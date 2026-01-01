@@ -130,6 +130,37 @@ actor ImageCacheManager: NSObject {
         return await download(url: url, key: key)
     }
 
+    /// Get image at full resolution, fully decoded for display.
+    /// Use for hero/background images that need full resolution (not downsampled to 400px).
+    /// Guarantees decoding completes off the main thread to prevent app hangs.
+    func imageFullSize(for url: URL, forceRefresh: Bool = false) async -> UIImage? {
+        let key = cacheKey(for: url)
+
+        // 1. Check memory cache
+        if !forceRefresh, let cached = memoryCache.object(forKey: key as NSString) {
+            updateAccessTime(for: key)
+            return cached
+        }
+
+        // 2. Load from disk at full size (no downsampling)
+        if !forceRefresh, let cacheDir = cacheDirectory {
+            let diskImage = await Task.detached(priority: .userInitiated) { [cacheDir] in
+                self.loadFromDiskFullSize(cacheDir: cacheDir, key: key)
+            }.value
+
+            if let image = diskImage {
+                // Fully decode before caching to prevent main thread decode
+                let decoded = await fullyDecodedImageAsync(image)
+                memoryCache.setObject(decoded, forKey: key as NSString)
+                updateAccessTime(for: key)
+                return decoded
+            }
+        }
+
+        // 3. Download (already uses async decoding)
+        return await download(url: url, key: key)
+    }
+
     /// Prefetch images in background (limited concurrency)
     /// Uses higher priority to ensure images are ready before user scrolls to them
     func prefetch(urls: [URL]) {
@@ -241,7 +272,9 @@ actor ImageCacheManager: NSObject {
                 }
 
                 guard let image = UIImage(data: data) else { return nil }
-                let decoded = decodedImage(image)
+
+                // Use async decoding to guarantee full decode off main thread
+                let decoded = await self.fullyDecodedImageAsync(image)
 
                 // Save to memory cache
                 await self.saveToMemoryCache(image: decoded, key: key)
@@ -310,6 +343,31 @@ actor ImageCacheManager: NSObject {
         return await Task.detached(priority: .userInitiated) { [cacheDir] in
             self.loadFromDiskSync(cacheDir: cacheDir, key: key)
         }.value
+    }
+
+    /// Load full-size image from disk without 400px downsampling.
+    /// Uses kCGImageSourceShouldCacheImmediately to force decode during load.
+    nonisolated private func loadFromDiskFullSize(cacheDir: URL, key: String) -> UIImage? {
+        let fileURL = cacheDir.appendingPathComponent(key)
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetStatus(imageSource) == .statusComplete,
+              CGImageSourceGetCount(imageSource) > 0 else {
+            try? FileManager.default.removeItem(at: fileURL)
+            return nil
+        }
+
+        // Force immediate decode via CGImageSource (no size limit)
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+
+        guard let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, options as CFDictionary) else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage)
     }
 
     private func saveToDisk(data: Data, key: String, url: URL) {
@@ -408,6 +466,20 @@ actor ImageCacheManager: NSObject {
     nonisolated private func decodedImage(_ image: UIImage) -> UIImage {
         if #available(tvOS 15.0, iOS 15.0, *) {
             return image.preparingForDisplay() ?? image
+        }
+        return image
+    }
+
+    /// Fully decode image using async API - guarantees decoding completes off main thread
+    /// Unlike preparingForDisplay() which may return before decoding completes,
+    /// this uses the callback-based API wrapped in a continuation for guaranteed completion.
+    nonisolated private func fullyDecodedImageAsync(_ image: UIImage) async -> UIImage {
+        if #available(tvOS 15.0, iOS 15.0, *) {
+            return await withCheckedContinuation { continuation in
+                image.prepareForDisplay { decoded in
+                    continuation.resume(returning: decoded ?? image)
+                }
+            }
         }
         return image
     }

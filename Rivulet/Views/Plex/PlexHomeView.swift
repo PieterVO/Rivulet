@@ -457,6 +457,9 @@ struct HeroView<FocusTarget: Hashable>: View {
     @Environment(\.openSidebar) private var openSidebar
     @Environment(\.isSidebarVisible) private var isSidebarVisible
 
+    // Hero art image loaded at full size with guaranteed off-main-thread decoding
+    @State private var heroArtImage: UIImage?
+
     // Focus binding - supports both Bool and enum-based patterns
     private let focusBinding: FocusBinding<FocusTarget>
 
@@ -520,34 +523,47 @@ struct HeroView<FocusTarget: Hashable>: View {
     var body: some View {
         #if os(tvOS)
         heroButtonView
+            .task(id: artURL) {
+                await loadHeroArt()
+            }
         #else
         heroContentView
             .frame(height: 400)
+            .task(id: artURL) {
+                await loadHeroArt()
+            }
         #endif
+    }
+
+    /// Load hero art at full size with guaranteed off-main-thread decoding
+    private func loadHeroArt() async {
+        guard let url = artURL else {
+            heroArtImage = nil
+            return
+        }
+        heroArtImage = await ImageCacheManager.shared.imageFullSize(for: url)
     }
 
     private var heroContentView: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottomLeading) {
                 // Background art - full width edge to edge
-                CachedAsyncImage(url: artURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geo.size.width, height: geo.size.height)
-                            .clipped()
-                    case .empty, .failure:
-                        Rectangle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color(white: 0.15), Color(white: 0.08)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
+                // Uses imageFullSize() for guaranteed off-main-thread PNG decoding (fixes RIVULET-C)
+                if let heroArtImage {
+                    Image(uiImage: heroArtImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                } else {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(white: 0.15), Color(white: 0.08)],
+                                startPoint: .top,
+                                endPoint: .bottom
                             )
-                    }
+                        )
                 }
 
                 // Gradient overlay for text legibility (simplified 2-stop gradient)
