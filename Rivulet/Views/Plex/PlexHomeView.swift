@@ -275,6 +275,7 @@ struct PlexHomeView: View {
                                 title: hub.title ?? "Unknown",
                                 initialItems: items,
                                 hubKey: hub.key ?? hub.hubKey,
+                                hubIdentifier: hub.hubIdentifier,
                                 serverURL: authManager.selectedServerURL ?? "",
                                 authToken: authManager.selectedServerToken ?? "",
                                 contextMenuSource: isContinueWatching ? .continueWatching : .other,
@@ -768,6 +769,7 @@ struct InfiniteContentRow: View {
     let title: String
     let initialItems: [PlexMetadata]
     let hubKey: String?  // The hub's key for fetching more items
+    let hubIdentifier: String?  // The hub's identifier (e.g., "home.movies.recent") - needed for /hubs/items endpoint
     let serverURL: String
     let authToken: String
     var contextMenuSource: MediaItemContextSource = .other
@@ -984,6 +986,7 @@ struct InfiniteContentRow: View {
                 serverURL: serverURL,
                 authToken: authToken,
                 hubKey: hubKey,
+                hubIdentifier: hubIdentifier,
                 start: items.count,
                 count: pageSize
             )

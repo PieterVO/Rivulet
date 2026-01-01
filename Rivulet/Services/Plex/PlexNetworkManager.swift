@@ -690,6 +690,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// Get more items from a hub using its key (for pagination/infinite scroll)
     /// - Parameters:
     ///   - hubKey: The hub's key path (e.g., "/hubs/sections/1/continueWatching")
+    ///   - hubIdentifier: The hub's identifier (e.g., "home.movies.recent") - required when hubKey is "/hubs/items"
     ///   - start: Starting index for pagination
     ///   - count: Number of items to fetch
     /// - Returns: Tuple of (items, totalSize) where totalSize indicates if more items exist
@@ -697,6 +698,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         serverURL: String,
         authToken: String,
         hubKey: String,
+        hubIdentifier: String? = nil,
         start: Int = 0,
         count: Int = 24
     ) async throws -> (items: [PlexMetadata], totalSize: Int?) {
@@ -713,10 +715,24 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             throw PlexAPIError.invalidURL
         }
 
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "X-Plex-Container-Start", value: "\(start)"),
             URLQueryItem(name: "X-Plex-Container-Size", value: "\(count)")
         ]
+
+        // The /hubs/items endpoint requires an identifier parameter to specify which hub
+        // Without it, Plex returns 404. See: https://plexapi.dev/api-reference/hubs/get-a-hubs-items
+        if hubKey == "/hubs/items" || hubKey.hasSuffix("/hubs/items") {
+            if let identifier = hubIdentifier, !identifier.isEmpty {
+                queryItems.append(URLQueryItem(name: "identifier", value: identifier))
+            } else {
+                // No identifier available - this request will fail, so skip it
+                print("⚠️ PlexNetworkManager: Cannot paginate /hubs/items without hubIdentifier")
+                return (items: [], totalSize: nil)
+            }
+        }
+
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             throw PlexAPIError.invalidURL
