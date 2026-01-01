@@ -27,7 +27,7 @@ struct PlexDevice: Codable, Sendable {
     let productVersion: String
     let platform: String?
     let platformVersion: String?
-    let device: String
+    let device: String?
     let clientIdentifier: String
     let createdAt: String
     let lastSeenAt: String
@@ -66,7 +66,7 @@ struct PlexDevice: Codable, Sendable {
         productVersion = try container.decode(String.self, forKey: .productVersion)
         platform = try container.decodeIfPresent(String.self, forKey: .platform)
         platformVersion = try container.decodeIfPresent(String.self, forKey: .platformVersion)
-        device = try container.decode(String.self, forKey: .device)
+        device = try container.decodeIfPresent(String.self, forKey: .device)
         clientIdentifier = try container.decode(String.self, forKey: .clientIdentifier)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         lastSeenAt = try container.decode(String.self, forKey: .lastSeenAt)
