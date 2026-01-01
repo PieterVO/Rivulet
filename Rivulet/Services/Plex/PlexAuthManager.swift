@@ -286,12 +286,12 @@ class PlexAuthManager: ObservableObject {
 
     /// Check if address is a Docker/internal bridge network
     private func isDockerOrInternalAddress(_ address: String) -> Bool {
-        // Docker default bridge networks
+        // Docker default bridge networks (172.17-31.x.x range)
+        // Note: We intentionally do NOT filter 10.x.x.x as these are common home network ranges
         let dockerPrefixes = [
             "172.17.", "172.18.", "172.19.", "172.20.", "172.21.",
             "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
             "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
-            "10.0.0.", "10.0.1.",  // Common Docker/container networks
         ]
 
         // Localhost variants (not useful for Apple TV)
