@@ -65,6 +65,7 @@ struct SettingsView: View {
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
+    @AppStorage("classicTVMode") private var classicTVMode = false
     @AppStorage("showSkipButton") private var showSkipButton = true
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
@@ -220,6 +221,14 @@ struct SettingsView: View {
 
                         // Live TV section
                         SettingsSection(title: "Live TV") {
+                            SettingsToggleRow(
+                                icon: "tv.fill",
+                                iconColor: .indigo,
+                                title: "Classic TV Mode",
+                                subtitle: "Hide player controls for a traditional TV experience",
+                                isOn: $classicTVMode
+                            )
+
                             SettingsToggleRow(
                                 icon: "square.stack.3d.down.right",
                                 iconColor: .purple,
