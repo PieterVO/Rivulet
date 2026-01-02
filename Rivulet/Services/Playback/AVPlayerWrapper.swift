@@ -2,8 +2,8 @@
 //  AVPlayerWrapper.swift
 //  Rivulet
 //
-//  AVPlayer-based video player for Live TV streams
-//  Uses native AVPlayer which is more resource-efficient for multiple simultaneous streams
+//  AVPlayer-based video player for Dolby Vision VOD content
+//  Used when "Use AVPlayer for Dolby Vision" setting is enabled
 //
 
 import Foundation
@@ -88,8 +88,13 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
     // MARK: - Playback Controls
 
-    func load(url: URL, headers: [String: String]?) async throws {
-        print("🎬 AVPlayerWrapper: Loading URL: \(url)")
+    /// Load a URL for playback
+    /// - Parameters:
+    ///   - url: The URL to load
+    ///   - headers: Optional HTTP headers for the request
+    ///   - isLive: Whether this is a live stream (affects buffering behavior)
+    func load(url: URL, headers: [String: String]?, isLive: Bool = false) async throws {
+        print("🎬 AVPlayerWrapper: Loading URL: \(url) (isLive: \(isLive))")
         playbackStateSubject.send(.loading)
         currentStreamURL = url
 
@@ -98,33 +103,41 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         player?.pause()
 
         // Create asset with headers if needed
-        var options: [String: Any] = [
-            // Don't require precise duration - live streams are indefinite anyway
-            // This prevents AVPlayer from making byte-range requests to probe duration
-            AVURLAssetPreferPreciseDurationAndTimingKey: false
-        ]
+        var options: [String: Any] = [:]
+
+        // For VOD content, use precise duration/timing for accurate seeking
+        // For live streams, disable to avoid byte-range requests
+        options[AVURLAssetPreferPreciseDurationAndTimingKey] = !isLive
+
         if let headers = headers, !headers.isEmpty {
             options["AVURLAssetHTTPHeaderFieldsKey"] = headers
         }
 
         let asset = AVURLAsset(url: url, options: options)
 
-        // Create player item - don't preload keys that require byte-range requests
-        // Live TS streams from IPTV proxies often don't support byte-range requests
-        playerItem = AVPlayerItem(asset: asset, automaticallyLoadedAssetKeys: [])
-
-        // Configure for live streaming - minimize byte-range probing
-        playerItem?.preferredForwardBufferDuration = 4  // Buffer ahead for live
-        playerItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        // Create player item
+        if isLive {
+            // Live streams: don't preload keys that require byte-range requests
+            playerItem = AVPlayerItem(asset: asset, automaticallyLoadedAssetKeys: [])
+            playerItem?.preferredForwardBufferDuration = 4  // Buffer ahead for live
+            playerItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = false
+        } else {
+            // VOD: preload duration for accurate seeking
+            playerItem = AVPlayerItem(asset: asset, automaticallyLoadedAssetKeys: ["duration"])
+            playerItem?.preferredForwardBufferDuration = 0  // Let system decide
+            playerItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        }
 
         // Create or reuse player
         if player == nil {
             let newPlayer = AVPlayer(playerItem: playerItem)
             // For live streams, don't wait - just start playing
-            newPlayer.automaticallyWaitsToMinimizeStalling = false
+            // For VOD, let it buffer appropriately to minimize stalling
+            newPlayer.automaticallyWaitsToMinimizeStalling = !isLive
             player = newPlayer
             _playerForCleanup = newPlayer
         } else {
+            player?.automaticallyWaitsToMinimizeStalling = !isLive
             player?.replaceCurrentItem(with: playerItem)
         }
 
@@ -134,9 +147,14 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         // Setup observers
         setupObservers()
 
-        print("🎬 AVPlayerWrapper: Starting playback")
-        // Start playback for live streams
-        player?.play()
+        if isLive {
+            print("🎬 AVPlayerWrapper: Starting live playback")
+            // Start playback immediately for live streams
+            player?.play()
+        } else {
+            print("🎬 AVPlayerWrapper: VOD content loaded, ready to play")
+            // For VOD, don't auto-play - let caller control
+        }
 
         // Start loading timeout - if we don't get playback within 10 seconds, fail
         startLoadingTimeout()
@@ -184,7 +202,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                         isCompatibilityError: false
                     )
 
-                    let message = "Stream failed to load. Try switching to MPV in Settings → Live TV."
+                    let message = "Stream failed to load. The format may be incompatible with AVPlayer."
                     self.playbackStateSubject.send(.failed(.loadFailed(message)))
                     self.errorSubject.send(.loadFailed(message))
                 }
@@ -268,6 +286,15 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                 case .readyToPlay:
                     print("🎬 AVPlayerWrapper: Ready to play")
                     self._duration = duration.isFinite ? duration : 0
+                    // Log track details for debugging (resolution/codec)
+                    let videoTracks = item.asset.tracks(withMediaType: .video)
+                    for (index, track) in videoTracks.enumerated() {
+                        let formatDescriptions = track.formatDescriptions as? [CMFormatDescription] ?? []
+                        let codecType = formatDescriptions.first.map { CMFormatDescriptionGetMediaSubType($0) }
+                        let codecString = codecType.map { self.fourCCToString($0) } ?? "unknown"
+                        let naturalSize = track.naturalSize
+                        print("🎬 AVPlayerWrapper: Video track \(index) codec=\(codecString) size=\(Int(abs(naturalSize.width)))x\(Int(abs(naturalSize.height))) fps=\(track.nominalFrameRate)")
+                    }
                     // Don't set playing here - let rate observation handle it
                 case .failed:
                     self.cancelLoadingTimeout()
@@ -279,9 +306,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                         print("🎬 AVPlayerWrapper: Error domain: \(nsError.domain), code: \(nsError.code)")
                         // -12939 = byte-range not supported
                         // -11850 = operation interrupted
-                        // -11819 = cannot decode
-                        let isCompatibilityError = nsError.code == -12939 || nsError.code == -11850 || nsError.code == -11819 ||
-                            nsError.domain.contains("CoreMedia")
+                        // -11819/-11821 = cannot decode
+                        // Only treat specific codes as compatibility errors; generic CoreMedia errors are usually transient
+                        let isCompatibilityError = nsError.code == -12939 || nsError.code == -11850 || nsError.code == -11819 || nsError.code == -11821
 
                         // Log to Sentry
                         self.logStreamFailureToSentry(
@@ -326,12 +353,23 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                     let nsError = error as NSError
                     print("🎬 AVPlayerWrapper: Error details - domain: \(nsError.domain), code: \(nsError.code)")
 
+                    // Non-fatal quirks: bandwidth variance, init segment variance, and remote XPC notices
+                    if nsError.domain == "CoreMediaErrorDomain" &&
+                        (nsError.code == -12318 || nsError.code == 1852797029 || nsError.code == -50) {
+                        print("🎬 AVPlayerWrapper: Non-fatal CoreMedia warning (bandwidth/variant/init segment) - continuing playback")
+                        return
+                    }
+                    if nsError.domain == "NSOSStatusErrorDomain" && nsError.code == -12860 {
+                        print("🎬 AVPlayerWrapper: Non-fatal PlayerRemoteXPC warning - continuing playback")
+                        return
+                    }
+
                     // Check for compatibility/format errors
+                    // Only treat specific known codes as compatibility issues
                     // -12939 = byte-range not supported
                     // -11850 = operation interrupted (often due to format issues)
-                    // -11819 = cannot decode
-                    let isCompatibilityError = nsError.code == -12939 || nsError.code == -11850 || nsError.code == -11819 ||
-                        nsError.domain.contains("CoreMedia")
+                    // -11819/-11821 = cannot decode
+                    let isCompatibilityError = nsError.code == -12939 || nsError.code == -11850 || nsError.code == -11819 || nsError.code == -11821
 
                     // Log to Sentry
                     self.logStreamFailureToSentry(
@@ -438,6 +476,19 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     @objc private func playerItemFailedToPlayToEnd(_ notification: Notification) {
         if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
             print("🎬 AVPlayerWrapper: Failed to play to end: \(error.localizedDescription)")
+            let nsError = error as NSError
+
+            // Ignore known non-fatal bandwidth/variant warnings so playback can continue
+            if nsError.domain == "CoreMediaErrorDomain" &&
+                (nsError.code == -12318 || nsError.code == 1852797029 || nsError.code == -50) {
+                print("🎬 AVPlayerWrapper: Ignoring CoreMedia bandwidth/variant warning on end notification")
+                return
+            }
+            if nsError.domain == "NSOSStatusErrorDomain" && nsError.code == -12860 {
+                print("🎬 AVPlayerWrapper: Ignoring PlayerRemoteXPC warning on end notification")
+                return
+            }
+
             playbackStateSubject.send(.failed(.unknown(error.localizedDescription)))
             errorSubject.send(.unknown(error.localizedDescription))
         }
@@ -459,10 +510,16 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         // -12938 = content not found
         // -12937 = connection failed
         if errorCode == -12939 {
-            print("🎬 AVPlayerWrapper: Server doesn't support byte-range requests - this stream may not work with AVPlayer")
-            let message = "Incompatible with AVPlayer. Switch to MPV in Settings → Live TV, or configure your source to output HLS."
+            print("🎬 AVPlayerWrapper: Server doesn't support byte-range requests")
+            let message = "Stream format is incompatible with AVPlayer."
             playbackStateSubject.send(.failed(.codecUnsupported(message)))
             errorSubject.send(.codecUnsupported(message))
+        } else if errorCode == -12938 {
+            // Content-not-found error occasionally appears mid-stream; treat as warning to avoid user-facing failure
+            print("🎬 AVPlayerWrapper: Warning - transient content-not-found from server (ignoring)")
+        } else if errorCode == -12318 {
+            // Segment reported higher bandwidth than variant; warn but don't fail playback
+            print("🎬 AVPlayerWrapper: Warning - segment exceeds declared variant bandwidth (continuing)")
         } else if errorCode < 0 && errorCode > -13000 {
             // Other HTTP/network errors in this range
             let message = "Stream error: \(errorComment) (code \(errorCode))"
@@ -545,9 +602,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     /// Builds error message with codec info if available
     private func buildCompatibilityErrorMessage() -> String {
         if let codec = detectCodecInfo() {
-            return "Codec '\(codec)' may be incompatible with AVPlayer. Switch to MPV in Settings → Live TV, or configure your source to output HLS."
+            return "Codec '\(codec)' is incompatible with AVPlayer. Disable 'Use AVPlayer for Dolby Vision' in Settings."
         } else {
-            return "Incompatible with AVPlayer. Switch to MPV in Settings → Live TV, or configure your source to output HLS."
+            return "This format is incompatible with AVPlayer. Disable 'Use AVPlayer for Dolby Vision' in Settings."
         }
     }
 
@@ -557,7 +614,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         let event = Event(level: .error)
 
         // Build a more informative message
-        var messageParts: [String] = ["AVPlayer Live TV stream failed"]
+        var messageParts: [String] = ["AVPlayer stream failed"]
         messageParts.append("Error: \(error.localizedDescription)")
         messageParts.append("Code: \(errorCode)")
         if let codec = detectCodecInfo() {
@@ -574,7 +631,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
         // Add tags
         event.tags = [
-            "component": "avplayer_livetv",
+            "component": "avplayer",
             "error_code": String(errorCode),
             "error_domain": errorDomain,
             "is_compatibility_error": String(isCompatibilityError)

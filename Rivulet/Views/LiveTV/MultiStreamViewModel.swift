@@ -66,7 +66,7 @@ final class MultiStreamViewModel: ObservableObject {
             if let mpv = mpvWrapper {
                 try await mpv.load(url: url, headers: headers, startTime: nil)
             } else if let av = avWrapper {
-                try await av.load(url: url, headers: headers)
+                try await av.load(url: url, headers: headers, isLive: true)
             }
         }
     }

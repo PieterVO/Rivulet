@@ -26,6 +26,8 @@ final class RemoteInputHandler: ObservableObject {
 
     // Check viewModel's scrubbing state (single source of truth)
     var isScrubbingCheck: (() -> Bool)?
+    // Check if player is in error state (don't capture clicks - let dismiss button work)
+    var isErrorCheck: (() -> Bool)?
 
     var onTap: ((Bool) -> Void)?           // forward: Bool
     var onScrubStart: ((Bool) -> Void)?    // forward: Bool
@@ -102,6 +104,11 @@ final class RemoteInputHandler: ObservableObject {
             guard let self else { return }
 
             Task { @MainActor in
+                // Don't capture clicks in error state - let SwiftUI dismiss button work
+                if self.isErrorCheck?() == true {
+                    return
+                }
+
                 if pressed {
                     self.isButtonDown = true
                     // Use tracked dpad direction (captured before click disrupted sensing)
@@ -252,6 +259,9 @@ struct UniversalPlayerView: View {
             remoteInput.isScrubbingCheck = { [weak viewModel] in
                 viewModel?.isScrubbing ?? false
             }
+            remoteInput.isErrorCheck = { [weak viewModel] in
+                viewModel?.playbackState.isFailed ?? false
+            }
             remoteInput.onTap = { [weak viewModel] forward in
                 guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
                 Task { await vm.seekRelative(by: forward ? 10 : -10) }
@@ -361,6 +371,19 @@ struct UniversalPlayerView: View {
                     .transition(.scale.combined(with: .opacity))
             }
 
+            // Compatibility Notice (e.g., DV fallback)
+            if let notice = viewModel.compatibilityNotice {
+                VStack {
+                    HStack {
+                        Spacer()
+                        compatibilityNoticeView(notice)
+                    }
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(15)
+            }
+
             // Error State
             if case .failed(let error) = viewModel.playbackState {
                 errorView(message: error.localizedDescription)
@@ -389,12 +412,14 @@ struct UniversalPlayerView: View {
                 .zIndex(10)  // Keep above other elements during animation
             }
         }
-        // Focusable when skip button is not focused and post-video is not showing
-        .focusable(!isSkipButtonFocused && viewModel.postVideoState == .hidden)
+        // Focusable when skip button is not focused, post-video is not showing, and not in error state
+        // When in error state, let the dismiss button receive focus instead
+        .focusable(!isSkipButtonFocused && viewModel.postVideoState == .hidden && !viewModel.playbackState.isFailed)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Don't toggle controls if info panel is showing
+            // Don't toggle controls if info panel is showing or in error state
             guard !viewModel.showInfoPanel else { return }
+            guard !viewModel.playbackState.isFailed else { return }
 
             // Tap anywhere to show/hide controls
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -440,17 +465,29 @@ struct UniversalPlayerView: View {
 
     @ViewBuilder
     private var playerLayer: some View {
-        if let url = viewModel.streamURL {
-            MPVPlayerView(
-                url: url,
-                headers: viewModel.streamHeaders,
-                startTime: viewModel.startOffset,
-                delegate: viewModel.mpvPlayerWrapper,
-                playerController: $playerController
-            )
-            .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
-            .offset(viewModel.videoFrameState.offset)
-            .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
+        if viewModel.streamURL != nil {
+            switch viewModel.playerType {
+            case .mpv:
+                if let mpv = viewModel.mpvPlayerWrapper {
+                    MPVPlayerView(
+                        url: viewModel.streamURL!,
+                        headers: viewModel.streamHeaders,
+                        startTime: viewModel.startOffset,
+                        delegate: mpv,
+                        playerController: $playerController
+                    )
+                    .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
+                    .offset(viewModel.videoFrameState.offset)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
+                }
+            case .avplayer:
+                if let avp = viewModel.avPlayerWrapper {
+                    AVPlayerView(playerWrapper: avp)
+                        .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
+                        .offset(viewModel.videoFrameState.offset)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
+                }
+            }
         }
     }
 
@@ -606,6 +643,27 @@ struct UniversalPlayerView: View {
             .shadow(color: .black.opacity(0.4), radius: 12, x: 0, y: 4)
     }
 
+    // MARK: - Compatibility Notice
+
+    private func compatibilityNoticeView(_ message: String) -> some View {
+        Text(message)
+            .font(.callout)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.35), radius: 12, x: 0, y: 6)
+            )
+            .padding(.trailing, 36)
+            .padding(.top, 24)
+    }
+
     // MARK: - Error View
 
     private func errorView(message: String) -> some View {
@@ -625,7 +683,13 @@ struct UniversalPlayerView: View {
                 .padding(.horizontal, 60)
 
             Button("Dismiss") {
+                // On tvOS, set shouldDismiss so the container can handle it
+                // On other platforms, use SwiftUI dismiss
+                #if os(tvOS)
+                viewModel.shouldDismiss = true
+                #else
                 dismiss()
+                #endif
             }
             .buttonStyle(.bordered)
             .padding(.top, 20)
