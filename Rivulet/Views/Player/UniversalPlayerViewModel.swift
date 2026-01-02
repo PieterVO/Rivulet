@@ -217,6 +217,12 @@ enum SeekIndicator: Equatable {
     }
 }
 
+/// Player engine type for video playback
+enum PlayerType: Equatable {
+    case mpv
+    case avplayer
+}
+
 @MainActor
 final class UniversalPlayerViewModel: ObservableObject {
 
@@ -232,6 +238,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var showInfoPanel = false
     @Published var isScrubbing = false
     @Published var showPausedPoster = false
+    @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
+    @Published var compatibilityNotice: String?
 
     // MARK: - Seek Indicator State
     /// Shows a brief indicator when user taps left/right to skip 10 seconds
@@ -260,6 +268,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var currentAudioTrackId: Int?
     @Published private(set) var currentSubtitleTrackId: Int?
+    private var compatibilityNoticeTimer: Timer?
 
     // MARK: - Playback Settings Panel State (Column-based layout)
 
@@ -338,7 +347,14 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Player Instance
 
-    private(set) var mpvPlayerWrapper: MPVPlayerWrapper
+    /// The player engine being used for this playback session
+    private(set) var playerType: PlayerType = .mpv
+
+    /// MPV player (used for most content)
+    private(set) var mpvPlayerWrapper: MPVPlayerWrapper?
+
+    /// AVPlayer (used for Dolby Vision when enabled)
+    private(set) var avPlayerWrapper: AVPlayerWrapper?
 
     // MARK: - Metadata
 
@@ -378,7 +394,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Stream URL (computed once)
 
-    private(set) var streamURL: URL?
+    @Published private(set) var streamURL: URL?
     private(set) var streamHeaders: [String: String] = [:]
 
     // MARK: - Initialization
@@ -397,7 +413,47 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.startOffset = startOffset
         self.loadingArtImage = loadingArtImage
         self.loadingThumbImage = loadingThumbImage
-        self.mpvPlayerWrapper = MPVPlayerWrapper()
+
+        // Determine which player to use based on content and settings
+        let useAVPlayerForDV = UserDefaults.standard.bool(forKey: "useAVPlayerForDolbyVision")
+        let hasDolbyVision = metadata.hasDolbyVision
+
+        // Identify DV stream (could be second video track in dual-layer profile 7)
+        let videoStreams = metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
+        let dvStream = videoStreams.first { ($0.DOVIProfile != nil) || ($0.DOVIPresent == true) }
+        let primaryVideoStream = dvStream ?? videoStreams.first
+
+        // Check DV profile compatibility - only Profile 5 and 8 work with Apple TV's native player
+        // Additionally, for Profile 8 we require BL Compat ID 1 (HDR10-compatible base layer) or 4 (P8.4 camera)
+        let dvProfile = dvStream?.DOVIProfile
+        let doviBLCompatID = dvStream?.DOVIBLCompatID
+        let isCompatibleDVProfile: Bool = {
+            if dvProfile == 5 { return true }
+            if dvProfile == 8 {
+                // Allow HDR10-compatible base (1) and Apple camera P8.4 (4); others fall back to MPV
+                return doviBLCompatID == 1 || doviBLCompatID == 4
+            }
+            return false
+        }()
+
+        print("🎬 [Player Selection] useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile)")
+
+        if useAVPlayerForDV && hasDolbyVision && isCompatibleDVProfile {
+            print("🎬 [Player Selection] → Using AVPlayer for Dolby Vision Profile \(dvProfile ?? 0)")
+            self.playerType = .avplayer
+            self.avPlayerWrapper = AVPlayerWrapper()
+            self.mpvPlayerWrapper = nil
+        } else {
+            print("🎬 [Player Selection] → Using MPV")
+            self.playerType = .mpv
+            self.mpvPlayerWrapper = MPVPlayerWrapper()
+            self.avPlayerWrapper = nil
+
+            // If user wanted AVPlayer for DV but this variant is incompatible, show a brief notice
+            if useAVPlayerForDV && hasDolbyVision && !isCompatibleDVProfile {
+                showCompatibilityNotice("This DV profile is not supported by AVPlayer — falling back to standard HDR")
+            }
+        }
 
         setupPlayer()
 
@@ -419,12 +475,38 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Check if this is audio content
         let isAudio = metadata.type == "track" || metadata.type == "album" || metadata.type == "artist"
 
+        // AVPlayer: For Dolby Vision content, use HLS remux
+        // Direct file access causes AVPlayer to disable the video track for some DV content
+        // HLS remux lets Plex properly package the DV metadata for Apple TV playback
+        if playerType == .avplayer {
+            let container = metadata.Media?.first?.container?.lowercased() ?? ""
+            print("🎬 [AVPlayer] Dolby Vision content in \(container.uppercased()) container - using HLS")
+
+            // Use HLS remux which properly packages DV metadata
+            // Plex HLS requires auth in HTTP headers, not query params
+            if let result = networkManager.buildHLSDirectPlayURL(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey,
+                offsetMs: Int((startOffset ?? 0) * 1000)
+            ) {
+                streamURL = result.url
+                streamHeaders = result.headers
+                print("🎬 [AVPlayer] HLS URL: \(result.url.absoluteString)")
+                print("🎬 [AVPlayer] Headers: \(result.headers.keys.joined(separator: ", "))")
+            }
+
+            return
+        }
+
+        // MPV: Use true direct play - stream raw file without any transcoding
+        // MPV can handle MKV, HEVC, H264, DTS, TrueHD, ASS/SSA subs natively with HDR passthrough
+
         // Try to get partKey from existing metadata
         var partKey = metadata.Media?.first?.Part?.first?.key
 
         // For audio content, if partKey is missing, fetch full metadata to get it
         if isAudio && partKey == nil {
-            print("🎵 Audio track missing partKey, fetching full metadata...")
             do {
                 let fullMetadata = try await networkManager.getMetadata(
                     serverURL: serverURL,
@@ -432,18 +514,11 @@ final class UniversalPlayerViewModel: ObservableObject {
                     ratingKey: ratingKey
                 )
                 partKey = fullMetadata.Media?.first?.Part?.first?.key
-                if let pk = partKey {
-                    print("🎵 Got partKey from full metadata: \(pk)")
-                } else {
-                    print("🎵 Full metadata still has no partKey")
-                }
             } catch {
-                print("🎵 Failed to fetch full metadata: \(error)")
+                // Continue with fallback
             }
         }
 
-        // MPV: Use true direct play - stream raw file without any transcoding
-        // MPV can handle MKV, HEVC, H264, DTS, TrueHD, ASS/SSA subs natively with HDR passthrough
         if let partKey = partKey {
             streamURL = networkManager.buildVLCDirectPlayURL(
                 serverURL: serverURL,
@@ -452,7 +527,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             )
         } else {
             // Fallback to direct stream if no part key available
-            // Use music endpoint for audio content
             streamURL = networkManager.buildDirectStreamURL(
                 serverURL: serverURL,
                 authToken: authToken,
@@ -469,14 +543,28 @@ final class UniversalPlayerViewModel: ObservableObject {
             "X-Plex-Device": PlexAPI.deviceName,
             "X-Plex-Product": PlexAPI.productName
         ]
-
-        if let url = streamURL {
-            print("🎬 MPV Direct Play URL: \(url.absoluteString)")
-        }
     }
 
     private func bindPlayerState() {
-        mpvPlayerWrapper.playbackStatePublisher
+        // Get the appropriate publisher based on player type
+        let statePublisher: AnyPublisher<UniversalPlaybackState, Never>
+        let timePublisher: AnyPublisher<TimeInterval, Never>
+        let errorPublisher: AnyPublisher<PlayerError, Never>
+
+        switch playerType {
+        case .mpv:
+            guard let mpv = mpvPlayerWrapper else { return }
+            statePublisher = mpv.playbackStatePublisher
+            timePublisher = mpv.timePublisher
+            errorPublisher = mpv.errorPublisher
+        case .avplayer:
+            guard let avp = avPlayerWrapper else { return }
+            statePublisher = avp.playbackStatePublisher
+            timePublisher = avp.timePublisher
+            errorPublisher = avp.errorPublisher
+        }
+
+        statePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
                 self?.playbackState = state
@@ -511,39 +599,54 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        mpvPlayerWrapper.timePublisher
+        timePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] time in
-                self?.currentTime = time
+                guard let self else { return }
+                self.currentTime = time
                 // Also update duration from wrapper
-                if let wrapper = self?.mpvPlayerWrapper, wrapper.duration > 0 {
-                    self?.duration = wrapper.duration
+                switch self.playerType {
+                case .mpv:
+                    if let wrapper = self.mpvPlayerWrapper, wrapper.duration > 0 {
+                        self.duration = wrapper.duration
+                    }
+                case .avplayer:
+                    if let wrapper = self.avPlayerWrapper, wrapper.duration > 0 {
+                        self.duration = wrapper.duration
+                    }
                 }
                 // Check for markers at current time
-                self?.checkMarkers(at: time)
+                self.checkMarkers(at: time)
             }
             .store(in: &cancellables)
 
-        mpvPlayerWrapper.errorPublisher
+        errorPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] error in
                 self?.errorMessage = error.localizedDescription
             }
             .store(in: &cancellables)
 
-        // Auto-update tracks when MPV reports them
-        mpvPlayerWrapper.tracksPublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in
-                self?.updateTrackLists()
-            }
-            .store(in: &cancellables)
+        // Auto-update tracks when MPV reports them (only for MPV)
+        if let mpv = mpvPlayerWrapper {
+            mpv.tracksPublisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] in
+                    self?.updateTrackLists()
+                }
+                .store(in: &cancellables)
+        }
     }
 
     // MARK: - Computed Properties
 
     var isPlaying: Bool {
-        mpvPlayerWrapper.isPlaying
+        switch playerType {
+        case .mpv:
+            return mpvPlayerWrapper?.isPlaying ?? false
+        case .avplayer:
+            return avPlayerWrapper?.isPlaying ?? false
+        }
     }
 
     // MARK: - Playback Controls
@@ -573,14 +676,24 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         do {
-            try await mpvPlayerWrapper.load(url: url, headers: streamHeaders, startTime: startOffset)
-            mpvPlayerWrapper.play()
+            switch playerType {
+            case .mpv:
+                guard let mpv = mpvPlayerWrapper else { return }
+                try await mpv.load(url: url, headers: streamHeaders, startTime: startOffset)
+                mpv.play()
+                self.duration = mpv.duration
+                updateTrackLists()
 
-            // Update duration after loading
-            self.duration = mpvPlayerWrapper.duration
-
-            // Update track lists
-            updateTrackLists()
+            case .avplayer:
+                guard let avp = avPlayerWrapper else { return }
+                // For AVPlayer, seek to start offset after loading if needed
+                try await avp.load(url: url, headers: streamHeaders)
+                if let offset = startOffset, offset > 0 {
+                    await avp.seek(to: offset)
+                }
+                avp.play()
+                self.duration = avp.duration
+            }
 
             // Preload thumbnails for scrubbing
             preloadThumbnails()
@@ -593,6 +706,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Capture playback load failure to Sentry
             SentrySDK.capture(error: error) { scope in
                 scope.setTag(value: "playback", key: "component")
+                scope.setTag(value: self.playerType == .avplayer ? "avplayer" : "mpv", key: "player_type")
                 scope.setExtra(value: url.absoluteString, key: "stream_url")
                 scope.setExtra(value: self.metadata.title ?? "unknown", key: "media_title")
                 scope.setExtra(value: self.metadata.type ?? "unknown", key: "media_type")
@@ -604,22 +718,37 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Called when the MPV view controller is created
     func setPlayerController(_ controller: MPVMetalViewController) {
-        mpvPlayerWrapper.setPlayerController(controller)
+        mpvPlayerWrapper?.setPlayerController(controller)
     }
 
     func stopPlayback() {
-        mpvPlayerWrapper.stop()
+        switch playerType {
+        case .mpv:
+            mpvPlayerWrapper?.stop()
+        case .avplayer:
+            avPlayerWrapper?.stop()
+        }
         controlsTimer?.invalidate()
+        hideCompatibilityNotice()
         // Re-enable screensaver
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
     func togglePlayPause() {
         hidePausedPoster()
-        if mpvPlayerWrapper.isPlaying {
-            mpvPlayerWrapper.pause()
-        } else {
-            mpvPlayerWrapper.play()
+        switch playerType {
+        case .mpv:
+            if mpvPlayerWrapper?.isPlaying == true {
+                mpvPlayerWrapper?.pause()
+            } else {
+                mpvPlayerWrapper?.play()
+            }
+        case .avplayer:
+            if avPlayerWrapper?.isPlaying == true {
+                avPlayerWrapper?.pause()
+            } else {
+                avPlayerWrapper?.play()
+            }
         }
         showControlsTemporarily()
     }
@@ -635,13 +764,25 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func seek(to time: TimeInterval) async {
-        await mpvPlayerWrapper.seek(to: time)
+        switch playerType {
+        case .mpv:
+            await mpvPlayerWrapper?.seek(to: time)
+        case .avplayer:
+            await avPlayerWrapper?.seek(to: time)
+        }
         showControlsTemporarily()
     }
 
     func seekRelative(by seconds: TimeInterval) async {
         hidePausedPoster()
-        await mpvPlayerWrapper.seekRelative(by: seconds)
+        switch playerType {
+        case .mpv:
+            await mpvPlayerWrapper?.seekRelative(by: seconds)
+        case .avplayer:
+            // AVPlayer doesn't have seekRelative, so calculate new time
+            let newTime = max(0, min(duration, currentTime + seconds))
+            await avPlayerWrapper?.seek(to: newTime)
+        }
         showControlsTemporarily()
 
         // Show seek indicator for tap-to-skip
@@ -838,7 +979,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Track Selection
 
     func selectAudioTrack(id: Int) {
-        mpvPlayerWrapper.selectAudioTrack(id: id)
+        // Note: Track selection is only supported for MPV player
+        // AVPlayer uses different track selection mechanism (AVMediaSelectionGroup)
+        mpvPlayerWrapper?.selectAudioTrack(id: id)
         currentAudioTrackId = id
 
         // Save preference
@@ -850,12 +993,13 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Select audio track without saving preference (for auto-selection)
     private func selectAudioTrackWithoutSaving(id: Int) {
-        mpvPlayerWrapper.selectAudioTrack(id: id)
+        mpvPlayerWrapper?.selectAudioTrack(id: id)
         currentAudioTrackId = id
     }
 
     func selectSubtitleTrack(id: Int?) {
-        mpvPlayerWrapper.selectSubtitleTrack(id: id)
+        // Note: Track selection is only supported for MPV player
+        mpvPlayerWrapper?.selectSubtitleTrack(id: id)
         currentSubtitleTrackId = id
 
         // Save preference
@@ -873,12 +1017,19 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var hasAppliedAudioPreference = false
 
     private func updateTrackLists() {
+        // Track selection is only available with MPV player
+        // AVPlayer uses its own track selection system via AVMediaSelectionGroup
+        guard let mpv = mpvPlayerWrapper else {
+            // For AVPlayer, we don't expose track lists in the info panel
+            return
+        }
+
         let previousSubtitleCount = subtitleTracks.count
         let previousAudioCount = audioTracks.count
 
         // Get raw tracks from MPV
-        var newAudioTracks = mpvPlayerWrapper.audioTracks
-        var newSubtitleTracks = mpvPlayerWrapper.subtitleTracks
+        var newAudioTracks = mpv.audioTracks
+        var newSubtitleTracks = mpv.subtitleTracks
 
         // Enrich with Plex stream metadata (for channel info, etc.)
         if let streams = metadata.Media?.first?.Part?.first?.Stream {
@@ -888,8 +1039,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         audioTracks = newAudioTracks
         subtitleTracks = newSubtitleTracks
-        currentAudioTrackId = mpvPlayerWrapper.currentAudioTrackId
-        currentSubtitleTrackId = mpvPlayerWrapper.currentSubtitleTrackId
+        currentAudioTrackId = mpv.currentAudioTrackId
+        currentSubtitleTrackId = mpv.currentSubtitleTrackId
 
         // Apply saved audio preference when tracks are first available
         if !hasAppliedAudioPreference && !audioTracks.isEmpty && previousAudioCount == 0 {
@@ -974,7 +1125,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Select subtitle track without saving preference (for auto-selection)
     private func selectSubtitleTrackWithoutSaving(id: Int?) {
-        mpvPlayerWrapper.selectSubtitleTrack(id: id)
+        mpvPlayerWrapper?.selectSubtitleTrack(id: id)
         currentSubtitleTrackId = id
     }
 
@@ -997,6 +1148,22 @@ final class UniversalPlayerViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Compatibility Notice
+
+    private func showCompatibilityNotice(_ message: String) {
+        compatibilityNotice = message
+        compatibilityNoticeTimer?.invalidate()
+        compatibilityNoticeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+            self?.compatibilityNotice = nil
+        }
+    }
+
+    private func hideCompatibilityNotice() {
+        compatibilityNoticeTimer?.invalidate()
+        compatibilityNoticeTimer = nil
+        compatibilityNotice = nil
     }
 
     // MARK: - Paused Poster Timer
@@ -1057,8 +1224,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // Check credits marker - trigger post-video when credits START
+        // But only if credits are in a sensible position (last 50% of video or < 5 min remaining)
         if let credits = metadata.creditsMarker {
             let previewStart = max(0, credits.startTimeSeconds - markerPreviewTime)
+            let creditsStartPercent = duration > 0 ? credits.startTimeSeconds / duration : 1.0
+            let remainingAfterCredits = duration - credits.startTimeSeconds
+
+            // Sanity check: credits should be in the last half of the video OR < 5 min of content remains
+            let creditsAreValid = creditsStartPercent >= 0.5 || remainingAfterCredits < 300
 
             // Reset flags if user rewound before the marker
             if time < previewStart {
@@ -1067,7 +1240,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
 
             // Trigger post-video summary when credits start (not when skip button would show)
-            if time >= credits.startTimeSeconds && !hasTriggeredPostVideo {
+            // Only if the credits marker is in a valid position
+            if time >= credits.startTimeSeconds && !hasTriggeredPostVideo && creditsAreValid {
                 hasTriggeredPostVideo = true
                 print("🎬 [PostVideo] Credits marker started at \(credits.startTimeSeconds)s, triggering summary")
                 Task { await handlePlaybackEnded() }
@@ -1075,7 +1249,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
 
             // Show skip button 5 seconds early (before credits actually start)
-            if time >= previewStart && time < credits.startTimeSeconds {
+            // Only show if credits marker is in a valid position
+            if creditsAreValid && time >= previewStart && time < credits.startTimeSeconds {
                 handleMarkerActive(credits, isIntro: false)
                 return
             }
@@ -1098,17 +1273,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // No credits marker - trigger post-video 45 seconds before end
+        // BUT require at least 85% completion to avoid triggering too early on short videos
         if metadata.creditsMarker == nil && duration > 60 {
             let triggerTime = duration - 45
+            let minCompletionTime = duration * 0.85  // At least 85% watched
 
             // Reset flag if user rewound before trigger point
             if time < triggerTime - 10 && hasTriggeredPostVideo {
                 hasTriggeredPostVideo = false
             }
 
-            if time >= triggerTime && !hasTriggeredPostVideo {
+            // Only trigger if we're both near the end AND have watched most of the content
+            if time >= triggerTime && time >= minCompletionTime && !hasTriggeredPostVideo {
                 hasTriggeredPostVideo = true
-                print("🎬 [PostVideo] 45s before end (no credits marker), triggering summary at \(time)s")
+                print("🎬 [PostVideo] 45s before end (no credits marker), triggering summary at \(time)s (duration: \(duration)s)")
                 Task { await handlePlaybackEnded() }
                 return
             }

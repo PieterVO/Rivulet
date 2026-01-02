@@ -396,7 +396,7 @@ class PlexDataStore: ObservableObject {
                             authToken: token,
                             sectionId: libraryKey,
                             start: 0,
-                            size: 100
+                            size: 30
                         )
 
                         // Cache based on type

@@ -277,18 +277,14 @@ final class MPVMetalViewController: UIViewController {
 
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
+
         do {
-            // Set playback category with movie mode for best audio quality
-            try session.setCategory(.playback, mode: .moviePlayback)
+            // Use playback category with default mode
+            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay])
+            try session.setActive(true, options: [])
 
-            // Request maximum available channels (up to 8 for 7.1 support)
-            // Note: Requires patched MPVKit to fix tvOS kAudioChannelLabel_Unknown bug
-            let maxChannels = session.maximumOutputNumberOfChannels
-            try session.setPreferredOutputNumberOfChannels(maxChannels)
-
-            try session.setActive(true)
-
-            print("🎬 AVAudioSession: Configured for \(maxChannels) channels (actual: \(session.outputNumberOfChannels))")
+            let routeType = session.currentRoute.outputs.first?.portType.rawValue ?? "unknown"
+            print("🎬 AVAudioSession: Configured (route: \(routeType), channels: \(session.outputNumberOfChannels))")
         } catch {
             print("🎬 AVAudioSession: Configuration failed - \(error.localizedDescription)")
         }
@@ -356,10 +352,17 @@ final class MPVMetalViewController: UIViewController {
         }
 
         // Audio configuration
+        // Use audiounit which is the standard for tvOS
+        checkError(mpv_set_option_string(mpv, "ao", "audiounit"))
+
+        // CRITICAL: Allow video playback to continue if audio fails to initialize
+        // This prevents the eARC handshake delay from blocking video entirely
+        checkError(mpv_set_option_string(mpv, "audio-fallback-to-null", "yes"))
+
         // Whitelist 7.1, 5.1, and stereo layouts - mpv will pick the best match for the content
         // Note: 7.1 requires patched MPVKit to fix tvOS kAudioChannelLabel_Unknown bug for channels 7-8
         checkError(mpv_set_option_string(mpv, "audio-channels", "7.1,5.1,stereo"))
-        print("🎬 MPV: Audio channels whitelisted to 7.1,5.1,stereo")
+        print("🎬 MPV: Audio output: audiounit with null fallback enabled")
 
         // Audio buffer for smoother playback (default ~0.2s can cause stuttering with high-bitrate 4K content)
         let audioBufferResult = mpv_set_option_string(mpv, "audio-buffer", "1.0")

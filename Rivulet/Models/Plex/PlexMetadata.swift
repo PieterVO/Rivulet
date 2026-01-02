@@ -431,16 +431,19 @@ extension PlexMetadata {
 
     /// HDR format display (e.g., "Dolby Vision", "HDR10", nil if SDR)
     var hdrFormatDisplay: String? {
-        guard let videoStream = Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo }) else {
-            return nil
-        }
-
-        if videoStream.isDolbyVision {
+        let videoStreams = Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
+        if videoStreams.contains(where: { $0.isDolbyVision }) {
             return "Dolby Vision"
-        } else if videoStream.isHDR {
+        } else if videoStreams.contains(where: { $0.isHDR }) {
             return "HDR"
         }
         return nil
+    }
+
+    /// Whether this content has Dolby Vision
+    var hasDolbyVision: Bool {
+        let videoStreams = Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
+        return videoStreams.contains(where: { $0.isDolbyVision })
     }
 
     /// Audio format display (e.g., "Atmos", "5.1", "Stereo")

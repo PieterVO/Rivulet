@@ -144,7 +144,7 @@ struct PlexSearchView: View {
                 #endif
                 .foregroundStyle(.white.opacity(0.7))
 
-            TextField("Search movies, shows, and episodes", text: $query)
+            TextField("Search your libraries", text: $query)
                 .textInputAutocapitalization(.words)
                 .disableAutocorrection(true)
                 .submitLabel(.search)
@@ -246,6 +246,7 @@ struct PlexSearchView: View {
     private var groupedResults: [(title: String, items: [PlexMetadata])] {
         let titleItems = filteredResults.filter { $0.type == "movie" || $0.type == "show" }
         let episodeItems = filteredResults.filter { $0.type == "episode" || $0.type == "season" }
+        let musicItems = filteredResults.filter { $0.type == "artist" || $0.type == "album" || $0.type == "track" }
         var groups: [(title: String, items: [PlexMetadata])] = []
 
         if !titleItems.isEmpty {
@@ -256,12 +257,16 @@ struct PlexSearchView: View {
             groups.append((title: "Episodes & Seasons", items: episodeItems))
         }
 
+        if !musicItems.isEmpty {
+            groups.append((title: "Music", items: musicItems))
+        }
+
         return groups
     }
 
     private var filteredResults: [PlexMetadata] {
-        let visibleKeys = Set(dataStore.visibleVideoLibraries.map { $0.key })
-        let types = Set(["movie", "show", "season", "episode"])
+        let visibleKeys = Set(dataStore.visibleLibraries.map { $0.key })
+        let types = Set(["movie", "show", "season", "episode", "artist", "album", "track"])
         var seen = Set<String>()
 
         return results.filter { item in
@@ -270,6 +275,7 @@ struct PlexSearchView: View {
             guard !seen.contains(key) else { return false }
             seen.insert(key)
 
+            // Filter to only pinned/visible libraries
             if !visibleKeys.isEmpty {
                 if let sectionKey = item.librarySectionKey {
                     return visibleKeys.contains(sectionKey)
@@ -564,7 +570,7 @@ private struct SearchableModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if isActive {
-            content.searchable(text: $query, prompt: "Search movies, shows, and episodes")
+            content.searchable(text: $query, prompt: "Search your libraries")
         } else {
             content
         }

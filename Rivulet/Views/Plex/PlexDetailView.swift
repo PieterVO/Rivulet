@@ -20,6 +20,7 @@ struct PlexDetailView: View {
     @State private var isLoadingEpisodes = false
     @State private var showPlayer = false
     @State private var selectedEpisode: PlexMetadata?
+    @State private var fullEpisodeMetadata: [String: PlexMetadata] = [:]  // Prefetched full metadata keyed by ratingKey
 
     // Music album state
     @State private var tracks: [PlexMetadata] = []
@@ -195,7 +196,20 @@ struct PlexDetailView: View {
         #else
         .fullScreenCover(isPresented: $showPlayer) {
             // Play the selected episode/track if available, otherwise play the main item (movie/album)
-            let playItem = selectedEpisode ?? selectedTrack ?? item
+            // Use prefetched full metadata for episodes (has Stream data for DV detection)
+            let playItem: PlexMetadata = if let episode = selectedEpisode {
+                // Use prefetched full metadata if available
+                if let ratingKey = episode.ratingKey, let fullEpisode = fullEpisodeMetadata[ratingKey] {
+                    fullEpisode
+                } else {
+                    episode
+                }
+            } else if selectedTrack != nil {
+                selectedTrack!
+            } else {
+                // For main item (movie), prefer fullMetadata as it has Stream data for DV/HDR detection
+                fullMetadata ?? item
+            }
             // Use fullMetadata for updated viewOffset when playing the main item (not episodes/tracks)
             let viewOffset = (selectedEpisode == nil && selectedTrack == nil)
                 ? (fullMetadata?.viewOffset ?? playItem.viewOffset)
@@ -1100,7 +1114,23 @@ struct PlexDetailView: View {
     #if os(tvOS)
     /// Present player using UIViewController to intercept Menu button
     private func presentPlayer() {
-        let playItem = selectedEpisode ?? selectedTrack ?? item
+        // Use prefetched full metadata for episodes (has Stream data for DV detection)
+        // Fall back to basic metadata if prefetch hasn't completed
+        let playItem: PlexMetadata
+        if let episode = selectedEpisode {
+            // Use prefetched full metadata if available, otherwise fall back to basic
+            if let ratingKey = episode.ratingKey, let fullEpisode = fullEpisodeMetadata[ratingKey] {
+                playItem = fullEpisode
+            } else {
+                playItem = episode
+            }
+        } else if selectedTrack != nil {
+            playItem = selectedTrack!
+        } else {
+            // For main item (movie), prefer fullMetadata as it has Stream data for DV/HDR detection
+            playItem = fullMetadata ?? item
+        }
+
         // Use fullMetadata for updated viewOffset when playing the main item (not episodes/tracks)
         let viewOffset = (selectedEpisode == nil && selectedTrack == nil)
             ? (fullMetadata?.viewOffset ?? playItem.viewOffset)
@@ -1382,6 +1412,9 @@ struct PlexDetailView: View {
                 ratingKey: ratingKey
             )
             episodes = fetchedEpisodes
+
+            // Prefetch full metadata for all episodes in background (for DV/HDR detection)
+            prefetchEpisodeMetadata(episodes: fetchedEpisodes)
         } catch {
             print("Failed to load episodes: \(error)")
         }
@@ -1404,6 +1437,9 @@ struct PlexDetailView: View {
                 ratingKey: ratingKey
             )
             episodes = fetchedEpisodes
+
+            // Prefetch full metadata for all episodes in background (for DV/HDR detection)
+            prefetchEpisodeMetadata(episodes: fetchedEpisodes)
         } catch {
             print("Failed to load episodes for season: \(error)")
         }
@@ -1431,8 +1467,39 @@ struct PlexDetailView: View {
                 episodes[index].viewCount = updatedMetadata.viewCount
                 episodes[index].viewOffset = updatedMetadata.viewOffset
             }
+
+            // Also update prefetched metadata
+            fullEpisodeMetadata[ratingKey] = updatedMetadata
         } catch {
             print("Failed to refresh episode watch status: \(error)")
+        }
+    }
+
+    /// Prefetch full metadata for episodes in background
+    /// This ensures Stream data (for DV/HDR detection) is ready when user presses play
+    private func prefetchEpisodeMetadata(episodes: [PlexMetadata]) {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+
+        // Clear old prefetched data when switching seasons
+        fullEpisodeMetadata.removeAll()
+
+        // Fetch full metadata for each episode concurrently in background
+        for episode in episodes {
+            guard let ratingKey = episode.ratingKey else { continue }
+
+            Task {
+                do {
+                    let metadata = try await networkManager.getFullMetadata(
+                        serverURL: serverURL,
+                        authToken: token,
+                        ratingKey: ratingKey
+                    )
+                    fullEpisodeMetadata[ratingKey] = metadata
+                } catch {
+                    // Silently fail - we'll fall back to basic metadata on playback
+                }
+            }
         }
     }
 
