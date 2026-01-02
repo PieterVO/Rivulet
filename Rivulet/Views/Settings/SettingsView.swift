@@ -65,9 +65,11 @@ struct SettingsView: View {
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
+    @AppStorage("classicTVMode") private var classicTVMode = false
     @AppStorage("showSkipButton") private var showSkipButton = true
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
+    @AppStorage("autoSkipAds") private var autoSkipAds = false
     @AppStorage("highQualityScaling") private var highQualityScaling = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
@@ -183,6 +185,14 @@ struct SettingsView: View {
                                 isOn: $autoSkipCredits
                             )
 
+                            SettingsToggleRow(
+                                icon: "forward.frame",
+                                iconColor: .red,
+                                title: "Auto-Skip Ads",
+                                subtitle: "Automatically skip advertisements",
+                                isOn: $autoSkipAds
+                            )
+
                             SettingsPickerRow(
                                 icon: "forward.end.alt",
                                 iconColor: .purple,
@@ -211,6 +221,14 @@ struct SettingsView: View {
 
                         // Live TV section
                         SettingsSection(title: "Live TV") {
+                            SettingsToggleRow(
+                                icon: "tv.fill",
+                                iconColor: .indigo,
+                                title: "Classic TV Mode",
+                                subtitle: "Hide player controls for a traditional TV experience",
+                                isOn: $classicTVMode
+                            )
+
                             SettingsToggleRow(
                                 icon: "square.stack.3d.down.right",
                                 iconColor: .purple,

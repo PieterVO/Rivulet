@@ -11,6 +11,7 @@ import Combine
 struct LiveTVPlayerView: View {
     @StateObject private var viewModel: MultiStreamViewModel
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
+    @AppStorage("classicTVMode") private var classicTVMode = false
     @State private var showExitConfirmation = false
     @State private var showChannelBadges = true
     @State private var channelBadgeTimer: Timer?
@@ -47,8 +48,8 @@ struct LiveTVPlayerView: View {
                     transaction.animation = nil
                 }
 
-            // Controls overlay
-            if viewModel.showControls {
+            // Controls overlay (hidden in classic TV mode)
+            if viewModel.showControls && !classicTVMode {
                 controlsOverlay
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
@@ -437,6 +438,9 @@ struct LiveTVPlayerView: View {
     #endif
 
     private func showControlsWithFocus() {
+        // In classic mode, Select does nothing - just watch TV
+        guard !classicTVMode else { return }
+
         withAnimation(.easeInOut(duration: 0.25)) {
             viewModel.showControlsTemporarily()
         }
@@ -854,8 +858,8 @@ struct LiveTVPlayerView: View {
             }
         } else if viewModel.showChannelPicker {
             viewModel.showChannelPicker = false
-        } else if viewModel.showControls {
-            // Hide controls and return focus to stream grid
+        } else if viewModel.showControls && !classicTVMode {
+            // Hide controls and return focus to stream grid (not in classic mode)
             withAnimation(.easeOut(duration: 0.2)) {
                 viewModel.showControls = false
             }
@@ -863,6 +867,7 @@ struct LiveTVPlayerView: View {
                 focusArea = .streamGrid
             }
         } else {
+            // In classic mode or when controls hidden, exit directly
             dismissPlayer()
         }
     }
