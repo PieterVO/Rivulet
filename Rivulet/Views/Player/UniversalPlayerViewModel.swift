@@ -242,6 +242,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var showSkipButton = false
     private var hasSkippedIntro = false
     private var hasSkippedCredits = false
+    private var skippedCommercialIds: Set<Int> = []  // Track skipped commercials by ID
     private var hasTriggeredPostVideo = false
     @Published var scrubTime: TimeInterval = 0
 
@@ -1080,6 +1081,22 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
+        // Check commercial markers
+        for commercial in metadata.commercialMarkers {
+            guard let commercialId = commercial.id else { continue }
+            let previewStart = max(0, commercial.startTimeSeconds - markerPreviewTime)
+
+            // Reset skip flag if user rewound before the marker
+            if time < previewStart && skippedCommercialIds.contains(commercialId) {
+                skippedCommercialIds.remove(commercialId)
+            }
+
+            if time >= previewStart && time < commercial.endTimeSeconds {
+                handleCommercialMarkerActive(commercial)
+                return
+            }
+        }
+
         // No credits marker - trigger post-video 45 seconds before end
         if metadata.creditsMarker == nil && duration > 60 {
             let triggerTime = duration - 45
@@ -1136,6 +1153,30 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Handle when playback enters a commercial marker range
+    private func handleCommercialMarkerActive(_ marker: PlexMarker) {
+        guard let commercialId = marker.id else { return }
+
+        let autoSkipAds = UserDefaults.standard.bool(forKey: "autoSkipAds")
+        let showSkipButtonSetting = UserDefaults.standard.object(forKey: "showSkipButton") as? Bool ?? true
+
+        // Check for auto-skip
+        if autoSkipAds && !skippedCommercialIds.contains(commercialId) {
+            skippedCommercialIds.insert(commercialId)
+            Task { await skipActiveMarker() }
+            return
+        }
+
+        // Show skip button if enabled and not already skipped
+        if showSkipButtonSetting {
+            if !skippedCommercialIds.contains(commercialId) && activeMarker == nil {
+                activeMarker = marker
+                showSkipButton = true
+                print("⏭️ [Skip] Showing skip button for commercial marker: \(marker.startTimeSeconds)s - \(marker.endTimeSeconds)s")
+            }
+        }
+    }
+
     /// Skip to end of current marker
     func skipActiveMarker() async {
         guard let marker = activeMarker ?? metadata.introMarker ?? metadata.creditsMarker else { return }
@@ -1145,6 +1186,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             hasSkippedIntro = true
         } else if marker.isCredits {
             hasSkippedCredits = true
+        } else if marker.isCommercial, let commercialId = marker.id {
+            skippedCommercialIds.insert(commercialId)
         }
 
         // Seek to end of marker
@@ -1162,6 +1205,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             return "Skip Intro"
         } else if marker.isCredits {
             return "Skip Credits"
+        } else if marker.isCommercial {
+            return "Skip Ad"
         }
         return "Skip"
     }
@@ -1459,6 +1504,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Reset skip tracking for new episode
         hasSkippedIntro = false
         hasSkippedCredits = false
+        skippedCommercialIds.removeAll()
         hasTriggeredPostVideo = false
         nextEpisode = nil
 

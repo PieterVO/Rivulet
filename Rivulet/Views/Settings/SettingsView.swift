@@ -68,6 +68,7 @@ struct SettingsView: View {
     @AppStorage("showSkipButton") private var showSkipButton = true
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
+    @AppStorage("autoSkipAds") private var autoSkipAds = false
     @AppStorage("highQualityScaling") private var highQualityScaling = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
@@ -181,6 +182,14 @@ struct SettingsView: View {
                                 title: "Auto-Skip Credits",
                                 subtitle: "Automatically skip end credits",
                                 isOn: $autoSkipCredits
+                            )
+
+                            SettingsToggleRow(
+                                icon: "forward.frame",
+                                iconColor: .red,
+                                title: "Auto-Skip Ads",
+                                subtitle: "Automatically skip advertisements",
+                                isOn: $autoSkipAds
                             )
 
                             SettingsPickerRow(
