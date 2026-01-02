@@ -49,6 +49,15 @@ final class AVPlayerUIView: UIView {
         set {
             guard playerLayer.player !== newValue else { return }
             playerLayer.player = newValue
+            // Debug: Log video track info
+            if let currentItem = newValue?.currentItem {
+                let asset = currentItem.asset
+                let videoTracks = asset.tracks(withMediaType: .video)
+                print("🎬 AVPlayerUIView: Player attached - video tracks: \(videoTracks.count)")
+                for (i, track) in videoTracks.enumerated() {
+                    print("🎬 AVPlayerUIView: Track \(i): naturalSize=\(track.naturalSize), enabled=\(track.isEnabled)")
+                }
+            }
         }
     }
 
@@ -71,6 +80,8 @@ final class AVPlayerUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         // AVPlayerLayer automatically resizes with the view
+        print("🎬 AVPlayerUIView: layoutSubviews - bounds=\(bounds), layer.frame=\(playerLayer.frame)")
+        print("🎬 AVPlayerUIView: videoRect=\(playerLayer.videoRect), isReadyForDisplay=\(playerLayer.isReadyForDisplay)")
     }
 }
 

@@ -73,6 +73,7 @@ struct SettingsView: View {
     @AppStorage("highQualityScaling") private var highQualityScaling = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
+    @AppStorage("useAVPlayerForDolbyVision") private var useAVPlayerForDolbyVision = false
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
     #if os(tvOS)
@@ -170,6 +171,14 @@ struct SettingsView: View {
                             )
 
                             SettingsToggleRow(
+                                icon: "timeline.selection",
+                                iconColor: .yellow,
+                                title: "Show Markers on Scrubber",
+                                subtitle: "Highlight intro, credits, and ads on the progress bar",
+                                isOn: $showMarkersOnScrubber
+                            )
+
+                            SettingsToggleRow(
                                 icon: "play.circle",
                                 iconColor: .green,
                                 title: "Auto-Skip Intro",
@@ -211,11 +220,11 @@ struct SettingsView: View {
                             )
 
                             SettingsToggleRow(
-                                icon: "timeline.selection",
-                                iconColor: .yellow,
-                                title: "Show Markers on Scrubber",
-                                subtitle: "Highlight intro and credits on the progress bar",
-                                isOn: $showMarkersOnScrubber
+                                icon: "sparkles.tv",
+                                iconColor: .purple,
+                                title: "Use AVPlayer for Dolby Vision",
+                                subtitle: "DV Profile 5/8 only. Profile 7 (MKV remux) requires MPV",
+                                isOn: $useAVPlayerForDolbyVision
                             )
                         }
 

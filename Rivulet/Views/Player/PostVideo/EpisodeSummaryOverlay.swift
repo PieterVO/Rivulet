@@ -216,7 +216,11 @@ struct PostVideoButton: View {
             )
             .scaleEffect(isFocused ? 1.08 : 1.0)
         }
+        #if os(tvOS)
+        .buttonStyle(CardButtonStyle())
+        #else
         .buttonStyle(.plain)
+        #endif
         .focusable(isActive)
         .focused($isFocused)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)

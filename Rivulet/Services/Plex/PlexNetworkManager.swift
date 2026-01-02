@@ -1283,8 +1283,98 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         return components.url
     }
-    
+
+    /// Build HLS URL for AVPlayer with direct stream (remux only, no transcoding)
+    /// This preserves video/audio codecs including Dolby Vision while providing HLS format
+    /// Returns both the URL and required HTTP headers (Plex HLS requires auth in headers, not query params)
+    func buildHLSDirectPlayURL(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String,
+        offsetMs: Int = 0
+    ) -> (url: URL, headers: [String: String])? {
+        // Request an HLS remux that keeps the HEVC/Dolby Vision bitstream intact
+        // tvOS requires fMP4/CMAF segments for Dolby Vision profiles 5/8
+        let endpoint = "/video/:/transcode/universal/start.m3u8"
+        guard var components = URLComponents(string: "\(serverURL)\(endpoint)") else {
+            return nil
+        }
+
+        let sessionId = UUID().uuidString
+        let clientProfile = [
+            "add-direct-stream-profile(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=hevc)",
+            "add-direct-stream-profile(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=h264)",
+            "add-direct-stream-profile(type=musicProfile&audioCodec=aac&container=mp4)",
+            "add-direct-stream-profile(type=musicProfile&audioCodec=ac3&container=mp4)",
+            "add-direct-stream-profile(type=musicProfile&audioCodec=eac3&container=mp4)",
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=hevc&audioCodec=aac,ac3,eac3)",
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=h264&audioCodec=aac,ac3,eac3)"
+        ].joined(separator: "+")
+
+        // Plex HLS requires auth in HTTP headers, not query params
+        // Without these headers, endpoint returns 400 Bad Request
+        var headers = plexHeaders(authToken: authToken)
+        headers["X-Plex-Client-Profile-Extra"] = clientProfile
+        headers["X-Plex-Client-Profile-Name"] = "Generic"
+
+        // URL query params (no auth here - must be in headers)
+        components.queryItems = [
+            URLQueryItem(name: "X-Plex-Client-Profile-Extra", value: clientProfile),
+            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
+            URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "offset", value: "\(offsetMs / 1000)"),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "container", value: "mp4"),
+            URLQueryItem(name: "segmentFormat", value: "mp4"),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "1"),
+            // Force audio transcode (TrueHD/ DTS are not playable by AVPlayer)
+            URLQueryItem(name: "directStreamAudio", value: "0"),
+            URLQueryItem(name: "fastSeek", value: "1"),
+            URLQueryItem(name: "videoCodec", value: "h264,hevc"),
+            URLQueryItem(name: "videoResolution", value: "4096x2160"),
+            URLQueryItem(name: "maxVideoBitrate", value: "200000"),
+            URLQueryItem(name: "videoQuality", value: "100"),
+            // Try to reduce segment burst size to avoid bandwidth mismatch warnings
+            URLQueryItem(name: "maxVideoBitrateMode", value: "throttled"),
+            URLQueryItem(name: "segmentDuration", value: "6"),
+            URLQueryItem(name: "audioCodec", value: "aac,eac3,ac3"),
+            URLQueryItem(name: "audioBitrate", value: "1024"),
+            URLQueryItem(name: "audioChannels", value: "8"),
+            URLQueryItem(name: "subtitles", value: "auto"),
+            URLQueryItem(name: "subtitleSize", value: "100"),
+            URLQueryItem(name: "context", value: "streaming"),
+            URLQueryItem(name: "location", value: "lan"),
+            URLQueryItem(name: "session", value: sessionId),
+            URLQueryItem(name: "autoAdjustQuality", value: "0"),
+            URLQueryItem(name: "hasMDE", value: "1")
+        ]
+
+        guard let url = components.url else { return nil }
+        return (url, headers)
+    }
+
+    /// Detect if a server URL is on the local network
+    private func isLocalServer(_ serverURL: String) -> Bool {
+        guard let url = URL(string: serverURL), let host = url.host else {
+            return false
+        }
+
+        // Check for private IP ranges
+        let localPrefixes = [
+            "192.168.", "10.", "172.16.", "172.17.", "172.18.", "172.19.",
+            "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.",
+            "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+            "127.", "localhost"
+        ]
+
+        return localPrefixes.contains(where: { host.hasPrefix($0) }) || host == "localhost"
+    }
+
     /// Get decision info from Plex about what playback method to use
+    /// This also initializes the transcode session on the server
     func getPlaybackDecision(
         serverURL: String,
         authToken: String,
@@ -1293,7 +1383,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         guard var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/decision") else {
             throw PlexAPIError.invalidURL
         }
-        
+
+        // Use parameters that request HLS with direct play/stream enabled
         components.queryItems = [
             URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
             URLQueryItem(name: "mediaIndex", value: "0"),
@@ -1303,11 +1394,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "directStream", value: "1"),
             URLQueryItem(name: "directStreamAudio", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
-            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3"),
+            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3,dca"),
+            URLQueryItem(name: "subtitles", value: "auto"),
+            URLQueryItem(name: "hasMDE", value: "1"),
+            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
             URLQueryItem(name: "X-Plex-Token", value: authToken),
             URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
             URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
-            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName)
+            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
+            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName)
         ]
         
         guard let url = components.url else {
@@ -1879,13 +1974,16 @@ struct PlaybackDecision: Codable, Sendable {
     let generalDecisionText: String?
     let transcodeDecisionCode: Int?
     let transcodeDecisionText: String?
-    
+    // MDE (Media Decision Engine) fields - used when hasMDE=1
+    let mdeDecisionCode: Int?
+    let mdeDecisionText: String?
+
     /// Check if direct play is available
     var canDirectPlay: Bool {
-        // Code 1000 = "Direct play OK"
-        directPlayDecisionCode == 1000
+        // Code 1000 = "Direct play OK" (from either directPlay or MDE)
+        directPlayDecisionCode == 1000 || mdeDecisionCode == 1000
     }
-    
+
     /// Check if transcoding is required/available
     var requiresTranscode: Bool {
         !canDirectPlay && transcodeDecisionCode != nil

@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UIKit
+import Combine
 
 #if os(tvOS)
 
@@ -18,6 +19,7 @@ class PlayerContainerViewController: UIViewController {
     // MARK: - Properties
 
     private var hostingController: UIHostingController<AnyView>?
+    private var cancellables = Set<AnyCancellable>()
 
     /// Reference to the player view model for handling Menu button logic
     weak var viewModel: UniversalPlayerViewModel?
@@ -65,6 +67,16 @@ class PlayerContainerViewController: UIViewController {
         // to avoid double-firing issues
         // Left/right arrows are handled by SwiftUI's onMoveCommand with RemoteHoldDetector
         // (UIKit gesture recognizers don't receive events when SwiftUI has focus)
+
+        // Observe viewModel's shouldDismiss property for programmatic dismissal
+        viewModel?.$shouldDismiss
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] shouldDismiss in
+                if shouldDismiss {
+                    self?.dismissPlayer()
+                }
+            }
+            .store(in: &cancellables)
 
         print("🎮 [SETUP] PlayerContainerViewController ready")
     }
@@ -244,7 +256,8 @@ class PlayerContainerViewController: UIViewController {
     }
 
     private func dismissPlayer() {
-        dismiss(animated: true) { [weak self] in
+        // Use super.dismiss to bypass our override checks
+        super.dismiss(animated: true) { [weak self] in
             self?.onDismiss?()
         }
     }
