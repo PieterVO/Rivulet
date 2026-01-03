@@ -21,6 +21,7 @@ struct PlexDetailView: View {
     @State private var showPlayer = false
     @State private var selectedEpisode: PlexMetadata?
     @State private var fullEpisodeMetadata: [String: PlexMetadata] = [:]  // Prefetched full metadata keyed by ratingKey
+    @State private var nextUpEpisode: PlexMetadata?  // The episode that will play when pressing Play on a show
 
     // Music album state
     @State private var tracks: [PlexMetadata] = []
@@ -75,6 +76,24 @@ struct PlexDetailView: View {
             return merged
         }
         return item
+    }
+
+    /// Play button label for TV shows
+    /// Shows "Continue [Episode Title]" for in-progress episodes, "Play" otherwise
+    private var showPlayButtonLabel: String {
+        guard let episode = nextUpEpisode else { return "Play" }
+
+        // Check if the episode is in progress
+        if episode.isInProgress, let title = episode.title {
+            // Truncate long titles
+            let maxLength = 20
+            let truncatedTitle = title.count <= maxLength
+                ? title
+                : String(title.prefix(maxLength - 1)) + "…"
+            return "Continue \(truncatedTitle)"
+        }
+
+        return "Play"
     }
 
     var body: some View {
@@ -161,6 +180,7 @@ struct PlexDetailView: View {
             selectedSeason = nil
             fullMetadata = nil
             relatedItems = []
+            nextUpEpisode = nil
 
             // Initialize watched state
             isWatched = item.isWatched
@@ -177,6 +197,8 @@ struct PlexDetailView: View {
             // Load seasons for TV shows
             if item.type == "show" {
                 await loadSeasons()
+                // Determine the "next up" episode for the Play button
+                await loadNextUpEpisode()
             }
 
             // Load episodes for seasons
@@ -607,7 +629,29 @@ struct PlexDetailView: View {
                 #if os(tvOS)
                 .focused($focusedActionButton, equals: "play")
                 #endif
+            } else if item.type == "show" {
+                // TV Show: Play button uses nextUpEpisode
+                Button {
+                    if let episode = nextUpEpisode {
+                        selectedEpisode = episode
+                    }
+                    playFromBeginning = false
+                    showPlayer = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                        Text(showPlayButtonLabel)
+                    }
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(minWidth: actionButtonMinWidth, minHeight: actionButtonHeight)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(nextUpEpisode == nil)
+                #if os(tvOS)
+                .focused($focusedActionButton, equals: "play")
+                #endif
             } else if item.type != "track" {
+                // Movies/Episodes: Standard Play/Resume button
                 Button {
                     playFromBeginning = false
                     showPlayer = true
@@ -1245,6 +1289,58 @@ struct PlexDetailView: View {
             relatedItems = related
         } catch {
             print("Failed to load related items: \(error)")
+        }
+    }
+
+    /// Determine the "next up" episode for the Play button on TV shows
+    /// Uses Plex's OnDeck data if available, otherwise falls back to first episode
+    private func loadNextUpEpisode() async {
+        guard item.type == "show",
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+
+        // Try to get OnDeck episode from full metadata
+        if let onDeckEpisode = fullMetadata?.OnDeck?.Metadata?.first,
+           let ratingKey = onDeckEpisode.ratingKey {
+            // Fetch full metadata for the episode (includes Stream data for DV detection)
+            do {
+                let fullEpisode = try await networkManager.getFullMetadata(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: ratingKey
+                )
+                nextUpEpisode = fullEpisode
+                return
+            } catch {
+                // Fall back to the basic OnDeck episode data
+                nextUpEpisode = onDeckEpisode
+                return
+            }
+        }
+
+        // No OnDeck episode - get the first episode of the first season
+        guard let firstSeason = seasons.first,
+              let seasonRatingKey = firstSeason.ratingKey else { return }
+
+        do {
+            let seasonEpisodes = try await networkManager.getChildren(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: seasonRatingKey
+            )
+
+            if let firstEpisode = seasonEpisodes.first,
+               let episodeRatingKey = firstEpisode.ratingKey {
+                // Fetch full metadata for the first episode
+                let fullEpisode = try await networkManager.getFullMetadata(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: episodeRatingKey
+                )
+                nextUpEpisode = fullEpisode
+            }
+        } catch {
+            print("Failed to load first episode: \(error)")
         }
     }
 

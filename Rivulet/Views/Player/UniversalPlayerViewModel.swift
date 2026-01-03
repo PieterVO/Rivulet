@@ -1427,6 +1427,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Don't re-enter if already showing post-video
         guard postVideoState == .hidden else { return }
 
+        // Mark as watched immediately when playback ends/reaches credits
+        await markCurrentAsWatched()
+
         print("🎬 [PostVideo] Playback ended, preparing summary...")
         print("🎬 [PostVideo] Content type: \(metadata.type ?? "nil")")
         print("🎬 [PostVideo] Title: \(metadata.title ?? "nil")")
@@ -1670,6 +1673,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     func playNextEpisode() async {
         guard let next = nextEpisode else { return }
 
+        // Mark current episode as watched BEFORE switching to next
+        await markCurrentAsWatched()
+
         print("🎬 [PostVideo] Playing next episode: \(next.title ?? "Unknown")")
 
         // Stop countdown
@@ -1734,6 +1740,25 @@ final class UniversalPlayerViewModel: ObservableObject {
             object: nil,
             userInfo: ["ratingKey": showKey, "type": "show"]
         )
+    }
+
+    // MARK: - Progress Tracking
+
+    /// Mark current content as watched (for use before transitioning to next episode)
+    private func markCurrentAsWatched() async {
+        guard let ratingKey = metadata.ratingKey, !ratingKey.isEmpty else { return }
+
+        // Report stopped state
+        await PlexProgressReporter.shared.reportProgress(
+            ratingKey: ratingKey,
+            time: currentTime,
+            duration: duration,
+            state: "stopped"
+        )
+
+        // Mark as watched (episode reached post-video, so it's effectively complete)
+        await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey)
+        print("📊 [Progress] Marked \(ratingKey) as watched")
     }
 
     // MARK: - Cleanup

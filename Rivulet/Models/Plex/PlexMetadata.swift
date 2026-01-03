@@ -44,6 +44,11 @@ struct PlexExtrasContainer: Codable, Sendable {
     var Metadata: [PlexExtra]?
 }
 
+/// Container for OnDeck (next episode to watch) in Plex API response
+struct PlexOnDeck: Codable, Sendable {
+    var Metadata: [PlexMetadata]?
+}
+
 // MARK: - Marker Model
 
 /// Plex media marker (intro, credits, commercial)
@@ -173,6 +178,9 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     // MARK: - Markers (Intro, Credits, etc.)
     var Marker: [PlexMarker]?
 
+    // MARK: - On Deck (Next Episode for Shows)
+    var OnDeck: PlexOnDeck?
+
     // MARK: - Additional Metadata
     var hasPremiumPrimaryExtra: String?
     var primaryExtraKey: String?
@@ -243,6 +251,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         Writer: [PlexCrewMember]? = nil,
         Extras: PlexExtrasContainer? = nil,
         Marker: [PlexMarker]? = nil,
+        OnDeck: PlexOnDeck? = nil,
         hasPremiumPrimaryExtra: String? = nil,
         primaryExtraKey: String? = nil
     ) {
@@ -300,6 +309,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         self.Writer = Writer
         self.Extras = Extras
         self.Marker = Marker
+        self.OnDeck = OnDeck
         self.hasPremiumPrimaryExtra = hasPremiumPrimaryExtra
         self.primaryExtraKey = primaryExtraKey
     }
@@ -364,8 +374,18 @@ extension PlexMetadata {
     }
 
     /// Check if item should show as "watched" (completed, no active re-watch in progress)
-    /// An item with viewCount > 0 but also isInProgress should show as "in progress", not "watched"
+    /// - Shows/Seasons: all episodes must be watched (viewedLeafCount >= leafCount)
+    /// - Movies/Episodes: viewCount > 0 and not currently in progress
     var isWatched: Bool {
+        // For shows and seasons, check if all episodes are watched
+        if type == "show" || type == "season" {
+            guard let total = leafCount, let watched = viewedLeafCount, total > 0 else {
+                return false
+            }
+            return watched >= total
+        }
+
+        // For movies and episodes, use viewCount logic
         // If currently in progress (re-watching), don't show as watched
         if isInProgress {
             return false
