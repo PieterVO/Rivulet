@@ -271,6 +271,34 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
             "current_time": playerController?.currentTime ?? 0
         ]
         event.tags = ["component": "mpv_player"]
+
+        // Fingerprint by error type so different MPV errors create separate issues
+        let errorCategory = categorizeMPVError(message)
+        event.fingerprint = ["mpv", errorCategory]
+
         SentrySDK.capture(event: event)
+    }
+
+    /// Categorizes MPV error messages for Sentry fingerprinting
+    private func categorizeMPVError(_ message: String) -> String {
+        let lowercased = message.lowercased()
+
+        if lowercased.contains("loading failed") {
+            return "loading-failed"
+        } else if lowercased.contains("unrecognized file format") || lowercased.contains("unknown format") {
+            return "unrecognized-format"
+        } else if lowercased.contains("network") || lowercased.contains("connection") {
+            return "network-error"
+        } else if lowercased.contains("demuxer") {
+            return "demuxer-error"
+        } else if lowercased.contains("codec") || lowercased.contains("decode") {
+            return "codec-error"
+        } else if lowercased.contains("audio") {
+            return "audio-error"
+        } else if lowercased.contains("video") {
+            return "video-error"
+        } else {
+            return "unknown"
+        }
     }
 }

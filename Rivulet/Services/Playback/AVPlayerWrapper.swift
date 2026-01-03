@@ -637,6 +637,10 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             "is_compatibility_error": String(isCompatibilityError)
         ]
 
+        // Fingerprint by error category so different AVPlayer errors create separate issues
+        let errorCategory = categorizeAVPlayerError(errorCode: errorCode, errorDomain: errorDomain)
+        event.fingerprint = ["avplayer", errorCategory]
+
         // Add extra context
         var extras: [String: Any] = [
             "error_description": error.localizedDescription,
@@ -669,5 +673,50 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
         SentrySDK.capture(event: event)
         print("🎬 AVPlayerWrapper: Logged stream failure to Sentry (code: \(errorCode))")
+    }
+
+    /// Categorizes AVPlayer errors for Sentry fingerprinting
+    private func categorizeAVPlayerError(errorCode: Int, errorDomain: String) -> String {
+        // Network/URL errors (NSURLErrorDomain)
+        if errorDomain == "NSURLErrorDomain" || errorDomain.contains("NSURLError") {
+            switch errorCode {
+            case -1008: return "resource-unavailable"
+            case -1009: return "no-internet"
+            case -1001: return "timeout"
+            case -1200, -1201, -1202, -1203, -1204, -1205, -1206: return "ssl-error"
+            case -999: return "cancelled"
+            default: return "network-\(errorCode)"
+            }
+        }
+
+        // CoreMedia errors
+        if errorDomain == "CoreMediaErrorDomain" || errorDomain.contains("CoreMedia") {
+            switch errorCode {
+            case -12939: return "byte-range-unsupported"
+            case -12938: return "content-not-found"
+            case -12937: return "connection-failed"
+            case -12927: return "format-unsupported"
+            case -12318: return "bandwidth-exceeded"
+            case -50: return "invalid-parameter"
+            default: return "coremedia-\(errorCode)"
+            }
+        }
+
+        // AVFoundation errors
+        if errorDomain == "AVFoundationErrorDomain" {
+            switch errorCode {
+            case -11800: return "unknown-avfoundation"
+            case -11819, -11821: return "cannot-decode"
+            case -11828: return "cannot-open"
+            case -11829: return "content-not-playable"
+            case -11839: return "content-not-authorized"
+            case -11850: return "operation-interrupted"
+            case -11868: return "cannot-open-file"
+            default: return "avfoundation-\(errorCode)"
+            }
+        }
+
+        // Fallback for unknown domains
+        return "\(errorDomain)-\(errorCode)"
     }
 }
