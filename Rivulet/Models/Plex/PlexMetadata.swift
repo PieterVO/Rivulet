@@ -26,6 +26,12 @@ struct PlexCrewMember: Codable, Identifiable, Sendable {
     var thumb: String?
 }
 
+/// Generic tag model (genres, collections, etc.)
+struct PlexTag: Codable, Identifiable, Hashable, Sendable {
+    var id: String { tag ?? UUID().uuidString }
+    var tag: String?
+}
+
 /// Trailer/Extra content
 struct PlexExtra: Codable, Identifiable, Sendable {
     var id: String { ratingKey ?? UUID().uuidString }
@@ -119,6 +125,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     var thumb: String?
     var art: String?
     var banner: String?
+    var Genre: [PlexTag]?
 
     // MARK: - Timing
     var duration: Int?            // Milliseconds
@@ -215,6 +222,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         thumb: String? = nil,
         art: String? = nil,
         banner: String? = nil,
+        Genre: [PlexTag]? = nil,
         duration: Int? = nil,
         originallyAvailableAt: String? = nil,
         addedAt: Int? = nil,
@@ -273,6 +281,7 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
         self.thumb = thumb
         self.art = art
         self.banner = banner
+        self.Genre = Genre
         self.duration = duration
         self.originallyAvailableAt = originallyAvailableAt
         self.addedAt = addedAt
@@ -318,6 +327,48 @@ struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
 // MARK: - Computed Properties
 
 extension PlexMetadata {
+    /// Best-effort extraction of TMDB ID from the guid
+    var tmdbId: Int? {
+        guard let guid else { return nil }
+        let lower = guid.lowercased()
+        let prefixes = ["tmdb://", "themoviedb://"]
+        for prefix in prefixes {
+            if lower.contains(prefix) {
+                let parts = lower.components(separatedBy: prefix)
+                guard parts.count > 1 else { continue }
+                let remainder = parts[1]
+                if let idPart = remainder.split(whereSeparator: { $0 == "?" || $0 == "&" || $0 == "/" }).first,
+                   let id = Int(idPart) {
+                    return id
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Normalized TMDB media type for the item
+    var tmdbMediaType: TMDBMediaType {
+        if type == "show" || type == "episode" {
+            return .tv
+        }
+        return .movie
+    }
+
+    /// Lowercased genre tags from Plex metadata
+    var genreTags: [String] {
+        Genre?.compactMap { $0.tag?.lowercased() } ?? []
+    }
+
+    /// Lowercased cast names
+    var castNames: [String] {
+        Role?.compactMap { $0.tag?.lowercased() } ?? []
+    }
+
+    /// Lowercased directors
+    var directorNames: [String] {
+        Director?.compactMap { $0.tag?.lowercased() } ?? []
+    }
+
     /// Duration formatted as "Xh Ym" or "Ym"
     var durationFormatted: String? {
         guard let durationMs = duration else { return nil }

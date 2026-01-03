@@ -12,13 +12,20 @@ struct PlexHomeView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var authManager = PlexAuthManager.shared
     @AppStorage("showHomeHero") private var showHomeHero = false
+    @AppStorage("enablePersonalizedRecommendations") private var enablePersonalizedRecommendations = false
     @Environment(\.nestedNavigationState) private var nestedNavState
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.isSidebarVisible) private var isSidebarVisible
     @State private var selectedItem: PlexMetadata?
     @State private var heroItem: PlexMetadata?
     @State private var cachedProcessedHubs: [PlexHub] = []  // Memoized to avoid recalculation on every render
+    @State private var recommendations: [PlexMetadata] = []
+    @State private var isLoadingRecommendations = false
+    @State private var recommendationsError: String?
     @FocusState private var focusedItemId: String?  // Tracks focused item by "context:itemId" format
+
+    private let recommendationService = PersonalizedRecommendationService.shared
+    private let recommendationsContentType: RecommendationContentType = .moviesAndShows
 
     // MARK: - Processed Hubs (merged Continue Watching + On Deck)
 
@@ -110,6 +117,9 @@ struct PlexHomeView: View {
             }
             .refreshable {
                 await dataStore.refreshHubs()
+                if enablePersonalizedRecommendations {
+                    await refreshRecommendations(force: true)
+                }
             }
             .onAppear {
                 // Initial computation of processed hubs
@@ -119,6 +129,9 @@ struct PlexHomeView: View {
                 // Only select hero if we don't have one yet
                 if heroItem == nil {
                     selectHeroItem()
+                }
+                if enablePersonalizedRecommendations && recommendations.isEmpty {
+                    Task { await refreshRecommendations(force: false) }
                 }
             }
             .onChange(of: dataStore.hubsVersion) { _, _ in
@@ -134,10 +147,16 @@ struct PlexHomeView: View {
                 // This ensures music hubs appear/disappear when library is pinned/unpinned
                 cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
             }
+            .onChange(of: enablePersonalizedRecommendations) { _, _ in
+                handleRecommendationsToggle()
+            }
             // Refresh hubs when notified (e.g., after playback ends, watch status changes)
             .onReceive(NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)) { _ in
                 Task {
                     await dataStore.refreshHubs()
+                    if enablePersonalizedRecommendations {
+                        await refreshRecommendations(force: true)
+                    }
                 }
             }
             .navigationDestination(item: $selectedItem) { item in
@@ -242,6 +261,51 @@ struct PlexHomeView: View {
         }
     }
 
+    // MARK: - Recommendations
+
+    private func refreshRecommendations(force: Bool = false) async {
+        guard enablePersonalizedRecommendations else { return }
+        await MainActor.run {
+            if force || recommendations.isEmpty {
+                isLoadingRecommendations = true
+            }
+            recommendationsError = nil
+        }
+
+        do {
+            let items = try await recommendationService.recommendations(
+                forceRefresh: force,
+                contentType: recommendationsContentType
+            )
+            await MainActor.run {
+                recommendations = items
+                isLoadingRecommendations = false
+            }
+        } catch {
+            await MainActor.run {
+                recommendations = []
+                recommendationsError = error.localizedDescription
+                isLoadingRecommendations = false
+            }
+        }
+    }
+
+    private func handleRecommendationsToggle() {
+        if enablePersonalizedRecommendations {
+            Task { await refreshRecommendations(force: true) }
+        } else {
+            recommendations = []
+            recommendationsError = nil
+            isLoadingRecommendations = false
+        }
+    }
+
+    private func isContinueWatchingHub(_ hub: PlexHub) -> Bool {
+        let identifier = hub.hubIdentifier?.lowercased() ?? ""
+        let title = hub.title?.lowercased() ?? ""
+        return identifier.contains("continuewatching") || title.contains("continue watching")
+    }
+
     // MARK: - Content View
 
     private var contentView: some View {
@@ -265,12 +329,16 @@ struct PlexHomeView: View {
                     }
                 }
 
+                if enablePersonalizedRecommendations {
+                    EmptyView() // Recommendations are injected below Continue Watching
+                }
+
                 // Content rows (uses cached processedHubs which merges Continue Watching + On Deck)
                 VStack(alignment: .leading, spacing: 48) {
-                    ForEach(cachedProcessedHubs, id: \.id) { hub in
+                    let continueWatchingIndex = cachedProcessedHubs.firstIndex(where: isContinueWatchingHub)
+                    ForEach(Array(cachedProcessedHubs.enumerated()), id: \.element.id) { index, hub in
                         if let items = hub.Metadata, !items.isEmpty {
-                            let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
-                                                     hub.title?.lowercased().contains("continue watching") == true
+                            let isContinueWatching = isContinueWatchingHub(hub)
                             InfiniteContentRow(
                                 title: hub.title ?? "Unknown",
                                 initialItems: items,
@@ -286,6 +354,11 @@ struct PlexHomeView: View {
                                     await dataStore.refreshHubs()
                                 }
                             )
+                        }
+
+                        if enablePersonalizedRecommendations,
+                           continueWatchingIndex == index {
+                            recommendationsSection
                         }
                     }
                 }
@@ -367,6 +440,65 @@ struct PlexHomeView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Recommendations Section
+
+    @ViewBuilder
+    private var recommendationsSection: some View {
+        if isLoadingRecommendations && recommendations.isEmpty {
+            HStack(spacing: 14) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Building Personalized Recommendations")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("This may take a moment")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 80)
+            .padding(.top, 24)
+        } else if let error = recommendationsError {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Personalized Recommendations Unavailable")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text(error)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button("Retry") {
+                    Task { await refreshRecommendations(force: true) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white.opacity(0.2))
+            }
+            .padding(.horizontal, 80)
+            .padding(.vertical, 12)
+        } else if !recommendations.isEmpty {
+            InfiniteContentRow(
+                title: "Personalized Recommendations",
+                initialItems: recommendations,
+                hubKey: nil,
+                hubIdentifier: nil,
+                serverURL: authManager.selectedServerURL ?? "",
+                authToken: authManager.selectedServerToken ?? "",
+                contextMenuSource: .other,
+                onItemSelected: { item in
+                    selectedItem = item
+                },
+                onRefreshNeeded: {
+                    await refreshRecommendations(force: true)
+                }
+            )
+        }
     }
 
     // MARK: - Error View

@@ -36,6 +36,10 @@ struct PlexLibraryView: View {
     @State private var loadingTask: Task<Void, Never>?  // Track current loading task for cancellation
     @State private var visibleItemCount: Int = 0  // Number of grid items to render initially
     @State private var visibleItemExpandTask: Task<Void, Never>?  // Gradual reveal task
+    @State private var recommendations: [PlexMetadata] = []
+    @State private var isLoadingRecommendations = false
+    @State private var recommendationsError: String?
+    @AppStorage("enablePersonalizedRecommendations") private var enablePersonalizedRecommendations = false
 
     #if os(tvOS)
     @FocusState private var focusedItemId: String?  // Track focused item by "context:itemId" format
@@ -55,6 +59,7 @@ struct PlexLibraryView: View {
 
     private let networkManager = PlexNetworkManager.shared
     private let cacheManager = CacheManager.shared
+    private let recommendationService = PersonalizedRecommendationService.shared
 
     /// Check if this is a music library (uses square posters)
     private var isMusicLibrary: Bool {
@@ -72,6 +77,23 @@ struct PlexLibraryView: View {
     #endif
 
     private let initialVisibleBatch = 24  // Limit first-frame layout work
+
+    private var recommendationsContentType: RecommendationContentType {
+        let libraryType = dataStore.libraries.first(where: { $0.key == libraryKey })?.type
+        switch libraryType {
+        case "movie":
+            return .movies
+        case "show":
+            return .shows
+        default:
+            return .moviesAndShows
+        }
+    }
+
+    private var shouldShowRecommendationsRow: Bool {
+        let libraryType = dataStore.libraries.first(where: { $0.key == libraryKey })?.type
+        return libraryType == "movie" || libraryType == "show"
+    }
 
     // MARK: - Processed Hubs (merged Continue Watching + On Deck)
 
@@ -246,9 +268,16 @@ struct PlexLibraryView: View {
                             // No cache - fetch from server (skeleton still showing)
                             await loadItems()
                         }
+
+                        if enablePersonalizedRecommendations {
+                            Task { await refreshRecommendations(force: false) }
+                        }
                     } else {
                         // Same library - just refresh in background
                         await loadItemsInBackground()
+                        if enablePersonalizedRecommendations, recommendations.isEmpty {
+                            Task { await refreshRecommendations(force: false) }
+                        }
                     }
                 } else {
                     // Not authenticated - clear everything
@@ -280,6 +309,9 @@ struct PlexLibraryView: View {
             } else {
                 nestedNavState.goBackAction = nil
             }
+        }
+        .onChange(of: enablePersonalizedRecommendations) { _, _ in
+            handleRecommendationsToggle()
         }
         #if os(tvOS)
         // Save focus when it changes (only when content scope is active)
@@ -427,10 +459,10 @@ struct PlexLibraryView: View {
     private var essentialRowsView: some View {
         if !essentialHubs.isEmpty {
             VStack(alignment: .leading, spacing: 40) {
-                ForEach(essentialHubs, id: \.hubIdentifier) { hub in
+                let continueWatchingIndex = essentialHubs.firstIndex(where: isContinueWatchingHub)
+                ForEach(Array(essentialHubs.enumerated()), id: \.element.hubIdentifier) { index, hub in
                     if let hubItems = hub.Metadata, !hubItems.isEmpty {
-                        let isContinueWatching = hub.hubIdentifier?.lowercased().contains("continuewatching") == true ||
-                                                 hub.title?.lowercased().contains("continue watching") == true
+                        let isContinueWatching = isContinueWatchingHub(hub)
                         InfiniteContentRow(
                             title: hub.title ?? "Untitled",
                             initialItems: hubItems,
@@ -446,6 +478,12 @@ struct PlexLibraryView: View {
                                 await refresh()
                             }
                         )
+
+                        if enablePersonalizedRecommendations,
+                           shouldShowRecommendationsRow,
+                           continueWatchingIndex == index {
+                            recommendationsSection
+                        }
                     }
                 }
             }
@@ -456,6 +494,61 @@ struct PlexLibraryView: View {
             .padding(.horizontal, 40)
             .padding(.top, 24)
             #endif
+        }
+    }
+
+    // MARK: - Recommendations Section
+
+    @ViewBuilder
+    private var recommendationsSection: some View {
+        if isLoadingRecommendations && recommendations.isEmpty {
+            HStack(spacing: 14) {
+                ProgressView()
+                    .progressViewStyle(.circular)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Building Personalized Recommendations")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text("This may take a moment")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        } else if let error = recommendationsError {
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Personalized Recommendations Unavailable")
+                        .font(.system(size: 20, weight: .semibold))
+                    Text(error)
+                        .font(.system(size: 16))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button("Retry") {
+                    Task { await refreshRecommendations(force: true) }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white.opacity(0.2))
+            }
+        } else if !recommendations.isEmpty {
+            InfiniteContentRow(
+                title: "Personalized Recommendations",
+                initialItems: recommendations,
+                hubKey: nil,
+                hubIdentifier: nil,
+                serverURL: authManager.selectedServerURL ?? "",
+                authToken: authManager.selectedServerToken ?? "",
+                contextMenuSource: .library,
+                onItemSelected: { item in
+                    selectedItem = item
+                },
+                onRefreshNeeded: {
+                    await refreshRecommendations(force: true)
+                }
+            )
         }
     }
 
@@ -838,6 +931,52 @@ struct PlexLibraryView: View {
         return []
     }
 
+    // MARK: - Personalized Recommendations
+
+    private func refreshRecommendations(force: Bool = false) async {
+        guard enablePersonalizedRecommendations else { return }
+        await MainActor.run {
+            if force || recommendations.isEmpty {
+                isLoadingRecommendations = true
+            }
+            recommendationsError = nil
+        }
+
+        do {
+            let items = try await recommendationService.recommendations(
+                forceRefresh: force,
+                contentType: recommendationsContentType,
+                libraryKey: shouldShowRecommendationsRow ? libraryKey : nil
+            )
+            await MainActor.run {
+                recommendations = items
+                isLoadingRecommendations = false
+            }
+        } catch {
+            await MainActor.run {
+                recommendations = []
+                recommendationsError = error.localizedDescription
+                isLoadingRecommendations = false
+            }
+        }
+    }
+
+    private func handleRecommendationsToggle() {
+        if enablePersonalizedRecommendations {
+            Task { await refreshRecommendations(force: true) }
+        } else {
+            recommendations = []
+            recommendationsError = nil
+            isLoadingRecommendations = false
+        }
+    }
+
+    private func isContinueWatchingHub(_ hub: PlexHub) -> Bool {
+        let identifier = hub.hubIdentifier?.lowercased() ?? ""
+        let title = hub.title?.lowercased() ?? ""
+        return identifier.contains("continuewatching") || title.contains("continue watching")
+    }
+
     private let pageSize = 60  // Smaller initial batch to reduce main-thread layout work
 
     private func fetchFromServer(serverURL: String, token: String, updateLoading: Bool) async {
@@ -1009,6 +1148,10 @@ struct PlexLibraryView: View {
         async let itemsFetch: () = fetchFromServer(serverURL: serverURL, token: token, updateLoading: true)
         async let hubsFetch: () = fetchLibraryHubs(serverURL: serverURL, token: token)
         _ = await (itemsFetch, hubsFetch)
+
+        if enablePersonalizedRecommendations {
+            await refreshRecommendations(force: true)
+        }
     }
 
     // MARK: - Focus Management
