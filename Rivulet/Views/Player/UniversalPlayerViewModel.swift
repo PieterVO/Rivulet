@@ -1308,13 +1308,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Check for auto-skip
         if isIntro && autoSkipIntro && !hasSkippedIntro {
             hasSkippedIntro = true
-            Task { await skipActiveMarker() }
+            Task { await skipMarker(marker) }
             return
         }
 
         if !isIntro && autoSkipCredits && !hasSkippedCredits {
             hasSkippedCredits = true
-            Task { await skipActiveMarker() }
+            Task { await skipMarker(marker) }
             return
         }
 
@@ -1341,7 +1341,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Check for auto-skip
         if autoSkipAds && !skippedCommercialIds.contains(commercialId) {
             skippedCommercialIds.insert(commercialId)
-            Task { await skipActiveMarker() }
+            Task { await skipMarker(marker) }
             return
         }
 
@@ -1355,10 +1355,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Skip to end of current marker
+    /// Skip to end of current marker (called from UI skip button)
     func skipActiveMarker() async {
-        guard let marker = activeMarker ?? metadata.introMarker ?? metadata.creditsMarker else { return }
+        guard let marker = activeMarker else { return }
+        await skipMarker(marker)
+    }
 
+    /// Skip to end of a specific marker
+    private func skipMarker(_ marker: PlexMarker) async {
         // Mark as skipped to prevent re-showing button if user seeks back
         if marker.isIntro {
             hasSkippedIntro = true

@@ -23,10 +23,8 @@ final class MultiStreamViewModel: ObservableObject {
         let id = UUID()
         let channel: UnifiedChannel
 
-        // Player wrappers - only one will be non-nil based on engine selection
-        let mpvWrapper: MPVPlayerWrapper?
-        let avWrapper: AVPlayerWrapper?
-        var playerController: MPVMetalViewController?  // Only used for MPV
+        let mpvWrapper: MPVPlayerWrapper
+        var playerController: MPVMetalViewController?
 
         var playbackState: UniversalPlaybackState
         var currentProgram: UnifiedProgram?
@@ -35,39 +33,31 @@ final class MultiStreamViewModel: ObservableObject {
         // MARK: - Convenience Accessors
 
         var isPlaying: Bool {
-            mpvWrapper?.isPlaying ?? avWrapper?.isPlaying ?? false
+            mpvWrapper.isPlaying
         }
 
         var playbackStatePublisher: AnyPublisher<UniversalPlaybackState, Never> {
-            mpvWrapper?.playbackStatePublisher ?? avWrapper?.playbackStatePublisher ?? Just(.idle).eraseToAnyPublisher()
+            mpvWrapper.playbackStatePublisher
         }
 
         func play() {
-            mpvWrapper?.play()
-            avWrapper?.play()
+            mpvWrapper.play()
         }
 
         func pause() {
-            mpvWrapper?.pause()
-            avWrapper?.pause()
+            mpvWrapper.pause()
         }
 
         func stop() {
-            mpvWrapper?.stop()
-            avWrapper?.stop()
+            mpvWrapper.stop()
         }
 
         func setMuted(_ muted: Bool) {
-            mpvWrapper?.setMuted(muted)
-            avWrapper?.setMuted(muted)
+            mpvWrapper.setMuted(muted)
         }
 
         func load(url: URL, headers: [String: String]?) async throws {
-            if let mpv = mpvWrapper {
-                try await mpv.load(url: url, headers: headers, startTime: nil)
-            } else if let av = avWrapper {
-                try await av.load(url: url, headers: headers, isLive: true)
-            }
+            try await mpvWrapper.load(url: url, headers: headers, startTime: nil)
         }
     }
 
@@ -97,9 +87,6 @@ final class MultiStreamViewModel: ObservableObject {
     private var controlsTimer: Timer?
     private let controlsHideDelay: TimeInterval = 5
 
-    /// The player engine selected at initialization (doesn't change during session)
-    let playerEngine: LiveTVPlayerEngine
-
     // MARK: - Computed Properties
 
     var focusedStream: StreamSlot? {
@@ -108,16 +95,10 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     var canAddStream: Bool {
-        let maxStreams: Int
-        if playerEngine == .avplayer {
-            // AVPlayer is lightweight - allow 4 streams by default
-            maxStreams = 4
-        } else {
-            // MPV uses significant memory per stream
-            // Default to 2 streams, allow 4 with user opt-in (may cause crashes)
-            let allowFourStreams = UserDefaults.standard.bool(forKey: "allowFourStreams")
-            maxStreams = allowFourStreams ? 4 : 2
-        }
+        // MPV uses significant memory per stream
+        // Default to 2 streams, allow 4 with user opt-in (may cause crashes)
+        let allowFourStreams = UserDefaults.standard.bool(forKey: "allowFourStreams")
+        let maxStreams = allowFourStreams ? 4 : 2
         return streams.count < maxStreams
     }
 
@@ -145,9 +126,6 @@ final class MultiStreamViewModel: ObservableObject {
     // MARK: - Initialization
 
     init(initialChannel: UnifiedChannel) {
-        // Capture engine selection at initialization time
-        self.playerEngine = LiveTVPlayerEngine.current
-
         // Prevent screensaver during Live TV playback
         UIApplication.shared.isIdleTimerDisabled = true
 
@@ -168,23 +146,10 @@ final class MultiStreamViewModel: ObservableObject {
 
         let isMuted = !streams.isEmpty  // First stream unmuted, others muted
 
-        // Create the appropriate wrapper based on engine
-        let mpvWrapper: MPVPlayerWrapper?
-        let avWrapper: AVPlayerWrapper?
-
-        if playerEngine == .mpv {
-            mpvWrapper = MPVPlayerWrapper()
-            avWrapper = nil
-        } else {
-            mpvWrapper = nil
-            avWrapper = AVPlayerWrapper()
-        }
-
         var slot = StreamSlot(
             channel: channel,
-            mpvWrapper: mpvWrapper,
-            avWrapper: avWrapper,
-            playbackState: .loading,  // Start in loading state
+            mpvWrapper: MPVPlayerWrapper(),
+            playbackState: .loading,
             isMuted: isMuted
         )
 
@@ -312,25 +277,12 @@ final class MultiStreamViewModel: ObservableObject {
         oldSlot.stop()
         cancellables.removeValue(forKey: oldSlot.id)
 
-        // Create the appropriate wrapper based on engine
-        let mpvWrapper: MPVPlayerWrapper?
-        let avWrapper: AVPlayerWrapper?
-
-        if playerEngine == .mpv {
-            mpvWrapper = MPVPlayerWrapper()
-            avWrapper = nil
-        } else {
-            mpvWrapper = nil
-            avWrapper = AVPlayerWrapper()
-        }
-
         let isMuted = index != focusedSlotIndex  // Mute if not focused
 
         var newSlot = StreamSlot(
             channel: channel,
-            mpvWrapper: mpvWrapper,
-            avWrapper: avWrapper,
-            playbackState: .loading,  // Start in loading state
+            mpvWrapper: MPVPlayerWrapper(),
+            playbackState: .loading,
             isMuted: isMuted
         )
         newSlot.currentProgram = LiveTVDataStore.shared.getCurrentProgram(for: channel)
@@ -386,14 +338,13 @@ final class MultiStreamViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Controller Binding (MPV only)
+    // MARK: - Controller Binding
 
     func setPlayerController(_ controller: MPVMetalViewController, for slotId: UUID) {
-        guard playerEngine == .mpv else { return }  // Only applies to MPV
         guard let index = streams.firstIndex(where: { $0.id == slotId }) else { return }
 
         streams[index].playerController = controller
-        streams[index].mpvWrapper?.setPlayerController(controller)
+        streams[index].mpvWrapper.setPlayerController(controller)
 
         // Apply mute state
         controller.setMuted(streams[index].isMuted)

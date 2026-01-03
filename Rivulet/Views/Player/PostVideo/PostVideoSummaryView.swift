@@ -7,9 +7,17 @@
 
 import SwiftUI
 
+/// Focus targets for post-video overlays
+enum PostVideoFocusTarget: Hashable {
+    case playNext
+    case cancel
+    case close
+    case season
+    case show
+}
+
 struct PostVideoSummaryView: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
-    @ObservedObject var focusScopeManager: FocusScopeManager
 
     var body: some View {
         Group {
@@ -29,11 +37,11 @@ struct PostVideoSummaryView: View {
                 }
 
             case .showingEpisodeSummary:
-                EpisodeSummaryOverlay(viewModel: viewModel, focusScopeManager: focusScopeManager)
+                EpisodeSummaryOverlay(viewModel: viewModel)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
 
             case .showingMovieSummary:
-                MovieSummaryOverlay(viewModel: viewModel, focusScopeManager: focusScopeManager)
+                MovieSummaryOverlay(viewModel: viewModel)
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
@@ -51,8 +59,7 @@ struct PostVideoSummaryView: View {
             )
             vm.postVideoState = .showingEpisodeSummary
             return vm
-        }(),
-        focusScopeManager: FocusScopeManager()
+        }()
     )
 }
 
@@ -66,7 +73,6 @@ struct PostVideoSummaryView: View {
             )
             vm.postVideoState = .showingMovieSummary
             return vm
-        }(),
-        focusScopeManager: FocusScopeManager()
+        }()
     )
 }
