@@ -183,12 +183,14 @@ actor PlexLiveTVProvider: LiveTVProvider {
         print("📺 PlexLiveTVProvider: ✅ Fetched EPG for \(guideChannels.count) channels")
 
         // Build unified channel ID lookup
+        // Use uniquingKeysWith to handle duplicate ratingKeys (keep first occurrence)
         let ratingKeyToUnifiedId = Dictionary(
-            uniqueKeysWithValues: channels.map { channel -> (String, String) in
+            channels.map { channel -> (String, String) in
                 let components = channel.id.split(separator: ":")
                 let ratingKey = components.count >= 3 ? String(components.last!) : channel.id
                 return (ratingKey, channel.id)
-            }
+            },
+            uniquingKeysWith: { first, _ in first }
         )
 
         print("📺 PlexLiveTVProvider: Channel lookup keys: \(Array(ratingKeyToUnifiedId.keys))")
