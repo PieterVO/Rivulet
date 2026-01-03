@@ -208,9 +208,10 @@ class PlexAuthManager: ObservableObject {
             } else {
                 print("🔐 PlexAuthManager: ❌ Connection failed: \(connection.uri)")
 
-                // If HTTP failed on a non-local connection, try HTTPS and plex.direct
-                if !connection.local && connection.protocolType == "http" {
-                    // First try direct HTTPS - this will fail with cert error but we can extract the correct hash
+                // If HTTP failed, try HTTPS fallback
+                // This handles "Require Secure Connections" setting on Plex servers
+                // For both local and remote connections
+                if connection.protocolType == "http" {
                     let httpsURI = connection.uri.replacingOccurrences(of: "http://", with: "https://")
                     print("🔐 PlexAuthManager: Trying HTTPS fallback: \(httpsURI)...")
                     let (success, certHash) = await testConnectionWithCertExtraction(httpsURI, serverToken: tokenToUse)
@@ -221,6 +222,7 @@ class PlexAuthManager: ObservableObject {
                         print("🔐 PlexAuthManager: ❌ HTTPS fallback failed: \(httpsURI)")
 
                         // If we extracted a plex.direct hash from the certificate, try that
+                        // This provides a valid SSL cert for the connection
                         if let hash = certHash {
                             let plexDirectURI = buildPlexDirectURL(
                                 address: connection.address,
