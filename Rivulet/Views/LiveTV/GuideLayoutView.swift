@@ -113,7 +113,9 @@ struct GuideLayoutView: View {
                     ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: false) {
                             ZStack(alignment: .topLeading) {
-                                VStack(spacing: 0) {
+                                // Use LazyVStack to avoid rendering all channels at once
+                                // This prevents memory pressure and focus system overload on older devices
+                                LazyVStack(spacing: 0, pinnedViews: []) {
                                     ForEach(Array(channels.enumerated()), id: \.element.id) { idx, ch in
                                         HStack(spacing: 0) {
                                             ChannelCell(channel: ch, isSelected: idx == focusedRow,
@@ -248,10 +250,10 @@ private struct ChannelCell: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // Channel logo
+            // Channel logo - use CachedAsyncImage for better memory management
             Group {
                 if let logoURL = channel.logoURL {
-                    AsyncImage(url: logoURL) { phase in
+                    CachedAsyncImage(url: logoURL) { phase in
                         switch phase {
                         case .success(let image):
                             image
