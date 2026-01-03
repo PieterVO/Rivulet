@@ -41,6 +41,7 @@ struct SettingsView: View {
     @AppStorage("showHomeHero") private var showHomeHero = false
     @AppStorage("showLibraryHero") private var showLibraryHero = false
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
+    @AppStorage("enablePersonalizedRecommendations") private var enablePersonalizedRecommendations = false
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.guide.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
@@ -130,6 +131,14 @@ struct SettingsView: View {
                                 title: "Discovery Rows",
                                 subtitle: "Top Rated, Rediscover, and similar",
                                 isOn: $showLibraryRecommendations
+                            )
+
+                            SettingsToggleRow(
+                                icon: "person.3",
+                                iconColor: .mint,
+                                title: "Personalized Recommendations",
+                                subtitle: "Use TMDB + watch history to surface unwatched picks",
+                                isOn: $enablePersonalizedRecommendations
                             )
                         }
 
