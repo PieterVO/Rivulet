@@ -21,10 +21,17 @@ body:
     validations:
       required: true
 
-  - type: textarea
-    id: description
+  - type: input
+    id: version
     attributes:
-      label: Describe the bug
-      placeholder: A clear description of what the bug is
+      label: Version
+      description: App version and build number (e.g. 1.0.0 18)
+      placeholder: "1.0.0 18"
     validations:
       required: true
+
+  - type: textarea
+    id: additional-info
+    attributes:
+      label: Any additional info
+      placeholder: Any other context about the bug

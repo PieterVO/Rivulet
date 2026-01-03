@@ -174,7 +174,7 @@ struct ChannelCard: View {
                     .fill(Color(white: 0.15))
 
                 if let logoURL = channel.logoURL {
-                    AsyncImage(url: logoURL) { phase in
+                    CachedAsyncImage(url: logoURL) { phase in
                         switch phase {
                         case .success(let image):
                             image
