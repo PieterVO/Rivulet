@@ -14,6 +14,7 @@ struct EpisodeSummaryOverlay: View {
     // Focus namespace for default focus control
     @Namespace private var buttonNamespace
     @FocusState private var focusedButton: PostVideoFocusTarget?
+    @State private var hasConsumedInitialFocus = false
 
     private var hasNextEpisode: Bool {
         viewModel.nextEpisode != nil
@@ -39,6 +40,12 @@ struct EpisodeSummaryOverlay: View {
 
     /// Cancel countdown on any user interaction
     private func cancelCountdownOnInteraction() {
+        // Ignore the first auto-focus when the overlay appears
+        if !hasConsumedInitialFocus {
+            hasConsumedInitialFocus = true
+            return
+        }
+
         if countdownActive {
             viewModel.cancelCountdown()
         }
@@ -196,6 +203,7 @@ struct EpisodeSummaryOverlay: View {
         .focusScope(buttonNamespace)
         .focusSection()
         .onAppear {
+            hasConsumedInitialFocus = false
             setDefaultFocus()
         }
         .onChange(of: hasNextEpisode) { _, _ in

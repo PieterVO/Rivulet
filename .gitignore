@@ -12,6 +12,9 @@ Packages/
 Package.resolved
 *.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
 
+# Worker deps
+tmdb-proxy/node_modules
+
 # CocoaPods
 Pods/
 
