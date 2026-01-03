@@ -13,6 +13,7 @@ struct MovieSummaryOverlay: View {
 
     // Focus namespace for default focus control
     @Namespace private var buttonNamespace
+    @FocusState private var focusedButton: PostVideoFocusTarget?
 
     private var completionPercentage: Int {
         guard viewModel.duration > 0 else { return 100 }
@@ -28,6 +29,12 @@ struct MovieSummaryOverlay: View {
         }
         return "\(minutes)m"
     }
+
+    #if os(tvOS)
+    private func setDefaultFocus() {
+        focusedButton = .close
+    }
+    #endif
 
     var body: some View {
         ZStack {
@@ -85,23 +92,29 @@ struct MovieSummaryOverlay: View {
                     }
 
                     // Close button
-                    PostVideoButton(
-                        title: "Close",
-                        icon: "xmark",
-                        isPrimary: true
-                    ) {
-                        viewModel.dismissPostVideo()
-                        dismiss()
-                    }
-                    .prefersDefaultFocus(in: buttonNamespace)
-                }
-                .padding(.horizontal, 80)
+            PostVideoButton(
+                title: "Close",
+                icon: "xmark",
+                isPrimary: true,
+                isFocused: focusedButton == .close
+            ) {
+                viewModel.dismissPostVideo()
+                dismiss()
+            }
+            .prefersDefaultFocus(in: buttonNamespace)
+            .focused($focusedButton, equals: .close)
+        }
+        .padding(.horizontal, 80)
 
                 Spacer()
             }
         }
         #if os(tvOS)
         .focusScope(buttonNamespace)
+        .focusSection()
+        .onAppear {
+            setDefaultFocus()
+        }
         .onExitCommand {
             viewModel.dismissPostVideo()
             dismiss()

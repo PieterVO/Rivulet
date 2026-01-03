@@ -7,6 +7,15 @@
 
 import SwiftUI
 
+/// Focus targets for post-video overlays
+enum PostVideoFocusTarget: Hashable {
+    case playNext
+    case cancel
+    case close
+    case season
+    case show
+}
+
 struct PostVideoSummaryView: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
 

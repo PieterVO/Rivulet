@@ -342,10 +342,10 @@ struct UniversalPlayerView: View {
             }
         }
         // Manage focus scope for post-video overlay
-        .onChange(of: viewModel.postVideoState) { _, state in
-            if state != .hidden {
+        .onChange(of: viewModel.postVideoState) { previous, state in
+            if previous == .hidden && state != .hidden {
                 focusScopeManager.activate(.postVideo)
-            } else {
+            } else if previous != .hidden && state == .hidden {
                 focusScopeManager.deactivate()
             }
         }

@@ -16,25 +16,6 @@ enum SettingsDestination: Hashable {
     case cache
 }
 
-// MARK: - Live TV Player Engine
-
-enum LiveTVPlayerEngine: String, CaseIterable, CustomStringConvertible {
-    case mpv = "MPV"
-    case avplayer = "AVPlayer"
-
-    var description: String {
-        switch self {
-        case .mpv: return "MPV (Full Codec)"
-        case .avplayer: return "AVPlayer (Lightweight)"
-        }
-    }
-
-    static var current: LiveTVPlayerEngine {
-        let value = UserDefaults.standard.string(forKey: "liveTVPlayerEngine") ?? "MPV"
-        return LiveTVPlayerEngine(rawValue: value) ?? .mpv
-    }
-}
-
 // MARK: - Autoplay Countdown
 
 enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
@@ -61,7 +42,6 @@ struct SettingsView: View {
     @AppStorage("showLibraryHero") private var showLibraryHero = false
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.guide.rawValue
-    @AppStorage("liveTVPlayerEngine") private var liveTVPlayerEngineRaw = LiveTVPlayerEngine.mpv.rawValue
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
@@ -93,13 +73,6 @@ struct SettingsView: View {
         Binding(
             get: { AutoplayCountdown(rawValue: autoplayCountdownRaw) ?? .fiveSeconds },
             set: { autoplayCountdownRaw = $0.rawValue }
-        )
-    }
-
-    private var liveTVPlayerEngine: Binding<LiveTVPlayerEngine> {
-        Binding(
-            get: { LiveTVPlayerEngine(rawValue: liveTVPlayerEngineRaw) ?? .mpv },
-            set: { liveTVPlayerEngineRaw = $0.rawValue }
         )
     }
 
@@ -254,17 +227,6 @@ struct SettingsView: View {
                                 selection: liveTVLayout,
                                 options: LiveTVLayout.allCases
                             )
-
-                            // TODO: Re-enable when AVPlayer supports more stream formats (needs HLS source)
-                            // Currently only works with proper HLS streams, not raw MPEG-TS from Dispatcharr
-                            // SettingsPickerRow(
-                            //     icon: "play.rectangle.on.rectangle",
-                            //     iconColor: .cyan,
-                            //     title: "Player Engine",
-                            //     subtitle: "AVPlayer uses less memory for multi-stream, but supports less video formats",
-                            //     selection: liveTVPlayerEngine,
-                            //     options: LiveTVPlayerEngine.allCases
-                            // )
 
                             SettingsToggleRow(
                                 icon: "rectangle.split.2x2",

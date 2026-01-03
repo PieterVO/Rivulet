@@ -1717,8 +1717,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard let seasonKey = metadata.parentRatingKey else { return }
         stopPlayback()
         dismissPostVideo()
-        // Dismiss player on tvOS via PlayerContainerViewController
-        shouldDismiss = true
         NotificationCenter.default.post(
             name: .navigateToContent,
             object: nil,
@@ -1731,8 +1729,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard let showKey = metadata.grandparentRatingKey else { return }
         stopPlayback()
         dismissPostVideo()
-        // Dismiss player on tvOS via PlayerContainerViewController
-        shouldDismiss = true
         NotificationCenter.default.post(
             name: .navigateToContent,
             object: nil,

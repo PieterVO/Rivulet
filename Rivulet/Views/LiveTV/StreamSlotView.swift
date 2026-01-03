@@ -94,20 +94,16 @@ struct StreamSlotView: View {
 
     @ViewBuilder
     private var playerView: some View {
-        if let mpvWrapper = slot.mpvWrapper, let url = streamURL {
-            // MPV Player - containerSize passed for explicit sizing in multi-stream
+        if let url = streamURL {
             MPVPlayerView(
                 url: url,
                 headers: [:],
                 startTime: nil,
-                delegate: mpvWrapper,
+                delegate: slot.mpvWrapper,
                 isLiveStream: true,
                 containerSize: containerSize,
                 playerController: $playerController
             )
-        } else if let avWrapper = slot.avWrapper {
-            // AVPlayer - lightweight native player
-            AVPlayerView(playerWrapper: avWrapper)
         }
     }
 
@@ -261,7 +257,6 @@ struct StreamSlotView: View {
                 isHD: true
             ),
             mpvWrapper: MPVPlayerWrapper(),
-            avWrapper: nil,
             playbackState: .loading,
             isMuted: false
         ),

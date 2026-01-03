@@ -13,6 +13,7 @@ struct EpisodeSummaryOverlay: View {
 
     // Focus namespace for default focus control
     @Namespace private var buttonNamespace
+    @FocusState private var focusedButton: PostVideoFocusTarget?
 
     private var hasNextEpisode: Bool {
         viewModel.nextEpisode != nil
@@ -29,6 +30,12 @@ struct EpisodeSummaryOverlay: View {
         }
         return UserDefaults.standard.integer(forKey: "autoplayCountdown") > 0
     }
+
+    #if os(tvOS)
+    private func setDefaultFocus() {
+        focusedButton = hasNextEpisode ? .playNext : .close
+    }
+    #endif
 
     /// Cancel countdown on any user interaction
     private func cancelCountdownOnInteraction() {
@@ -92,11 +99,13 @@ struct EpisodeSummaryOverlay: View {
                                 title: countdownActive ? "Play Now" : "Play Next",
                                 icon: "play.fill",
                                 isPrimary: true,
+                                isFocused: focusedButton == .playNext,
                                 onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 Task { await viewModel.playNextEpisode() }
                             }
                             .prefersDefaultFocus(in: buttonNamespace)
+                            .focused($focusedButton, equals: .playNext)
 
                             // Cancel button (only if countdown active)
                             if countdownActive {
@@ -104,10 +113,12 @@ struct EpisodeSummaryOverlay: View {
                                     title: "Cancel",
                                     icon: nil,
                                     isPrimary: false,
+                                    isFocused: focusedButton == .cancel,
                                     onFocusChange: cancelCountdownOnInteraction
                                 ) {
                                     viewModel.cancelCountdown()
                                 }
+                                .focused($focusedButton, equals: .cancel)
                             }
                         }
 
@@ -117,12 +128,14 @@ struct EpisodeSummaryOverlay: View {
                                 title: "Close",
                                 icon: "xmark",
                                 isPrimary: !hasNextEpisode,  // Primary if no next episode
+                                isFocused: focusedButton == .close,
                                 onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.dismissPostVideo()
                                 dismiss()
                             }
                             .prefersDefaultFocus(!hasNextEpisode, in: buttonNamespace)
+                            .focused($focusedButton, equals: .close)
                         }
                     }
 
@@ -133,11 +146,13 @@ struct EpisodeSummaryOverlay: View {
                                 title: "Go to Season",
                                 icon: "list.number",
                                 isPrimary: false,
+                                isFocused: focusedButton == .season,
                                 onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.navigateToSeason()
                                 dismiss()
                             }
+                            .focused($focusedButton, equals: .season)
                         }
 
                         if viewModel.metadata.grandparentRatingKey != nil {
@@ -145,11 +160,13 @@ struct EpisodeSummaryOverlay: View {
                                 title: "Go to Show",
                                 icon: "tv",
                                 isPrimary: false,
+                                isFocused: focusedButton == .show,
                                 onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.navigateToShow()
                                 dismiss()
                             }
+                            .focused($focusedButton, equals: .show)
                         }
                     }
 
@@ -177,6 +194,13 @@ struct EpisodeSummaryOverlay: View {
         }
         #if os(tvOS)
         .focusScope(buttonNamespace)
+        .focusSection()
+        .onAppear {
+            setDefaultFocus()
+        }
+        .onChange(of: hasNextEpisode) { _, _ in
+            setDefaultFocus()
+        }
         .onExitCommand {
             viewModel.dismissPostVideo()
             dismiss()
@@ -196,10 +220,9 @@ struct PostVideoButton: View {
     let title: String
     let icon: String?
     let isPrimary: Bool
+    var isFocused: Bool = false
     var onFocusChange: (() -> Void)? = nil
     let action: () -> Void
-
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         Button(action: action) {
@@ -211,7 +234,7 @@ struct PostVideoButton: View {
                 Text(title)
                     .font(.system(size: isPrimary ? 24 : 22, weight: isPrimary ? .semibold : .medium))
             }
-            .foregroundStyle(isPrimary ? .black : .white)
+            .foregroundStyle(.white)
             .padding(.horizontal, isPrimary ? 32 : 28)
             .padding(.vertical, isPrimary ? 16 : 14)
             .background(
@@ -229,7 +252,6 @@ struct PostVideoButton: View {
         #else
         .buttonStyle(.plain)
         #endif
-        .focused($isFocused)
         .onChange(of: isFocused) { _, focused in
             if focused {
                 onFocusChange?()
@@ -240,18 +262,14 @@ struct PostVideoButton: View {
 
     private var buttonBackground: some ShapeStyle {
         if isPrimary {
-            return AnyShapeStyle(isFocused ? Color.blue : Color.white)
-        } else {
-            return AnyShapeStyle(isFocused ? Color.white.opacity(0.3) : Color.white.opacity(0.15))
+            return AnyShapeStyle(isFocused ? Color.white.opacity(0.22) : Color.white.opacity(0.12))
         }
+        return AnyShapeStyle(isFocused ? Color.white.opacity(0.18) : Color.white.opacity(0.08))
     }
 
     private var buttonBorder: Color {
-        if isPrimary {
-            return isFocused ? .white : .clear
-        } else {
-            return isFocused ? .white.opacity(0.8) : .white.opacity(0.3)
-        }
+        let focusedOpacity = isPrimary ? 0.35 : 0.25
+        return isFocused ? .white.opacity(focusedOpacity) : .white.opacity(0.08)
     }
 }
 
