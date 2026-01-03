@@ -28,6 +28,8 @@ final class RemoteInputHandler: ObservableObject {
     var isScrubbingCheck: (() -> Bool)?
     // Check if player is in error state (don't capture clicks - let dismiss button work)
     var isErrorCheck: (() -> Bool)?
+    // Check if post-video overlay is showing (don't capture clicks - let buttons work)
+    var isPostVideoCheck: (() -> Bool)?
 
     var onTap: ((Bool) -> Void)?           // forward: Bool
     var onScrubStart: ((Bool) -> Void)?    // forward: Bool
@@ -80,6 +82,11 @@ final class RemoteInputHandler: ObservableObject {
         micro.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
             guard let self else { return }
 
+            // Don't capture dpad when post-video is showing - let SwiftUI handle focus
+            if self.isPostVideoCheck?() == true {
+                return
+            }
+
             let dir: Bool? = if xValue > threshold {
                 true  // right
             } else if xValue < -threshold {
@@ -106,6 +113,11 @@ final class RemoteInputHandler: ObservableObject {
             Task { @MainActor in
                 // Don't capture clicks in error state - let SwiftUI dismiss button work
                 if self.isErrorCheck?() == true {
+                    return
+                }
+
+                // Don't capture clicks when post-video overlay is showing - let buttons work
+                if self.isPostVideoCheck?() == true {
                     return
                 }
 
@@ -220,7 +232,7 @@ struct UniversalPlayerView: View {
 
             // Post-Video Summary Overlay - separate layer with its own focus handling
             if viewModel.postVideoState != .hidden {
-                PostVideoSummaryView(viewModel: viewModel, focusScopeManager: focusScopeManager)
+                PostVideoSummaryView(viewModel: viewModel)
                     .zIndex(100)  // Ensure it's above everything
             }
         }
@@ -261,6 +273,9 @@ struct UniversalPlayerView: View {
             }
             remoteInput.isErrorCheck = { [weak viewModel] in
                 viewModel?.playbackState.isFailed ?? false
+            }
+            remoteInput.isPostVideoCheck = { [weak viewModel] in
+                viewModel?.postVideoState != .hidden
             }
             remoteInput.onTap = { [weak viewModel] forward in
                 guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }

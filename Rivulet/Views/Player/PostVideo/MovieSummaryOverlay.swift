@@ -9,12 +9,10 @@ import SwiftUI
 
 struct MovieSummaryOverlay: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
-    @ObservedObject var focusScopeManager: FocusScopeManager
     @Environment(\.dismiss) private var dismiss
 
-    private var isActive: Bool {
-        focusScopeManager.isScopeActive(.postVideo)
-    }
+    // Focus namespace for default focus control
+    @Namespace private var buttonNamespace
 
     private var completionPercentage: Int {
         guard viewModel.duration > 0 else { return 100 }
@@ -76,8 +74,7 @@ struct MovieSummaryOverlay: View {
                                         MovieRecommendationCard(
                                             item: item,
                                             serverURL: viewModel.serverURL,
-                                            authToken: viewModel.authToken,
-                                            isActive: isActive
+                                            authToken: viewModel.authToken
                                         )
                                     }
                                 }
@@ -91,12 +88,12 @@ struct MovieSummaryOverlay: View {
                     PostVideoButton(
                         title: "Close",
                         icon: "xmark",
-                        isPrimary: false,
-                        isActive: isActive
+                        isPrimary: true
                     ) {
                         viewModel.dismissPostVideo()
                         dismiss()
                     }
+                    .prefersDefaultFocus(in: buttonNamespace)
                 }
                 .padding(.horizontal, 80)
 
@@ -104,6 +101,7 @@ struct MovieSummaryOverlay: View {
             }
         }
         #if os(tvOS)
+        .focusScope(buttonNamespace)
         .onExitCommand {
             viewModel.dismissPostVideo()
             dismiss()
@@ -118,7 +116,6 @@ struct MovieRecommendationCard: View {
     let item: PlexMetadata
     let serverURL: String
     let authToken: String
-    let isActive: Bool
 
     @FocusState private var isFocused: Bool
 
@@ -185,7 +182,6 @@ struct MovieRecommendationCard: View {
         #else
         .buttonStyle(.plain)
         #endif
-        .focusable(isActive)
         .focused($isFocused)
     }
 }
@@ -199,7 +195,6 @@ struct MovieRecommendationCard: View {
                 authToken: "test"
             )
             return vm
-        }(),
-        focusScopeManager: FocusScopeManager()
+        }()
     )
 }

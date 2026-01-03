@@ -151,9 +151,16 @@ struct PlexDetailView: View {
         }
         .defaultScrollAnchor(.top)
         .ignoresSafeArea(edges: .top)
-        .task {
+        .task(id: item.ratingKey) {
             // Debug: log what item we're loading
             print("📋 PlexDetailView loading: \(item.title ?? "?") (type: \(item.type ?? "nil"), ratingKey: \(item.ratingKey ?? "nil"))")
+
+            // Reset state for new item
+            seasons = []
+            episodes = []
+            selectedSeason = nil
+            fullMetadata = nil
+            relatedItems = []
 
             // Initialize watched state
             isWatched = item.isWatched

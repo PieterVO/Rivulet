@@ -9,8 +9,10 @@ import SwiftUI
 
 struct EpisodeSummaryOverlay: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
-    @ObservedObject var focusScopeManager: FocusScopeManager
     @Environment(\.dismiss) private var dismiss
+
+    // Focus namespace for default focus control
+    @Namespace private var buttonNamespace
 
     private var hasNextEpisode: Bool {
         viewModel.nextEpisode != nil
@@ -28,8 +30,11 @@ struct EpisodeSummaryOverlay: View {
         return UserDefaults.standard.integer(forKey: "autoplayCountdown") > 0
     }
 
-    private var isActive: Bool {
-        focusScopeManager.isScopeActive(.postVideo)
+    /// Cancel countdown on any user interaction
+    private func cancelCountdownOnInteraction() {
+        if countdownActive {
+            viewModel.cancelCountdown()
+        }
     }
 
     var body: some View {
@@ -87,10 +92,11 @@ struct EpisodeSummaryOverlay: View {
                                 title: countdownActive ? "Play Now" : "Play Next",
                                 icon: "play.fill",
                                 isPrimary: true,
-                                isActive: isActive
+                                onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 Task { await viewModel.playNextEpisode() }
                             }
+                            .prefersDefaultFocus(in: buttonNamespace)
 
                             // Cancel button (only if countdown active)
                             if countdownActive {
@@ -98,7 +104,7 @@ struct EpisodeSummaryOverlay: View {
                                     title: "Cancel",
                                     icon: nil,
                                     isPrimary: false,
-                                    isActive: isActive
+                                    onFocusChange: cancelCountdownOnInteraction
                                 ) {
                                     viewModel.cancelCountdown()
                                 }
@@ -110,12 +116,13 @@ struct EpisodeSummaryOverlay: View {
                             PostVideoButton(
                                 title: "Close",
                                 icon: "xmark",
-                                isPrimary: false,
-                                isActive: isActive
+                                isPrimary: !hasNextEpisode,  // Primary if no next episode
+                                onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.dismissPostVideo()
                                 dismiss()
                             }
+                            .prefersDefaultFocus(!hasNextEpisode, in: buttonNamespace)
                         }
                     }
 
@@ -126,7 +133,7 @@ struct EpisodeSummaryOverlay: View {
                                 title: "Go to Season",
                                 icon: "list.number",
                                 isPrimary: false,
-                                isActive: isActive
+                                onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.navigateToSeason()
                                 dismiss()
@@ -138,7 +145,7 @@ struct EpisodeSummaryOverlay: View {
                                 title: "Go to Show",
                                 icon: "tv",
                                 isPrimary: false,
-                                isActive: isActive
+                                onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.navigateToShow()
                                 dismiss()
@@ -169,6 +176,7 @@ struct EpisodeSummaryOverlay: View {
             }
         }
         #if os(tvOS)
+        .focusScope(buttonNamespace)
         .onExitCommand {
             viewModel.dismissPostVideo()
             dismiss()
@@ -188,7 +196,7 @@ struct PostVideoButton: View {
     let title: String
     let icon: String?
     let isPrimary: Bool
-    let isActive: Bool
+    var onFocusChange: (() -> Void)? = nil
     let action: () -> Void
 
     @FocusState private var isFocused: Bool
@@ -221,8 +229,12 @@ struct PostVideoButton: View {
         #else
         .buttonStyle(.plain)
         #endif
-        .focusable(isActive)
         .focused($isFocused)
+        .onChange(of: isFocused) { _, focused in
+            if focused {
+                onFocusChange?()
+            }
+        }
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 
@@ -252,7 +264,6 @@ struct PostVideoButton: View {
                 authToken: "test"
             )
             return vm
-        }(),
-        focusScopeManager: FocusScopeManager()
+        }()
     )
 }
