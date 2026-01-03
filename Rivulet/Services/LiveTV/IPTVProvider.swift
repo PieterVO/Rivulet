@@ -180,10 +180,12 @@ actor IPTVProvider: LiveTVProvider {
         print("📺 IPTVProvider [\(displayName)]: ✅ Parsed EPG with \(parseResult.programs.count) channel schedules")
 
         // Build unified channel ID -> tvgId mapping
+        // Use uniquingKeysWith to handle duplicate tvgIds (keep first occurrence)
         let tvgIdToUnifiedId = Dictionary(
-            uniqueKeysWithValues: channels.compactMap { channel in
+            channels.compactMap { channel in
                 channel.tvgId.map { ($0, channel.id) }
-            }
+            },
+            uniquingKeysWith: { first, _ in first }
         )
 
         // Convert to UnifiedProgram, mapping by tvgId

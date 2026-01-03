@@ -101,7 +101,11 @@ class LibrarySettingsManager: ObservableObject {
     /// - Returns: Libraries sorted by user preference, with unordered ones at the end
     func sortLibraries(_ libraries: [PlexLibrary]) -> [PlexLibrary] {
         // Create a lookup for quick access
-        let libraryByKey = Dictionary(uniqueKeysWithValues: libraries.map { ($0.key, $0) })
+        // Use uniquingKeysWith to handle potential duplicate keys (keep first occurrence)
+        let libraryByKey = Dictionary(
+            libraries.map { ($0.key, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
         var result: [PlexLibrary] = []
 
