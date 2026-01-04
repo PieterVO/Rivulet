@@ -52,6 +52,7 @@ struct PlexDetailView: View {
     @State private var relatedItems: [PlexMetadata] = []
     @State private var isWatched = false
     @State private var isStarred = false  // For music: 5-star rating toggle
+    @State private var displayedProgress: Double = 0  // For animating progress bar
     @State private var isLoadingExtras = false
     @State private var showTrailerPlayer = false
     @State private var trailerMetadata: PlexMetadata?  // Full metadata for trailer playback
@@ -78,22 +79,45 @@ struct PlexDetailView: View {
         return item
     }
 
-    /// Play button label for TV shows
-    /// Shows "Continue [Episode Title]" for in-progress episodes, "Play" otherwise
+    /// Play button label for TV shows and seasons
+    /// Shows "Continue S02E05" for in-progress episodes, "Play" otherwise
     private var showPlayButtonLabel: String {
         guard let episode = nextUpEpisode else { return "Play" }
 
         // Check if the episode is in progress
-        if episode.isInProgress, let title = episode.title {
-            // Truncate long titles
-            let maxLength = 20
-            let truncatedTitle = title.count <= maxLength
-                ? title
-                : String(title.prefix(maxLength - 1)) + "…"
-            return "Continue \(truncatedTitle)"
+        if episode.isInProgress, let epString = episode.episodeString {
+            return "Continue \(epString)"
         }
 
         return "Play"
+    }
+
+    /// Caption shown below the Play button when there's a next episode to play
+    /// Returns nil for in-progress episodes (button already shows episode info)
+    private var upNextCaption: String? {
+        guard let episode = nextUpEpisode else { return nil }
+
+        // Don't show caption if episode is in progress (button already says "Continue S02E05")
+        if episode.isInProgress { return nil }
+
+        // Build "Up Next: S02E05 - Title" caption
+        let epString = episode.episodeString ?? ""
+        let title = episode.title ?? ""
+
+        if !epString.isEmpty && !title.isEmpty {
+            // Truncate long titles
+            let maxTitleLength = 25
+            let truncatedTitle = title.count <= maxTitleLength
+                ? title
+                : String(title.prefix(maxTitleLength - 1)) + "…"
+            return "Up Next: \(epString) - \(truncatedTitle)"
+        } else if !epString.isEmpty {
+            return "Up Next: \(epString)"
+        } else if !title.isEmpty {
+            return "Up Next: \(title)"
+        }
+
+        return nil
     }
 
     var body: some View {
@@ -110,9 +134,18 @@ struct PlexDetailView: View {
                     // Action buttons
                     actionButtons
 
+                    // Up Next caption for shows/seasons (below button row, above description)
+                    if let caption = upNextCaption {
+                        Text(caption)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
                     // Progress bar for in-progress content (movies/episodes)
-                    if !isMusicItem, effectiveItem.isInProgress, let progress = effectiveItem.watchProgress, progress > 0 && progress < 1 {
-                        progressSection(progress: progress)
+                    // Show if not watched and has progress
+                    if !isMusicItem, !isWatched, displayedProgress > 0 {
+                        progressSection(progress: displayedProgress)
+                            .transition(.opacity.animation(.easeOut(duration: 0.3)))
                     }
 
                     // Summary
@@ -185,6 +218,9 @@ struct PlexDetailView: View {
             // Initialize watched state
             isWatched = item.isWatched
 
+            // Initialize progress for animation
+            displayedProgress = item.watchProgress ?? 0
+
             // Initialize starred state for music (userRating > 0 means starred)
             isStarred = (item.userRating ?? 0) > 0
 
@@ -204,6 +240,8 @@ struct PlexDetailView: View {
             // Load episodes for seasons
             if item.type == "season" {
                 await loadEpisodesForSeason()
+                // Determine the "next up" episode for the Play button
+                await loadNextUpEpisode()
             }
 
             // Load tracks for albums
@@ -567,12 +605,13 @@ struct PlexDetailView: View {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(Color.blue)
                         .frame(width: geo.size.width * progress)
+                        .animation(.easeOut(duration: 0.5), value: progress)
                 }
             }
             .frame(height: 6)
 
-            // Time remaining text
-            if let remaining = effectiveItem.remainingTimeFormatted {
+            // Time remaining text (hide when animating to 100%)
+            if progress < 1, let remaining = effectiveItem.remainingTimeFormatted {
                 Text("\(remaining) remaining")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -629,8 +668,8 @@ struct PlexDetailView: View {
                 #if os(tvOS)
                 .focused($focusedActionButton, equals: "play")
                 #endif
-            } else if item.type == "show" {
-                // TV Show: Play button uses nextUpEpisode
+            } else if item.type == "show" || item.type == "season" {
+                // TV Show/Season: Play button uses nextUpEpisode
                 Button {
                     if let episode = nextUpEpisode {
                         selectedEpisode = episode
@@ -1292,12 +1331,19 @@ struct PlexDetailView: View {
         }
     }
 
-    /// Determine the "next up" episode for the Play button on TV shows
-    /// Uses Plex's OnDeck data if available, otherwise falls back to first episode
+    /// Determine the "next up" episode for the Play button on TV shows and seasons
+    /// Uses Plex's OnDeck data if available, otherwise falls back to first unwatched episode
     private func loadNextUpEpisode() async {
-        guard item.type == "show",
-              let serverURL = authManager.selectedServerURL,
+        guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return }
+
+        // For seasons, find the next up episode from the loaded episodes
+        if item.type == "season" {
+            await loadNextUpEpisodeForSeason()
+            return
+        }
+
+        guard item.type == "show" else { return }
 
         // Try to get OnDeck episode from full metadata
         if let onDeckEpisode = fullMetadata?.OnDeck?.Metadata?.first,
@@ -1318,29 +1364,122 @@ struct PlexDetailView: View {
             }
         }
 
-        // No OnDeck episode - get the first episode of the first season
-        guard let firstSeason = seasons.first,
-              let seasonRatingKey = firstSeason.ratingKey else { return }
+        // No OnDeck episode - search for first in-progress or unwatched episode across all seasons
+        for season in seasons {
+            guard let seasonRatingKey = season.ratingKey else { continue }
 
-        do {
-            let seasonEpisodes = try await networkManager.getChildren(
-                serverURL: serverURL,
-                authToken: token,
-                ratingKey: seasonRatingKey
-            )
+            do {
+                let seasonEpisodes = try await networkManager.getChildren(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: seasonRatingKey
+                )
 
-            if let firstEpisode = seasonEpisodes.first,
-               let episodeRatingKey = firstEpisode.ratingKey {
-                // Fetch full metadata for the first episode
+                // First, look for an in-progress episode in this season
+                if let inProgressEpisode = seasonEpisodes.first(where: { $0.isInProgress }),
+                   let ratingKey = inProgressEpisode.ratingKey {
+                    let fullEpisode = try await networkManager.getFullMetadata(
+                        serverURL: serverURL,
+                        authToken: token,
+                        ratingKey: ratingKey
+                    )
+                    nextUpEpisode = fullEpisode
+                    return
+                }
+
+                // Next, look for first unwatched episode in this season
+                if let unwatchedEpisode = seasonEpisodes.first(where: { !$0.isWatched }),
+                   let ratingKey = unwatchedEpisode.ratingKey {
+                    let fullEpisode = try await networkManager.getFullMetadata(
+                        serverURL: serverURL,
+                        authToken: token,
+                        ratingKey: ratingKey
+                    )
+                    nextUpEpisode = fullEpisode
+                    return
+                }
+            } catch {
+                print("Failed to load episodes for season: \(error)")
+            }
+        }
+
+        // All episodes watched - fall back to first episode of first season
+        if let firstSeason = seasons.first,
+           let seasonRatingKey = firstSeason.ratingKey {
+            do {
+                let seasonEpisodes = try await networkManager.getChildren(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: seasonRatingKey
+                )
+                if let firstEpisode = seasonEpisodes.first,
+                   let ratingKey = firstEpisode.ratingKey {
+                    let fullEpisode = try await networkManager.getFullMetadata(
+                        serverURL: serverURL,
+                        authToken: token,
+                        ratingKey: ratingKey
+                    )
+                    nextUpEpisode = fullEpisode
+                }
+            } catch {
+                print("Failed to load first episode: \(error)")
+            }
+        }
+    }
+
+    /// Determine the "next up" episode for seasons
+    /// Finds the first in-progress or unwatched episode, falls back to first episode
+    private func loadNextUpEpisodeForSeason() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+
+        // First, look for an in-progress episode
+        if let inProgressEpisode = episodes.first(where: { $0.isInProgress }),
+           let ratingKey = inProgressEpisode.ratingKey {
+            do {
                 let fullEpisode = try await networkManager.getFullMetadata(
                     serverURL: serverURL,
                     authToken: token,
-                    ratingKey: episodeRatingKey
+                    ratingKey: ratingKey
                 )
                 nextUpEpisode = fullEpisode
+                return
+            } catch {
+                nextUpEpisode = inProgressEpisode
+                return
             }
-        } catch {
-            print("Failed to load first episode: \(error)")
+        }
+
+        // Next, look for the first unwatched episode
+        if let unwatchedEpisode = episodes.first(where: { !$0.isWatched }),
+           let ratingKey = unwatchedEpisode.ratingKey {
+            do {
+                let fullEpisode = try await networkManager.getFullMetadata(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: ratingKey
+                )
+                nextUpEpisode = fullEpisode
+                return
+            } catch {
+                nextUpEpisode = unwatchedEpisode
+                return
+            }
+        }
+
+        // All episodes watched - fall back to first episode
+        if let firstEpisode = episodes.first,
+           let ratingKey = firstEpisode.ratingKey {
+            do {
+                let fullEpisode = try await networkManager.getFullMetadata(
+                    serverURL: serverURL,
+                    authToken: token,
+                    ratingKey: ratingKey
+                )
+                nextUpEpisode = fullEpisode
+            } catch {
+                nextUpEpisode = firstEpisode
+            }
         }
     }
 
@@ -1376,14 +1515,23 @@ struct PlexDetailView: View {
                     authToken: token,
                     ratingKey: ratingKey
                 )
+                isWatched = false
             } else {
                 try await networkManager.markWatched(
                     serverURL: serverURL,
                     authToken: token,
                     ratingKey: ratingKey
                 )
+                // Animate progress bar to 100% before marking as watched
+                withAnimation(.easeOut(duration: 0.5)) {
+                    displayedProgress = 1.0
+                }
+                // After animation, mark as watched and hide progress
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                isWatched = true
             }
-            isWatched.toggle()
+            // Notify home screen to refresh Continue Watching
+            NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
         } catch {
             print("Failed to toggle watched status: \(error)")
         }
