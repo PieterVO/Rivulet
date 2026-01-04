@@ -34,6 +34,100 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
     }
 }
 
+// MARK: - Language Option
+
+enum LanguageOption: String, CaseIterable, CustomStringConvertible {
+    case english = "eng"
+    case spanish = "spa"
+    case french = "fra"
+    case german = "deu"
+    case italian = "ita"
+    case portuguese = "por"
+    case japanese = "jpn"
+    case korean = "kor"
+    case chinese = "zho"
+    case russian = "rus"
+    case arabic = "ara"
+    case hindi = "hin"
+
+    var description: String {
+        switch self {
+        case .english: return "English"
+        case .spanish: return "Spanish"
+        case .french: return "French"
+        case .german: return "German"
+        case .italian: return "Italian"
+        case .portuguese: return "Portuguese"
+        case .japanese: return "Japanese"
+        case .korean: return "Korean"
+        case .chinese: return "Chinese"
+        case .russian: return "Russian"
+        case .arabic: return "Arabic"
+        case .hindi: return "Hindi"
+        }
+    }
+
+    /// Initialize from a language code (handles various formats)
+    init(languageCode: String?) {
+        guard let code = languageCode?.lowercased() else {
+            self = .english
+            return
+        }
+        switch code {
+        case "eng", "en", "english": self = .english
+        case "spa", "es", "spanish": self = .spanish
+        case "fra", "fr", "french": self = .french
+        case "deu", "de", "ger", "german": self = .german
+        case "ita", "it", "italian": self = .italian
+        case "por", "pt", "portuguese": self = .portuguese
+        case "jpn", "ja", "japanese": self = .japanese
+        case "kor", "ko", "korean": self = .korean
+        case "zho", "zh", "chi", "chinese": self = .chinese
+        case "rus", "ru", "russian": self = .russian
+        case "ara", "ar", "arabic": self = .arabic
+        case "hin", "hi", "hindi": self = .hindi
+        default: self = .english
+        }
+    }
+}
+
+// MARK: - Subtitle Option (includes Off)
+
+enum SubtitleOption: Hashable, CaseIterable, CustomStringConvertible {
+    case off
+    case language(LanguageOption)
+
+    static var allCases: [SubtitleOption] {
+        [.off] + LanguageOption.allCases.map { .language($0) }
+    }
+
+    var description: String {
+        switch self {
+        case .off: return "Off"
+        case .language(let lang): return lang.description
+        }
+    }
+
+    var isEnabled: Bool {
+        if case .off = self { return false }
+        return true
+    }
+
+    var languageCode: String? {
+        if case .language(let lang) = self { return lang.rawValue }
+        return nil
+    }
+
+    /// Initialize from subtitle preference
+    init(enabled: Bool, languageCode: String?) {
+        if !enabled {
+            self = .off
+        } else {
+            self = .language(LanguageOption(languageCode: languageCode))
+        }
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
@@ -62,6 +156,38 @@ struct SettingsView: View {
     @Environment(\.isSidebarVisible) private var isSidebarVisible
     #endif
     @State private var focusTrigger = 0  // Increment to trigger first row focus
+
+    // Audio/Subtitle preference state (synced with preference managers)
+    @State private var audioLanguage: LanguageOption = LanguageOption(languageCode: AudioPreferenceManager.current.languageCode)
+    @State private var subtitleOption: SubtitleOption = SubtitleOption(
+        enabled: SubtitlePreferenceManager.current.enabled,
+        languageCode: SubtitlePreferenceManager.current.languageCode
+    )
+
+    private var audioLanguageBinding: Binding<LanguageOption> {
+        Binding(
+            get: { audioLanguage },
+            set: { newValue in
+                audioLanguage = newValue
+                AudioPreferenceManager.current = AudioPreference(languageCode: newValue.rawValue)
+            }
+        )
+    }
+
+    private var subtitleOptionBinding: Binding<SubtitleOption> {
+        Binding(
+            get: { subtitleOption },
+            set: { newValue in
+                subtitleOption = newValue
+                var pref = SubtitlePreferenceManager.current
+                pref.enabled = newValue.isEnabled
+                if let code = newValue.languageCode {
+                    pref.languageCode = code
+                }
+                SubtitlePreferenceManager.current = pref
+            }
+        )
+    }
 
     private var liveTVLayout: Binding<LiveTVLayout> {
         Binding(
@@ -144,6 +270,24 @@ struct SettingsView: View {
 
                         // Playback section
                         SettingsSection(title: "Playback") {
+                            SettingsListPickerRow(
+                                icon: "waveform",
+                                iconColor: .cyan,
+                                title: "Audio Language",
+                                subtitle: "Preferred language for audio tracks",
+                                selection: audioLanguageBinding,
+                                options: LanguageOption.allCases
+                            )
+
+                            SettingsListPickerRow(
+                                icon: "captions.bubble",
+                                iconColor: .yellow,
+                                title: "Subtitles",
+                                subtitle: "Preferred language for subtitles",
+                                selection: subtitleOptionBinding,
+                                options: SubtitleOption.allCases
+                            )
+
                             SettingsToggleRow(
                                 icon: "forward.fill",
                                 iconColor: .blue,
