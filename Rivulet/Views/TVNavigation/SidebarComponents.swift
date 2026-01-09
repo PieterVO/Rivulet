@@ -44,7 +44,7 @@ struct FocusableSidebarRow: View {
             }
             .foregroundStyle(.white.opacity(focusedItem == id || isSelected ? 1.0 : 0.6))
             .padding(.leading, 16)
-            .padding(.trailing, 12)
+            .padding(.trailing, 4)
             .padding(.vertical, 13 * fontScale)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
