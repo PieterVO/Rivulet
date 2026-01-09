@@ -266,6 +266,12 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
     func mpvPlayerDidEncounterError(_ message: String) {
         errorSubject.send(.unknown(message))
 
+        // Extract additional context from URL
+        let fileExtension = loadedURL?.pathExtension.lowercased() ?? "unknown"
+        let urlScheme = loadedURL?.scheme ?? "unknown"
+        let port = loadedURL?.port
+        let streamType = classifyStreamType(url: loadedURL)
+
         // Capture playback error to Sentry with context
         let event = Event(level: .error)
         event.message = SentryMessage(formatted: "MPV Playback Error: \(message)")
@@ -274,13 +280,19 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
             "stream_url": loadedURL?.absoluteString ?? "none",
             "stream_host": loadedURL?.host ?? "unknown",
             "stream_path": loadedURL?.path ?? "unknown",
+            "stream_type": streamType,
+            "file_extension": fileExtension,
+            "url_scheme": urlScheme,
+            "port": port ?? 0,
             "has_controller": playerController != nil,
             "duration": _duration,
             "current_time": playerController?.currentTime ?? 0
         ]
         event.tags = [
             "component": "mpv_player",
-            "stream_host": loadedURL?.host ?? "unknown"
+            "stream_host": loadedURL?.host ?? "unknown",
+            "file_extension": fileExtension,
+            "stream_type": streamType
         ]
 
         // Fingerprint by error type so different MPV errors create separate issues
@@ -288,6 +300,27 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
         event.fingerprint = ["mpv", errorCategory]
 
         SentrySDK.capture(event: event)
+    }
+
+    /// Classifies the stream type based on URL patterns
+    private func classifyStreamType(url: URL?) -> String {
+        guard let url = url else { return "unknown" }
+        let path = url.path.lowercased()
+        let host = url.host?.lowercased() ?? ""
+
+        if path.contains("/library/parts/") {
+            return "plex_direct"
+        } else if path.contains("/video/:/transcode/") {
+            return "plex_transcode"
+        } else if path.contains("/live/") || path.hasSuffix(".ts") || path.contains(".m3u") {
+            return "iptv"
+        } else if path.contains("/proxy/") {
+            return "proxy"
+        } else if host.contains("plex.direct") {
+            return "plex_relay"
+        } else {
+            return "other"
+        }
     }
 
     /// Categorizes MPV error messages for Sentry fingerprinting

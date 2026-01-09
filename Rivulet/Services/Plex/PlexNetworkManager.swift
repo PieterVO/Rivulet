@@ -83,8 +83,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             }
             let error = PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: data)
 
-            // Capture HTTP errors to Sentry (skip 401/403 as those are expected auth errors)
-            if httpResponse.statusCode != 401 && httpResponse.statusCode != 403 {
+            // Capture HTTP errors to Sentry (skip 401/403 auth errors and 5xx server errors)
+            if httpResponse.statusCode != 401 && httpResponse.statusCode != 403 && !(500...599).contains(httpResponse.statusCode) {
                 SentrySDK.capture(error: error) { scope in
                     scope.setTag(value: "plex_network", key: "component")
                     scope.setExtra(value: url.absoluteString, key: "url")
@@ -118,8 +118,38 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 scope.setTag(value: "json_decode", key: "error_type")
                 scope.setExtra(value: url.absoluteString, key: "url")
                 scope.setExtra(value: String(describing: T.self), key: "expected_type")
+                scope.setExtra(value: data.count, key: "response_size")
+
+                // Try UTF-8 first, fall back to Latin1 (which never fails) to capture something
                 if let responseStr = String(data: data, encoding: .utf8) {
-                    scope.setExtra(value: String(responseStr.prefix(1000)), key: "response_body")
+                    scope.setExtra(value: String(responseStr.prefix(2000)), key: "response_body")
+                } else {
+                    // UTF-8 failed - capture what we can
+                    scope.setTag(value: "true", key: "invalid_utf8")
+
+                    // Latin1 encoding never fails - use it to get a lossy representation
+                    if let latin1Str = String(data: data.prefix(2000), encoding: .isoLatin1) {
+                        scope.setExtra(value: latin1Str, key: "response_body_latin1")
+                    }
+
+                    // Try to find the error position from the underlying error
+                    let nsError = error as NSError
+                    if let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+                       let errorIndex = underlyingError.userInfo["NSJSONSerializationErrorIndex"] as? Int {
+                        scope.setExtra(value: errorIndex, key: "error_byte_position")
+
+                        // Capture hex dump around the error position
+                        let start = max(0, errorIndex - 50)
+                        let end = min(data.count, errorIndex + 50)
+                        let problemArea = data[start..<end]
+                        let hexDump = problemArea.map { String(format: "%02x", $0) }.joined(separator: " ")
+                        scope.setExtra(value: hexDump, key: "hex_around_error")
+
+                        // Also capture as Latin1 string for context
+                        if let contextStr = String(data: Data(problemArea), encoding: .isoLatin1) {
+                            scope.setExtra(value: contextStr, key: "context_around_error")
+                        }
+                    }
                 }
             }
 
