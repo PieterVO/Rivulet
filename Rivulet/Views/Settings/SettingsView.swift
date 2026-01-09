@@ -37,33 +37,65 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
 // MARK: - Language Option
 
 enum LanguageOption: String, CaseIterable, CustomStringConvertible {
+    case arabic = "ara"
+    case chinese = "zho"
+    case czech = "ces"
+    case danish = "dan"
+    case dutch = "nld"
     case english = "eng"
-    case spanish = "spa"
+    case finnish = "fin"
     case french = "fra"
     case german = "deu"
+    case greek = "ell"
+    case hebrew = "heb"
+    case hindi = "hin"
+    case hungarian = "hun"
+    case indonesian = "ind"
     case italian = "ita"
-    case portuguese = "por"
     case japanese = "jpn"
     case korean = "kor"
-    case chinese = "zho"
+    case norwegian = "nor"
+    case polish = "pol"
+    case portuguese = "por"
+    case romanian = "ron"
     case russian = "rus"
-    case arabic = "ara"
-    case hindi = "hin"
+    case spanish = "spa"
+    case swedish = "swe"
+    case thai = "tha"
+    case turkish = "tur"
+    case ukrainian = "ukr"
+    case vietnamese = "vie"
 
     var description: String {
         switch self {
+        case .arabic: return "Arabic"
+        case .chinese: return "Chinese"
+        case .czech: return "Czech"
+        case .danish: return "Danish"
+        case .dutch: return "Dutch"
         case .english: return "English"
-        case .spanish: return "Spanish"
+        case .finnish: return "Finnish"
         case .french: return "French"
         case .german: return "German"
+        case .greek: return "Greek"
+        case .hebrew: return "Hebrew"
+        case .hindi: return "Hindi"
+        case .hungarian: return "Hungarian"
+        case .indonesian: return "Indonesian"
         case .italian: return "Italian"
-        case .portuguese: return "Portuguese"
         case .japanese: return "Japanese"
         case .korean: return "Korean"
-        case .chinese: return "Chinese"
+        case .norwegian: return "Norwegian"
+        case .polish: return "Polish"
+        case .portuguese: return "Portuguese"
+        case .romanian: return "Romanian"
         case .russian: return "Russian"
-        case .arabic: return "Arabic"
-        case .hindi: return "Hindi"
+        case .spanish: return "Spanish"
+        case .swedish: return "Swedish"
+        case .thai: return "Thai"
+        case .turkish: return "Turkish"
+        case .ukrainian: return "Ukrainian"
+        case .vietnamese: return "Vietnamese"
         }
     }
 
@@ -74,18 +106,34 @@ enum LanguageOption: String, CaseIterable, CustomStringConvertible {
             return
         }
         switch code {
+        case "ara", "ar", "arabic": self = .arabic
+        case "zho", "zh", "chi", "chinese": self = .chinese
+        case "ces", "cs", "cze", "czech": self = .czech
+        case "dan", "da", "danish": self = .danish
+        case "nld", "nl", "dut", "dutch": self = .dutch
         case "eng", "en", "english": self = .english
-        case "spa", "es", "spanish": self = .spanish
-        case "fra", "fr", "french": self = .french
+        case "fin", "fi", "finnish": self = .finnish
+        case "fra", "fr", "fre", "french": self = .french
         case "deu", "de", "ger", "german": self = .german
+        case "ell", "el", "gre", "greek": self = .greek
+        case "heb", "he", "hebrew": self = .hebrew
+        case "hin", "hi", "hindi": self = .hindi
+        case "hun", "hu", "hungarian": self = .hungarian
+        case "ind", "id", "indonesian": self = .indonesian
         case "ita", "it", "italian": self = .italian
-        case "por", "pt", "portuguese": self = .portuguese
         case "jpn", "ja", "japanese": self = .japanese
         case "kor", "ko", "korean": self = .korean
-        case "zho", "zh", "chi", "chinese": self = .chinese
+        case "nor", "no", "nb", "nn", "norwegian": self = .norwegian
+        case "pol", "pl", "polish": self = .polish
+        case "por", "pt", "portuguese": self = .portuguese
+        case "ron", "ro", "rum", "romanian": self = .romanian
         case "rus", "ru", "russian": self = .russian
-        case "ara", "ar", "arabic": self = .arabic
-        case "hin", "hi", "hindi": self = .hindi
+        case "spa", "es", "spanish": self = .spanish
+        case "swe", "sv", "swedish": self = .swedish
+        case "tha", "th", "thai": self = .thai
+        case "tur", "tr", "turkish": self = .turkish
+        case "ukr", "uk", "ukrainian": self = .ukrainian
+        case "vie", "vi", "vietnamese": self = .vietnamese
         default: self = .english
         }
     }
