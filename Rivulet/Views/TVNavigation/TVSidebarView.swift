@@ -17,6 +17,7 @@ struct TVSidebarView: View {
     @StateObject private var focusScopeManager = FocusScopeManager()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
+    @AppStorage("sidebarFontSize") private var sidebarFontSizeRaw = SidebarFontSize.normal.rawValue
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
     @State private var selectedLiveTVSourceId: String?  // nil = all sources, non-nil = specific source
@@ -31,6 +32,10 @@ struct TVSidebarView: View {
     }
 
     private let sidebarWidth: CGFloat = 340
+
+    private var fontScale: CGFloat {
+        (SidebarFontSize(rawValue: sidebarFontSizeRaw) ?? .normal).scale
+    }
 
     var body: some View {
         ZStack {
@@ -193,11 +198,11 @@ struct TVSidebarView: View {
     private var sidebarContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             // App branding
-            HStack(spacing: 14) {
+            HStack(spacing: 14 * fontScale) {
                 Image(systemName: "play.rectangle.fill")
-                    .font(.system(size: 30, weight: .semibold))
+                    .font(.system(size: 30 * fontScale, weight: .semibold))
                 Text("Rivulet")
-                    .font(.system(size: 34, weight: .bold))
+                    .font(.system(size: 34 * fontScale, weight: .bold))
             }
             .foregroundStyle(.white)
             .padding(.top, 50)
@@ -216,6 +221,7 @@ struct TVSidebarView: View {
                                 title: "Search",
                                 isSelected: selectedDestination == .search,
                                 onSelect: { queueNavigation(destination: .search, libraryKey: nil) },
+                                fontScale: fontScale,
                                 focusedItem: $sidebarFocusedItem
                             )
 
@@ -226,6 +232,7 @@ struct TVSidebarView: View {
                                 title: "Home",
                                 isSelected: selectedDestination == .home && selectedLibraryKey == nil,
                                 onSelect: { queueNavigation(destination: .home, libraryKey: nil) },
+                                fontScale: fontScale,
                                 focusedItem: $sidebarFocusedItem
                             )
 
@@ -240,6 +247,7 @@ struct TVSidebarView: View {
                                         title: library.title,
                                         isSelected: selectedLibraryKey == library.key,
                                         onSelect: { queueNavigation(destination: .home, libraryKey: library.key) },
+                                        fontScale: fontScale,
                                         focusedItem: $sidebarFocusedItem
                                     )
                                 }
@@ -250,7 +258,7 @@ struct TVSidebarView: View {
                                     ProgressView()
                                         .tint(.white.opacity(0.5))
                                     Text("Loading...")
-                                        .font(.system(size: 17))
+                                        .font(.system(size: 17 * fontScale))
                                         .foregroundStyle(.white.opacity(0.5))
                                 }
                                 .padding(.horizontal, 32)
@@ -269,6 +277,7 @@ struct TVSidebarView: View {
                                         title: "Channels",
                                         isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == nil,
                                         onSelect: { queueLiveTVNavigation(sourceId: nil) },
+                                        fontScale: fontScale,
                                         focusedItem: $sidebarFocusedItem
                                     )
                                 } else {
@@ -280,6 +289,7 @@ struct TVSidebarView: View {
                                             title: source.displayName.replacingOccurrences(of: " Live TV", with: ""),
                                             isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == source.id,
                                             onSelect: { queueLiveTVNavigation(sourceId: source.id) },
+                                            fontScale: fontScale,
                                             focusedItem: $sidebarFocusedItem
                                         )
                                     }
@@ -300,6 +310,7 @@ struct TVSidebarView: View {
                                 title: "Settings",
                                 isSelected: selectedDestination == .settings,
                                 onSelect: { queueNavigation(destination: .settings, libraryKey: nil) },
+                                fontScale: fontScale,
                                 focusedItem: $sidebarFocusedItem
                             )
                         }
@@ -349,8 +360,8 @@ struct TVSidebarView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 13, weight: .bold))
-            .tracking(1.5)
+            .font(.system(size: 13 * fontScale, weight: .bold))
+            .tracking(1.5 * fontScale)
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 36)
             .padding(.top, 24)

@@ -34,6 +34,30 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
     }
 }
 
+// MARK: - Sidebar Font Size
+
+enum SidebarFontSize: String, CaseIterable, CustomStringConvertible {
+    case normal = "normal"
+    case large = "large"
+    case extraLarge = "extraLarge"
+
+    var description: String {
+        switch self {
+        case .normal: return "Normal"
+        case .large: return "Large"
+        case .extraLarge: return "Extra Large"
+        }
+    }
+
+    var scale: CGFloat {
+        switch self {
+        case .normal: return 1.0
+        case .large: return 1.25
+        case .extraLarge: return 1.5
+        }
+    }
+}
+
 // MARK: - Language Option
 
 enum LanguageOption: String, CaseIterable, CustomStringConvertible {
@@ -198,6 +222,7 @@ struct SettingsView: View {
     @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
     @AppStorage("useAVPlayerForDolbyVision") private var useAVPlayerForDolbyVision = false
     @AppStorage("useAVPlayerForAllVideos") private var useAVPlayerForAllVideos = false
+    @AppStorage("sidebarFontSize") private var sidebarFontSizeRaw = SidebarFontSize.normal.rawValue
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
     #if os(tvOS)
@@ -252,6 +277,13 @@ struct SettingsView: View {
         )
     }
 
+    private var sidebarFontSize: Binding<SidebarFontSize> {
+        Binding(
+            get: { SidebarFontSize(rawValue: sidebarFontSizeRaw) ?? .normal },
+            set: { sidebarFontSizeRaw = $0.rawValue }
+        )
+    }
+
     private var appVersion: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
@@ -282,6 +314,15 @@ struct SettingsView: View {
                                     navigationPath.append(SettingsDestination.libraries)
                                 },
                                 focusTrigger: focusTrigger  // First row gets focus
+                            )
+
+                            SettingsListPickerRow(
+                                icon: "textformat.size",
+                                iconColor: .orange,
+                                title: "Sidebar Font Size",
+                                subtitle: "Menu text size",
+                                selection: sidebarFontSize,
+                                options: SidebarFontSize.allCases
                             )
 
                             SettingsToggleRow(
@@ -405,8 +446,8 @@ struct SettingsView: View {
                             SettingsToggleRow(
                                 icon: "play.rectangle",
                                 iconColor: .blue,
-                                title: "Use AVPlayer for All Videos",
-                                subtitle: "Falls back to MPV if needed",
+                                title: "Use AVPlayer for All Videos (more experimental than the rest)",
+                                subtitle: "Will probably remux a lot. Falls back to MPV if needed",
                                 isOn: $useAVPlayerForAllVideos
                             )
                         }
