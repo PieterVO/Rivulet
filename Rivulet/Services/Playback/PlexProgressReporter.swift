@@ -42,6 +42,16 @@ actor PlexProgressReporter {
         let timeMs = Int(time * 1000)
         let durationMs = Int(duration * 1000)
 
+        // Get Plex client identifiers on MainActor
+        let clientInfo = await MainActor.run {
+            (
+                clientId: PlexAPI.clientIdentifier,
+                platform: PlexAPI.platform,
+                device: PlexAPI.deviceName,
+                product: PlexAPI.productName
+            )
+        }
+
         // Build timeline URL with all required parameters
         var components = URLComponents(string: "\(server.address)/:/timeline")
         components?.queryItems = [
@@ -49,7 +59,11 @@ actor PlexProgressReporter {
             URLQueryItem(name: "key", value: "/library/metadata/\(ratingKey)"),
             URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "time", value: String(timeMs)),
-            URLQueryItem(name: "duration", value: String(durationMs))
+            URLQueryItem(name: "duration", value: String(durationMs)),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: clientInfo.clientId),
+            URLQueryItem(name: "X-Plex-Platform", value: clientInfo.platform),
+            URLQueryItem(name: "X-Plex-Device", value: clientInfo.device),
+            URLQueryItem(name: "X-Plex-Product", value: clientInfo.product)
         ]
 
         guard let url = components?.url else { return }
