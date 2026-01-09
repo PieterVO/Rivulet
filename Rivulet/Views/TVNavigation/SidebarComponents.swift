@@ -17,6 +17,7 @@ struct FocusableSidebarRow: View {
     let title: String
     let isSelected: Bool
     let onSelect: () -> Void
+    var fontScale: CGFloat = 1.0
 
     @FocusState.Binding var focusedItem: String?
 
@@ -24,13 +25,13 @@ struct FocusableSidebarRow: View {
         Button {
             onSelect()
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 14 * fontScale) {
                 Image(systemName: icon)
-                    .font(.system(size: 22, weight: .medium))
-                    .frame(width: 26)
+                    .font(.system(size: 22 * fontScale, weight: .medium))
+                    .frame(width: 26 * fontScale)
 
                 Text(title)
-                    .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 21 * fontScale, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
 
                 Spacer(minLength: 4)
@@ -38,13 +39,13 @@ struct FocusableSidebarRow: View {
                 if isSelected {
                     Circle()
                         .fill(.white)
-                        .frame(width: 6, height: 6)
+                        .frame(width: 6 * fontScale, height: 6 * fontScale)
                 }
             }
             .foregroundStyle(.white.opacity(focusedItem == id || isSelected ? 1.0 : 0.6))
             .padding(.leading, 16)
             .padding(.trailing, 12)
-            .padding(.vertical, 13)
+            .padding(.vertical, 13 * fontScale)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(focusedItem == id ? .white.opacity(0.15) : .clear)
