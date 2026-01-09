@@ -11,7 +11,6 @@ import Foundation
 actor PlexProgressReporter {
     static let shared = PlexProgressReporter()
 
-    private let networkManager = PlexNetworkManager.shared
     private var lastReportedTimes: [String: TimeInterval] = [:]
 
     private init() {}
@@ -43,33 +42,24 @@ actor PlexProgressReporter {
         let timeMs = Int(time * 1000)
         let durationMs = Int(duration * 1000)
 
-        // Build timeline URL
+        // Build timeline URL with all required parameters
         var components = URLComponents(string: "\(server.address)/:/timeline")
         components?.queryItems = [
             URLQueryItem(name: "ratingKey", value: ratingKey),
             URLQueryItem(name: "key", value: "/library/metadata/\(ratingKey)"),
             URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "time", value: String(timeMs)),
-            URLQueryItem(name: "duration", value: String(durationMs)),
-            URLQueryItem(name: "X-Plex-Token", value: server.token),
-            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
-            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
-            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
-            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName)
+            URLQueryItem(name: "duration", value: String(durationMs))
         ]
 
         guard let url = components?.url else { return }
 
         do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.setValue(server.token, forHTTPHeaderField: "X-Plex-Token")
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                print("📊 PlexProgress: Timeline report failed with status \(httpResponse.statusCode)")
-            }
+            _ = try await PlexNetworkManager.shared.requestData(
+                url,
+                method: "GET",
+                headers: ["X-Plex-Token": server.token]
+            )
         } catch {
             print("📊 PlexProgress: Failed to report progress: \(error)")
         }
@@ -81,23 +71,17 @@ actor PlexProgressReporter {
         guard !ratingKey.isEmpty else { return }
         guard let server = await getServer() else { return }
 
-        let urlString = "\(server.address)/:/scrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)&X-Plex-Token=\(server.token)"
+        let urlString = "\(server.address)/:/scrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)"
 
         guard let url = URL(string: urlString) else { return }
 
         do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-
-            let (_, response) = try await URLSession.shared.data(for: request)
-
-            if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 200 {
-                    print("📊 PlexProgress: ✅ Marked \(ratingKey) as watched")
-                } else {
-                    print("📊 PlexProgress: Scrobble failed with status \(httpResponse.statusCode)")
-                }
-            }
+            _ = try await PlexNetworkManager.shared.requestData(
+                url,
+                method: "GET",
+                headers: ["X-Plex-Token": server.token]
+            )
+            print("📊 PlexProgress: ✅ Marked \(ratingKey) as watched")
         } catch {
             print("📊 PlexProgress: Failed to mark as watched: \(error)")
         }
@@ -109,15 +93,16 @@ actor PlexProgressReporter {
         guard !ratingKey.isEmpty else { return }
         guard let server = await getServer() else { return }
 
-        let urlString = "\(server.address)/:/unscrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)&X-Plex-Token=\(server.token)"
+        let urlString = "\(server.address)/:/unscrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)"
 
         guard let url = URL(string: urlString) else { return }
 
         do {
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-
-            let (_, _) = try await URLSession.shared.data(for: request)
+            _ = try await PlexNetworkManager.shared.requestData(
+                url,
+                method: "GET",
+                headers: ["X-Plex-Token": server.token]
+            )
             print("📊 PlexProgress: Marked \(ratingKey) as unwatched")
         } catch {
             print("📊 PlexProgress: Failed to mark as unwatched: \(error)")
