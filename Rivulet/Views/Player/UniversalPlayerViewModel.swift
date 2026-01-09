@@ -418,6 +418,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Determine which player to use based on content and settings
         let useAVPlayerForDV = UserDefaults.standard.bool(forKey: "useAVPlayerForDolbyVision")
+        let useAVPlayerForAll = UserDefaults.standard.bool(forKey: "useAVPlayerForAllVideos")
         let hasDolbyVision = metadata.hasDolbyVision
 
         // Identify DV stream (could be second video track in dual-layer profile 7)
@@ -438,15 +439,22 @@ final class UniversalPlayerViewModel: ObservableObject {
             return false
         }()
 
-        print("🎬 [Player Selection] useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile)")
+        print("[Player Selection] useAVPlayerForAll=\(useAVPlayerForAll), useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile)")
 
-        if useAVPlayerForDV && hasDolbyVision && isCompatibleDVProfile {
-            print("🎬 [Player Selection] → Using AVPlayer for Dolby Vision Profile \(dvProfile ?? 0)")
+        // Use AVPlayer if:
+        // 1. "Use AVPlayer for All Videos" is enabled, OR
+        // 2. "Use AVPlayer for DV" is enabled AND content has compatible DV profile
+        if useAVPlayerForAll || (useAVPlayerForDV && hasDolbyVision && isCompatibleDVProfile) {
+            if useAVPlayerForAll {
+                print("[Player Selection] → Using AVPlayer (all videos mode)")
+            } else {
+                print("[Player Selection] → Using AVPlayer for Dolby Vision Profile \(dvProfile ?? 0)")
+            }
             self.playerType = .avplayer
             self.avPlayerWrapper = AVPlayerWrapper()
             self.mpvPlayerWrapper = nil
         } else {
-            print("🎬 [Player Selection] → Using MPV")
+            print("[Player Selection] → Using MPV")
             self.playerType = .mpv
             self.mpvPlayerWrapper = MPVPlayerWrapper()
             self.avPlayerWrapper = nil
@@ -477,15 +485,36 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Check if this is audio content
         let isAudio = metadata.type == "track" || metadata.type == "album" || metadata.type == "artist"
 
-        // AVPlayer: For Dolby Vision content, use HLS remux
-        // Direct file access causes AVPlayer to disable the video track for some DV content
-        // HLS remux lets Plex properly package the DV metadata for Apple TV playback
+        // AVPlayer: Check if source is compatible for true direct play (no server processing)
+        // Otherwise fall back to HLS remux which handles container conversion and codec tag fixes
         if playerType == .avplayer {
             let container = metadata.Media?.first?.container?.lowercased() ?? ""
-            print("🎬 [AVPlayer] Dolby Vision content in \(container.uppercased()) container - using HLS")
 
-            // Use HLS remux which properly packages DV metadata
-            // Plex HLS requires auth in HTTP headers, not query params
+            // Check if the source file is already AVPlayer-compatible
+            if isAVPlayerDirectPlayCompatible(metadata), let partKey = metadata.Media?.first?.Part?.first?.key {
+                // True direct play - no server processing needed
+                print("[AVPlayer] Direct play compatible (\(container.uppercased())) - using raw file stream")
+                if let url = networkManager.buildVLCDirectPlayURL(
+                    serverURL: serverURL,
+                    authToken: authToken,
+                    partKey: partKey
+                ) {
+                    streamURL = url
+                    streamHeaders = [
+                        "X-Plex-Token": authToken,
+                        "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,
+                        "X-Plex-Platform": PlexAPI.platform,
+                        "X-Plex-Device": PlexAPI.deviceName,
+                        "X-Plex-Product": PlexAPI.productName
+                    ]
+                    print("[AVPlayer] Direct play URL: \(url.absoluteString)")
+                    return
+                }
+            }
+
+            // Not direct-play compatible - use HLS remux
+            // This handles: MKV containers, incompatible codecs, DTS/TrueHD audio, bad codec tags (dvhe/hev1)
+            print("[AVPlayer] Not direct-play compatible (\(container.uppercased())) - using HLS remux")
             if let result = networkManager.buildHLSDirectPlayURL(
                 serverURL: serverURL,
                 authToken: authToken,
@@ -494,8 +523,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             ) {
                 streamURL = result.url
                 streamHeaders = result.headers
-                print("🎬 [AVPlayer] HLS URL: \(result.url.absoluteString)")
-                print("🎬 [AVPlayer] Headers: \(result.headers.keys.joined(separator: ", "))")
+                print("[AVPlayer] HLS URL: \(result.url.absoluteString)")
             }
 
             return
@@ -545,6 +573,35 @@ final class UniversalPlayerViewModel: ObservableObject {
             "X-Plex-Device": PlexAPI.deviceName,
             "X-Plex-Product": PlexAPI.productName
         ]
+    }
+
+    /// Check if the source file is compatible with AVPlayer for true direct play (no server processing).
+    /// Returns true if the file can be played directly without remuxing or transcoding.
+    private func isAVPlayerDirectPlayCompatible(_ metadata: PlexMetadata) -> Bool {
+        guard let media = metadata.Media?.first,
+              let part = media.Part?.first else { return false }
+
+        // AVPlayer-compatible containers: mp4, mov, m4v
+        let container = media.container?.lowercased() ?? ""
+        guard ["mp4", "mov", "m4v"].contains(container) else { return false }
+
+        // Check video codec - must be h264 or hevc
+        let videoStream = part.Stream?.first { $0.isVideo }
+        let videoCodec = videoStream?.codec?.lowercased() ?? ""
+        guard ["h264", "hevc"].contains(videoCodec) else { return false }
+
+        // Check for incompatible codec tags that need remuxing
+        // dvhe and hev1 need to be converted to dvh1 and hvc1 for tvOS compatibility
+        let codecTag = videoStream?.codecID?.lowercased() ?? ""
+        if codecTag == "dvhe" || codecTag == "hev1" { return false }
+
+        // Check audio codec - must be aac, ac3, or eac3
+        // DTS and TrueHD require transcoding (handled by HLS remux path)
+        let audioStream = part.Stream?.first { $0.isAudio }
+        let audioCodec = audioStream?.codec?.lowercased() ?? ""
+        guard ["aac", "ac3", "eac3"].contains(audioCodec) else { return false }
+
+        return true
     }
 
     private func bindPlayerState() {

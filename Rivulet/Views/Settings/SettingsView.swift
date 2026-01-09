@@ -149,6 +149,7 @@ struct SettingsView: View {
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
     @AppStorage("useAVPlayerForDolbyVision") private var useAVPlayerForDolbyVision = false
+    @AppStorage("useAVPlayerForAllVideos") private var useAVPlayerForAllVideos = false
     @Environment(\.focusScopeManager) private var focusScopeManager
     @Environment(\.nestedNavigationState) private var nestedNavState
     #if os(tvOS)
@@ -351,6 +352,14 @@ struct SettingsView: View {
                                 title: "Use AVPlayer for Dolby Vision",
                                 subtitle: "DV Profile 5/8 only. Profile 7 (MKV remux) requires MPV",
                                 isOn: $useAVPlayerForDolbyVision
+                            )
+
+                            SettingsToggleRow(
+                                icon: "play.rectangle",
+                                iconColor: .blue,
+                                title: "Use AVPlayer for All Videos",
+                                subtitle: "Falls back to MPV if needed",
+                                isOn: $useAVPlayerForAllVideos
                             )
                         }
 
