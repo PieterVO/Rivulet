@@ -92,14 +92,14 @@ struct MediaPosterCard: View, Equatable {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Poster Image
+            // Poster Image with progress bar
             posterImage
                 .frame(width: posterWidth, height: posterHeight)
-                .overlay(alignment: .bottom) {
-                    progressOverlay
-                }
                 .overlay(alignment: .topTrailing) {
                     unwatchedBadge
+                }
+                .overlay {
+                    progressBarOverlay
                 }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 #if os(tvOS)
@@ -185,24 +185,33 @@ struct MediaPosterCard: View, Equatable {
     }
 
     @ViewBuilder
-    private var progressOverlay: some View {
+    private var progressBarOverlay: some View {
         // Don't show progress for audio items
         if !isAudioItem, let progress = item.watchProgress, progress > 0 && progress < 1 {
             VStack {
                 Spacer()
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        // Track
-                        Rectangle()
-                            .fill(.black.opacity(0.6))
+                        // Dark backing for contrast on light posters
+                        Capsule()
+                            .fill(.black.opacity(0.5))
 
-                        // Progress
-                        Rectangle()
+                        // Glow layer
+                        Capsule()
+                            .fill(.white)
+                            .frame(width: geo.size.width * progress)
+                            .blur(radius: 4)
+                            .opacity(0.8)
+
+                        // Sharp core
+                        Capsule()
                             .fill(.white)
                             .frame(width: geo.size.width * progress)
                     }
                 }
-                .frame(height: 4)
+                .frame(height: 6)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 1)
             }
         }
     }

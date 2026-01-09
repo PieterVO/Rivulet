@@ -292,6 +292,14 @@ struct PlexLibraryView: View {
             .refreshable {
                 await refresh()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)) { _ in
+                // Only refresh hubs (Continue Watching, etc.) - not the full library grid
+                Task {
+                    guard let serverURL = authManager.selectedServerURL,
+                          let token = authManager.selectedServerToken else { return }
+                    await fetchLibraryHubs(serverURL: serverURL, token: token)
+                }
+            }
             .navigationDestination(item: $selectedItem) { item in
                 PlexDetailView(item: item)
             }

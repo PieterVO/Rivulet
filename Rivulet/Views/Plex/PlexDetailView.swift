@@ -321,6 +321,14 @@ struct PlexDetailView: View {
                 Task {
                     await loadFullMetadata()
 
+                    // Update displayed progress and watched state from refreshed metadata
+                    if let full = fullMetadata {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            displayedProgress = full.watchProgress ?? 0
+                            isWatched = full.isWatched
+                        }
+                    }
+
                     // Also refresh the specific episode if one was played
                     if let episodeKey = playedEpisodeKey {
                         await refreshEpisodeWatchStatus(ratingKey: episodeKey)

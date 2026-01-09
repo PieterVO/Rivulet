@@ -686,9 +686,18 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Auto-update tracks when MPV reports them (only for MPV)
+        // Auto-update tracks when player reports them
         if let mpv = mpvPlayerWrapper {
             mpv.tracksPublisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] in
+                    self?.updateTrackLists()
+                }
+                .store(in: &cancellables)
+        }
+
+        if let avp = avPlayerWrapper {
+            avp.tracksPublisher
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] in
                     self?.updateTrackLists()
@@ -1224,9 +1233,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Track Selection
 
     func selectAudioTrack(id: Int) {
-        // Note: Track selection is only supported for MPV player
-        // AVPlayer uses different track selection mechanism (AVMediaSelectionGroup)
-        mpvPlayerWrapper?.selectAudioTrack(id: id)
+        // Select on the active player
+        if mpvPlayerWrapper != nil {
+            mpvPlayerWrapper?.selectAudioTrack(id: id)
+        } else if avPlayerWrapper != nil {
+            avPlayerWrapper?.selectAudioTrack(id: id)
+        }
         currentAudioTrackId = id
 
         // Save preference
@@ -1238,13 +1250,21 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Select audio track without saving preference (for auto-selection)
     private func selectAudioTrackWithoutSaving(id: Int) {
-        mpvPlayerWrapper?.selectAudioTrack(id: id)
+        if mpvPlayerWrapper != nil {
+            mpvPlayerWrapper?.selectAudioTrack(id: id)
+        } else if avPlayerWrapper != nil {
+            avPlayerWrapper?.selectAudioTrack(id: id)
+        }
         currentAudioTrackId = id
     }
 
     func selectSubtitleTrack(id: Int?) {
-        // Note: Track selection is only supported for MPV player
-        mpvPlayerWrapper?.selectSubtitleTrack(id: id)
+        // Select on the active player
+        if mpvPlayerWrapper != nil {
+            mpvPlayerWrapper?.selectSubtitleTrack(id: id)
+        } else if avPlayerWrapper != nil {
+            avPlayerWrapper?.selectSubtitleTrack(id: id)
+        }
         currentSubtitleTrackId = id
 
         // Save preference
@@ -1262,19 +1282,29 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var hasAppliedAudioPreference = false
 
     private func updateTrackLists() {
-        // Track selection is only available with MPV player
-        // AVPlayer uses its own track selection system via AVMediaSelectionGroup
-        guard let mpv = mpvPlayerWrapper else {
-            // For AVPlayer, we don't expose track lists in the info panel
-            return
-        }
-
         let previousSubtitleCount = subtitleTracks.count
         let previousAudioCount = audioTracks.count
 
-        // Get raw tracks from MPV
-        var newAudioTracks = mpv.audioTracks
-        var newSubtitleTracks = mpv.subtitleTracks
+        var newAudioTracks: [MediaTrack]
+        var newSubtitleTracks: [MediaTrack]
+        var newCurrentAudioTrackId: Int?
+        var newCurrentSubtitleTrackId: Int?
+
+        // Get tracks from the active player
+        if let mpv = mpvPlayerWrapper {
+            newAudioTracks = mpv.audioTracks
+            newSubtitleTracks = mpv.subtitleTracks
+            newCurrentAudioTrackId = mpv.currentAudioTrackId
+            newCurrentSubtitleTrackId = mpv.currentSubtitleTrackId
+        } else if let avp = avPlayerWrapper {
+            newAudioTracks = avp.audioTracks
+            newSubtitleTracks = avp.subtitleTracks
+            newCurrentAudioTrackId = avp.currentAudioTrackId
+            newCurrentSubtitleTrackId = avp.currentSubtitleTrackId
+        } else {
+            // No active player
+            return
+        }
 
         // Enrich with Plex stream metadata (for channel info, etc.)
         if let streams = metadata.Media?.first?.Part?.first?.Stream {
@@ -1284,8 +1314,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         audioTracks = newAudioTracks
         subtitleTracks = newSubtitleTracks
-        currentAudioTrackId = mpv.currentAudioTrackId
-        currentSubtitleTrackId = mpv.currentSubtitleTrackId
+        currentAudioTrackId = newCurrentAudioTrackId
+        currentSubtitleTrackId = newCurrentSubtitleTrackId
 
         // Apply saved audio preference when tracks are first available
         if !hasAppliedAudioPreference && !audioTracks.isEmpty && previousAudioCount == 0 {

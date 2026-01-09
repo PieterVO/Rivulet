@@ -23,6 +23,24 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     // Keep a non-isolated reference for cleanup in deinit
     private nonisolated(unsafe) var _playerForCleanup: AVPlayer?
 
+    // MARK: - Track Management
+
+    private let tracksSubject = PassthroughSubject<Void, Never>()
+    private var _audioTracks: [MediaTrack] = []
+    private var _subtitleTracks: [MediaTrack] = []
+    private var _currentAudioTrackId: Int?
+    private var _currentSubtitleTrackId: Int?
+
+    /// Publisher that fires when tracks are updated
+    var tracksPublisher: AnyPublisher<Void, Never> {
+        tracksSubject.eraseToAnyPublisher()
+    }
+
+    var audioTracks: [MediaTrack] { _audioTracks }
+    var subtitleTracks: [MediaTrack] { _subtitleTracks }
+    var currentAudioTrackId: Int? { _currentAudioTrackId }
+    var currentSubtitleTrackId: Int? { _currentSubtitleTrackId }
+
     // MARK: - State
 
     private let playbackStateSubject = CurrentValueSubject<UniversalPlaybackState, Never>(.idle)
@@ -295,6 +313,8 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                         let naturalSize = track.naturalSize
                         print("🎬 AVPlayerWrapper: Video track \(index) codec=\(codecString) size=\(Int(abs(naturalSize.width)))x\(Int(abs(naturalSize.height))) fps=\(track.nominalFrameRate)")
                     }
+                    // Enumerate available audio/subtitle tracks
+                    self.enumerateTracks(for: item)
                     // Don't set playing here - let rate observation handle it
                 case .failed:
                     self.cancelLoadingTimeout()
@@ -546,8 +566,199 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         _duration = 0
         _isMuted = false
         currentStreamURL = nil
+        _audioTracks = []
+        _subtitleTracks = []
+        _currentAudioTrackId = nil
+        _currentSubtitleTrackId = nil
         playbackStateSubject.send(.idle)
         timeSubject.send(0)
+    }
+
+    // MARK: - Track Management
+
+    /// Enumerate audio and subtitle tracks from AVMediaSelectionGroup
+    private func enumerateTracks(for item: AVPlayerItem) {
+        let asset = item.asset
+
+        // Get audio tracks
+        if let audioGroup = asset.mediaSelectionGroup(forMediaCharacteristic: .audible) {
+            _audioTracks = audioGroup.options.enumerated().compactMap { index, option in
+                mediaTrack(from: option, id: index, isAudio: true)
+            }
+
+            // Determine currently selected audio track
+            if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: audioGroup),
+               let index = audioGroup.options.firstIndex(of: selectedOption) {
+                _currentAudioTrackId = index
+            } else if !_audioTracks.isEmpty {
+                _currentAudioTrackId = 0  // Default to first track
+            }
+
+            print("🎬 AVPlayerWrapper: Found \(_audioTracks.count) audio tracks")
+            for track in _audioTracks {
+                print("🎬 AVPlayerWrapper:   Audio: \(track.name) (\(track.languageCode ?? "?")) - \(track.formattedCodec)")
+            }
+        }
+
+        // Get subtitle/legible tracks
+        if let subtitleGroup = asset.mediaSelectionGroup(forMediaCharacteristic: .legible) {
+            _subtitleTracks = subtitleGroup.options.enumerated().compactMap { index, option in
+                // Filter out closed captions if they're duplicates (AVPlayer often includes both)
+                mediaTrack(from: option, id: index, isAudio: false)
+            }
+
+            // Determine currently selected subtitle track
+            if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: subtitleGroup),
+               let index = subtitleGroup.options.firstIndex(of: selectedOption) {
+                _currentSubtitleTrackId = index
+            } else {
+                _currentSubtitleTrackId = nil  // Subtitles off by default
+            }
+
+            print("🎬 AVPlayerWrapper: Found \(_subtitleTracks.count) subtitle tracks")
+            for track in _subtitleTracks {
+                print("🎬 AVPlayerWrapper:   Subtitle: \(track.name) (\(track.languageCode ?? "?"))")
+            }
+        }
+
+        // Notify subscribers that tracks are available
+        tracksSubject.send()
+    }
+
+    /// Convert AVMediaSelectionOption to MediaTrack
+    private func mediaTrack(from option: AVMediaSelectionOption, id: Int, isAudio: Bool) -> MediaTrack? {
+        let locale = option.locale
+        let languageCode = locale?.language.languageCode?.identifier
+        let language = locale.flatMap { Locale.current.localizedString(forLanguageCode: $0.language.languageCode?.identifier ?? "") }
+
+        // Get display name
+        let displayName = option.displayName
+
+        // Determine codec from media type
+        let codec: String?
+        if isAudio {
+            // Try to get codec from format descriptions
+            codec = extractAudioCodec(from: option)
+        } else {
+            codec = extractSubtitleCodec(from: option)
+        }
+
+        // Check characteristics for subtitle flags
+        let isForced = option.hasMediaCharacteristic(.containsOnlyForcedSubtitles)
+        let isHearingImpaired = option.hasMediaCharacteristic(.describesMusicAndSoundForAccessibility)
+            || option.hasMediaCharacteristic(.transcribesSpokenDialogForAccessibility)
+
+        // Get channel count for audio
+        let channels: Int? = isAudio ? extractChannelCount(from: option) : nil
+
+        return MediaTrack(
+            id: id,
+            name: displayName,
+            language: language,
+            languageCode: languageCode,
+            codec: codec,
+            isDefault: false,  // AVPlayer doesn't expose this directly
+            isForced: isForced,
+            isHearingImpaired: isHearingImpaired,
+            channels: channels
+        )
+    }
+
+    /// Extract audio codec from AVMediaSelectionOption
+    private func extractAudioCodec(from option: AVMediaSelectionOption) -> String? {
+        // Check common audio types in the option's media type
+        let mediaType = option.mediaType
+
+        // Try to get from format descriptions if available
+        // AVMediaSelectionOption doesn't directly expose codec, so we infer from common patterns
+        let displayName = option.displayName.lowercased()
+
+        if displayName.contains("dolby") || displayName.contains("atmos") {
+            return "eac3"
+        } else if displayName.contains("dts") {
+            return "dts"
+        } else if displayName.contains("stereo") || displayName.contains("aac") {
+            return "aac"
+        } else if displayName.contains("ac3") || displayName.contains("ac-3") {
+            return "ac3"
+        }
+
+        // Default to AAC for audio
+        return mediaType == .audio ? "aac" : nil
+    }
+
+    /// Extract subtitle codec from AVMediaSelectionOption
+    private func extractSubtitleCodec(from option: AVMediaSelectionOption) -> String? {
+        let displayName = option.displayName.lowercased()
+
+        if displayName.contains("cc") || option.hasMediaCharacteristic(.transcribesSpokenDialogForAccessibility) {
+            return "cc_dec"
+        } else if displayName.contains("sdh") {
+            return "subrip"
+        }
+
+        // Default subtitle type
+        return "subrip"
+    }
+
+    /// Extract channel count from AVMediaSelectionOption
+    private func extractChannelCount(from option: AVMediaSelectionOption) -> Int? {
+        let displayName = option.displayName.lowercased()
+
+        // Parse channel info from display name
+        if displayName.contains("7.1") || displayName.contains("atmos") {
+            return 8
+        } else if displayName.contains("5.1") {
+            return 6
+        } else if displayName.contains("stereo") || displayName.contains("2.0") {
+            return 2
+        } else if displayName.contains("mono") {
+            return 1
+        }
+
+        // Default to stereo if not specified
+        return 2
+    }
+
+    /// Select an audio track by ID
+    func selectAudioTrack(id: Int) {
+        guard let playerItem = playerItem,
+              let audioGroup = playerItem.asset.mediaSelectionGroup(forMediaCharacteristic: .audible),
+              id >= 0 && id < audioGroup.options.count else {
+            print("🎬 AVPlayerWrapper: Invalid audio track ID: \(id)")
+            return
+        }
+
+        let option = audioGroup.options[id]
+        playerItem.select(option, in: audioGroup)
+        _currentAudioTrackId = id
+        print("🎬 AVPlayerWrapper: Selected audio track: \(option.displayName)")
+    }
+
+    /// Select a subtitle track by ID, or nil to disable subtitles
+    func selectSubtitleTrack(id: Int?) {
+        guard let playerItem = playerItem,
+              let subtitleGroup = playerItem.asset.mediaSelectionGroup(forMediaCharacteristic: .legible) else {
+            print("🎬 AVPlayerWrapper: No subtitle group available")
+            return
+        }
+
+        if let id = id, id >= 0 && id < subtitleGroup.options.count {
+            let option = subtitleGroup.options[id]
+            playerItem.select(option, in: subtitleGroup)
+            _currentSubtitleTrackId = id
+            print("🎬 AVPlayerWrapper: Selected subtitle track: \(option.displayName)")
+        } else {
+            // Disable subtitles
+            playerItem.select(nil, in: subtitleGroup)
+            _currentSubtitleTrackId = nil
+            print("🎬 AVPlayerWrapper: Subtitles disabled")
+        }
+    }
+
+    /// Disable subtitles
+    func disableSubtitles() {
+        selectSubtitleTrack(id: nil)
     }
 
     // MARK: - Codec Detection
