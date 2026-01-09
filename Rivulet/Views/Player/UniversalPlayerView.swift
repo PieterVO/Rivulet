@@ -321,6 +321,10 @@ struct UniversalPlayerView: View {
             // Report progress periodically
             reportProgress(time: newTime)
         }
+        .onChange(of: viewModel.playbackState) { oldState, newState in
+            // Immediately report state changes to Plex
+            reportStateChange(from: oldState, to: newState)
+        }
         // Manage focus scope when settings panel opens/closes
         .onChange(of: viewModel.showInfoPanel) { _, showPanel in
             if showPanel {
@@ -854,7 +858,8 @@ struct UniversalPlayerView: View {
                 ratingKey: viewModel.metadata.ratingKey ?? "",
                 time: viewModel.currentTime,
                 duration: viewModel.duration,
-                state: "stopped"
+                state: "stopped",
+                forceReport: true
             )
 
             // Mark as watched if > 90% complete
@@ -863,6 +868,33 @@ struct UniversalPlayerView: View {
                     ratingKey: viewModel.metadata.ratingKey ?? ""
                 )
             }
+        }
+    }
+
+    private func reportStateChange(from oldState: UniversalPlaybackState, to newState: UniversalPlaybackState) {
+        // Only report significant state changes
+        let plexState: String?
+        switch newState {
+        case .playing:
+            plexState = "playing"
+        case .paused:
+            plexState = "paused"
+        case .ended:
+            plexState = "stopped"
+        default:
+            plexState = nil
+        }
+
+        guard let state = plexState else { return }
+
+        Task {
+            await PlexProgressReporter.shared.reportProgress(
+                ratingKey: viewModel.metadata.ratingKey ?? "",
+                time: viewModel.currentTime,
+                duration: viewModel.duration,
+                state: state,
+                forceReport: true
+            )
         }
     }
 }

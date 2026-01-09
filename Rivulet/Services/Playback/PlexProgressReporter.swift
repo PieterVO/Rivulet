@@ -23,16 +23,18 @@ actor PlexProgressReporter {
     ///   - time: Current playback time in seconds
     ///   - duration: Total duration in seconds
     ///   - state: Playback state ("playing", "paused", "stopped")
+    ///   - forceReport: If true, bypasses throttle to report immediately (for state changes)
     func reportProgress(
         ratingKey: String,
         time: TimeInterval,
         duration: TimeInterval,
-        state: String
+        state: String,
+        forceReport: Bool = false
     ) async {
         guard !ratingKey.isEmpty else { return }
 
-        // Throttle reports - only report if time changed significantly
-        if let lastTime = lastReportedTimes[ratingKey], abs(time - lastTime) < 5 {
+        // Throttle reports - only report if time changed significantly (unless forced)
+        if !forceReport, let lastTime = lastReportedTimes[ratingKey], abs(time - lastTime) < 5 {
             return
         }
         lastReportedTimes[ratingKey] = time
@@ -74,6 +76,7 @@ actor PlexProgressReporter {
                 method: "GET",
                 headers: ["X-Plex-Token": server.token]
             )
+            print("📊 PlexProgress: Reported \(state) at \(Int(time))s/\(Int(duration))s for \(ratingKey)")
         } catch {
             print("📊 PlexProgress: Failed to report progress: \(error)")
         }
