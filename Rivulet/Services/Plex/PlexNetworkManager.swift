@@ -1301,14 +1301,26 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         let sessionId = UUID().uuidString
+
+        // Client profile matching official Plex tvOS app for optimal AVPlayer compatibility
+        // Reference: https://github.com/l984-451/Rivulet/issues/45
         let clientProfile = [
-            "add-direct-stream-profile(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=hevc)",
-            "add-direct-stream-profile(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=h264)",
-            "add-direct-stream-profile(type=musicProfile&audioCodec=aac&container=mp4)",
-            "add-direct-stream-profile(type=musicProfile&audioCodec=ac3&container=mp4)",
-            "add-direct-stream-profile(type=musicProfile&audioCodec=eac3&container=mp4)",
-            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=hevc&audioCodec=aac,ac3,eac3)",
-            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentFormat=mp4&videoCodec=h264&audioCodec=aac,ac3,eac3)"
+            // Direct play profiles - tells server what formats AVPlayer can play natively
+            "add-direct-play-profile(type=videoProfile&protocol=http&container=mp4,mov&videoCodec=h264,mpeg4,hevc&audioCodec=aac,ac3,eac3&subtitleCodec=mov_text,tx3g,ttxt,text,webvtt)",
+            "add-direct-play-profile(type=musicProfile&protocol=http&container=flac&audioCodec=flac)",
+            "add-direct-play-profile(type=musicProfile&protocol=http&container=mp4&audioCodec=alac)",
+
+            // Transcode targets - tells server how to transcode incompatible content
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&replace=true)",
+            "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
+            "add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)",
+
+            // Limitations - tells server about codec/format restrictions
+            "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=6&replace=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe&onlyDirectPlay=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1&onlyDirectPlay=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=4096&replace=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=2160&replace=true)"
         ].joined(separator: "+")
 
         // Plex HLS requires auth in HTTP headers, not query params
@@ -1342,7 +1354,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "segmentDuration", value: "6"),
             URLQueryItem(name: "audioCodec", value: "aac,eac3,ac3"),
             URLQueryItem(name: "audioBitrate", value: "1024"),
-            URLQueryItem(name: "audioChannels", value: "8"),
+            URLQueryItem(name: "audioChannels", value: "6"),
             URLQueryItem(name: "subtitles", value: "auto"),
             URLQueryItem(name: "subtitleSize", value: "100"),
             URLQueryItem(name: "context", value: "streaming"),
