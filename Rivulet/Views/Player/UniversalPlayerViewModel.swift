@@ -348,13 +348,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Player Instance
 
     /// The player engine being used for this playback session
-    private(set) var playerType: PlayerType = .mpv
+    /// Published so the view can react to fallback from AVPlayer to MPV
+    @Published private(set) var playerType: PlayerType = .mpv
 
     /// MPV player (used for most content)
-    private(set) var mpvPlayerWrapper: MPVPlayerWrapper?
+    /// Published so the view can react to fallback from AVPlayer to MPV
+    @Published private(set) var mpvPlayerWrapper: MPVPlayerWrapper?
 
     /// AVPlayer (used for Dolby Vision when enabled)
-    private(set) var avPlayerWrapper: AVPlayerWrapper?
+    @Published private(set) var avPlayerWrapper: AVPlayerWrapper?
 
     // MARK: - Metadata
 
@@ -686,6 +688,16 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             case .avplayer:
                 guard let avp = avPlayerWrapper else { return }
+
+                // Wait for HLS transcode to be ready before loading
+                // Plex needs time to start the transcode session and generate the manifest
+                print("🎬 [AVPlayer] Waiting for HLS transcode session...")
+                let transcodeReady = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
+                if !transcodeReady {
+                    throw PlayerError.loadFailed("HLS transcode session failed to start")
+                }
+                print("🎬 [AVPlayer] Transcode session ready, loading...")
+
                 // For AVPlayer, seek to start offset after loading if needed
                 try await avp.load(url: url, headers: streamHeaders)
                 if let offset = startOffset, offset > 0 {
@@ -700,6 +712,33 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             startControlsHideTimer()
         } catch {
+            // If AVPlayer failed, try falling back to MPV
+            if playerType == .avplayer {
+                print("🎬 [Fallback] AVPlayer failed to load: \(error.localizedDescription)")
+                print("🎬 [Fallback] Attempting fallback to MPV player...")
+
+                // Capture the AVPlayer failure to Sentry before fallback
+                SentrySDK.capture(error: error) { scope in
+                    scope.setTag(value: "playback", key: "component")
+                    scope.setTag(value: "avplayer", key: "player_type")
+                    scope.setTag(value: "fallback_triggered", key: "fallback_status")
+                    scope.setExtra(value: url.absoluteString, key: "stream_url")
+                    scope.setExtra(value: self.metadata.title ?? "unknown", key: "media_title")
+                    scope.setExtra(value: self.metadata.type ?? "unknown", key: "media_type")
+                    scope.setExtra(value: self.metadata.ratingKey ?? "unknown", key: "rating_key")
+                    scope.setExtra(value: self.startOffset ?? 0, key: "start_offset")
+                }
+
+                // Attempt MPV fallback
+                do {
+                    try await fallbackToMPV()
+                    return  // Success - don't show error
+                } catch {
+                    print("🎬 [Fallback] MPV fallback also failed: \(error.localizedDescription)")
+                    // Fall through to show the original error
+                }
+            }
+
             errorMessage = error.localizedDescription
             playbackState = .failed(.loadFailed(error.localizedDescription))
 
@@ -714,6 +753,155 @@ final class UniversalPlayerViewModel: ObservableObject {
                 scope.setExtra(value: self.startOffset ?? 0, key: "start_offset")
             }
         }
+    }
+
+    // MARK: - HLS Transcode Preflight
+
+    /// Wait for the HLS transcode session to be ready before loading into AVPlayer
+    /// Plex needs time to start the transcoder and generate the initial manifest
+    /// - Parameters:
+    ///   - url: The HLS manifest URL
+    ///   - headers: HTTP headers including auth token
+    /// - Returns: true if the transcode is ready, false if it failed to start
+    private func waitForHLSTranscodeReady(url: URL, headers: [String: String]) async -> Bool {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+
+        // Add auth headers
+        for (key, value) in headers {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        // Try up to 5 times with delays to give Plex time to start the transcode
+        for attempt in 1...5 {
+            do {
+                print("🎬 [AVPlayer] Preflight attempt \(attempt)/5: Checking HLS manifest...")
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+
+                if let httpResponse = response as? HTTPURLResponse {
+                    print("🎬 [AVPlayer] Preflight response: \(httpResponse.statusCode) (\(data.count) bytes)")
+
+                    if httpResponse.statusCode == 200 && data.count > 0 {
+                        if let content = String(data: data, encoding: .utf8) {
+                            // Check for valid HLS manifest with actual content
+                            let hasHeader = content.contains("#EXTM3U")
+                            let hasSegments = content.contains("#EXTINF") || content.contains(".m3u8") || content.contains(".mp4")
+
+                            if hasHeader && hasSegments {
+                                print("🎬 [AVPlayer] Preflight: Valid HLS manifest detected")
+                                return true
+                            } else if hasHeader {
+                                // Has header but no segments yet - transcode still starting
+                                print("🎬 [AVPlayer] Preflight: Manifest exists but no segments yet, waiting...")
+                            } else {
+                                print("🎬 [AVPlayer] Preflight: Invalid manifest content")
+                            }
+                        }
+                    } else if httpResponse.statusCode == 404 || httpResponse.statusCode == 503 {
+                        // Transcode not started yet
+                        print("🎬 [AVPlayer] Preflight: Transcode not ready (\(httpResponse.statusCode))")
+                    } else {
+                        print("🎬 [AVPlayer] Preflight: Unexpected status \(httpResponse.statusCode)")
+                    }
+                }
+            } catch {
+                print("🎬 [AVPlayer] Preflight error: \(error.localizedDescription)")
+            }
+
+            // Wait before retrying (increasing delay: 0.5s, 1s, 1.5s, 2s, 2.5s)
+            if attempt < 5 {
+                let delay = Double(attempt) * 0.5
+                print("🎬 [AVPlayer] Preflight: Waiting \(delay)s before retry...")
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+
+        print("🎬 [AVPlayer] Preflight: Transcode failed to start after 5 attempts")
+        return false
+    }
+
+    // MARK: - AVPlayer to MPV Fallback
+
+    /// Tracks whether we've already attempted fallback (to prevent loops)
+    private var hasAttemptedMPVFallback = false
+
+    /// Fall back from AVPlayer to MPV when AVPlayer fails to load
+    /// This creates an MPV player, rebuilds the stream URL for direct play, and retries
+    private func fallbackToMPV() async throws {
+        guard !hasAttemptedMPVFallback else {
+            throw PlayerError.loadFailed("Already attempted MPV fallback")
+        }
+        hasAttemptedMPVFallback = true
+
+        // Stop AVPlayer
+        avPlayerWrapper?.stop()
+        avPlayerWrapper = nil
+
+        // Switch to MPV
+        playerType = .mpv
+        mpvPlayerWrapper = MPVPlayerWrapper()
+
+        // Cancel existing subscriptions and rebind to MPV
+        cancellables.removeAll()
+        bindPlayerState()
+
+        // Rebuild stream URL for MPV (direct play instead of HLS)
+        let networkManager = PlexNetworkManager.shared
+        guard let ratingKey = metadata.ratingKey else {
+            throw PlayerError.loadFailed("Missing rating key")
+        }
+
+        let partKey = metadata.Media?.first?.Part?.first?.key
+
+        if let partKey = partKey {
+            streamURL = networkManager.buildVLCDirectPlayURL(
+                serverURL: serverURL,
+                authToken: authToken,
+                partKey: partKey
+            )
+        } else {
+            streamURL = networkManager.buildDirectStreamURL(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey,
+                offsetMs: Int((startOffset ?? 0) * 1000),
+                isAudio: false
+            )
+        }
+
+        streamHeaders = [
+            "X-Plex-Token": authToken,
+            "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,
+            "X-Plex-Platform": PlexAPI.platform,
+            "X-Plex-Device": PlexAPI.deviceName,
+            "X-Plex-Product": PlexAPI.productName
+        ]
+
+        guard let url = streamURL else {
+            throw PlayerError.loadFailed("Could not build MPV stream URL")
+        }
+
+        print("🎬 [Fallback] Retrying with MPV using URL: \(url.absoluteString)")
+
+        // Show notice to user about the fallback
+        showCompatibilityNotice("AVPlayer failed — falling back to standard HDR")
+
+        // Load and play with MPV
+        guard let mpv = mpvPlayerWrapper else {
+            throw PlayerError.loadFailed("MPV player not available")
+        }
+
+        try await mpv.load(url: url, headers: streamHeaders, startTime: startOffset)
+        mpv.play()
+        self.duration = mpv.duration
+        updateTrackLists()
+
+        preloadThumbnails()
+        startControlsHideTimer()
+
+        print("🎬 [Fallback] MPV fallback successful!")
     }
 
     /// Called when the MPV view controller is created
