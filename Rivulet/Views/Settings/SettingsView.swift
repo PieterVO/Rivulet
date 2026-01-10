@@ -447,7 +447,7 @@ struct SettingsView: View {
                                 icon: "play.rectangle",
                                 iconColor: .blue,
                                 title: "Use AVPlayer for All Videos (more experimental than the rest)",
-                                subtitle: "Will probably remux a lot. Falls back to MPV if needed",
+                                subtitle: "If you like remuxing and Direct Stream, here's to you",
                                 isOn: $useAVPlayerForAllVideos
                             )
                         }

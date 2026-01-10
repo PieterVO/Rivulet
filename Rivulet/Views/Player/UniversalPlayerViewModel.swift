@@ -682,7 +682,24 @@ final class UniversalPlayerViewModel: ObservableObject {
         errorPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] error in
-                self?.errorMessage = error.localizedDescription
+                guard let self else { return }
+                self.errorMessage = error.localizedDescription
+
+                // Trigger fallback to MPV if AVPlayer fails asynchronously during playback
+                if self.playerType == .avplayer && !self.hasAttemptedMPVFallback {
+                    print("🎬 [Fallback] AVPlayer failed asynchronously: \(error.localizedDescription)")
+                    print("🎬 [Fallback] Attempting fallback to MPV player...")
+                    Task {
+                        do {
+                            try await self.fallbackToMPV()
+                            // Clear error message on successful fallback
+                            self.errorMessage = nil
+                        } catch {
+                            print("🎬 [Fallback] MPV fallback also failed: \(error.localizedDescription)")
+                            // Keep the original error message
+                        }
+                    }
+                }
             }
             .store(in: &cancellables)
 
@@ -755,14 +772,20 @@ final class UniversalPlayerViewModel: ObservableObject {
             case .avplayer:
                 guard let avp = avPlayerWrapper else { return }
 
-                // Wait for HLS transcode to be ready before loading
-                // Plex needs time to start the transcode session and generate the manifest
-                print("🎬 [AVPlayer] Waiting for HLS transcode session...")
-                let transcodeReady = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
-                if !transcodeReady {
-                    throw PlayerError.loadFailed("HLS transcode session failed to start")
+                // Only do HLS preflight check for transcode URLs (not direct play)
+                let isHLSStream = url.absoluteString.contains(".m3u8")
+                if isHLSStream {
+                    // Wait for HLS transcode to be ready before loading
+                    // Plex needs time to start the transcode session and generate segments
+                    print("🎬 [AVPlayer] Waiting for HLS transcode session...")
+                    let transcodeReady = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
+                    if !transcodeReady {
+                        throw PlayerError.loadFailed("HLS transcode session failed to start")
+                    }
+                    print("🎬 [AVPlayer] Transcode ready, loading stream...")
+                } else {
+                    print("🎬 [AVPlayer] Direct play URL detected, skipping HLS preflight")
                 }
-                print("🎬 [AVPlayer] Transcode session ready, loading...")
 
                 // For AVPlayer, seek to start offset after loading if needed
                 try await avp.load(url: url, headers: streamHeaders)
@@ -824,7 +847,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - HLS Transcode Preflight
 
     /// Wait for the HLS transcode session to be ready before loading into AVPlayer
-    /// Plex needs time to start the transcoder and generate the initial manifest
+    /// Plex needs time to start the transcoder and generate the initial manifest AND segments
+    /// This method verifies both the manifest and at least one segment are accessible
     /// - Parameters:
     ///   - url: The HLS manifest URL
     ///   - headers: HTTP headers including auth token
@@ -839,10 +863,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             request.addValue(value, forHTTPHeaderField: key)
         }
 
-        // Try up to 5 times with delays to give Plex time to start the transcode
-        for attempt in 1...5 {
+        // Try up to 8 times with delays to give Plex time to start the transcode
+        for attempt in 1...8 {
             do {
-                print("🎬 [AVPlayer] Preflight attempt \(attempt)/5: Checking HLS manifest...")
+                print("🎬 [AVPlayer] Preflight attempt \(attempt)/8: Checking HLS manifest...")
 
                 let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -853,14 +877,25 @@ final class UniversalPlayerViewModel: ObservableObject {
                         if let content = String(data: data, encoding: .utf8) {
                             // Check for valid HLS manifest with actual content
                             let hasHeader = content.contains("#EXTM3U")
-                            let hasSegments = content.contains("#EXTINF") || content.contains(".m3u8") || content.contains(".mp4")
+                            let hasVariants = content.contains(".m3u8")
+                            let hasSegments = content.contains("#EXTINF")
 
-                            if hasHeader && hasSegments {
-                                print("🎬 [AVPlayer] Preflight: Valid HLS manifest detected")
+                            if hasHeader && hasVariants {
+                                // This is a master playlist - follow a variant to check for segments
+                                print("🎬 [AVPlayer] Preflight: Master playlist found, checking variant...")
+                                if let variantReady = await checkVariantPlaylist(masterContent: content, baseURL: url, headers: headers), variantReady {
+                                    print("🎬 [AVPlayer] Preflight: Variant playlist has segments, transcode ready!")
+                                    return true
+                                } else {
+                                    print("🎬 [AVPlayer] Preflight: Variant not ready yet...")
+                                }
+                            } else if hasHeader && hasSegments {
+                                // This is already a media playlist with segments
+                                print("🎬 [AVPlayer] Preflight: Media playlist with segments found")
                                 return true
                             } else if hasHeader {
-                                // Has header but no segments yet - transcode still starting
-                                print("🎬 [AVPlayer] Preflight: Manifest exists but no segments yet, waiting...")
+                                // Has header but no content yet
+                                print("🎬 [AVPlayer] Preflight: Manifest exists but no content yet, waiting...")
                             } else {
                                 print("🎬 [AVPlayer] Preflight: Invalid manifest content")
                             }
@@ -876,16 +911,76 @@ final class UniversalPlayerViewModel: ObservableObject {
                 print("🎬 [AVPlayer] Preflight error: \(error.localizedDescription)")
             }
 
-            // Wait before retrying (increasing delay: 0.5s, 1s, 1.5s, 2s, 2.5s)
-            if attempt < 5 {
+            // Wait before retrying (increasing delay: 0.5s, 1s, 1.5s, 2s, 2.5s, 3s, 3.5s, 4s)
+            if attempt < 8 {
                 let delay = Double(attempt) * 0.5
                 print("🎬 [AVPlayer] Preflight: Waiting \(delay)s before retry...")
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
         }
 
-        print("🎬 [AVPlayer] Preflight: Transcode failed to start after 5 attempts")
+        print("🎬 [AVPlayer] Preflight: Transcode failed to start after 8 attempts")
         return false
+    }
+
+    /// Check if a variant playlist has actual segments ready
+    private func checkVariantPlaylist(masterContent: String, baseURL: URL, headers: [String: String]) async -> Bool? {
+        // Parse the master playlist to find a variant playlist URL
+        let lines = masterContent.components(separatedBy: .newlines)
+        var variantURL: URL?
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasSuffix(".m3u8") && !trimmed.hasPrefix("#") {
+                // Construct the full URL for the variant
+                if let url = URL(string: trimmed, relativeTo: baseURL) {
+                    variantURL = url.absoluteURL
+                    break
+                }
+            }
+        }
+
+        guard let variant = variantURL else {
+            print("🎬 [AVPlayer] Preflight: No variant playlist URL found in master")
+            return nil
+        }
+
+        print("🎬 [AVPlayer] Preflight: Checking variant at \(variant.lastPathComponent)")
+
+        var request = URLRequest(url: variant)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 5
+
+        for (key, value) in headers {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse,
+               httpResponse.statusCode == 200,
+               let content = String(data: data, encoding: .utf8) {
+
+                // Check if variant playlist has actual segments
+                let hasSegments = content.contains("#EXTINF")
+                let hasMediaContent = content.contains(".mp4") || content.contains(".ts") || content.contains(".m4s")
+
+                if hasSegments && hasMediaContent {
+                    print("🎬 [AVPlayer] Preflight: Variant has \(content.components(separatedBy: "#EXTINF").count - 1) segments")
+                    return true
+                } else {
+                    print("🎬 [AVPlayer] Preflight: Variant exists but has no segments yet")
+                    return false
+                }
+            } else {
+                print("🎬 [AVPlayer] Preflight: Variant not accessible")
+                return false
+            }
+        } catch {
+            print("🎬 [AVPlayer] Preflight: Failed to fetch variant: \(error.localizedDescription)")
+            return false
+        }
     }
 
     // MARK: - AVPlayer to MPV Fallback
@@ -952,7 +1047,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         print("🎬 [Fallback] Retrying with MPV using URL: \(url.absoluteString)")
 
         // Show notice to user about the fallback
-        showCompatibilityNotice("AVPlayer failed — falling back to standard HDR")
+        // Use appropriate message based on which setting was enabled
+        let useAVPlayerForAll = UserDefaults.standard.bool(forKey: "useAVPlayerForAllVideos")
+        if useAVPlayerForAll {
+            showCompatibilityNotice("AVPlayer failed — falling back to MPV")
+        } else {
+            showCompatibilityNotice("AVPlayer failed — falling back to standard HDR")
+        }
 
         // Load and play with MPV
         guard let mpv = mpvPlayerWrapper else {

@@ -56,6 +56,8 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     private var _isMuted: Bool = false
     private var loadingTimeoutTask: Task<Void, Never>?
     private var currentStreamURL: URL?
+    private var consecutive404Count: Int = 0
+    private let max404CountBeforeFail = 5  // Fail after 5 consecutive 404s
 
     // MARK: - Publishers
 
@@ -115,6 +117,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         print("🎬 AVPlayerWrapper: Loading URL: \(url) (isLive: \(isLive))")
         playbackStateSubject.send(.loading)
         currentStreamURL = url
+        consecutive404Count = 0  // Reset 404 counter for new load
 
         // Clean up previous player
         cleanupObservers()
@@ -535,8 +538,17 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             playbackStateSubject.send(.failed(.codecUnsupported(message)))
             errorSubject.send(.codecUnsupported(message))
         } else if errorCode == -12938 {
-            // Content-not-found error occasionally appears mid-stream; treat as warning to avoid user-facing failure
-            print("🎬 AVPlayerWrapper: Warning - transient content-not-found from server (ignoring)")
+            // Content-not-found (HTTP 404) - track consecutive occurrences
+            // A few 404s can be transient, but many consecutive ones indicate the transcode isn't working
+            consecutive404Count += 1
+            if consecutive404Count >= max404CountBeforeFail {
+                print("🎬 AVPlayerWrapper: Too many consecutive 404 errors (\(consecutive404Count)) - transcode failed")
+                let message = "HLS transcode failed - segments not available"
+                playbackStateSubject.send(.failed(.loadFailed(message)))
+                errorSubject.send(.loadFailed(message))
+            } else {
+                print("🎬 AVPlayerWrapper: Warning - content-not-found (\(consecutive404Count)/\(max404CountBeforeFail))")
+            }
         } else if errorCode == -12318 {
             // Segment reported higher bandwidth than variant; warn but don't fail playback
             print("🎬 AVPlayerWrapper: Warning - segment exceeds declared variant bandwidth (continuing)")
@@ -555,6 +567,11 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
         // Log successful connection for debugging
         if lastEvent.numberOfBytesTransferred > 0 {
+            // Reset 404 counter on successful data transfer
+            if consecutive404Count > 0 {
+                print("🎬 AVPlayerWrapper: Successful transfer, resetting 404 counter")
+                consecutive404Count = 0
+            }
             print("🎬 AVPlayerWrapper: Streaming - \(lastEvent.numberOfBytesTransferred) bytes, bitrate: \(Int(lastEvent.indicatedBitrate))")
         }
     }
@@ -566,6 +583,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         _duration = 0
         _isMuted = false
         currentStreamURL = nil
+        consecutive404Count = 0
         _audioTracks = []
         _subtitleTracks = []
         _currentAudioTrackId = nil
