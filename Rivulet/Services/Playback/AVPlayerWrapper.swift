@@ -145,7 +145,8 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         } else {
             // VOD: preload duration for accurate seeking
             playerItem = AVPlayerItem(asset: asset, automaticallyLoadedAssetKeys: ["duration"])
-            playerItem?.preferredForwardBufferDuration = 0  // Let system decide
+            // Buffer 30 seconds ahead for high-bitrate HDR content to prevent audio stuttering
+            playerItem?.preferredForwardBufferDuration = 30
             playerItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
 
