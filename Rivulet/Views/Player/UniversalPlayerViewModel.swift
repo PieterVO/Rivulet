@@ -387,7 +387,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     let serverURL: String
     let authToken: String
-    let startOffset: TimeInterval?
+    private(set) var startOffset: TimeInterval?
 
     // MARK: - Loading Screen Images (passed from detail view for instant display)
 
@@ -398,6 +398,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     @Published private(set) var streamURL: URL?
     private(set) var streamHeaders: [String: String] = [:]
+
+    // MARK: - Preloaded Next Episode Data
+
+    private var preloadedNextStreamURL: URL?
+    private var preloadedNextStreamHeaders: [String: String] = [:]
+    private var preloadedNextMetadata: PlexMetadata?
 
     // MARK: - Initialization
 
@@ -1935,10 +1941,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             postVideoState = .showingEpisodeSummary
             print("🎬 [PostVideo] State set to showingEpisodeSummary")
 
-            // Start countdown if enabled and next episode exists
+            // Start countdown and preload if next episode exists
             if nextEpisode != nil {
                 print("🎬 [PostVideo] Starting autoplay countdown")
                 startAutoplayCountdown()
+                // Preload next episode in background for instant playback
+                Task {
+                    await preloadNextEpisode()
+                }
             } else {
                 print("🎬 [PostVideo] No next episode, skipping countdown")
             }
@@ -2031,12 +2041,20 @@ final class UniversalPlayerViewModel: ObservableObject {
             )
             print("🎬 [PostVideo] Got \(episodes.count) episodes in season")
 
-            // Find next episode in season
-            if let nextEp = episodes.first(where: { $0.index == currentIndex + 1 }) {
+            // Sort episodes by index and find the next one after current
+            let sortedEpisodes = episodes
+                .filter { $0.index != nil }
+                .sorted { ($0.index ?? 0) < ($1.index ?? 0) }
+
+            // Find episodes with index greater than current, take the first one
+            if let nextEp = sortedEpisodes.first(where: { ($0.index ?? 0) > currentIndex }) {
                 print("🎬 [PostVideo] Found next episode: S\(nextEp.parentIndex ?? 0)E\(nextEp.index ?? 0) - \(nextEp.title ?? "?")")
                 return nextEp
             }
-            print("🎬 [PostVideo] No episode with index \(currentIndex + 1) found, trying next season...")
+
+            // Debug: show what episodes and indexes we have
+            let episodeInfo = sortedEpisodes.map { "E\($0.index ?? -1): \($0.title ?? "?")" }
+            print("🎬 [PostVideo] No episode after index \(currentIndex) found. Episodes in season: \(episodeInfo). Trying next season...")
 
             // End of season - try next season
             guard let showKey = metadata.grandparentRatingKey,
@@ -2051,9 +2069,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                 ratingKey: showKey
             )
 
-            guard let nextSeason = seasons.first(where: { $0.index == seasonIndex + 1 }),
+            // Sort seasons by index and find the next one after current
+            let sortedSeasons = seasons
+                .filter { $0.index != nil }
+                .sorted { ($0.index ?? 0) < ($1.index ?? 0) }
+
+            guard let nextSeason = sortedSeasons.first(where: { ($0.index ?? 0) > seasonIndex }),
                   let nextSeasonKey = nextSeason.ratingKey else {
-                print("🎬 [PostVideo] End of series - no next season")
+                let seasonIndexes = sortedSeasons.compactMap { $0.index }
+                print("🎬 [PostVideo] End of series - no season after \(seasonIndex). Available seasons: \(seasonIndexes)")
                 return nil
             }
 
@@ -2063,7 +2087,12 @@ final class UniversalPlayerViewModel: ObservableObject {
                 ratingKey: nextSeasonKey
             )
 
-            if let firstEp = nextSeasonEpisodes.first {
+            // Get first episode of next season (sorted by index)
+            let sortedNextSeasonEps = nextSeasonEpisodes
+                .filter { $0.index != nil }
+                .sorted { ($0.index ?? 0) < ($1.index ?? 0) }
+
+            if let firstEp = sortedNextSeasonEps.first {
                 print("🎬 [PostVideo] Found first episode of next season: S\(firstEp.parentIndex ?? 0)E\(firstEp.index ?? 0)")
                 return firstEp
             }
@@ -2132,6 +2161,54 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Preload the next episode's stream URL and metadata for instant playback
+    private func preloadNextEpisode() async {
+        guard let next = nextEpisode, let ratingKey = next.ratingKey else { return }
+
+        print("🎬 [Preload] Starting preload for: \(next.title ?? "Unknown")")
+
+        let networkManager = PlexNetworkManager.shared
+
+        // Fetch full metadata with markers
+        do {
+            let fullMetadata = try await networkManager.getFullMetadata(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey
+            )
+            preloadedNextMetadata = fullMetadata
+            print("🎬 [Preload] Fetched metadata with \(fullMetadata.Marker?.count ?? 0) markers")
+        } catch {
+            print("🎬 [Preload] Failed to fetch metadata: \(error)")
+            preloadedNextMetadata = next
+        }
+
+        // Build stream URL for next episode
+        let metadata = preloadedNextMetadata ?? next
+        if let partKey = metadata.Media?.first?.Part?.first?.key {
+            preloadedNextStreamURL = networkManager.buildVLCDirectPlayURL(
+                serverURL: serverURL,
+                authToken: authToken,
+                partKey: partKey
+            )
+            preloadedNextStreamHeaders = [
+                "X-Plex-Token": authToken,
+                "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,
+                "X-Plex-Platform": PlexAPI.platform,
+                "X-Plex-Device": PlexAPI.deviceName,
+                "X-Plex-Product": PlexAPI.productName
+            ]
+            print("🎬 [Preload] Stream URL ready: \(preloadedNextStreamURL?.absoluteString ?? "nil")")
+        }
+    }
+
+    /// Clear preloaded data
+    private func clearPreloadedData() {
+        preloadedNextStreamURL = nil
+        preloadedNextStreamHeaders = [:]
+        preloadedNextMetadata = nil
+    }
+
     /// Cancel countdown but stay on summary
     func cancelCountdown() {
         countdownTimer?.invalidate()
@@ -2149,16 +2226,24 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         print("🎬 [PostVideo] Playing next episode: \(next.title ?? "Unknown")")
 
-        // Stop countdown
+        // Stop countdown and reset all countdown state
         countdownTimer?.invalidate()
         countdownTimer = nil
+        countdownSeconds = 0
+        isCountdownPaused = false
 
-        // Reset post-video state
-        postVideoState = .hidden
-        videoFrameState = .fullscreen
+        // Reset post-video state with animation to return video to fullscreen
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            postVideoState = .hidden
+            videoFrameState = .fullscreen
+        }
+        print("🎬 [PostVideo] Reset state: postVideoState=\(postVideoState), videoFrameState=\(videoFrameState)")
 
-        // Update metadata to next episode
-        metadata = next
+        // Use preloaded metadata if available (has markers), otherwise use fetched next episode
+        metadata = preloadedNextMetadata ?? next
+
+        // Reset start offset so next episode starts from beginning (not resume position)
+        startOffset = nil
 
         // Reset skip tracking for new episode
         hasSkippedIntro = false
@@ -2167,8 +2252,24 @@ final class UniversalPlayerViewModel: ObservableObject {
         hasTriggeredPostVideo = false
         nextEpisode = nil
 
-        // Prepare new stream URL
-        await prepareStreamURL()
+        // Ensure next episode has required metadata for subsequent next-up detection
+        if metadata.parentRatingKey == nil || metadata.index == nil {
+            print("🎬 [PostVideo] Next episode missing parent metadata, fetching full details...")
+            await fetchFullMetadataIfNeeded()
+        }
+
+        // Use preloaded stream URL if available, otherwise prepare fresh
+        if let preloadedURL = preloadedNextStreamURL {
+            print("🎬 [PostVideo] Using preloaded stream URL")
+            streamURL = preloadedURL
+            streamHeaders = preloadedNextStreamHeaders
+        } else {
+            print("🎬 [PostVideo] No preloaded URL, preparing fresh...")
+            await prepareStreamURL()
+        }
+
+        // Clear preloaded data
+        clearPreloadedData()
 
         // Start playback
         await startPlayback()
@@ -2185,6 +2286,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         countdownSeconds = 0
         isCountdownPaused = false
         hasTriggeredPostVideo = false
+        clearPreloadedData()
     }
 
     // MARK: - Navigation

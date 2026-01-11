@@ -336,10 +336,14 @@ struct UniversalPlayerView: View {
         }
         // Auto-focus skip button when it appears
         .onChange(of: viewModel.showSkipButton) { _, showButton in
-            if showButton && !viewModel.showInfoPanel {
+            if showButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
                 // Brief delay to ensure button is rendered
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    isSkipButtonFocused = true
+                    // Re-check conditions before focusing (state may have changed)
+                    if viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
+                        print("⏭️ [Skip] Auto-focusing skip button")
+                        isSkipButtonFocused = true
+                    }
                 }
             } else if !showButton {
                 isSkipButtonFocused = false
@@ -417,7 +421,7 @@ struct UniversalPlayerView: View {
             // Controls Overlay (transport bar at bottom)
             // Always show when scrubbing so user can see the progress bar, but not during post-video
             if (viewModel.showControls || viewModel.isScrubbing) && viewModel.playbackState.isActive && viewModel.postVideoState == .hidden {
-                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false)
+                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false, hideTitle: viewModel.showPausedPoster)
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
 
@@ -607,12 +611,13 @@ struct UniversalPlayerView: View {
 
                 Spacer()
 
-                // Right side - poster (passed from detail view - instant display)
+                // Right side - poster/thumbnail (passed from detail view - instant display)
                 if let thumbImage = viewModel.loadingThumbImage {
+                    let isLandscape = thumbImage.size.width > thumbImage.size.height
                     Image(uiImage: thumbImage)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(height: 500)
+                        .frame(maxWidth: isLandscape ? 700 : nil, maxHeight: 500)
                         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 10)
                         .padding(.trailing, 80)

@@ -14,6 +14,9 @@ struct PlayerControlsOverlay: View {
     /// When true, shows only the info panel. When false, shows only the transport bar.
     var showInfoPanel: Bool = false
 
+    /// When true, hides the title from the transport bar (used when paused poster is showing)
+    var hideTitle: Bool = false
+
     var body: some View {
         ZStack {
             if showInfoPanel {
@@ -33,32 +36,34 @@ struct PlayerControlsOverlay: View {
 
     private var transportBar: some View {
         VStack(spacing: 16) {
-            // Title (shows briefly at top of transport area)
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(viewModel.title)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-
-                    if let subtitle = viewModel.subtitle {
-                        Text(subtitle)
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.7))
+            // Title (shows briefly at top of transport area, hidden when paused poster is showing)
+            if !hideTitle {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(viewModel.title)
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.white)
                             .lineLimit(1)
+
+                        if let subtitle = viewModel.subtitle {
+                            Text(subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.7))
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+
+                    // Playback state indicator
+                    if viewModel.isBuffering {
+                        ProgressView()
+                            .scaleEffect(0.8)
+                            .tint(.white)
                     }
                 }
-                Spacer()
-
-                // Playback state indicator
-                if viewModel.isBuffering {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .tint(.white)
-                }
+                .padding(.horizontal, 80)
             }
-            .padding(.horizontal, 80)
 
             // Progress bar with scrubbing support
             TransportProgressBar(
