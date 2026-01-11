@@ -519,7 +519,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 serverURL: serverURL,
                 authToken: authToken,
                 ratingKey: ratingKey,
-                offsetMs: Int((startOffset ?? 0) * 1000)
+                offsetMs: Int((startOffset ?? 0) * 1000),
+                hasHDR: metadata.hasHDR
             ) {
                 streamURL = result.url
                 streamHeaders = result.headers
@@ -631,6 +632,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
                 // Auto-hide controls when playing
                 if state == .playing {
+                    // Track that playback has started at least once (for HLS restart logic)
+                    self?.hasPlaybackEverStarted = true
                     self?.startControlsHideTimer()
                     // Prevent screensaver during playback
                     UIApplication.shared.isIdleTimerDisabled = true
@@ -685,18 +688,35 @@ final class UniversalPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 self.errorMessage = error.localizedDescription
 
-                // Trigger fallback to MPV if AVPlayer fails asynchronously during playback
-                if self.playerType == .avplayer && !self.hasAttemptedMPVFallback {
-                    print("🎬 [Fallback] AVPlayer failed asynchronously: \(error.localizedDescription)")
-                    print("🎬 [Fallback] Attempting fallback to MPV player...")
+                // Handle AVPlayer errors with HLS restart or MPV fallback
+                if self.playerType == .avplayer {
+                    print("🎬 [Error] AVPlayer failed: \(error.localizedDescription)")
+
                     Task {
-                        do {
-                            try await self.fallbackToMPV()
-                            // Clear error message on successful fallback
-                            self.errorMessage = nil
-                        } catch {
-                            print("🎬 [Fallback] MPV fallback also failed: \(error.localizedDescription)")
-                            // Keep the original error message
+                        // If playback had previously started successfully (e.g., after pause/resume),
+                        // try restarting the HLS session first before falling back to MPV
+                        if self.hasPlaybackEverStarted && !self.hasAttemptedHLSRestart {
+                            print("🎬 [Restart] Playback was working before - attempting HLS session restart...")
+                            do {
+                                try await self.restartHLSSession()
+                                self.errorMessage = nil
+                                print("🎬 [Restart] HLS session restart successful!")
+                                return
+                            } catch {
+                                print("🎬 [Restart] HLS restart failed: \(error.localizedDescription)")
+                                // Fall through to MPV fallback
+                            }
+                        }
+
+                        // Fall back to MPV if HLS restart failed or wasn't attempted
+                        if !self.hasAttemptedMPVFallback {
+                            print("🎬 [Fallback] Attempting fallback to MPV player...")
+                            do {
+                                try await self.fallbackToMPV()
+                                self.errorMessage = nil
+                            } catch {
+                                print("🎬 [Fallback] MPV fallback also failed: \(error.localizedDescription)")
+                            }
                         }
                     }
                 }
@@ -983,10 +1003,85 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - AVPlayer to MPV Fallback
+    // MARK: - AVPlayer HLS Restart and MPV Fallback
+
+    /// Tracks whether we've already attempted HLS session restart (to prevent loops)
+    private var hasAttemptedHLSRestart = false
 
     /// Tracks whether we've already attempted fallback (to prevent loops)
     private var hasAttemptedMPVFallback = false
+
+    /// Tracks whether playback has successfully started at least once
+    /// Used to distinguish initial load failures from mid-playback failures (e.g., after pause)
+    private var hasPlaybackEverStarted = false
+
+    /// Restart the HLS session when it expires (e.g., after long pause)
+    /// This re-requests the HLS URL from Plex and reloads AVPlayer at the same position
+    private func restartHLSSession() async throws {
+        guard !hasAttemptedHLSRestart else {
+            throw PlayerError.loadFailed("Already attempted HLS restart")
+        }
+        hasAttemptedHLSRestart = true
+
+        // Save current position to restore after restart
+        let savedPosition = currentTime
+        print("🎬 [Restart] Saving position: \(savedPosition)s")
+
+        // Stop current AVPlayer
+        avPlayerWrapper?.stop()
+        avPlayerWrapper = nil
+
+        // Create new AVPlayer instance
+        let newAVPlayer = AVPlayerWrapper()
+        avPlayerWrapper = newAVPlayer
+
+        // Rebind to new player's publishers
+        cancellables.removeAll()
+        bindPlayerState()
+
+        // Rebuild HLS URL with current position as offset
+        let networkManager = PlexNetworkManager.shared
+        guard let ratingKey = metadata.ratingKey else {
+            throw PlayerError.loadFailed("Missing rating key")
+        }
+
+        // Request new HLS session from server
+        if let result = networkManager.buildHLSDirectPlayURL(
+            serverURL: serverURL,
+            authToken: authToken,
+            ratingKey: ratingKey,
+            offsetMs: Int(savedPosition * 1000),
+            hasHDR: metadata.hasHDR
+        ) {
+            streamURL = result.url
+            streamHeaders = result.headers
+        } else {
+            throw PlayerError.loadFailed("Could not build HLS URL")
+        }
+
+        guard let url = streamURL else {
+            throw PlayerError.loadFailed("No stream URL available")
+        }
+
+        print("🎬 [Restart] Loading new HLS session: \(url.absoluteString.prefix(100))...")
+
+        // Load the new stream (offset is already baked into the HLS URL)
+        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
+        newAVPlayer.play()
+
+        // Update duration from new player
+        if newAVPlayer.duration > 0 {
+            duration = newAVPlayer.duration
+        }
+
+        updateTrackLists()
+        startControlsHideTimer()
+
+        // Show brief notice to user
+        showCompatibilityNotice("Stream restarted")
+
+        print("🎬 [Restart] HLS session restart complete, resuming from \(savedPosition)s")
+    }
 
     /// Fall back from AVPlayer to MPV when AVPlayer fails to load
     /// This creates an MPV player, rebuilds the stream URL for direct play, and retries

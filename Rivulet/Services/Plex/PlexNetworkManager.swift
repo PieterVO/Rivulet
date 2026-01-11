@@ -1317,11 +1317,13 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// Build HLS URL for AVPlayer with direct stream (remux only, no transcoding)
     /// This preserves video/audio codecs including Dolby Vision while providing HLS format
     /// Returns both the URL and required HTTP headers (Plex HLS requires auth in headers, not query params)
+    /// - Parameter hasHDR: Whether content has HDR (HDR10/HDR10+/HLG/DV) - adds useDoviCodecs=1 for proper TV mode switching
     func buildHLSDirectPlayURL(
         serverURL: String,
         authToken: String,
         ratingKey: String,
-        offsetMs: Int = 0
+        offsetMs: Int = 0,
+        hasHDR: Bool = false
     ) -> (url: URL, headers: [String: String])? {
         // Request an HLS remux that keeps the HEVC/Dolby Vision bitstream intact
         // tvOS requires fMP4/CMAF segments for Dolby Vision profiles 5/8
@@ -1372,8 +1374,9 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "segmentFormat", value: "mp4"),
             URLQueryItem(name: "directPlay", value: "0"),
             URLQueryItem(name: "directStream", value: "1"),
-            // Force audio transcode (TrueHD/ DTS are not playable by AVPlayer)
-            URLQueryItem(name: "directStreamAudio", value: "0"),
+            // Direct stream audio when possible (AAC, AC3, EAC3 are supported by AVPlayer)
+            // Server will still transcode DTS/TrueHD to AAC automatically
+            URLQueryItem(name: "directStreamAudio", value: "1"),
             URLQueryItem(name: "fastSeek", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
@@ -1393,6 +1396,12 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "autoAdjustQuality", value: "0"),
             URLQueryItem(name: "hasMDE", value: "1")
         ]
+
+        // Add useDoviCodecs=1 for HDR/DV content to enable proper TV mode switching
+        // This causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
+        if hasHDR {
+            components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
+        }
 
         guard let url = components.url else { return nil }
         return (url, headers)

@@ -517,6 +517,13 @@ extension PlexMetadata {
         return videoStreams.contains(where: { $0.isDolbyVision })
     }
 
+    /// Whether this content has any HDR format (HDR10, HDR10+, HLG, or Dolby Vision)
+    var hasHDR: Bool {
+        if hasDolbyVision { return true }
+        let videoStreams = Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
+        return videoStreams.contains(where: { $0.isHDR })
+    }
+
     /// Audio format display (e.g., "Atmos", "5.1", "Stereo")
     var audioFormatDisplay: String? {
         guard let media = Media?.first else { return nil }
