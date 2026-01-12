@@ -21,9 +21,16 @@ class PlexDataStore: ObservableObject {
     @Published var hubsError: String?
     @Published var librariesError: String?
 
+    /// Per-library hubs for Home screen (keyed by library key)
+    @Published var libraryHubs: [String: [PlexHub]] = [:]
+    @Published var isLoadingLibraryHubs = false
+
     /// Increments whenever hubs content changes (not just count)
     /// Views should watch this to trigger UI updates when items change
     @Published private(set) var hubsVersion: UUID = UUID()
+
+    /// Increments when library hubs content changes
+    @Published private(set) var libraryHubsVersion: UUID = UUID()
 
     // MARK: - Hero Cache (per library)
 
@@ -78,6 +85,11 @@ class PlexDataStore: ObservableObject {
     /// Check if any music library is visible in the sidebar
     var hasMusicLibraryVisible: Bool {
         !visibleMusicLibraries.isEmpty
+    }
+
+    /// Video and music libraries that should appear on the Home screen
+    var librariesForHomeScreen: [PlexLibrary] {
+        visibleMediaLibraries.filter { librarySettings.isLibraryShownOnHome($0.key) }
     }
 
     // Track if initial load has been attempted
@@ -192,6 +204,64 @@ class PlexDataStore: ObservableObject {
         isLoadingHubs = true
         await cacheManager.clearOnDeckCache()
         await fetchHubsFromServer(serverURL: serverURL, token: token, updateLoading: true)
+    }
+
+    // MARK: - Library-Specific Hubs (for separated Home screen)
+
+    /// Load hubs for each library that should appear on the Home screen
+    func loadLibraryHubsIfNeeded() async {
+        let librariesToLoad = librariesForHomeScreen
+
+        // Skip if no libraries configured for Home
+        guard !librariesToLoad.isEmpty else {
+            print("📦 PlexDataStore: No libraries configured for Home screen")
+            return
+        }
+
+        // Skip if we already have hubs for all libraries
+        let missingLibraries = librariesToLoad.filter { libraryHubs[$0.key] == nil }
+        guard !missingLibraries.isEmpty else {
+            print("📦 PlexDataStore: Library hubs already loaded for all \(librariesToLoad.count) libraries")
+            return
+        }
+
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else {
+            print("📦 PlexDataStore: Not authenticated for library hubs")
+            return
+        }
+
+        print("📦 PlexDataStore: Loading hubs for \(missingLibraries.count) libraries...")
+        isLoadingLibraryHubs = true
+
+        // Fetch hubs for each library
+        for library in missingLibraries {
+            // Extract section ID from library key (e.g., "/library/sections/1" -> "1")
+            let sectionId = library.key.replacingOccurrences(of: "/library/sections/", with: "")
+
+            do {
+                let hubs = try await networkManager.getLibraryHubs(
+                    serverURL: serverURL,
+                    authToken: token,
+                    sectionId: sectionId,
+                    count: 24
+                )
+                libraryHubs[library.key] = hubs
+                print("📦 PlexDataStore: ✅ Loaded \(hubs.count) hubs for \(library.title)")
+            } catch {
+                print("📦 PlexDataStore: ❌ Failed to load hubs for \(library.title): \(error)")
+            }
+        }
+
+        libraryHubsVersion = UUID()
+        isLoadingLibraryHubs = false
+        print("📦 PlexDataStore: Library hubs loading complete")
+    }
+
+    /// Refresh hubs for all libraries on Home screen
+    func refreshLibraryHubs() async {
+        libraryHubs.removeAll()
+        await loadLibraryHubsIfNeeded()
     }
 
     // MARK: - Libraries

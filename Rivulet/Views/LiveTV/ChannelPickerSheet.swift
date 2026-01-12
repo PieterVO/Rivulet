@@ -14,12 +14,12 @@ struct ChannelPickerSheet: View {
     let onDismiss: () -> Void
 
     @StateObject private var dataStore = LiveTVDataStore.shared
-    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = "Channels"
+    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = "Guide"
     @State private var searchText = ""
     @FocusState private var focusedChannelId: String?
 
     private var layout: LiveTVLayout {
-        LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .channels
+        LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .guide
     }
 
     private var availableChannels: [UnifiedChannel] {
