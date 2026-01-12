@@ -29,11 +29,28 @@ class LibrarySettingsManager: ObservableObject {
         }
     }
 
+    /// Library keys that should appear on the Home screen (separate from sidebar visibility)
+    /// Empty set means "not yet configured" - all visible libraries will be shown by default
+    @Published var librariesShownOnHome: Set<String> {
+        didSet {
+            saveHomeLibraries()
+        }
+    }
+
+    /// Track whether Home visibility has been explicitly configured
+    @Published private(set) var homeVisibilityConfigured: Bool {
+        didSet {
+            userDefaults.set(homeVisibilityConfigured, forKey: homeVisibilityConfiguredKey)
+        }
+    }
+
     // MARK: - UserDefaults Keys
 
     private let userDefaults = UserDefaults.standard
     private let hiddenLibrariesKey = "hiddenLibraryKeys"
     private let libraryOrderKey = "libraryOrder"
+    private let homeLibrariesKey = "librariesShownOnHome"
+    private let homeVisibilityConfiguredKey = "homeVisibilityConfigured"
 
     // MARK: - Initialization
 
@@ -52,6 +69,15 @@ class LibrarySettingsManager: ObservableObject {
             self.libraryOrder = []
         }
 
+        // Load Home screen libraries
+        if let homeLibs = userDefaults.array(forKey: homeLibrariesKey) as? [String] {
+            self.librariesShownOnHome = Set(homeLibs)
+        } else {
+            self.librariesShownOnHome = []
+        }
+
+        // Load whether Home visibility has been configured
+        self.homeVisibilityConfigured = userDefaults.bool(forKey: homeVisibilityConfiguredKey)
     }
 
     // MARK: - Public Methods
@@ -61,23 +87,87 @@ class LibrarySettingsManager: ObservableObject {
         !hiddenLibraryKeys.contains(libraryKey)
     }
 
-    /// Toggle library visibility
+    /// Toggle library visibility in sidebar
+    /// When showing a library, it's automatically added to Home screen
     func toggleVisibility(for libraryKey: String) {
         if hiddenLibraryKeys.contains(libraryKey) {
+            // Showing the library - also add to Home
             hiddenLibraryKeys.remove(libraryKey)
+            if homeVisibilityConfigured {
+                librariesShownOnHome.insert(libraryKey)
+            }
         } else {
             hiddenLibraryKeys.insert(libraryKey)
         }
     }
 
-    /// Show a library
+    /// Show a library in sidebar (also adds to Home screen)
     func showLibrary(_ libraryKey: String) {
         hiddenLibraryKeys.remove(libraryKey)
+        if homeVisibilityConfigured {
+            librariesShownOnHome.insert(libraryKey)
+        }
     }
 
-    /// Hide a library
+    /// Hide a library from sidebar
     func hideLibrary(_ libraryKey: String) {
         hiddenLibraryKeys.insert(libraryKey)
+    }
+
+    // MARK: - Home Screen Visibility
+
+    /// Check if a library should appear on the Home screen
+    /// If not yet configured, all visible libraries are shown by default
+    func isLibraryShownOnHome(_ libraryKey: String) -> Bool {
+        if !homeVisibilityConfigured {
+            // Not configured yet - show all visible libraries
+            return isLibraryVisible(libraryKey)
+        }
+        return librariesShownOnHome.contains(libraryKey)
+    }
+
+    /// Set whether a library appears on the Home screen
+    /// - Parameters:
+    ///   - libraryKey: The library key
+    ///   - shown: Whether to show on Home
+    ///   - allLibraryKeys: All current library keys (needed for first-time setup)
+    func setLibraryShownOnHome(_ libraryKey: String, shown: Bool, allLibraryKeys: [String]? = nil) {
+        // When first configuring, populate with all libraries as ON, then apply change
+        if !homeVisibilityConfigured {
+            if let allKeys = allLibraryKeys {
+                // Start with all libraries visible on Home
+                for key in allKeys {
+                    librariesShownOnHome.insert(key)
+                }
+            }
+            homeVisibilityConfigured = true
+        }
+
+        if shown {
+            librariesShownOnHome.insert(libraryKey)
+        } else {
+            librariesShownOnHome.remove(libraryKey)
+        }
+    }
+
+    /// Toggle Home screen visibility for a library
+    /// - Parameters:
+    ///   - libraryKey: The library key to toggle
+    ///   - allLibraryKeys: All current visible library keys (needed for first-time setup)
+    func toggleHomeVisibility(for libraryKey: String, allLibraryKeys: [String] = []) {
+        setLibraryShownOnHome(libraryKey, shown: !isLibraryShownOnHome(libraryKey), allLibraryKeys: allLibraryKeys)
+    }
+
+    /// Initialize Home visibility for all visible libraries
+    /// Called when libraries are first loaded to set up defaults
+    func initializeHomeVisibility(for libraries: [PlexLibrary]) {
+        guard !homeVisibilityConfigured else { return }
+
+        // Default: show all visible video and music libraries on Home
+        for library in libraries where (library.isVideoLibrary || library.isMusicLibrary) && isLibraryVisible(library.key) {
+            librariesShownOnHome.insert(library.key)
+        }
+        homeVisibilityConfigured = true
     }
 
     /// Move a library in the order list
@@ -152,6 +242,11 @@ class LibrarySettingsManager: ObservableObject {
         for library in libraries {
             if !orderedKeys.contains(library.key) {
                 libraryOrder.append(library.key)
+
+                // If Home visibility is already configured, add new video/music libraries to Home by default
+                if homeVisibilityConfigured && (library.isVideoLibrary || library.isMusicLibrary) && isLibraryVisible(library.key) {
+                    librariesShownOnHome.insert(library.key)
+                }
             }
         }
 
@@ -160,12 +255,17 @@ class LibrarySettingsManager: ObservableObject {
 
         // Also clean up hidden keys for libraries that no longer exist
         hiddenLibraryKeys = hiddenLibraryKeys.filter { currentKeys.contains($0) }
+
+        // Clean up Home visibility for libraries that no longer exist
+        librariesShownOnHome = librariesShownOnHome.filter { currentKeys.contains($0) }
     }
 
     /// Reset all library settings to defaults
     func resetToDefaults() {
         hiddenLibraryKeys = []
         libraryOrder = []
+        librariesShownOnHome = []
+        homeVisibilityConfigured = false
     }
 
     // MARK: - Private Methods
@@ -176,5 +276,9 @@ class LibrarySettingsManager: ObservableObject {
 
     private func saveLibraryOrder() {
         userDefaults.set(libraryOrder, forKey: libraryOrderKey)
+    }
+
+    private func saveHomeLibraries() {
+        userDefaults.set(Array(librariesShownOnHome), forKey: homeLibrariesKey)
     }
 }

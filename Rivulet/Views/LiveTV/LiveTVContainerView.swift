@@ -23,11 +23,11 @@ struct LiveTVContainerView: View {
     /// Optional source ID to filter channels. nil = show all sources.
     var sourceIdFilter: String?
 
-    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = "Channels"
+    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = "Guide"
     @StateObject private var dataStore = LiveTVDataStore.shared
 
     private var layout: LiveTVLayout {
-        LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .channels
+        LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .guide
     }
 
     var body: some View {

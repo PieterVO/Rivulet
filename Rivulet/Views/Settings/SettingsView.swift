@@ -220,7 +220,7 @@ struct SettingsView: View {
     @AppStorage("highQualityScaling") private var highQualityScaling = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
     @AppStorage("showMarkersOnScrubber") private var showMarkersOnScrubber = true
-    @AppStorage("useAVPlayerForDolbyVision") private var useAVPlayerForDolbyVision = false
+    @AppStorage("useAVPlayerForDolbyVision") private var useAVPlayerForDolbyVision = true
     @AppStorage("useAVPlayerForAllVideos") private var useAVPlayerForAllVideos = false
     @AppStorage("sidebarFontSize") private var sidebarFontSizeRaw = SidebarFontSize.normal.rawValue
     @Environment(\.focusScopeManager) private var focusScopeManager

@@ -53,11 +53,12 @@ struct LibrarySettingsView: View {
                 } else {
                     // Library list
                     VStack(spacing: 24) {
-                        SettingsSection(title: "Libraries") {
+                        SettingsSection(title: "Sidebar") {
                             ForEach(orderedLibraries, id: \.key) { library in
                                 LibraryVisibilityRow(
                                     library: library,
                                     isVisible: librarySettings.isLibraryVisible(library.key),
+                                    isShownOnHome: (library.isVideoLibrary || library.isMusicLibrary) ? librarySettings.isLibraryShownOnHome(library.key) : nil,
                                     onToggle: {
                                         librarySettings.toggleVisibility(for: library.key)
                                     },
@@ -140,6 +141,7 @@ struct LibrarySettingsView: View {
 struct LibraryVisibilityRow: View {
     let library: PlexLibrary
     let isVisible: Bool
+    let isShownOnHome: Bool?  // nil for non-video libraries
     let onToggle: () -> Void
     let onLongPress: () -> Void
 
@@ -184,9 +186,16 @@ struct LibraryVisibilityRow: View {
                     .font(.system(size: 29, weight: .medium))
                     .foregroundStyle(.white)
 
-                Text(library.type.capitalized)
-                    .font(.system(size: 23))
-                    .foregroundStyle(.white.opacity(0.6))
+                // Show Home status for video libraries
+                if let showOnHome = isShownOnHome {
+                    Text(showOnHome ? "On Home" : "Hidden from Home")
+                        .font(.system(size: 23))
+                        .foregroundStyle(.white.opacity(0.6))
+                } else {
+                    Text(library.type.capitalized)
+                        .font(.system(size: 23))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
             }
 
             Spacer()
@@ -232,7 +241,17 @@ struct LibraryReorderSheet: View {
     @FocusState private var focusedButton: ReorderButton?
 
     private enum ReorderButton: Hashable {
-        case up, down, done
+        case up, down, home, done
+    }
+
+    /// Whether this library supports Home screen visibility (video and music libraries)
+    private var supportsHomeScreen: Bool {
+        library.isVideoLibrary || library.isMusicLibrary
+    }
+
+    /// Whether this library is shown on Home
+    private var isShownOnHome: Bool {
+        librarySettings.isLibraryShownOnHome(library.key)
     }
 
     private var iconName: String {
@@ -382,6 +401,42 @@ struct LibraryReorderSheet: View {
                 .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
                 .disabled(!canMoveDown)
                 .opacity(canMoveDown ? 1.0 : 0.4)
+
+                // Home Screen toggle (for video and music libraries)
+                if supportsHomeScreen {
+                    Button {
+                        // Pass all visible media library keys for first-time setup
+                        let allMediaKeys = allLibraries
+                            .filter { $0.isVideoLibrary || $0.isMusicLibrary }
+                            .map { $0.key }
+                        librarySettings.toggleHomeVisibility(for: library.key, allLibraryKeys: allMediaKeys)
+                    } label: {
+                        HStack {
+                            Image(systemName: isShownOnHome ? "house.fill" : "house")
+                                .font(.system(size: 26, weight: .semibold))
+                            Text(isShownOnHome ? "Hide from Home" : "Show on Home")
+                                .font(.system(size: 28, weight: .medium))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(focusedButton == .home ? .white.opacity(0.18) : .white.opacity(0.08))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .strokeBorder(
+                                            focusedButton == .home ? .white.opacity(0.25) : .white.opacity(0.08),
+                                            lineWidth: 1
+                                        )
+                                )
+                        )
+                    }
+                    .buttonStyle(SettingsButtonStyle())
+                    .focused($focusedButton, equals: .home)
+                    .scaleEffect(focusedButton == .home ? 1.02 : 1.0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
+                }
             }
             .padding(.horizontal, 56)
 

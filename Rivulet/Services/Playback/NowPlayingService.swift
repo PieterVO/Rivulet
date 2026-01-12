@@ -8,6 +8,7 @@
 
 import Foundation
 import MediaPlayer
+import AVFoundation
 import Combine
 import UIKit
 
@@ -31,10 +32,60 @@ final class NowPlayingService: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        setupAudioSession()
         setupRemoteCommandCenter()
     }
 
+    // MARK: - Audio Session Setup
+
+    /// Configure audio session for media playback.
+    /// This makes the app recognized as a media player by the system.
+    private func setupAudioSession() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+
+            // Set category to playback - this interrupts other audio and shows in Now Playing
+            try audioSession.setCategory(
+                .playback,
+                mode: .moviePlayback,
+                options: []
+            )
+
+            print("🎵 NowPlaying: Audio session configured")
+        } catch {
+            print("🎵 NowPlaying: Failed to configure audio session - \(error.localizedDescription)")
+        }
+    }
+
+    /// Activate the audio session when starting playback
+    private func activateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            print("🎵 NowPlaying: Audio session activated")
+        } catch {
+            print("🎵 NowPlaying: Failed to activate audio session - \(error.localizedDescription)")
+        }
+    }
+
+    /// Deactivate the audio session when stopping playback
+    private func deactivateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            print("🎵 NowPlaying: Audio session deactivated")
+        } catch {
+            print("🎵 NowPlaying: Failed to deactivate audio session - \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Public API
+
+    /// Initialize the Now Playing service early at app launch.
+    /// This configures the audio session so the app is ready for playback.
+    func initialize() {
+        // Audio session is already configured in init(), but this method
+        // forces the singleton to be created early if called at app launch.
+        print("🎵 NowPlaying: Service initialized")
+    }
 
     /// Attach to a player view model to sync Now Playing state
     func attach(to viewModel: UniversalPlayerViewModel) {
@@ -42,6 +93,9 @@ final class NowPlayingService: ObservableObject {
         detach()
 
         self.viewModel = viewModel
+
+        // Activate audio session to take over system audio
+        activateAudioSession()
 
         // Set initial Now Playing info
         updateNowPlayingInfo(
@@ -91,6 +145,7 @@ final class NowPlayingService: ObservableObject {
         artworkTask?.cancel()
         artworkTask = nil
         clearNowPlayingInfo()
+        deactivateAudioSession()
         print("🎵 NowPlaying: Detached from player")
     }
 

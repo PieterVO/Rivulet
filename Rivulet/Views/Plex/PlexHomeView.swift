@@ -27,45 +27,42 @@ struct PlexHomeView: View {
     private let recommendationService = PersonalizedRecommendationService.shared
     private let recommendationsContentType: RecommendationContentType = .moviesAndShows
 
-    // MARK: - Processed Hubs (merged Continue Watching + On Deck)
+    // MARK: - Processed Hubs (merged Continue Watching + library-specific sections)
 
-    /// Computes processed hubs - called only when dataStore.hubs changes
+    /// Computes processed hubs with library-specific sections
+    /// - Continue Watching is merged from global hubs (across all libraries)
+    /// - Other hubs come from library-specific endpoints with library name prefixes
     private func computeProcessedHubs(from hubsToProcess: [PlexHub]) -> [PlexHub] {
         var result: [PlexHub] = []
+
+        // 1. Extract and merge Continue Watching / On Deck from global hubs
+        let continueWatchingHub = extractContinueWatchingHub(from: hubsToProcess)
+        if let hub = continueWatchingHub {
+            result.append(hub)
+        }
+
+        // 2. Add "Recently Added" hub for each library shown on Home (video and music)
+        for library in dataStore.librariesForHomeScreen {
+            if let hubs = dataStore.libraryHubs[library.key] {
+                // Find the "Recently Added" hub for this library
+                if let recentlyAddedHub = hubs.first(where: { isRecentlyAddedHub($0) }) {
+                    var transformedHub = recentlyAddedHub
+                    transformedHub.title = "Recently Added \(library.title)"
+                    result.append(transformedHub)
+                }
+            }
+        }
+
+        return result
+    }
+
+    /// Extract Continue Watching / On Deck items and merge into a single hub
+    private func extractContinueWatchingHub(from hubs: [PlexHub]) -> PlexHub? {
         var continueWatchingItems: [PlexMetadata] = []
         var seenRatingKeys: Set<String> = []
 
-        // Check if music library is visible in sidebar
-        let showMusicHubs = dataStore.hasMusicLibraryVisible
-
-        for hub in hubsToProcess {
-            let identifier = hub.hubIdentifier?.lowercased() ?? ""
-            let title = hub.title?.lowercased() ?? ""
-
-            // Filter out playlists - never show on home page
-            let isPlaylist = identifier.contains("playlist") || title.contains("playlist")
-            if isPlaylist {
-                continue
-            }
-
-            // Filter out music hubs unless music library is in sidebar
-            let isMusicHub = identifier.contains("music") ||
-                            identifier.contains("artist") ||
-                            identifier.contains("album") ||
-                            title.contains("music") ||
-                            title.contains("recently added in music")
-            if isMusicHub && !showMusicHubs {
-                continue
-            }
-
-            // Check if this is a Continue Watching or On Deck hub
-            let isContinueWatching = identifier.contains("continuewatching") ||
-                                     title.contains("continue watching")
-            let isOnDeck = identifier.contains("ondeck") ||
-                          title.contains("on deck")
-
-            if isContinueWatching || isOnDeck {
-                // Merge items, deduplicating by ratingKey
+        for hub in hubs {
+            if isContinueWatchingHub(hub) {
                 if let items = hub.Metadata {
                     for item in items {
                         if let key = item.ratingKey, !seenRatingKeys.contains(key) {
@@ -74,30 +71,63 @@ struct PlexHomeView: View {
                         }
                     }
                 }
-            } else {
-                // Keep other hubs as-is
-                result.append(hub)
             }
         }
 
-        // Sort merged items by lastViewedAt (most recent first)
-        continueWatchingItems.sort { item1, item2 in
-            let time1 = item1.lastViewedAt ?? 0
-            let time2 = item2.lastViewedAt ?? 0
-            return time1 > time2
-        }
+        guard !continueWatchingItems.isEmpty else { return nil }
 
-        // Create merged Continue Watching hub if we have items
-        if !continueWatchingItems.isEmpty {
-            var mergedHub = PlexHub()
-            mergedHub.hubIdentifier = "continueWatching"
-            mergedHub.title = "Continue Watching"
-            mergedHub.Metadata = continueWatchingItems
-            // Insert at beginning
-            result.insert(mergedHub, at: 0)
-        }
+        // Sort by lastViewedAt (most recent first)
+        continueWatchingItems.sort { ($0.lastViewedAt ?? 0) > ($1.lastViewedAt ?? 0) }
 
-        return result
+        var mergedHub = PlexHub()
+        mergedHub.hubIdentifier = "continueWatching"
+        mergedHub.title = "Continue Watching"
+        mergedHub.Metadata = continueWatchingItems
+        return mergedHub
+    }
+
+    /// Check if a hub is a Continue Watching or On Deck hub
+    private func isContinueWatchingHub(_ hub: PlexHub) -> Bool {
+        let identifier = hub.hubIdentifier?.lowercased() ?? ""
+        let title = hub.title?.lowercased() ?? ""
+        return identifier.contains("continuewatching") ||
+               identifier.contains("ondeck") ||
+               title.contains("continue watching") ||
+               title.contains("on deck")
+    }
+
+    /// Check if a hub is a Recently Added hub
+    private func isRecentlyAddedHub(_ hub: PlexHub) -> Bool {
+        let identifier = hub.hubIdentifier?.lowercased() ?? ""
+        let title = hub.title?.lowercased() ?? ""
+        return identifier.contains("recentlyadded") ||
+               title.contains("recently added")
+    }
+
+    /// Transform generic hub titles to include library name
+    private func transformHubTitle(_ hubTitle: String?, libraryName: String) -> String {
+        guard let title = hubTitle else { return libraryName }
+
+        let lowercasedTitle = title.lowercased()
+
+        // Map common hub titles to library-specific versions
+        switch lowercasedTitle {
+        case "recently added":
+            return "\(libraryName) added"
+        case "recently released":
+            return "\(libraryName) recently released"
+        case "recommended":
+            return "\(libraryName) recommended"
+        case "new releases":
+            return "\(libraryName) new releases"
+        default:
+            // For other hubs, check if library name is already included
+            if lowercasedTitle.contains(libraryName.lowercased()) {
+                return title
+            }
+            // Prepend library name for clarity
+            return "\(libraryName) - \(title)"
+        }
     }
 
     var body: some View {
@@ -117,6 +147,7 @@ struct PlexHomeView: View {
             }
             .refreshable {
                 await dataStore.refreshHubs()
+                await dataStore.refreshLibraryHubs()
                 if enablePersonalizedRecommendations {
                     await refreshRecommendations(force: true)
                 }
@@ -134,18 +165,29 @@ struct PlexHomeView: View {
                     Task { await refreshRecommendations(force: false) }
                 }
             }
+            .task(id: dataStore.libraries.count) {
+                // Load library-specific hubs for Home screen when libraries are available
+                // Initialize Home visibility for libraries if not configured
+                guard !dataStore.libraries.isEmpty else { return }
+                dataStore.librarySettings.initializeHomeVisibility(for: dataStore.libraries)
+                await dataStore.loadLibraryHubsIfNeeded()
+            }
             .onChange(of: dataStore.hubsVersion) { _, _ in
-                // Recompute cached hubs when source data changes (including item properties like viewCount)
+                // Recompute cached hubs when global hub data changes (for Continue Watching)
                 cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
                 // Only reselect hero if we don't have one yet (avoid redundant selection)
                 if heroItem == nil {
                     selectHeroItem()
                 }
             }
-            .onChange(of: dataStore.hasMusicLibraryVisible) { _, _ in
-                // Recompute hubs when music library visibility changes
-                // This ensures music hubs appear/disappear when library is pinned/unpinned
+            .onChange(of: dataStore.libraryHubsVersion) { _, _ in
+                // Recompute when library-specific hubs change
                 cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
+            }
+            .onChange(of: dataStore.librarySettings.librariesShownOnHome) { _, _ in
+                // Recompute and reload when Home library selection changes
+                cachedProcessedHubs = computeProcessedHubs(from: dataStore.hubs)
+                Task { await dataStore.loadLibraryHubsIfNeeded() }
             }
             .onChange(of: enablePersonalizedRecommendations) { _, _ in
                 handleRecommendationsToggle()
@@ -154,6 +196,7 @@ struct PlexHomeView: View {
             .onReceive(NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)) { _ in
                 Task {
                     await dataStore.refreshHubs()
+                    await dataStore.refreshLibraryHubs()
                     if enablePersonalizedRecommendations {
                         await refreshRecommendations(force: true)
                     }
@@ -300,12 +343,6 @@ struct PlexHomeView: View {
         }
     }
 
-    private func isContinueWatchingHub(_ hub: PlexHub) -> Bool {
-        let identifier = hub.hubIdentifier?.lowercased() ?? ""
-        let title = hub.title?.lowercased() ?? ""
-        return identifier.contains("continuewatching") || title.contains("continue watching")
-    }
-
     // MARK: - Content View
 
     private var contentView: some View {
@@ -329,13 +366,8 @@ struct PlexHomeView: View {
                     }
                 }
 
-                if enablePersonalizedRecommendations {
-                    EmptyView() // Recommendations are injected below Continue Watching
-                }
-
                 // Content rows (uses cached processedHubs which merges Continue Watching + On Deck)
                 VStack(alignment: .leading, spacing: 48) {
-                    let continueWatchingIndex = cachedProcessedHubs.firstIndex(where: isContinueWatchingHub)
                     ForEach(Array(cachedProcessedHubs.enumerated()), id: \.element.id) { index, hub in
                         if let items = hub.Metadata, !items.isEmpty {
                             let isContinueWatching = isContinueWatchingHub(hub)
@@ -361,11 +393,11 @@ struct PlexHomeView: View {
                                 }
                             )
                         }
+                    }
 
-                        if enablePersonalizedRecommendations,
-                           continueWatchingIndex == index {
-                            recommendationsSection
-                        }
+                    // Recommendations at the end of all library hubs
+                    if enablePersonalizedRecommendations {
+                        recommendationsSection
                     }
                 }
                 .padding(.top, 48)

@@ -24,6 +24,11 @@ struct RivuletApp: App {
             options.enableAppHangTracking = true
             options.appHangTimeoutInterval = 2
         }
+
+        // Initialize Now Playing service early to configure audio session
+        Task { @MainActor in
+            NowPlayingService.shared.initialize()
+        }
     }
 
     var sharedModelContainer: ModelContainer = {
