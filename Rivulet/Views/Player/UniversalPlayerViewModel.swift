@@ -1209,6 +1209,29 @@ final class UniversalPlayerViewModel: ObservableObject {
         showControlsTemporarily()
     }
 
+    /// Resume playback (used by remote commands)
+    func resume() {
+        hidePausedPoster()
+        switch playerType {
+        case .mpv:
+            mpvPlayerWrapper?.play()
+        case .avplayer:
+            avPlayerWrapper?.play()
+        }
+        showControlsTemporarily()
+    }
+
+    /// Pause playback (used by remote commands)
+    func pause() {
+        switch playerType {
+        case .mpv:
+            mpvPlayerWrapper?.pause()
+        case .avplayer:
+            avPlayerWrapper?.pause()
+        }
+        showControlsTemporarily()
+    }
+
     // MARK: - Info Panel Navigation
 
     /// Reset settings panel state when opening

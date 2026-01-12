@@ -301,8 +301,12 @@ struct UniversalPlayerView: View {
             // Activate player scope when player starts
             focusScopeManager.activate(.player)
             await viewModel.startPlayback()
+            // Register with system Now Playing center
+            NowPlayingService.shared.attach(to: viewModel)
         }
         .onDisappear {
+            // Unregister from system Now Playing center
+            NowPlayingService.shared.detach()
             viewModel.stopPlayback()
             reportFinalProgress()
             #if os(tvOS)
