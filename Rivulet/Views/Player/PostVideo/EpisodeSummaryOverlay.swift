@@ -129,7 +129,7 @@ struct EpisodeSummaryOverlay: View {
                             }
                         }
 
-                        // Close button (always available, especially for end of series)
+                        // Close button - returns to fullscreen video
                         if !hasNextEpisode || !countdownActive {
                             PostVideoButton(
                                 title: "Close",
@@ -139,7 +139,6 @@ struct EpisodeSummaryOverlay: View {
                                 onFocusChange: cancelCountdownOnInteraction
                             ) {
                                 viewModel.dismissPostVideo()
-                                dismiss()
                             }
                             .prefersDefaultFocus(!hasNextEpisode, in: buttonNamespace)
                             .focused($focusedButton, equals: .close)
@@ -210,8 +209,8 @@ struct EpisodeSummaryOverlay: View {
             setDefaultFocus()
         }
         .onExitCommand {
+            // Back button returns to fullscreen video, doesn't exit player
             viewModel.dismissPostVideo()
-            dismiss()
         }
         .onPlayPauseCommand {
             if hasNextEpisode {

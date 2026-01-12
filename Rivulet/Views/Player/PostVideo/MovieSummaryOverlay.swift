@@ -9,7 +9,6 @@ import SwiftUI
 
 struct MovieSummaryOverlay: View {
     @ObservedObject var viewModel: UniversalPlayerViewModel
-    @Environment(\.dismiss) private var dismiss
 
     // Focus namespace for default focus control
     @Namespace private var buttonNamespace
@@ -91,18 +90,17 @@ struct MovieSummaryOverlay: View {
                         .frame(maxWidth: 1200)
                     }
 
-                    // Close button
-            PostVideoButton(
-                title: "Close",
-                icon: "xmark",
-                isPrimary: true,
-                isFocused: focusedButton == .close
-            ) {
-                viewModel.dismissPostVideo()
-                dismiss()
-            }
-            .prefersDefaultFocus(in: buttonNamespace)
-            .focused($focusedButton, equals: .close)
+                    // Close button - returns to fullscreen video
+                    PostVideoButton(
+                        title: "Close",
+                        icon: "xmark",
+                        isPrimary: true,
+                        isFocused: focusedButton == .close
+                    ) {
+                        viewModel.dismissPostVideo()
+                    }
+                    .prefersDefaultFocus(in: buttonNamespace)
+                    .focused($focusedButton, equals: .close)
         }
         .padding(.horizontal, 80)
 
@@ -116,8 +114,8 @@ struct MovieSummaryOverlay: View {
             setDefaultFocus()
         }
         .onExitCommand {
+            // Back button returns to fullscreen video, doesn't exit player
             viewModel.dismissPostVideo()
-            dismiss()
         }
         #endif
     }
