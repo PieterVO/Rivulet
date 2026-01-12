@@ -150,6 +150,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             playerItem?.canUseNetworkResourcesForLiveStreamingWhilePaused = true
         }
 
+        // Enable per-frame HDR display metadata for proper HDR10/HDR10+/DV rendering
+        playerItem?.appliesPerFrameHDRDisplayMetadata = true
+
         // Create or reuse player
         if player == nil {
             let newPlayer = AVPlayer(playerItem: playerItem)

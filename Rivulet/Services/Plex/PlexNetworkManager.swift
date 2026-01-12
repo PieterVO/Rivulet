@@ -1420,10 +1420,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "fastSeek", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
-            URLQueryItem(name: "maxVideoBitrate", value: "200000"),
             URLQueryItem(name: "videoQuality", value: "100"),
-            // Try to reduce segment burst size to avoid bandwidth mismatch warnings
-            URLQueryItem(name: "maxVideoBitrateMode", value: "throttled"),
             URLQueryItem(name: "segmentDuration", value: "6"),
             URLQueryItem(name: "audioCodec", value: "aac,eac3,ac3"),
             URLQueryItem(name: "audioBitrate", value: "1024"),
@@ -1434,13 +1431,17 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "location", value: "lan"),
             URLQueryItem(name: "session", value: sessionId),
             URLQueryItem(name: "autoAdjustQuality", value: "0"),
-            URLQueryItem(name: "hasMDE", value: "1")
+            URLQueryItem(name: "hasMDE", value: "1"),
+            // Keyframe playlist improves seeking accuracy in HLS streams
+            URLQueryItem(name: "includeKeyframePlaylist", value: "1")
         ]
 
-        // Add useDoviCodecs=1 for HDR/DV content to enable proper TV mode switching
-        // This causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
+        // Add HDR-related parameters for proper TV mode switching
+        // useDoviCodecs=1 causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
+        // includeCodecs=1 is required with useDoviCodecs for correct HLS manifest generation
         if hasHDR {
             components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
+            components.queryItems?.append(URLQueryItem(name: "includeCodecs", value: "1"))
         }
 
         guard let url = components.url else { return nil }
