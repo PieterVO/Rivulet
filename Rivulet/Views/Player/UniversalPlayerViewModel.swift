@@ -43,20 +43,49 @@ struct SubtitlePreference: Codable, Equatable {
 
 /// Manages subtitle preference persistence
 enum SubtitlePreferenceManager {
-    private static let key = "subtitlePreference"
+    // Individual keys for each preference field (more robust than JSON)
+    private static let enabledKey = "subtitlePreferenceEnabled"
+    private static let languageKey = "subtitlePreferenceLanguage"
+    private static let codecKey = "subtitlePreferenceCodec"
+    private static let hearingImpairedKey = "subtitlePreferenceHearingImpaired"
+
+    // Migration from old JSON format
+    private static let migrationKey = "subtitlePreferenceMigrated"
 
     static var current: SubtitlePreference {
         get {
-            guard let data = UserDefaults.standard.data(forKey: key),
-                  let pref = try? JSONDecoder().decode(SubtitlePreference.self, from: data) else {
-                return .off
+            // Migrate from old JSON format if needed
+            if !UserDefaults.standard.bool(forKey: migrationKey) {
+                UserDefaults.standard.set(true, forKey: migrationKey)
+                if let data = UserDefaults.standard.data(forKey: "subtitlePreference"),
+                   let oldPref = try? JSONDecoder().decode(SubtitlePreference.self, from: data) {
+                    // Migrate old values to new format
+                    UserDefaults.standard.set(oldPref.enabled, forKey: enabledKey)
+                    UserDefaults.standard.set(oldPref.languageCode, forKey: languageKey)
+                    UserDefaults.standard.set(oldPref.codec, forKey: codecKey)
+                    UserDefaults.standard.set(oldPref.preferHearingImpaired, forKey: hearingImpairedKey)
+                    UserDefaults.standard.removeObject(forKey: "subtitlePreference")
+                }
             }
-            return pref
+
+            // Read from individual keys
+            let enabled = UserDefaults.standard.bool(forKey: enabledKey)
+            let languageCode = UserDefaults.standard.string(forKey: languageKey)
+            let codec = UserDefaults.standard.string(forKey: codecKey)
+            let preferHearingImpaired = UserDefaults.standard.bool(forKey: hearingImpairedKey)
+
+            return SubtitlePreference(
+                enabled: enabled,
+                languageCode: languageCode,
+                codec: codec,
+                preferHearingImpaired: preferHearingImpaired
+            )
         }
         set {
-            if let data = try? JSONEncoder().encode(newValue) {
-                UserDefaults.standard.set(data, forKey: key)
-            }
+            UserDefaults.standard.set(newValue.enabled, forKey: enabledKey)
+            UserDefaults.standard.set(newValue.languageCode, forKey: languageKey)
+            UserDefaults.standard.set(newValue.codec, forKey: codecKey)
+            UserDefaults.standard.set(newValue.preferHearingImpaired, forKey: hearingImpairedKey)
         }
     }
 
@@ -117,20 +146,30 @@ struct AudioPreference: Codable, Equatable {
 
 /// Manages audio preference persistence
 enum AudioPreferenceManager {
-    private static let key = "audioPreference"
+    private static let languageKey = "audioPreferenceLanguage"
+
+    // Migration: try to read old JSON format once
+    private static let migrationKey = "audioPreferenceMigrated"
 
     static var current: AudioPreference {
         get {
-            guard let data = UserDefaults.standard.data(forKey: key),
-                  let pref = try? JSONDecoder().decode(AudioPreference.self, from: data) else {
-                return .defaultEnglish
+            // Migrate from old JSON format if needed
+            if !UserDefaults.standard.bool(forKey: migrationKey) {
+                UserDefaults.standard.set(true, forKey: migrationKey)
+                if let data = UserDefaults.standard.data(forKey: "audioPreference"),
+                   let oldPref = try? JSONDecoder().decode(AudioPreference.self, from: data) {
+                    // Migrate old value to new format
+                    UserDefaults.standard.set(oldPref.languageCode, forKey: languageKey)
+                    UserDefaults.standard.removeObject(forKey: "audioPreference")
+                }
             }
-            return pref
+
+            // Read from simple string storage
+            let languageCode = UserDefaults.standard.string(forKey: languageKey)
+            return AudioPreference(languageCode: languageCode ?? "eng")
         }
         set {
-            if let data = try? JSONEncoder().encode(newValue) {
-                UserDefaults.standard.set(data, forKey: key)
-            }
+            UserDefaults.standard.set(newValue.languageCode, forKey: languageKey)
         }
     }
 
@@ -263,7 +302,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var isCountdownPaused: Bool = false
     private var countdownTimer: Timer?
     @Published var scrubThumbnail: UIImage?
-    @Published private(set) var scrubSpeed: Int = 0  // -6 to 6, 0 = not scrubbing
+    @Published private(set) var scrubSpeed: Int = 0  // -1, 0, or 1 (direction only)
+    private var scrubStartTime: Date?  // When scrubbing started (for YouTube-style acceleration)
     @Published private(set) var audioTracks: [MediaTrack] = []
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var currentAudioTrackId: Int?
@@ -378,6 +418,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var controlsTimer: Timer?
     private let controlsHideDelay: TimeInterval = 5
     private var scrubTimer: Timer?
+    private var appLifecycleObserver: Any?
+    private var appBecameActiveObserver: Any?
+    private var pausedDueToAppInactive: Bool = false
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
     private var pausedPosterTimer: Timer?
@@ -481,6 +524,41 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     private func setupPlayer() {
         bindPlayerState()
+        observeAppLifecycle()
+    }
+
+    /// Observe app lifecycle to pause playback when Apple TV goes to sleep
+    private func observeAppLifecycle() {
+        // Pause when Apple TV goes to sleep
+        appLifecycleObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            // Pause playback when Apple TV turns off / goes to sleep
+            if self.playbackState == .playing {
+                print("🎬 [Lifecycle] App resigning active - pausing playback")
+                self.pausedDueToAppInactive = true
+                Task { @MainActor in
+                    self.pause()
+                }
+            }
+        }
+
+        // Ensure we stay paused when waking up (prevent system auto-resume)
+        appBecameActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.pausedDueToAppInactive else { return }
+            // Force pause state in case system tried to resume
+            print("🎬 [Lifecycle] App became active - ensuring playback stays paused")
+            Task { @MainActor in
+                self.pause()
+            }
+        }
     }
 
     private func prepareStreamURL() async {
@@ -521,12 +599,27 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Not direct-play compatible - use HLS remux
             // This handles: MKV containers, incompatible codecs, DTS/TrueHD audio, bad codec tags (dvhe/hev1)
             print("[AVPlayer] Not direct-play compatible (\(container.uppercased())) - using HLS remux")
+
+            // For DV content, decide whether to attempt DV HLS or skip to HDR10
+            // Plex's DV HLS remux from MKV containers is broken - produces blank output
+            // Only attempt DV HLS for native MP4/MOV containers (rare, usually handled as direct play above)
+            let isMKV = container == "mkv"
+            let useDV = metadata.hasDolbyVision && !isMKV
+            isUsingDolbyVisionHLS = useDV
+
+            // If we're skipping DV due to MKV container, show notice
+            if metadata.hasDolbyVision && isMKV {
+                print("[AVPlayer] Skipping DV HLS for MKV - Plex remux produces broken output")
+                showCompatibilityNotice("Playing HDR10 (Plex can't remux DV from MKV)")
+            }
+
             if let result = networkManager.buildHLSDirectPlayURL(
                 serverURL: serverURL,
                 authToken: authToken,
                 ratingKey: ratingKey,
                 offsetMs: Int((startOffset ?? 0) * 1000),
-                hasHDR: metadata.hasHDR
+                hasHDR: metadata.hasHDR,
+                useDolbyVision: useDV
             ) {
                 streamURL = result.url
                 streamHeaders = result.headers
@@ -694,14 +787,32 @@ final class UniversalPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 self.errorMessage = error.localizedDescription
 
-                // Handle AVPlayer errors with HLS restart or MPV fallback
+                // Handle AVPlayer errors with HLS restart or fallbacks
                 if self.playerType == .avplayer {
                     print("🎬 [Error] AVPlayer failed: \(error.localizedDescription)")
 
+                    // Check if this is a codec/rendering issue (likely DV HLS remux problem)
+                    let isCodecError = if case .codecUnsupported = error { true } else { false }
+
                     Task {
+                        // For codec/rendering errors with DV content, try HDR10 fallback first
+                        // This is specifically for Plex's broken DV HLS remux from MKV sources
+                        if isCodecError && self.isUsingDolbyVisionHLS && !self.hasAttemptedHDR10Fallback {
+                            print("🎬 [Fallback] DV HLS rendering failed - attempting HDR10 base layer fallback...")
+                            do {
+                                try await self.fallbackToHDR10()
+                                self.errorMessage = nil
+                                print("🎬 [Fallback] HDR10 fallback successful!")
+                                return
+                            } catch {
+                                print("🎬 [Fallback] HDR10 fallback failed: \(error.localizedDescription)")
+                                // Fall through to MPV fallback
+                            }
+                        }
+
                         // If playback had previously started successfully (e.g., after pause/resume),
                         // try restarting the HLS session first before falling back to MPV
-                        if self.hasPlaybackEverStarted && !self.hasAttemptedHLSRestart {
+                        if self.hasPlaybackEverStarted && !self.hasAttemptedHLSRestart && !isCodecError {
                             print("🎬 [Restart] Playback was working before - attempting HLS session restart...")
                             do {
                                 try await self.restartHLSSession()
@@ -714,7 +825,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                             }
                         }
 
-                        // Fall back to MPV if HLS restart failed or wasn't attempted
+                        // Fall back to MPV if other fallbacks failed or weren't attempted
                         if !self.hasAttemptedMPVFallback {
                             print("🎬 [Fallback] Attempting fallback to MPV player...")
                             do {
@@ -797,6 +908,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             case .avplayer:
                 guard let avp = avPlayerWrapper else { return }
+
+                // Set expected aspect ratio from source metadata for verification
+                if let videoStream = metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo }),
+                   let width = videoStream.width, let height = videoStream.height, height > 0 {
+                    avp.setExpectedAspectRatio(width: width, height: height)
+                }
 
                 // Only do HLS preflight check for transcode URLs (not direct play)
                 let isHLSStream = url.absoluteString.contains(".m3u8")
@@ -1009,10 +1126,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - AVPlayer HLS Restart and MPV Fallback
+    // MARK: - AVPlayer HLS Restart and Fallbacks
 
     /// Tracks whether we've already attempted HLS session restart (to prevent loops)
     private var hasAttemptedHLSRestart = false
+
+    /// Tracks whether we've already attempted HDR10 fallback for DV content (to prevent loops)
+    private var hasAttemptedHDR10Fallback = false
+
+    /// Tracks whether we're currently using DV mode (useDoviCodecs=1) for HLS
+    private var isUsingDolbyVisionHLS = false
 
     /// Tracks whether we've already attempted fallback (to prevent loops)
     private var hasAttemptedMPVFallback = false
@@ -1087,6 +1210,84 @@ final class UniversalPlayerViewModel: ObservableObject {
         showCompatibilityNotice("Stream restarted")
 
         print("🎬 [Restart] HLS session restart complete, resuming from \(savedPosition)s")
+    }
+
+    /// Fall back from Dolby Vision HLS to HDR10 base layer when DV remux fails
+    /// This is a workaround for Plex's broken DV HLS remux from MKV sources
+    /// By requesting without useDoviCodecs=1, we get the HDR10 base layer which AVPlayer can handle
+    private func fallbackToHDR10() async throws {
+        guard !hasAttemptedHDR10Fallback else {
+            throw PlayerError.loadFailed("Already attempted HDR10 fallback")
+        }
+        hasAttemptedHDR10Fallback = true
+        isUsingDolbyVisionHLS = false
+
+        // Save current position to restore after restart
+        let savedPosition = currentTime
+        print("🎬 [HDR10 Fallback] Saving position: \(savedPosition)s")
+
+        // Stop current AVPlayer
+        avPlayerWrapper?.stop()
+        avPlayerWrapper = nil
+
+        // Create new AVPlayer instance
+        let newAVPlayer = AVPlayerWrapper()
+        avPlayerWrapper = newAVPlayer
+
+        // Set expected aspect ratio for the new player
+        if let videoStream = metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo }),
+           let width = videoStream.width, let height = videoStream.height, height > 0 {
+            newAVPlayer.setExpectedAspectRatio(width: width, height: height)
+        }
+
+        // Rebind to new player's publishers
+        cancellables.removeAll()
+        bindPlayerState()
+
+        // Rebuild HLS URL WITHOUT useDoviCodecs - get HDR10 base layer only
+        let networkManager = PlexNetworkManager.shared
+        guard let ratingKey = metadata.ratingKey else {
+            throw PlayerError.loadFailed("Missing rating key")
+        }
+
+        print("🎬 [HDR10 Fallback] Requesting HLS without DV codecs (HDR10 base layer)...")
+
+        if let result = networkManager.buildHLSDirectPlayURL(
+            serverURL: serverURL,
+            authToken: authToken,
+            ratingKey: ratingKey,
+            offsetMs: Int(savedPosition * 1000),
+            hasHDR: metadata.hasHDR,
+            useDolbyVision: false  // Key difference: no useDoviCodecs=1
+        ) {
+            streamURL = result.url
+            streamHeaders = result.headers
+        } else {
+            throw PlayerError.loadFailed("Could not build HDR10 HLS URL")
+        }
+
+        guard let url = streamURL else {
+            throw PlayerError.loadFailed("No stream URL available")
+        }
+
+        print("🎬 [HDR10 Fallback] Loading HDR10 stream: \(url.absoluteString.prefix(100))...")
+
+        // Load the new stream
+        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
+        newAVPlayer.play()
+
+        // Update duration from new player
+        if newAVPlayer.duration > 0 {
+            duration = newAVPlayer.duration
+        }
+
+        updateTrackLists()
+        startControlsHideTimer()
+
+        // Show notice explaining the fallback (this is a Plex issue, not our bug)
+        showCompatibilityNotice("Playing HDR10 (Plex can't remux DV from MKV)")
+
+        print("🎬 [HDR10 Fallback] Complete, resuming from \(savedPosition)s")
     }
 
     /// Fall back from AVPlayer to MPV when AVPlayer fails to load
@@ -1211,6 +1412,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Resume playback (used by remote commands)
     func resume() {
+        pausedDueToAppInactive = false  // User explicitly resumed, allow normal playback
         hidePausedPoster()
         switch playerType {
         case .mpv:
@@ -1293,10 +1495,21 @@ final class UniversalPlayerViewModel: ObservableObject {
         3: 4.0,    // 3x = 40 seconds per second
         4: 8.0,    // 4x = 80 seconds per second
         5: 15.0,   // 5x = 150 seconds per second
-        6: 30.0    // 6x = 300 seconds per second (5 min/sec)
+        6: 30.0,   // 6x = 300 seconds per second (5 min/sec)
+        7: 45.0,   // 7x = 450 seconds per second (7.5 min/sec)
+        8: 60.0    // 8x = 600 seconds per second (10 min/sec)
     ]
 
+    /// Human-readable label for current scrub speed
+    var scrubStepLabel: String? {
+        guard scrubSpeed != 0 else { return nil }
+        let magnitude = abs(scrubSpeed)
+        let arrow = scrubSpeed > 0 ? "▶▶" : "◀◀"
+        return "\(arrow) \(magnitude)×"
+    }
+
     /// Start or increase scrub speed in given direction
+    /// Each click increases speed up to 8x
     /// - Parameter forward: true for forward, false for backward
     func scrubInDirection(forward: Bool) {
         hidePausedPoster()
@@ -1311,8 +1524,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             startScrubTimer()
             loadThumbnail(for: scrubTime)
         } else if (scrubSpeed > 0) == forward {
-            // Same direction - increase speed up to 6x
-            let newSpeed = min(6, abs(scrubSpeed) + 1) * direction
+            // Same direction - increase speed up to 8x
+            let newSpeed = min(8, abs(scrubSpeed) + 1) * direction
             scrubSpeed = newSpeed
         } else {
             // Opposite direction - decelerate first, then reverse
@@ -1340,6 +1553,48 @@ final class UniversalPlayerViewModel: ObservableObject {
         loadThumbnail(for: scrubTime)
     }
 
+    /// Start swipe-based scrubbing (proportional, no speed acceleration)
+    func startSwipeScrubbing() {
+        hidePausedPoster()
+        isScrubbing = true
+        scrubTime = currentTime
+        scrubSpeed = 0  // No direction-based speed for swipe scrubbing
+        scrubStartTime = nil  // No time-based acceleration for swipe
+        controlsTimer?.invalidate()
+        loadThumbnail(for: scrubTime)
+    }
+
+    /// Update scrub position by a relative amount (for swipe gestures)
+    /// - Parameter seconds: Amount to seek (positive = forward, negative = backward)
+    func updateSwipeScrubPosition(by seconds: TimeInterval) {
+        if !isScrubbing {
+            startSwipeScrubbing()
+        }
+        scrubTime = max(0, min(duration, scrubTime + seconds))
+        loadThumbnail(for: scrubTime)
+    }
+
+    /// Handle click wheel rotation (iPod-style circular scrubbing)
+    /// - Parameter radians: Rotation amount in radians (clockwise/positive = forward)
+    func handleWheelRotation(_ radians: Float) {
+        // Convert rotation to seek time
+        // ~10 seconds per full rotation (2π radians), so ~1.6 seconds per radian
+        let secondsPerRadian: TimeInterval = 10.0
+        let seekDelta = TimeInterval(radians) * secondsPerRadian
+
+        if !isScrubbing {
+            hidePausedPoster()
+            isScrubbing = true
+            scrubTime = currentTime
+            scrubSpeed = 0
+            scrubStartTime = nil  // No time-based acceleration for wheel
+            controlsTimer?.invalidate()
+        }
+
+        scrubTime = max(0, min(duration, scrubTime + seekDelta))
+        loadThumbnail(for: scrubTime)
+    }
+
     func updateScrubPosition(_ time: TimeInterval) {
         scrubTime = max(0, min(duration, time))
         loadThumbnail(for: scrubTime)
@@ -1359,6 +1614,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             await seek(to: scrubTime)
             isScrubbing = false
             scrubSpeed = 0
+            scrubStartTime = nil
             scrubThumbnail = nil
         }
     }
@@ -1367,6 +1623,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         stopScrubTimer()
         isScrubbing = false
         scrubSpeed = 0
+        scrubStartTime = nil
         scrubTime = currentTime
         scrubThumbnail = nil
         startControlsHideTimer()
@@ -1400,6 +1657,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Stop at boundaries
         if scrubTime <= 0 || scrubTime >= duration {
             scrubSpeed = 0
+            scrubStartTime = nil
             stopScrubTimer()
         }
 
@@ -2364,6 +2622,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         scrubTimer?.invalidate()
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
+        if let observer = appLifecycleObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = appBecameActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         // Ensure screensaver is re-enabled when player is deallocated
         Task { @MainActor in
             UIApplication.shared.isIdleTimerDisabled = false

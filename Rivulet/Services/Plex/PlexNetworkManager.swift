@@ -1358,12 +1358,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// This preserves video/audio codecs including Dolby Vision while providing HLS format
     /// Returns both the URL and required HTTP headers (Plex HLS requires auth in headers, not query params)
     /// - Parameter hasHDR: Whether content has HDR (HDR10/HDR10+/HLG/DV) - adds useDoviCodecs=1 for proper TV mode switching
+    /// - Parameter useDolbyVision: Whether to include DV enhancement layers (useDoviCodecs=1). Set to false to get HDR10 base layer only.
     func buildHLSDirectPlayURL(
         serverURL: String,
         authToken: String,
         ratingKey: String,
         offsetMs: Int = 0,
-        hasHDR: Bool = false
+        hasHDR: Bool = false,
+        useDolbyVision: Bool = true
     ) -> (url: URL, headers: [String: String])? {
         // Request an HLS remux that keeps the HEVC/Dolby Vision bitstream intact
         // tvOS requires fMP4/CMAF segments for Dolby Vision profiles 5/8
@@ -1388,7 +1390,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             "add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)",
 
             // Limitations - tells server about codec/format restrictions
-            "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=6&replace=true)",
+            "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=8&replace=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe&onlyDirectPlay=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1&onlyDirectPlay=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=4096&replace=true)",
@@ -1424,7 +1426,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "segmentDuration", value: "6"),
             URLQueryItem(name: "audioCodec", value: "aac,eac3,ac3"),
             URLQueryItem(name: "audioBitrate", value: "1024"),
-            URLQueryItem(name: "audioChannels", value: "6"),
+            URLQueryItem(name: "audioChannels", value: "8"),
             URLQueryItem(name: "subtitles", value: "auto"),
             URLQueryItem(name: "subtitleSize", value: "100"),
             URLQueryItem(name: "context", value: "streaming"),
@@ -1439,7 +1441,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         // Add HDR-related parameters for proper TV mode switching
         // useDoviCodecs=1 causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
         // includeCodecs=1 is required with useDoviCodecs for correct HLS manifest generation
-        if hasHDR {
+        // When useDolbyVision=false, we skip useDoviCodecs to get HDR10 base layer only (workaround for Plex HLS DV remux issues)
+        if hasHDR && useDolbyVision {
             components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
             components.queryItems?.append(URLQueryItem(name: "includeCodecs", value: "1"))
         }

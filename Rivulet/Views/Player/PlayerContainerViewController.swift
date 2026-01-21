@@ -20,6 +20,7 @@ class PlayerContainerViewController: UIViewController {
 
     private var hostingController: UIHostingController<AnyView>?
     private var cancellables = Set<AnyCancellable>()
+    private var panGestureRecognizer: UIPanGestureRecognizer?
 
     /// Reference to the player view model for handling Menu button logic
     weak var viewModel: UniversalPlayerViewModel?
@@ -67,6 +68,9 @@ class PlayerContainerViewController: UIViewController {
         // to avoid double-firing issues
         // Left/right arrows are handled by SwiftUI's onMoveCommand with RemoteHoldDetector
         // (UIKit gesture recognizers don't receive events when SwiftUI has focus)
+
+        // Pan gesture for swipe-to-scrub on Siri Remote touchpad
+        setupPanGesture()
 
         // Observe viewModel's shouldDismiss property for programmatic dismissal
         viewModel?.$shouldDismiss
@@ -253,6 +257,62 @@ class PlayerContainerViewController: UIViewController {
     private func handleSelectButton() {
         guard let vm = viewModel else { return }
         vm.selectFocusedSetting()
+    }
+
+    // MARK: - Swipe-to-Scrub Gesture
+
+    private func setupPanGesture() {
+        let panRecognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePanGesture(_:)))
+        // Only recognize indirect touches (Siri Remote touchpad, not direct screen touches)
+        panRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        view.addGestureRecognizer(panRecognizer)
+        panGestureRecognizer = panRecognizer
+        print("🎮 [SETUP] Pan gesture recognizer added for swipe-to-scrub")
+    }
+
+    @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
+        guard let vm = viewModel else { return }
+
+        // Only allow swipe scrubbing when paused
+        guard vm.playbackState == .paused else { return }
+
+        // Don't handle pan when info panel or post-video is showing
+        if vm.showInfoPanel || vm.postVideoState != .hidden {
+            return
+        }
+
+        let translation = gesture.translation(in: view)
+        let velocity = gesture.velocity(in: view)
+
+        switch gesture.state {
+        case .began:
+            print("🎮 [PAN] Began - starting swipe scrub (paused)")
+            // Only initialize scrub position if not already scrubbing
+            // This allows multiple swipes to accumulate
+            if !vm.isScrubbing {
+                vm.startSwipeScrubbing()
+            }
+
+        case .changed:
+            // Proportional scrubbing: horizontal translation maps to seek time
+            // Sensitivity: ~1 second per 2 points of horizontal movement
+            // Positive translation.x = swipe right = forward
+            let seekDelta = translation.x * 0.5
+            vm.updateSwipeScrubPosition(by: seekDelta)
+            gesture.setTranslation(.zero, in: view)
+
+        case .ended, .cancelled:
+            print("🎮 [PAN] Ended - velocity: \(velocity.x), waiting for play/select to commit")
+            // If significant horizontal velocity, apply a final "flick" adjustment
+            if abs(velocity.x) > 500 {
+                let flickSeekDelta = velocity.x * 0.02  // Small multiplier for flick
+                vm.updateSwipeScrubPosition(by: flickSeekDelta)
+            }
+            // Don't auto-commit - wait for user to press play/select to confirm position
+
+        default:
+            break
+        }
     }
 
     private func dismissPlayer() {

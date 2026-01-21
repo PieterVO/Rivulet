@@ -39,16 +39,18 @@ final class NowPlayingService: ObservableObject {
     // MARK: - Audio Session Setup
 
     /// Configure audio session for media playback.
-    /// This makes the app recognized as a media player by the system.
+    /// This is the single source of truth for audio session configuration.
+    /// Both MPV and AVPlayer rely on this configuration.
     private func setupAudioSession() {
         do {
             let audioSession = AVAudioSession.sharedInstance()
 
             // Set category to playback - this interrupts other audio and shows in Now Playing
+            // .allowAirPlay enables AirPlay audio routing
             try audioSession.setCategory(
                 .playback,
                 mode: .moviePlayback,
-                options: []
+                options: [.allowAirPlay]
             )
 
             print("🎵 NowPlaying: Audio session configured")
@@ -223,11 +225,29 @@ final class NowPlayingService: ObservableObject {
             return .success
         }
 
+        // Seek forward (IR remote FF button)
+        // This is different from skipForward - it's triggered by holding FF on IR remotes
+        commandCenter.seekForwardCommand.isEnabled = true
+        commandCenter.seekForwardCommand.addTarget { [weak self] event in
+            Task { @MainActor in
+                self?.viewModel?.scrubInDirection(forward: true)
+            }
+            return .success
+        }
+
+        // Seek backward (IR remote RW button)
+        // This is different from skipBackward - it's triggered by holding RW on IR remotes
+        commandCenter.seekBackwardCommand.isEnabled = true
+        commandCenter.seekBackwardCommand.addTarget { [weak self] event in
+            Task { @MainActor in
+                self?.viewModel?.scrubInDirection(forward: false)
+            }
+            return .success
+        }
+
         // Disable commands we don't support
         commandCenter.nextTrackCommand.isEnabled = false
         commandCenter.previousTrackCommand.isEnabled = false
-        commandCenter.seekForwardCommand.isEnabled = false
-        commandCenter.seekBackwardCommand.isEnabled = false
         commandCenter.changeRepeatModeCommand.isEnabled = false
         commandCenter.changeShuffleModeCommand.isEnabled = false
 

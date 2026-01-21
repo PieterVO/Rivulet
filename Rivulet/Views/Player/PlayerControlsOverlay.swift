@@ -71,7 +71,7 @@ struct PlayerControlsOverlay: View {
                 duration: viewModel.duration,
                 isScrubbing: viewModel.isScrubbing,
                 scrubTime: viewModel.scrubTime,
-                scrubSpeed: viewModel.scrubSpeed,
+                scrubStepLabel: viewModel.scrubStepLabel,
                 scrubThumbnail: viewModel.scrubThumbnail,
                 markers: viewModel.metadata.allMarkers,
                 showMarkers: showMarkersOnScrubber
@@ -506,7 +506,7 @@ private struct TransportProgressBar: View {
     let duration: TimeInterval
     var isScrubbing: Bool = false
     var scrubTime: TimeInterval = 0
-    var scrubSpeed: Int = 0
+    var scrubStepLabel: String?  // YouTube-style step indicator (e.g. "▶▶ 30s")
     var scrubThumbnail: UIImage?
     var markers: [PlexMarker] = []
     var showMarkers: Bool = true
@@ -518,13 +518,6 @@ private struct TransportProgressBar: View {
     private var progress: Double {
         guard duration > 0 else { return 0 }
         return min(1, max(0, displayTime / duration))
-    }
-
-    private var speedLabel: String? {
-        guard scrubSpeed != 0 else { return nil }
-        let magnitude = abs(scrubSpeed)
-        let arrow = scrubSpeed > 0 ? "▶▶" : "◀◀"
-        return "\(arrow) \(magnitude)×"
     }
 
     /// Color for a marker type
@@ -627,8 +620,8 @@ private struct TransportProgressBar: View {
                             .monospacedDigit()
                             .foregroundStyle(.blue)
 
-                        if let speed = speedLabel {
-                            Text(speed)
+                        if let stepLabel = scrubStepLabel {
+                            Text(stepLabel)
                                 .font(.callout)
                                 .fontWeight(.medium)
                                 .foregroundStyle(.white.opacity(0.8))

@@ -55,9 +55,16 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     private var _duration: TimeInterval = 0
     private var _isMuted: Bool = false
     private var loadingTimeoutTask: Task<Void, Never>?
+    private var videoRenderVerificationTask: Task<Void, Never>?
     private var currentStreamURL: URL?
     private var consecutive404Count: Int = 0
     private let max404CountBeforeFail = 5  // Fail after 5 consecutive 404s
+
+    // Video rendering detection
+    private var hasReceivedVideoFrames: Bool = false
+    private var hasVerifiedVideoRendering: Bool = false  // Persists once verified - don't re-verify after seek
+    private var lastVideoRect: CGRect = .zero
+    private var expectedAspectRatio: CGFloat?  // Set from source metadata if available
 
     // MARK: - Publishers
 
@@ -249,6 +256,8 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     }
 
     func stop() {
+        // Mute immediately to stop audio (buffer would otherwise drain briefly)
+        player?.isMuted = true
         cleanupObservers()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
@@ -293,6 +302,10 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                     self.cancelLoadingTimeout()
                     self.playbackStateSubject.send(.playing)
                     print("🎬 AVPlayerWrapper: Playback started (rate: \(rate))")
+                    // Start video rendering verification (only on first play, not after seek)
+                    if !self.hasVerifiedVideoRendering {
+                        self.startVideoRenderVerification()
+                    }
                 } else if currentState == .playing {
                     self.playbackStateSubject.send(.paused)
                 }
@@ -470,6 +483,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
     private func cleanupObservers() {
         cancelLoadingTimeout()
+        cancelVideoRenderVerification()
 
         if let timeObserver = timeObserver, let player = player {
             player.removeTimeObserver(timeObserver)
@@ -580,6 +594,106 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Video Rendering Detection
+
+    /// Called by AVPlayerUIView when rendering status changes
+    func handleRenderingStatusChanged(isReady: Bool, videoRect: CGRect) {
+        lastVideoRect = videoRect
+
+        if isReady {
+            // Check if we actually have video rendering (non-zero video rect)
+            let hasValidVideoRect = videoRect.width > 10 && videoRect.height > 10
+            if hasValidVideoRect {
+                let renderedAspectRatio = videoRect.width / videoRect.height
+                print("🎬 AVPlayerWrapper: Video rendering reported - rect=\(videoRect), aspectRatio=\(String(format: "%.2f", renderedAspectRatio))")
+
+                // Check for aspect ratio mismatch which indicates decoder failure
+                // Most modern video content (movies/TV) has aspect ratio >= 1.5 (3:2)
+                // A 4:3 (1.33) aspect ratio for DV content is almost certainly wrong
+                if let expected = expectedAspectRatio {
+                    let aspectDiff = abs(renderedAspectRatio - expected) / expected
+                    if aspectDiff > 0.25 {  // More than 25% difference
+                        print("🎬 AVPlayerWrapper: ASPECT RATIO MISMATCH - rendered=\(String(format: "%.2f", renderedAspectRatio)), expected=\(String(format: "%.2f", expected))")
+                        print("🎬 AVPlayerWrapper: This indicates decoder failure - frames may be blank")
+                        // Don't confirm rendering - let verification timeout trigger fallback
+                        return
+                    }
+                }
+
+                // Additional heuristic: if aspect ratio is suspiciously narrow (< 1.5) for video content
+                // This catches cases where we don't have expected aspect ratio but the output looks wrong
+                // 4:3 = 1.33 which is unusual for modern DV content
+                if renderedAspectRatio < 1.4 {
+                    print("🎬 AVPlayerWrapper: WARNING - Suspiciously narrow aspect ratio \(String(format: "%.2f", renderedAspectRatio)) - may indicate decoder issues")
+                    // Don't confirm rendering for narrow aspect ratio - let timeout handle it
+                    return
+                }
+
+                print("🎬 AVPlayerWrapper: Video rendering confirmed")
+                hasReceivedVideoFrames = true
+                hasVerifiedVideoRendering = true  // Persist - don't re-verify after seek
+                // Cancel verification timeout since video is rendering
+                videoRenderVerificationTask?.cancel()
+                videoRenderVerificationTask = nil
+            } else {
+                // isReadyForDisplay=true but videoRect is empty/invalid - suspicious
+                print("🎬 AVPlayerWrapper: WARNING - isReadyForDisplay=true but videoRect is invalid: \(videoRect)")
+            }
+        }
+    }
+
+    /// Set expected aspect ratio from source video metadata
+    func setExpectedAspectRatio(width: Int, height: Int) {
+        guard height > 0 else { return }
+        expectedAspectRatio = CGFloat(width) / CGFloat(height)
+        print("🎬 AVPlayerWrapper: Expected aspect ratio set to \(String(format: "%.2f", expectedAspectRatio!)) from \(width)x\(height)")
+    }
+
+    /// Start verification that video is actually rendering after playback starts
+    private func startVideoRenderVerification() {
+        videoRenderVerificationTask?.cancel()
+        hasReceivedVideoFrames = false
+
+        videoRenderVerificationTask = Task { [weak self] in
+            // Wait 3 seconds for video to start rendering
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+
+            // Check if we're playing but haven't received video frames
+            if case .playing = self.playbackStateSubject.value {
+                if !self.hasReceivedVideoFrames {
+                    print("🎬 AVPlayerWrapper: Video rendering verification FAILED - playback active but no video frames after 3 seconds")
+
+                    // Check the last known video rect
+                    if self.lastVideoRect.width < 10 || self.lastVideoRect.height < 10 {
+                        print("🎬 AVPlayerWrapper: Video rect is empty/invalid: \(self.lastVideoRect)")
+                    }
+
+                    // Log to Sentry
+                    let renderError = NSError(domain: "AVPlayerWrapper", code: -1001, userInfo: [
+                        NSLocalizedDescriptionKey: "Video rendering verification failed - no video frames"
+                    ])
+                    self.logStreamFailureToSentry(
+                        error: renderError,
+                        errorCode: -1001,
+                        errorDomain: "AVPlayerWrapper",
+                        isCompatibilityError: true
+                    )
+
+                    // Report as codec/rendering failure to trigger fallback
+                    let message = "AVPlayer failed to render video frames. This Dolby Vision content may require MPV."
+                    self.playbackStateSubject.send(.failed(.codecUnsupported(message)))
+                    self.errorSubject.send(.codecUnsupported(message))
+                }
+            }
+        }
+    }
+
+    private func cancelVideoRenderVerification() {
+        videoRenderVerificationTask?.cancel()
+        videoRenderVerificationTask = nil
+    }
+
     // MARK: - Lifecycle
 
     func prepareForReuse() {
@@ -588,6 +702,10 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         _isMuted = false
         currentStreamURL = nil
         consecutive404Count = 0
+        hasReceivedVideoFrames = false
+        hasVerifiedVideoRendering = false
+        lastVideoRect = .zero
+        expectedAspectRatio = nil
         _audioTracks = []
         _subtitleTracks = []
         _currentAudioTrackId = nil

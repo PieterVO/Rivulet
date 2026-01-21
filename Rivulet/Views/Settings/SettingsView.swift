@@ -439,14 +439,14 @@ struct SettingsView: View {
                                 icon: "sparkles.tv",
                                 iconColor: .purple,
                                 title: "Use AVPlayer for Dolby Vision",
-                                subtitle: "DV Profile 5/8 only. Profile 7 (MKV remux) requires MPV",
+                                subtitle: "If Plex can send it, we can play it",
                                 isOn: $useAVPlayerForDolbyVision
                             )
 
                             SettingsToggleRow(
                                 icon: "play.rectangle",
                                 iconColor: .blue,
-                                title: "Use AVPlayer for All Videos (more experimental than the rest)",
+                                title: "Use AVPlayer for All Videos",
                                 subtitle: "If you like remuxing and Direct Stream, here's to you",
                                 isOn: $useAVPlayerForAllVideos
                             )

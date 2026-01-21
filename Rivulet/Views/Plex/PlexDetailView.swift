@@ -9,6 +9,17 @@ import SwiftUI
 
 struct PlexDetailView: View {
     let item: PlexMetadata
+
+    /// Tracks the currently displayed item - allows swapping content in place
+    /// When set, this overrides `item` so collection/recommended navigation
+    /// replaces content rather than pushing a new view
+    @State private var displayedItem: PlexMetadata?
+
+    /// The item currently being shown - either displayedItem or the original item
+    private var currentItem: PlexMetadata {
+        displayedItem ?? item
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.nestedNavigationState) private var nestedNavState
     @Environment(\.focusScopeManager) private var focusScopeManager
@@ -73,13 +84,13 @@ struct PlexDetailView: View {
     /// This ensures we have the most up-to-date playback position after returning from the player
     private var effectiveItem: PlexMetadata {
         if let full = fullMetadata {
-            // Merge updated viewOffset/viewCount into item
-            var merged = item
+            // Merge updated viewOffset/viewCount into currentItem
+            var merged = currentItem
             merged.viewOffset = full.viewOffset
             merged.viewCount = full.viewCount
             return merged
         }
-        return item
+        return currentItem
     }
 
     /// Play button label for TV shows and seasons
@@ -152,7 +163,7 @@ struct PlexDetailView: View {
                     }
 
                     // Summary
-                    if let summary = fullMetadata?.summary ?? item.summary, !summary.isEmpty {
+                    if let summary = fullMetadata?.summary ?? currentItem.summary, !summary.isEmpty {
                         Text(summary)
                             .font(.body)
                             .foregroundStyle(.secondary)
@@ -160,22 +171,22 @@ struct PlexDetailView: View {
                     }
 
                     // TV Show specific: Seasons and Episodes
-                    if item.type == "show" {
+                    if currentItem.type == "show" {
                         seasonSection
                     }
 
                     // Season specific: Episodes list (no season picker needed)
-                    if item.type == "season" {
+                    if currentItem.type == "season" {
                         episodeSection
                     }
 
                     // Album specific: Tracks
-                    if item.type == "album" {
+                    if currentItem.type == "album" {
                         trackSection
                     }
 
                     // Artist specific: Albums
-                    if item.type == "artist" {
+                    if currentItem.type == "artist" {
                         albumSection
                     }
                 }
@@ -188,7 +199,13 @@ struct PlexDetailView: View {
                         title: name,
                         items: collectionItems,
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.selectedServerToken ?? ""
+                        authToken: authManager.selectedServerToken ?? "",
+                        onItemSelected: { selectedItem in
+                            // Replace current view content with crossfade animation
+                            withAnimation(.easeInOut(duration: 0.35)) {
+                                displayedItem = selectedItem
+                            }
+                        }
                     )
                     .padding(.top, 32)
                 }
@@ -199,7 +216,13 @@ struct PlexDetailView: View {
                         title: "Recommended",
                         items: recommendedItems,
                         serverURL: authManager.selectedServerURL ?? "",
-                        authToken: authManager.selectedServerToken ?? ""
+                        authToken: authManager.selectedServerToken ?? "",
+                        onItemSelected: { selectedItem in
+                            // Replace current view content with crossfade animation
+                            withAnimation(.easeInOut(duration: 0.35)) {
+                                displayedItem = selectedItem
+                            }
+                        }
                     )
                     .padding(.top, 32)
                 }
@@ -222,9 +245,9 @@ struct PlexDetailView: View {
         }
         .defaultScrollAnchor(.top)
         .ignoresSafeArea(edges: .top)
-        .task(id: item.ratingKey) {
+        .task(id: currentItem.ratingKey) {
             // Debug: log what item we're loading
-            print("📋 PlexDetailView loading: \(item.title ?? "?") (type: \(item.type ?? "nil"), ratingKey: \(item.ratingKey ?? "nil"))")
+            print("📋 PlexDetailView loading: \(currentItem.title ?? "?") (type: \(currentItem.type ?? "nil"), ratingKey: \(currentItem.ratingKey ?? "nil"))")
 
             // Reset state for new item
             seasons = []
@@ -237,19 +260,19 @@ struct PlexDetailView: View {
             nextUpEpisode = nil
 
             // Initialize watched state
-            isWatched = item.isWatched
+            isWatched = currentItem.isWatched
 
             // Initialize progress for animation
-            displayedProgress = item.watchProgress ?? 0
+            displayedProgress = currentItem.watchProgress ?? 0
 
             // Initialize starred state for music (userRating > 0 means starred)
-            isStarred = (item.userRating ?? 0) > 0
+            isStarred = (currentItem.userRating ?? 0) > 0
 
             // Load full metadata for cast/crew and trailer
             await loadFullMetadata()
 
             // Load collection and recommendations for movies
-            if item.type == "movie" {
+            if currentItem.type == "movie" {
                 // Load collection items if movie is part of a collection
                 if let collection = fullMetadata?.Collection?.first,
                    let collectionId = collection.idString,
@@ -262,26 +285,26 @@ struct PlexDetailView: View {
             }
 
             // Load seasons for TV shows
-            if item.type == "show" {
+            if currentItem.type == "show" {
                 await loadSeasons()
                 // Determine the "next up" episode for the Play button
                 await loadNextUpEpisode()
             }
 
             // Load episodes for seasons
-            if item.type == "season" {
+            if currentItem.type == "season" {
                 await loadEpisodesForSeason()
                 // Determine the "next up" episode for the Play button
                 await loadNextUpEpisode()
             }
 
             // Load tracks for albums
-            if item.type == "album" {
+            if currentItem.type == "album" {
                 await loadTracks()
             }
 
             // Load albums for artists
-            if item.type == "artist" {
+            if currentItem.type == "artist" {
                 await loadAlbums()
             }
         }
@@ -333,8 +356,8 @@ struct PlexDetailView: View {
         }
         .sheet(isPresented: $showBioSheet) {
             ArtistBioSheet(
-                artistName: fullMetadata?.title ?? item.title ?? "Artist",
-                bio: fullMetadata?.summary ?? item.summary ?? "",
+                artistName: fullMetadata?.title ?? currentItem.title ?? "Artist",
+                bio: fullMetadata?.summary ?? currentItem.summary ?? "",
                 thumbURL: artistThumbURL
             )
         }
@@ -440,6 +463,8 @@ struct PlexDetailView: View {
                         )
                 }
             }
+            .id(artURL)
+            .transition(.opacity)
             .frame(height: 600)
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
@@ -492,6 +517,8 @@ struct PlexDetailView: View {
                             }
                     }
                 }
+                .id(posterURL)
+                .transition(.opacity)
                 .frame(width: 400, height: isMusicItem ? 400 : 600)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 // GPU-accelerated shadow
@@ -506,16 +533,17 @@ struct PlexDetailView: View {
             .padding(.horizontal, 96) // Inset from hero edges
             .padding(.bottom, isMusicItem ? -40 : -140) // Overlap below hero section
         }
+        .animation(.easeInOut(duration: 0.3), value: currentItem.ratingKey)
     }
 
     /// Check if this is a music item (album, artist, track)
     private var isMusicItem: Bool {
-        item.type == "album" || item.type == "artist" || item.type == "track"
+        currentItem.type == "album" || currentItem.type == "artist" || currentItem.type == "track"
     }
 
     /// Icon for fallback poster based on item type
     private var iconForType: String {
-        switch item.type {
+        switch currentItem.type {
         case "movie": return "film"
         case "show": return "tv"
         case "album": return "music.note.list"
@@ -527,7 +555,7 @@ struct PlexDetailView: View {
 
     /// Artist thumbnail URL for bio sheet
     private var artistThumbURL: URL? {
-        guard let thumb = fullMetadata?.thumb ?? item.thumb,
+        guard let thumb = fullMetadata?.thumb ?? currentItem.thumb,
               let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")
@@ -537,7 +565,7 @@ struct PlexDetailView: View {
     private func playAllArtistTracks() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         isLoadingArtistTracks = true
         defer { isLoadingArtistTracks = false }
@@ -568,16 +596,16 @@ struct PlexDetailView: View {
             Spacer()
                 .frame(height: isMusicItem ? 20 : 40)
 
-            Text(fullMetadata?.title ?? item.title ?? "Unknown Title")
+            Text(fullMetadata?.title ?? currentItem.title ?? "Unknown Title")
                 .font(.title2)
                 .fontWeight(.semibold)
 
             HStack(spacing: 16) {
-                if let year = fullMetadata?.year ?? item.year {
+                if let year = fullMetadata?.year ?? currentItem.year {
                     Text(String(year))
                 }
 
-                if let contentRating = fullMetadata?.contentRating ?? item.contentRating {
+                if let contentRating = fullMetadata?.contentRating ?? currentItem.contentRating {
                     Text(contentRating)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
@@ -587,11 +615,11 @@ struct PlexDetailView: View {
                         }
                 }
 
-                if let duration = fullMetadata?.durationFormatted ?? item.durationFormatted {
+                if let duration = fullMetadata?.durationFormatted ?? currentItem.durationFormatted {
                     Text(duration)
                 }
 
-                if let rating = fullMetadata?.rating ?? item.rating {
+                if let rating = fullMetadata?.rating ?? currentItem.rating {
                     HStack(spacing: 4) {
                         Image(systemName: "star.fill")
                             .foregroundStyle(.yellow)
@@ -600,22 +628,22 @@ struct PlexDetailView: View {
                 }
 
                 // Use fullMetadata for media info since hub items don't include Stream data
-                if let videoQuality = fullMetadata?.videoQualityDisplay ?? item.videoQualityDisplay {
+                if let videoQuality = fullMetadata?.videoQualityDisplay ?? currentItem.videoQualityDisplay {
                     Text(videoQuality)
                 }
 
-                if let hdrFormat = fullMetadata?.hdrFormatDisplay ?? item.hdrFormatDisplay {
+                if let hdrFormat = fullMetadata?.hdrFormatDisplay ?? currentItem.hdrFormatDisplay {
                     Text(hdrFormat)
                 }
 
-                if let audioFormat = fullMetadata?.audioFormatDisplay ?? item.audioFormatDisplay {
+                if let audioFormat = fullMetadata?.audioFormatDisplay ?? currentItem.audioFormatDisplay {
                     Text(audioFormat)
                 }
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
 
-            if let tagline = fullMetadata?.tagline ?? item.tagline {
+            if let tagline = fullMetadata?.tagline ?? currentItem.tagline {
                 Text(tagline)
                     .font(.subheadline)
                     .italic()
@@ -665,7 +693,7 @@ struct PlexDetailView: View {
         HStack(spacing: 16) {
             // Play button for movies, shows, albums
             // Play All button for artists
-            if item.type == "artist" {
+            if currentItem.type == "artist" {
                 Button {
                     Task {
                         await playAllArtistTracks()
@@ -688,7 +716,7 @@ struct PlexDetailView: View {
                 #if os(tvOS)
                 .focused($focusedActionButton, equals: "play")
                 #endif
-            } else if item.type == "album" {
+            } else if currentItem.type == "album" {
                 Button {
                     if let firstTrack = tracks.first {
                         selectedTrack = firstTrack
@@ -707,7 +735,7 @@ struct PlexDetailView: View {
                 #if os(tvOS)
                 .focused($focusedActionButton, equals: "play")
                 #endif
-            } else if item.type == "show" || item.type == "season" {
+            } else if currentItem.type == "show" || currentItem.type == "season" {
                 // TV Show/Season: Play button uses nextUpEpisode
                 Button {
                     if let episode = nextUpEpisode {
@@ -728,7 +756,7 @@ struct PlexDetailView: View {
                 #if os(tvOS)
                 .focused($focusedActionButton, equals: "play")
                 #endif
-            } else if item.type != "track" {
+            } else if currentItem.type != "track" {
                 // Movies/Episodes: Standard Play/Resume button
                 Button {
                     playFromBeginning = false
@@ -822,8 +850,8 @@ struct PlexDetailView: View {
             }
 
             // Season / Show navigation buttons (for episodes only)
-            if item.type == "episode" {
-                if item.parentRatingKey != nil {
+            if currentItem.type == "episode" {
+                if currentItem.parentRatingKey != nil {
                     Button {
                         Task { await navigateToParentSeason() }
                     } label: {
@@ -841,7 +869,7 @@ struct PlexDetailView: View {
                     #endif
                 }
 
-                if item.grandparentRatingKey != nil {
+                if currentItem.grandparentRatingKey != nil {
                     Button {
                         Task { await navigateToParentShow() }
                     } label: {
@@ -861,7 +889,7 @@ struct PlexDetailView: View {
             }
 
             // Show button (for seasons)
-            if item.type == "season", item.parentRatingKey != nil {
+            if currentItem.type == "season", currentItem.parentRatingKey != nil {
                 Button {
                     Task { await navigateToParentShowFromSeason() }
                 } label: {
@@ -880,7 +908,7 @@ struct PlexDetailView: View {
             }
 
             // Info button for artists with bio
-            if item.type == "artist", let summary = fullMetadata?.summary ?? item.summary, !summary.isEmpty {
+            if currentItem.type == "artist", let summary = fullMetadata?.summary ?? currentItem.summary, !summary.isEmpty {
                 Button {
                     showBioSheet = true
                 } label: {
@@ -1285,7 +1313,7 @@ struct PlexDetailView: View {
               let token = authManager.selectedServerToken else { return (nil, nil) }
 
         // For episodes, use the show's art (displayed on detail page)
-        let art = (metadata.type == "episode" && selectedEpisode != nil) ? item.bestArt : metadata.bestArt
+        let art = (metadata.type == "episode" && selectedEpisode != nil) ? currentItem.bestArt : metadata.bestArt
         let thumb = metadata.thumb ?? metadata.bestThumb
 
         // Build URLs
@@ -1305,7 +1333,7 @@ struct PlexDetailView: View {
     private func loadFullMetadata() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         isLoadingExtras = true
 
@@ -1333,7 +1361,7 @@ struct PlexDetailView: View {
                 authToken: token,
                 sectionId: sectionId,
                 collectionId: collectionId,
-                excludeRatingKey: item.ratingKey
+                excludeRatingKey: currentItem.ratingKey
             )
             collectionItems = items
             collectionName = name
@@ -1358,12 +1386,12 @@ struct PlexDetailView: View {
               let token = authManager.selectedServerToken else { return }
 
         // For seasons, find the next up episode from the loaded episodes
-        if item.type == "season" {
+        if currentItem.type == "season" {
             await loadNextUpEpisodeForSeason()
             return
         }
 
-        guard item.type == "show" else { return }
+        guard currentItem.type == "show" else { return }
 
         // Try to get OnDeck episode from full metadata
         if let onDeckEpisode = fullMetadata?.OnDeck?.Metadata?.first,
@@ -1526,7 +1554,7 @@ struct PlexDetailView: View {
     private func toggleWatched() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         do {
             if isWatched {
@@ -1560,7 +1588,7 @@ struct PlexDetailView: View {
     private func toggleStarRating() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         do {
             // Toggle between 5 stars (rating=10) and no rating (rating=nil)
@@ -1583,7 +1611,7 @@ struct PlexDetailView: View {
     private func navigateToParentSeason() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let seasonKey = item.parentRatingKey else { return }
+              let seasonKey = currentItem.parentRatingKey else { return }
 
         isLoadingNavigation = true
         defer { isLoadingNavigation = false }
@@ -1604,7 +1632,7 @@ struct PlexDetailView: View {
     private func navigateToParentShow() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let showKey = item.grandparentRatingKey else { return }
+              let showKey = currentItem.grandparentRatingKey else { return }
 
         isLoadingNavigation = true
         defer { isLoadingNavigation = false }
@@ -1625,7 +1653,7 @@ struct PlexDetailView: View {
     private func navigateToParentShowFromSeason() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let showKey = item.parentRatingKey else { return }
+              let showKey = currentItem.parentRatingKey else { return }
 
         isLoadingNavigation = true
         defer { isLoadingNavigation = false }
@@ -1645,7 +1673,7 @@ struct PlexDetailView: View {
     private func loadSeasons() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         isLoadingSeasons = true
 
@@ -1697,7 +1725,7 @@ struct PlexDetailView: View {
     private func loadEpisodesForSeason() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         isLoadingEpisodes = true
 
@@ -1777,7 +1805,7 @@ struct PlexDetailView: View {
     private func loadTracks() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
+              let ratingKey = currentItem.ratingKey else { return }
 
         isLoadingTracks = true
 
@@ -1798,14 +1826,14 @@ struct PlexDetailView: View {
     private func loadAlbums() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
-              let ratingKey = item.ratingKey else {
+              let ratingKey = currentItem.ratingKey else {
             print("🎵 Missing required data for loading albums")
             return
         }
 
         // Get librarySectionID from fullMetadata (fetched first) or item
-        guard let librarySectionId = fullMetadata?.librarySectionID ?? item.librarySectionID else {
-            print("🎵 Missing librarySectionID for artist - item: \(item.librarySectionID ?? -1), fullMetadata: \(fullMetadata?.librarySectionID ?? -1)")
+        guard let librarySectionId = fullMetadata?.librarySectionID ?? currentItem.librarySectionID else {
+            print("🎵 Missing librarySectionID for artist - item: \(currentItem.librarySectionID ?? -1), fullMetadata: \(fullMetadata?.librarySectionID ?? -1)")
             return
         }
 
@@ -1824,7 +1852,7 @@ struct PlexDetailView: View {
             // Sort by year (newest first)
             albums = fetchedAlbums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
 
-            print("🎵 Found \(albums.count) albums for \(item.title ?? "?")")
+            print("🎵 Found \(albums.count) albums for \(currentItem.title ?? "?")")
             for album in albums.prefix(5) {
                 print("  - \(album.title ?? "?") (type: \(album.type ?? "nil"), ratingKey: \(album.ratingKey ?? "nil"), parentKey: \(album.parentRatingKey ?? "nil"))")
             }
@@ -1842,7 +1870,7 @@ struct PlexDetailView: View {
     // MARK: - URL Helpers
 
     private var artURL: URL? {
-        guard let art = item.bestArt,
+        guard let art = currentItem.bestArt,
               let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(art)?X-Plex-Token=\(token)")
@@ -1853,10 +1881,10 @@ struct PlexDetailView: View {
         let thumb: String?
 
         // For TV show episodes, prefer the series poster (grandparentThumb)
-        if item.type == "episode" || item.type == "season" {
-            thumb = item.grandparentThumb ?? item.parentThumb ?? item.thumb
+        if currentItem.type == "episode" || currentItem.type == "season" {
+            thumb = currentItem.grandparentThumb ?? currentItem.parentThumb ?? currentItem.thumb
         } else {
-            thumb = item.thumb
+            thumb = currentItem.thumb
         }
 
         guard let thumbPath = thumb,
@@ -1866,7 +1894,7 @@ struct PlexDetailView: View {
     }
 
     private var thumbURL: URL? {
-        guard let thumb = item.thumb,
+        guard let thumb = currentItem.thumb,
               let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return nil }
         return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")

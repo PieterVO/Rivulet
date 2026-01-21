@@ -24,18 +24,29 @@ final class RemoteInputHandler: ObservableObject {
     private var isButtonDown = false  // true while buttonA is pressed
     private let holdThreshold: TimeInterval = 0.4
 
+    // Click wheel rotation tracking (iPod-style)
+    private var lastAngle: Float?
+    private var accumulatedRotation: Float = 0
+    private let rotationThreshold: Float = 0.3  // ~17 degrees before triggering
+    private let radiusThreshold: Float = 0.7    // Only track rotation on outer edge
+
     // Check viewModel's scrubbing state (single source of truth)
     var isScrubbingCheck: (() -> Bool)?
+    // Check if actively scrubbing with timer (hold-based), vs passive scrubbing (swipe/wheel)
+    var isActivelyScrubbing: (() -> Bool)?
     // Check if player is in error state (don't capture clicks - let dismiss button work)
     var isErrorCheck: (() -> Bool)?
     // Check if post-video overlay is showing (don't capture clicks - let buttons work)
     var isPostVideoCheck: (() -> Bool)?
+    // Check if player is paused (taps start scrubbing when paused)
+    var isPausedCheck: (() -> Bool)?
 
     var onTap: ((Bool) -> Void)?           // forward: Bool
     var onScrubStart: ((Bool) -> Void)?    // forward: Bool
     var onSpeedChange: ((Bool) -> Void)?   // forward: Bool
     var onScrubConfirm: (() -> Void)?
     var onScrubCancel: (() -> Void)?
+    var onWheelRotation: ((Float) -> Void)?  // rotation delta in radians (clockwise = positive)
 
     private var controllerObserver: NSObjectProtocol?
 
@@ -78,7 +89,7 @@ final class RemoteInputHandler: ObservableObject {
 
         let threshold: Float = 0.3
 
-        // Track dpad position (just stores where finger is, no action)
+        // Track dpad position and detect circular rotation (iPod-style click wheel)
         micro.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
             guard let self else { return }
 
@@ -95,14 +106,44 @@ final class RemoteInputHandler: ObservableObject {
                 nil  // center
             }
 
+            // Calculate radius and angle for click wheel rotation
+            let radius = sqrt(xValue * xValue + yValue * yValue)
+            let angle = atan2(yValue, xValue)
+
             Task { @MainActor in
                 // Ignore dpad changes while button is pressed (click disrupts touch sensing)
                 guard !self.isButtonDown else { return }
 
+                // Track left/right direction for tap/hold detection
                 if self.currentDpadDirection != dir {
                     print("🎮 [Remote] Dpad: \(dir.map { $0 ? "RIGHT" : "LEFT" } ?? "CENTER") (x=\(xValue))")
                 }
                 self.currentDpadDirection = dir
+
+                // Click wheel rotation: only track when finger is on outer edge
+                if radius > self.radiusThreshold {
+                    if let lastAngle = self.lastAngle {
+                        var delta = angle - lastAngle
+
+                        // Handle wrap-around at ±π
+                        if delta > .pi { delta -= 2 * .pi }
+                        if delta < -.pi { delta += 2 * .pi }
+
+                        self.accumulatedRotation += delta
+
+                        // Trigger rotation callback when threshold exceeded
+                        if abs(self.accumulatedRotation) > self.rotationThreshold {
+                            let rotation = self.accumulatedRotation
+                            self.accumulatedRotation = 0
+                            self.onWheelRotation?(rotation)
+                        }
+                    }
+                    self.lastAngle = angle
+                } else {
+                    // Finger moved to center - reset rotation tracking
+                    self.lastAngle = nil
+                    self.accumulatedRotation = 0
+                }
             }
         }
 
@@ -147,11 +188,13 @@ final class RemoteInputHandler: ObservableObject {
             return
         }
 
-        if isScrubbing {
-            // Already scrubbing - click changes speed
+        let activelyScrubbingWithTimer = isActivelyScrubbing?() ?? false
+        if isScrubbing && activelyScrubbingWithTimer {
+            // Actively scrubbing with timer (hold-based) - click changes speed
             print("🎮 [Remote] Speed change while scrubbing")
             onSpeedChange?(forward)
         } else {
+            // Not scrubbing, OR passively scrubbing (swipe/wheel) - allow tap detection
             // Start hold detection
             clickedDirection = forward
             holdTimer?.invalidate()
@@ -174,8 +217,14 @@ final class RemoteInputHandler: ObservableObject {
             holdTimer = nil
 
             if let forward = clickedDirection, !isScrubbing {
-                print("🎮 [Remote] Tap detected - seeking \(forward ? "+10s" : "-10s")")
-                onTap?(forward)
+                // When paused, taps start scrubbing instead of seeking
+                if isPausedCheck?() == true {
+                    print("🎮 [Remote] Tap while paused - starting scrub \(forward ? "forward" : "backward")")
+                    onScrubStart?(forward)
+                } else {
+                    print("🎮 [Remote] Tap detected - seeking \(forward ? "+10s" : "-10s")")
+                    onTap?(forward)
+                }
             }
         }
         clickedDirection = nil
@@ -187,6 +236,9 @@ final class RemoteInputHandler: ObservableObject {
         clickedDirection = nil
         currentDpadDirection = nil
         isButtonDown = false
+        // Reset rotation tracking
+        lastAngle = nil
+        accumulatedRotation = 0
     }
 }
 #endif
@@ -271,15 +323,29 @@ struct UniversalPlayerView: View {
             remoteInput.isScrubbingCheck = { [weak viewModel] in
                 viewModel?.isScrubbing ?? false
             }
+            remoteInput.isActivelyScrubbing = { [weak viewModel] in
+                // Active scrubbing = hold-based with timer running (scrubSpeed != 0)
+                // Passive scrubbing = swipe/wheel (scrubSpeed == 0)
+                (viewModel?.scrubSpeed ?? 0) != 0
+            }
             remoteInput.isErrorCheck = { [weak viewModel] in
                 viewModel?.playbackState.isFailed ?? false
             }
             remoteInput.isPostVideoCheck = { [weak viewModel] in
                 viewModel?.postVideoState != .hidden
             }
+            remoteInput.isPausedCheck = { [weak viewModel] in
+                viewModel?.playbackState == .paused
+            }
             remoteInput.onTap = { [weak viewModel] forward in
                 guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                Task { await vm.seekRelative(by: forward ? 10 : -10) }
+                if vm.isScrubbing {
+                    // Passively scrubbing (swipe/wheel) - adjust scrub position
+                    vm.updateSwipeScrubPosition(by: forward ? 10 : -10)
+                } else {
+                    // Not scrubbing - seek actual playback position
+                    Task { await vm.seekRelative(by: forward ? 10 : -10) }
+                }
                 vm.showControlsTemporarily()
             }
             remoteInput.onScrubStart = { [weak viewModel] forward in
@@ -292,6 +358,22 @@ struct UniversalPlayerView: View {
                 vm.scrubInDirection(forward: forward)
                 vm.showControlsTemporarily()
             }
+            remoteInput.onWheelRotation = { [weak viewModel] radians in
+                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+                // Click wheel scrubbing only works when paused (same as swipe)
+                guard vm.playbackState == .paused else { return }
+                vm.handleWheelRotation(radians)
+                vm.showControlsTemporarily()
+            }
+            remoteInput.onScrubConfirm = { [weak viewModel] in
+                guard let vm = viewModel else { return }
+                // Commit scrub position and resume playback
+                Task {
+                    await vm.commitScrub()
+                    vm.resume()
+                }
+                vm.showControlsTemporarily()
+            }
             remoteInput.startMonitoring()
             #endif
         }
@@ -300,14 +382,16 @@ struct UniversalPlayerView: View {
             hasStartedPlayback = true
             // Activate player scope when player starts
             focusScopeManager.activate(.player)
-            await viewModel.startPlayback()
-            // Register with system Now Playing center
+            // Activate audio session BEFORE playback starts
+            // This ensures MPV's AudioUnit is created with correct session config
             NowPlayingService.shared.attach(to: viewModel)
+            await viewModel.startPlayback()
         }
         .onDisappear {
-            // Unregister from system Now Playing center
-            NowPlayingService.shared.detach()
+            // Stop playback first, then detach from Now Playing
+            // (audio session must remain active until player stops)
             viewModel.stopPlayback()
+            NowPlayingService.shared.detach()
             reportFinalProgress()
             #if os(tvOS)
             remoteInput.stopMonitoring()
@@ -831,8 +915,12 @@ struct UniversalPlayerView: View {
             return
         }
         if viewModel.isScrubbing {
-            // Commit scrub position
-            Task { await viewModel.commitScrub() }
+            // Commit scrub position and resume playback
+            // (swipe-scrubbing only works when paused, so resume after confirming position)
+            Task {
+                await viewModel.commitScrub()
+                viewModel.resume()
+            }
             remoteInput.reset()
         } else {
             // Normal play/pause toggle

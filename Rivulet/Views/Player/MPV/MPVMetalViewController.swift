@@ -280,32 +280,24 @@ final class MPVMetalViewController: UIViewController {
         }
     }
 
-    // MARK: - Audio Session Configuration
+    // MARK: - Audio Route Change Handling
 
-    private func configureAudioSession() {
+    /// Set up observer for audio route changes (e.g., switching to AirPlay/HomePod).
+    /// Note: Audio session configuration is handled by NowPlayingService.
+    private func setupAudioRouteObserver() {
+        guard audioRouteObserver == nil else { return }
+
+        audioRouteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleAudioRouteChange(notification)
+        }
+
         let session = AVAudioSession.sharedInstance()
-
-        do {
-            // Use playback category with default mode
-            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay])
-            try session.setActive(true, options: [])
-
-            let routeType = session.currentRoute.outputs.first?.portType.rawValue ?? "unknown"
-            print("🎬 AVAudioSession: Configured (route: \(routeType), channels: \(session.outputNumberOfChannels))")
-        } catch {
-            print("🎬 AVAudioSession: Configuration failed - \(error.localizedDescription)")
-        }
-
-        // Observe audio route changes
-        if audioRouteObserver == nil {
-            audioRouteObserver = NotificationCenter.default.addObserver(
-                forName: AVAudioSession.routeChangeNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] notification in
-                self?.handleAudioRouteChange(notification)
-            }
-        }
+        let routeType = session.currentRoute.outputs.first?.portType.rawValue ?? "unknown"
+        print("🎬 MPV: Audio route observer registered (current route: \(routeType))")
     }
 
     private func handleAudioRouteChange(_ notification: Notification) {
@@ -322,36 +314,28 @@ final class MPVMetalViewController: UIViewController {
 
         switch reason {
         case .newDeviceAvailable:
-            print("🎬 AVAudioSession: New device available, switching to: \(newRoute)")
-            reinitializeAudio()
+            print("🎬 MPV: New audio device available, switching to: \(newRoute)")
+            reinitializeMpvAudio()
 
         case .oldDeviceUnavailable:
-            print("🎬 AVAudioSession: Device unavailable, switching to: \(newRoute)")
-            reinitializeAudio()
+            print("🎬 MPV: Audio device unavailable, switching to: \(newRoute)")
+            reinitializeMpvAudio()
 
         case .routeConfigurationChange:
-            print("🎬 AVAudioSession: Route configuration changed to: \(newRoute)")
-            reinitializeAudio()
+            print("🎬 MPV: Audio route changed to: \(newRoute)")
+            reinitializeMpvAudio()
 
         default:
             break
         }
     }
 
-    private func reinitializeAudio() {
+    /// Reinitialize MPV's audio output when the system audio route changes.
+    /// This tells MPV to rediscover and use the new audio device.
+    private func reinitializeMpvAudio() {
         guard mpv != nil, !isShuttingDown else { return }
 
-        // Reconfigure audio session for new route
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setActive(false, options: [])
-            try session.setActive(true, options: [])
-        } catch {
-            print("🎬 AVAudioSession: Reactivation failed - \(error.localizedDescription)")
-        }
-
         // Trigger MPV audio reinitialization by resetting audio-device to default
-        // Setting to empty string tells MPV to use system default
         setString("audio-device", "auto")
         print("🎬 MPV: Audio device reset to auto for route change")
     }
@@ -359,9 +343,9 @@ final class MPVMetalViewController: UIViewController {
     // MARK: - MPV Setup
 
     private func setupMpv() {
-        // Configure AVAudioSession BEFORE mpv creates its AudioUnit
-        // Request max channels (up to 8 for 7.1) - requires patched MPVKit for tvOS
-        configureAudioSession()
+        // Set up audio route change observer for handling AirPlay/HomePod switching
+        // Note: Audio session is configured by NowPlayingService before player starts
+        setupAudioRouteObserver()
 
         mpv = mpv_create()
         guard mpv != nil else {
@@ -555,6 +539,8 @@ final class MPVMetalViewController: UIViewController {
     }
 
     func stop() {
+        // Flush audio buffers immediately (buffer would otherwise drain for ~1 second)
+        command("ao-reload")
         command("stop")
         updateState(.idle)
         // Trigger full shutdown to ensure clean state for next player instance

@@ -13,6 +13,8 @@ struct MediaItemRow: View {
     let items: [PlexMetadata]
     let serverURL: String
     let authToken: String
+    /// Called when an item is selected - allows parent to handle navigation/replacement
+    var onItemSelected: ((PlexMetadata) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -25,7 +27,9 @@ struct MediaItemRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 24) {
                     ForEach(items, id: \.ratingKey) { item in
-                        NavigationLink(value: item) {
+                        Button {
+                            onItemSelected?(item)
+                        } label: {
                             MediaPosterCard(
                                 item: item,
                                 serverURL: serverURL,
