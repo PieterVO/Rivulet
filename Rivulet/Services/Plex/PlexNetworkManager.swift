@@ -1432,9 +1432,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // For MKV+DV, we must force video transcoding (not just remux) to get Apple-compatible codec tags (dvh1/hvc1)
             // MKV files typically use dvhe/hev1 which AVPlayer cannot decode
             URLQueryItem(name: "directStream", value: forceVideoTranscode ? "0" : "1"),
-            // Direct stream audio when possible (AAC, AC3, EAC3 are supported by AVPlayer)
-            // Server will still transcode DTS/TrueHD to AAC automatically
-            URLQueryItem(name: "directStreamAudio", value: allowAudioDirectStream ? "1" : "0"),
+            // Always set directStreamAudio=1 for DV/HDR content (matches official Plex app behavior)
+            // Server will still transcode DTS/TrueHD to EAC3 automatically, but this ensures fMP4 segments
+            // Setting to 0 may force Plex to use MPEG-TS which breaks DV playback
+            URLQueryItem(name: "directStreamAudio", value: "1"),
             URLQueryItem(name: "fastSeek", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
