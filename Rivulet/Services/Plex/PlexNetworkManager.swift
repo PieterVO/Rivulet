@@ -1401,10 +1401,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
             // Limitations - tells server about codec/format restrictions
             "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=8&replace=true)",
-            // Block dvhe/hev1 codec tags - tvOS AVPlayer requires dvh1/hvc1 for Dolby Vision
-            // Removing onlyDirectPlay=true so this applies to HLS as well as direct play
-            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe)",
-            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1)",
+            // Block dvhe/hev1 for direct play only - forces server to remux to dvh1/hvc1 for HLS
+            // With onlyDirectPlay=true: Server remuxes dvhe→dvh1 (preserves DV)
+            // Without it: Server may transcode HEVC→H.264 (loses DV)
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe&onlyDirectPlay=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1&onlyDirectPlay=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=4096&replace=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=2160&replace=true)"
         ].joined(separator: "+")
@@ -1426,7 +1427,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "container", value: "mp4"),
             URLQueryItem(name: "segmentFormat", value: "mp4"),
             URLQueryItem(name: "segmentContainer", value: "mp4"),  // Force CMAF/fMP4 segments (required for DV on tvOS)
-            URLQueryItem(name: "directPlay", value: "0"),
+            // directPlay=1 tells server we CAN direct play mp4/mov - without this, server may transcode instead of remux
+            URLQueryItem(name: "directPlay", value: "1"),
             // For MKV+DV, we must force video transcoding (not just remux) to get Apple-compatible codec tags (dvh1/hvc1)
             // MKV files typically use dvhe/hev1 which AVPlayer cannot decode
             URLQueryItem(name: "directStream", value: forceVideoTranscode ? "0" : "1"),
