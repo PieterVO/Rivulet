@@ -28,64 +28,94 @@ final class NowPlayingService: ObservableObject {
     private var artworkTask: Task<Void, Never>?
     private var cachedArtwork: MPMediaItemArtwork?
     private var cachedArtworkURL: String?
+    private var interruptionObserver: NSObjectProtocol?
+    /// Track if we've set Now Playing info with valid duration (> 0)
+    /// This prevents the system from ignoring our Now Playing registration
+    private var hasValidNowPlayingInfo: Bool = false
 
     // MARK: - Initialization
 
     private init() {
-        setupAudioSession()
+        // Don't configure audio session here - do it when attaching to a player
+        // Configuring at app launch causes OSStatus error -50
+        setupInterruptionHandling()
         setupRemoteCommandCenter()
     }
 
-    // MARK: - Audio Session Setup
+    // MARK: - Audio Session Configuration
 
-    /// Configure audio session for media playback.
-    /// This is the single source of truth for audio session configuration.
-    /// Both MPV and AVPlayer rely on this configuration.
-    private func setupAudioSession() {
+    /// Ensure audio session is active before setting Now Playing info.
+    /// This is required for tvOS to register us as the Now Playing app.
+    private func ensureAudioSessionActive() {
+        let session = AVAudioSession.sharedInstance()
+
         do {
-            let audioSession = AVAudioSession.sharedInstance()
-
-            // Set category to playback - this interrupts other audio and shows in Now Playing
-            // .allowAirPlay enables AirPlay audio routing
-            try audioSession.setCategory(
-                .playback,
-                mode: .moviePlayback,
-                options: [.allowAirPlay]
-            )
-
-            print("🎵 NowPlaying: Audio session configured")
+            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay])
         } catch {
-            print("🎵 NowPlaying: Failed to configure audio session - \(error.localizedDescription)")
+            print("🎵 NowPlaying: Could not set audio category: \(error.localizedDescription)")
+        }
+
+        do {
+            try session.setActive(true)
+            print("🎵 NowPlaying: Audio session active for Now Playing registration")
+        } catch {
+            print("🎵 NowPlaying: Failed to activate audio session: \(error.localizedDescription)")
         }
     }
 
-    /// Activate the audio session when starting playback
-    private func activateAudioSession() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-            print("🎵 NowPlaying: Audio session activated")
-        } catch {
-            print("🎵 NowPlaying: Failed to activate audio session - \(error.localizedDescription)")
+    // MARK: - Audio Session Interruption Handling
+
+    /// Set up observer for audio session interruptions (e.g., phone calls, other apps)
+    private func setupInterruptionHandling() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor [weak self] in
+                self?.handleInterruption(notification)
+            }
         }
+        print("🎵 NowPlaying: Interruption handling configured")
     }
 
-    /// Deactivate the audio session when stopping playback
-    private func deactivateAudioSession() {
-        do {
-            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            print("🎵 NowPlaying: Audio session deactivated")
-        } catch {
-            print("🎵 NowPlaying: Failed to deactivate audio session - \(error.localizedDescription)")
+    /// Handle audio session interruptions
+    private func handleInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            // Interruption began - system is pausing our audio
+            // Don't explicitly pause the player - let the system handle it
+            // This prevents the "video pauses when opening Control Center" issue
+            print("🎵 NowPlaying: Interruption began")
+
+        case .ended:
+            // Interruption ended - check if we should resume
+            print("🎵 NowPlaying: Interruption ended")
+            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                if options.contains(.shouldResume) {
+                    print("🎵 NowPlaying: System suggests resuming playback")
+                    viewModel?.resume()
+                }
+            }
+
+        @unknown default:
+            break
         }
     }
 
     // MARK: - Public API
 
     /// Initialize the Now Playing service early at app launch.
-    /// This configures the audio session so the app is ready for playback.
+    /// This ensures the singleton is created and audio session category is configured.
     func initialize() {
-        // Audio session is already configured in init(), but this method
-        // forces the singleton to be created early if called at app launch.
+        // Audio session is configured when attach() is called
         print("🎵 NowPlaying: Service initialized")
     }
 
@@ -96,25 +126,63 @@ final class NowPlayingService: ObservableObject {
 
         self.viewModel = viewModel
 
-        // Activate audio session to take over system audio
-        activateAudioSession()
+        // Note: We use MPNowPlayingInfoCenter.default() and MPRemoteCommandCenter.shared()
+        // MPNowPlayingSession requires AVPlayer instances, which we don't have with MPV
+        // The shared instances should work for Now Playing integration
 
-        // Set initial Now Playing info
-        updateNowPlayingInfo(
+        // CRITICAL: Ensure audio session is active BEFORE setting Now Playing info
+        // This is required for tvOS to register us as the Now Playing app
+        ensureAudioSessionActive()
+
+        // CRITICAL: Set preliminary Now Playing info BEFORE playback starts
+        // tvOS only registers apps as "Now Playing" if info is set before play() is called
+        setPreliminaryNowPlayingInfo(
             metadata: viewModel.metadata,
-            currentTime: viewModel.currentTime,
-            duration: viewModel.duration,
-            isPlaying: viewModel.playbackState == .playing,
             serverURL: viewModel.serverURL,
             authToken: viewModel.authToken
         )
+
+        // Track whether we've updated with actual duration from player
+        hasValidNowPlayingInfo = false
 
         // Subscribe to playback state changes
         viewModel.$playbackState
             .receive(on: RunLoop.main)
             .sink { [weak self, weak viewModel] state in
                 guard let self, let viewModel else { return }
-                self.updatePlaybackRate(isPlaying: state == .playing)
+
+                print("🎵 NowPlaying: Playback state changed to \(state)")
+
+                switch state {
+                case .playing:
+                    // ALWAYS update rate and state immediately when playing starts
+                    // This is critical for Control Center to show the correct state
+                    self.updatePlaybackRateAndState(isPlaying: true)
+
+                    // If we have valid duration, update full info with actual duration
+                    if viewModel.duration > 0 {
+                        self.updateNowPlayingInfo(
+                            metadata: viewModel.metadata,
+                            currentTime: viewModel.currentTime,
+                            duration: viewModel.duration,
+                            isPlaying: true,
+                            serverURL: viewModel.serverURL,
+                            authToken: viewModel.authToken
+                        )
+                        self.hasValidNowPlayingInfo = true
+                    }
+
+                case .paused:
+                    // Update rate and state for paused
+                    self.updatePlaybackRateAndState(isPlaying: false)
+
+                case .loading, .buffering:
+                    // Don't update rate for loading/buffering - keep previous state
+                    break
+
+                default:
+                    break
+                }
             }
             .store(in: &cancellables)
 
@@ -133,7 +201,23 @@ final class NowPlayingService: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self, weak viewModel] duration in
                 guard let self, let viewModel else { return }
-                self.updateDuration(duration, currentTime: viewModel.currentTime)
+
+                // If we haven't set valid Now Playing info yet and now have valid duration while playing,
+                // set the full Now Playing info now
+                if !self.hasValidNowPlayingInfo && duration > 0 && viewModel.playbackState == .playing {
+                    print("🎵 NowPlaying: Duration available (\(Int(duration))s) - setting full info now")
+                    self.updateNowPlayingInfo(
+                        metadata: viewModel.metadata,
+                        currentTime: viewModel.currentTime,
+                        duration: duration,
+                        isPlaying: true,
+                        serverURL: viewModel.serverURL,
+                        authToken: viewModel.authToken
+                    )
+                    self.hasValidNowPlayingInfo = true
+                } else {
+                    self.updateDuration(duration, currentTime: viewModel.currentTime)
+                }
             }
             .store(in: &cancellables)
 
@@ -141,13 +225,15 @@ final class NowPlayingService: ObservableObject {
     }
 
     /// Detach from the current view model and clear Now Playing
+    /// Note: We intentionally do NOT deactivate the audio session here.
+    /// Per WWDC17 guidance, the session should remain active while the app could receive remote commands.
     func detach() {
         cancellables.removeAll()
         viewModel = nil
         artworkTask?.cancel()
         artworkTask = nil
+        hasValidNowPlayingInfo = false
         clearNowPlayingInfo()
-        deactivateAudioSession()
         print("🎵 NowPlaying: Detached from player")
     }
 
@@ -225,22 +311,50 @@ final class NowPlayingService: ObservableObject {
             return .success
         }
 
-        // Seek forward (IR remote FF button)
-        // This is different from skipForward - it's triggered by holding FF on IR remotes
+        // Seek forward (IR remote FF button - dedicated fast forward buttons)
+        // This is different from skipForward - it's triggered by holding dedicated FF button on some remotes
+        // Receives beginSeeking when button is pressed, endSeeking when released
         commandCenter.seekForwardCommand.isEnabled = true
         commandCenter.seekForwardCommand.addTarget { [weak self] event in
+            guard let seekEvent = event as? MPSeekCommandEvent else {
+                return .commandFailed
+            }
             Task { @MainActor in
-                self?.viewModel?.scrubInDirection(forward: true)
+                guard let vm = self?.viewModel else { return }
+                switch seekEvent.type {
+                case .beginSeeking:
+                    print("🎵 NowPlaying: seekForward beginSeeking")
+                    vm.scrubInDirection(forward: true)
+                case .endSeeking:
+                    print("🎵 NowPlaying: seekForward endSeeking")
+                    // Don't auto-commit - wait for user to press play/select
+                    // Just stop the speed from increasing further
+                @unknown default:
+                    break
+                }
             }
             return .success
         }
 
-        // Seek backward (IR remote RW button)
-        // This is different from skipBackward - it's triggered by holding RW on IR remotes
+        // Seek backward (IR remote RW button - dedicated rewind buttons)
+        // This is different from skipBackward - it's triggered by holding dedicated RW button on some remotes
         commandCenter.seekBackwardCommand.isEnabled = true
         commandCenter.seekBackwardCommand.addTarget { [weak self] event in
+            guard let seekEvent = event as? MPSeekCommandEvent else {
+                return .commandFailed
+            }
             Task { @MainActor in
-                self?.viewModel?.scrubInDirection(forward: false)
+                guard let vm = self?.viewModel else { return }
+                switch seekEvent.type {
+                case .beginSeeking:
+                    print("🎵 NowPlaying: seekBackward beginSeeking")
+                    vm.scrubInDirection(forward: false)
+                case .endSeeking:
+                    print("🎵 NowPlaying: seekBackward endSeeking")
+                    // Don't auto-commit - wait for user to press play/select
+                @unknown default:
+                    break
+                }
             }
             return .success
         }
@@ -251,7 +365,7 @@ final class NowPlayingService: ObservableObject {
         commandCenter.changeRepeatModeCommand.isEnabled = false
         commandCenter.changeShuffleModeCommand.isEnabled = false
 
-        print("🎵 NowPlaying: Remote command center configured")
+        print("🎵 NowPlaying: Remote command center configured (shared)")
     }
 
     // MARK: - Now Playing Info Updates
@@ -293,22 +407,26 @@ final class NowPlayingService: ObservableObject {
         // Media type
         nowPlayingInfo[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
 
-        let infoCenter = MPNowPlayingInfoCenter.default()
-        infoCenter.nowPlayingInfo = nowPlayingInfo
-        infoCenter.playbackState = isPlaying ? .playing : .paused
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        // Explicitly set playback state for tvOS Control Center
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
 
         // Load artwork asynchronously
         loadArtwork(for: metadata, serverURL: serverURL, authToken: authToken)
 
-        print("🎵 NowPlaying: Updated info - \(metadata.title ?? "Unknown"), \(Int(currentTime))/\(Int(duration))s")
+        print("🎵 NowPlaying: Updated info - \(metadata.title ?? "Unknown"), \(Int(currentTime))/\(Int(duration))s, playing: \(isPlaying)")
     }
 
+    /// Legacy method - prefer updatePlaybackRateAndState() for state changes
     private func updatePlaybackRate(isPlaying: Bool) {
-        let infoCenter = MPNowPlayingInfoCenter.default()
-        var nowPlayingInfo = infoCenter.nowPlayingInfo ?? [:]
+        // Only update rate if we already have Now Playing info set
+        guard var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo, !nowPlayingInfo.isEmpty else {
+            print("🎵 NowPlaying: Skipping rate update - no info set yet")
+            return
+        }
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        infoCenter.nowPlayingInfo = nowPlayingInfo
-        infoCenter.playbackState = isPlaying ? .playing : .paused
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
     }
 
     private func updateElapsedTime(_ time: TimeInterval, duration: TimeInterval) {
@@ -326,10 +444,73 @@ final class NowPlayingService: ObservableObject {
     }
 
     private func clearNowPlayingInfo() {
-        let infoCenter = MPNowPlayingInfoCenter.default()
-        infoCenter.nowPlayingInfo = nil
-        infoCenter.playbackState = .stopped
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
         print("🎵 NowPlaying: Cleared")
+    }
+
+    /// Set Now Playing info BEFORE playback starts - critical for tvOS.
+    /// This registers us as the "Now Playing app" before play() is called.
+    /// Uses estimated duration from Plex metadata; will be updated when actual duration is available.
+    private func setPreliminaryNowPlayingInfo(
+        metadata: PlexMetadata,
+        serverURL: String,
+        authToken: String
+    ) {
+        var nowPlayingInfo = [String: Any]()
+
+        // Title
+        nowPlayingInfo[MPMediaItemPropertyTitle] = metadata.title ?? "Unknown"
+
+        // For episodes, set artist as show name and album as season
+        if metadata.type == "episode" {
+            if let showName = metadata.grandparentTitle {
+                nowPlayingInfo[MPMediaItemPropertyArtist] = showName
+            }
+            if let seasonNum = metadata.parentIndex {
+                nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = "Season \(seasonNum)"
+            }
+        } else if metadata.type == "movie" {
+            // For movies, use year as artist if available
+            if let year = metadata.year {
+                nowPlayingInfo[MPMediaItemPropertyArtist] = String(year)
+            }
+        }
+
+        // Use Plex metadata duration (milliseconds -> seconds) as estimate
+        // Will be updated with actual duration when player reports it
+        let estimatedDuration = Double(metadata.duration ?? 0) / 1000.0
+        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = estimatedDuration
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = 0
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+        nowPlayingInfo[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+
+        // Media type
+        nowPlayingInfo[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
+
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        // Explicitly set playback state - we're about to play
+        MPNowPlayingInfoCenter.default().playbackState = .paused
+
+        print("🎵 NowPlaying: Preliminary info set for '\(metadata.title ?? "Unknown")' (estimated duration: \(Int(estimatedDuration))s)")
+
+        // Load artwork asynchronously
+        loadArtwork(for: metadata, serverURL: serverURL, authToken: authToken)
+    }
+
+    /// Update playback rate in Now Playing info AND set explicit playback state.
+    /// This should be called whenever play/pause state changes.
+    private func updatePlaybackRateAndState(isPlaying: Bool) {
+        guard var nowPlayingInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo else {
+            print("🎵 NowPlaying: Cannot update rate/state - no info set")
+            return
+        }
+
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+
+        print("🎵 NowPlaying: Rate/state updated - isPlaying: \(isPlaying)")
     }
 
     // MARK: - Artwork Loading

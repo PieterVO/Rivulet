@@ -13,10 +13,12 @@ struct TVSidebarView: View {
     @StateObject private var authManager = PlexAuthManager.shared
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var liveTVDataStore = LiveTVDataStore.shared
+    @StateObject private var profileManager = PlexUserProfileManager.shared
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var focusScopeManager = FocusScopeManager()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
+    @AppStorage("liveTVAboveLibraries") private var liveTVAboveLibraries = false
     @AppStorage("sidebarFontSize") private var sidebarFontSizeRaw = SidebarFontSize.normal.rawValue
     @State private var selectedDestination: TVDestination = .home
     @State private var selectedLibraryKey: String?
@@ -25,6 +27,9 @@ struct TVSidebarView: View {
     @State private var pendingDestination: TVDestination?
     @State private var pendingLibraryKey: String?
     @State private var pendingLiveTVSourceId: String?
+    @State private var showProfilePicker = false
+    @State private var hasCheckedProfilePicker = false
+    @State private var isAwaitingProfileSelection = false
 
     /// Computed property for sidebar visibility based on active scope
     private var isSidebarVisible: Bool {
@@ -112,17 +117,38 @@ struct TVSidebarView: View {
             }
         }
         .task(id: authManager.hasCredentials) {
-            if authManager.selectedServerToken != nil {
-                // Verify connection first to avoid 500 errors from stale/invalid server URLs
-                await authManager.verifyAndFixConnection()
-                // Then load data (will use cache first, then background refresh)
-                async let hubsLoad: () = dataStore.loadHubsIfNeeded()
-                async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
-                _ = await (hubsLoad, librariesLoad)
+            guard authManager.selectedServerToken != nil else { return }
 
-                // Start background prefetch of library content for faster navigation
-                dataStore.startBackgroundPrefetch()
+            // If profile picker on launch is enabled, block content immediately
+            if profileManager.showProfilePickerOnLaunch && !hasCheckedProfilePicker {
+                isAwaitingProfileSelection = true
             }
+
+            // Fetch home users first if profile picker is enabled
+            await profileManager.fetchHomeUsers()
+
+            // Check if we need to show profile picker (before loading content)
+            if !hasCheckedProfilePicker {
+                hasCheckedProfilePicker = true
+
+                if profileManager.showProfilePickerOnLaunch && profileManager.hasMultipleProfiles {
+                    print("👤 TVSidebarView: Showing profile picker on launch")
+                    showProfilePicker = true
+                    // Content will load after profile is selected
+                    return
+                } else {
+                    // No picker needed, unblock content
+                    isAwaitingProfileSelection = false
+                }
+            }
+
+            // Load data optimistically (will use cache first, then background refresh)
+            async let hubsLoad: () = dataStore.loadHubsIfNeeded()
+            async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
+            _ = await (hubsLoad, librariesLoad)
+
+            // Start background prefetch of library content for faster navigation
+            dataStore.startBackgroundPrefetch()
         }
         .task {
             // Start background preloading of Live TV data (low priority)
@@ -133,6 +159,26 @@ struct TVSidebarView: View {
             guard let metadata else { return }
             presentPlayerForDeepLink(metadata)
             deepLinkHandler.pendingPlayback = nil
+        }
+        // Profile picker overlay
+        .fullScreenCover(isPresented: $showProfilePicker) {
+            ProfilePickerOverlay(isPresented: $showProfilePicker)
+        }
+        .onChange(of: showProfilePicker) { _, isShowing in
+            if !isShowing {
+                // Profile selected, unblock content
+                isAwaitingProfileSelection = false
+
+                // Load content if not already loaded (profile switch handles its own reload)
+                Task {
+                    if dataStore.hubs.isEmpty {
+                        async let hubsLoad: () = dataStore.loadHubsIfNeeded()
+                        async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
+                        _ = await (hubsLoad, librariesLoad)
+                        dataStore.startBackgroundPrefetch()
+                    }
+                }
+            }
         }
     }
 
@@ -197,18 +243,6 @@ struct TVSidebarView: View {
 
     private var sidebarContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // App branding
-            HStack(spacing: 14 * fontScale) {
-                Image(systemName: "play.rectangle.fill")
-                    .font(.system(size: 30 * fontScale, weight: .semibold))
-                Text("Rivulet")
-                    .font(.system(size: 34 * fontScale, weight: .bold))
-            }
-            .foregroundStyle(.white)
-            .padding(.top, 50)
-            .padding(.horizontal, 32)
-            .padding(.bottom, 36)
-
             // Navigation with individually focusable items (enables native hold-to-scroll)
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
@@ -236,64 +270,13 @@ struct TVSidebarView: View {
                                 focusedItem: $sidebarFocusedItem
                             )
 
-                            // Libraries section
-                            if authManager.hasCredentials && !dataStore.visibleMediaLibraries.isEmpty {
-                                sectionHeader(authManager.savedServerName?.uppercased() ?? "LIBRARY")
-
-                                ForEach(dataStore.visibleMediaLibraries, id: \.key) { library in
-                                    FocusableSidebarRow(
-                                        id: library.key,
-                                        icon: iconForLibrary(library),
-                                        title: library.title,
-                                        isSelected: selectedLibraryKey == library.key,
-                                        onSelect: { queueNavigation(destination: .home, libraryKey: library.key) },
-                                        fontScale: fontScale,
-                                        focusedItem: $sidebarFocusedItem
-                                    )
-                                }
-                            }
-
-                            if dataStore.isLoadingLibraries {
-                                HStack(spacing: 12) {
-                                    ProgressView()
-                                        .tint(.white.opacity(0.5))
-                                    Text("Loading...")
-                                        .font(.system(size: 17 * fontScale))
-                                        .foregroundStyle(.white.opacity(0.5))
-                                }
-                                .padding(.horizontal, 32)
-                                .padding(.vertical, 16)
-                            }
-
-                            // Live TV section
-                            if liveTVDataStore.hasConfiguredSources {
-                                sectionHeader("LIVE TV")
-
-                                if combineLiveTVSources {
-                                    // Combined: Single "Channels" entry for all sources
-                                    FocusableSidebarRow(
-                                        id: "liveTV",
-                                        icon: "tv.and.mediabox",
-                                        title: "Channels",
-                                        isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == nil,
-                                        onSelect: { queueLiveTVNavigation(sourceId: nil) },
-                                        fontScale: fontScale,
-                                        focusedItem: $sidebarFocusedItem
-                                    )
-                                } else {
-                                    // Separate: Individual entry for each source
-                                    ForEach(liveTVDataStore.sources) { source in
-                                        FocusableSidebarRow(
-                                            id: "liveTV:\(source.id)",
-                                            icon: iconForSourceType(source.sourceType),
-                                            title: source.displayName.replacingOccurrences(of: " Live TV", with: ""),
-                                            isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == source.id,
-                                            onSelect: { queueLiveTVNavigation(sourceId: source.id) },
-                                            fontScale: fontScale,
-                                            focusedItem: $sidebarFocusedItem
-                                        )
-                                    }
-                                }
+                            // Live TV section (shown first if liveTVAboveLibraries is enabled)
+                            if liveTVAboveLibraries {
+                                liveTVSection
+                                librariesSection
+                            } else {
+                                librariesSection
+                                liveTVSection
                             }
 
                             Spacer(minLength: 60)
@@ -336,7 +319,7 @@ struct TVSidebarView: View {
                 }
             }
         }
-        .padding(.top, 20)
+        .padding(.top, 50)
         .padding(.bottom, 24)
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -373,7 +356,11 @@ struct TVSidebarView: View {
     @ViewBuilder
     private var mainContent: some View {
         Group {
-            if let libraryKey = selectedLibraryKey,
+            // Block content while awaiting profile selection (privacy)
+            if isAwaitingProfileSelection {
+                Color.black
+                    .ignoresSafeArea()
+            } else if let libraryKey = selectedLibraryKey,
                let library = dataStore.libraries.first(where: { $0.key == libraryKey }) {
                 PlexLibraryView(libraryKey: library.key, libraryTitle: library.title)
                 // Removed .id() to preserve AsyncImage caches across library switches
@@ -416,6 +403,74 @@ struct TVSidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Sidebar Sections
+
+    @ViewBuilder
+    private var librariesSection: some View {
+        // Libraries section
+        if authManager.hasCredentials && !dataStore.visibleMediaLibraries.isEmpty {
+            sectionHeader(authManager.savedServerName?.uppercased() ?? "LIBRARY")
+
+            ForEach(dataStore.visibleMediaLibraries, id: \.key) { library in
+                FocusableSidebarRow(
+                    id: library.key,
+                    icon: iconForLibrary(library),
+                    title: library.title,
+                    isSelected: selectedLibraryKey == library.key,
+                    onSelect: { queueNavigation(destination: .home, libraryKey: library.key) },
+                    fontScale: fontScale,
+                    focusedItem: $sidebarFocusedItem
+                )
+            }
+        }
+
+        if dataStore.isLoadingLibraries {
+            HStack(spacing: 12) {
+                ProgressView()
+                    .tint(.white.opacity(0.5))
+                Text("Loading...")
+                    .font(.system(size: 17 * fontScale))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 16)
+        }
+    }
+
+    @ViewBuilder
+    private var liveTVSection: some View {
+        // Live TV section
+        if liveTVDataStore.hasConfiguredSources {
+            sectionHeader("LIVE TV")
+
+            if combineLiveTVSources {
+                // Combined: Single "Channels" entry for all sources
+                FocusableSidebarRow(
+                    id: "liveTV",
+                    icon: "tv.and.mediabox",
+                    title: "Channels",
+                    isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == nil,
+                    onSelect: { queueLiveTVNavigation(sourceId: nil) },
+                    fontScale: fontScale,
+                    focusedItem: $sidebarFocusedItem
+                )
+            } else {
+                // Separate: Individual entry for each source
+                ForEach(liveTVDataStore.sources) { source in
+                    FocusableSidebarRow(
+                        id: "liveTV:\(source.id)",
+                        icon: iconForSourceType(source.sourceType),
+                        title: source.displayName.replacingOccurrences(of: " Live TV", with: ""),
+                        isSelected: selectedDestination == .liveTV && selectedLiveTVSourceId == source.id,
+                        onSelect: { queueLiveTVNavigation(sourceId: source.id) },
+                        fontScale: fontScale,
+                        focusedItem: $sidebarFocusedItem
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Navigation Actions

@@ -1,0 +1,3 @@
+#EXTM3U
+#EXTINF:-1 tvg-id=ch1 tvg-chno=1 group-title=News,Channel One
+http://example.com/stream1.m3u8

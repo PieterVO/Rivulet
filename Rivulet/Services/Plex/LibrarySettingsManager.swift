@@ -9,6 +9,7 @@ import Foundation
 import Combine
 
 /// Manages user preferences for library visibility and ordering in the sidebar
+/// Settings are stored per-user for Plex Home accounts
 @MainActor
 class LibrarySettingsManager: ObservableObject {
     static let shared = LibrarySettingsManager()
@@ -40,44 +41,87 @@ class LibrarySettingsManager: ObservableObject {
     /// Track whether Home visibility has been explicitly configured
     @Published private(set) var homeVisibilityConfigured: Bool {
         didSet {
-            userDefaults.set(homeVisibilityConfigured, forKey: homeVisibilityConfiguredKey)
+            userDefaults.set(homeVisibilityConfigured, forKey: currentKey(homeVisibilityConfiguredBaseKey))
         }
     }
 
-    // MARK: - UserDefaults Keys
+    // MARK: - UserDefaults Keys (base keys - user ID is appended)
 
     private let userDefaults = UserDefaults.standard
-    private let hiddenLibrariesKey = "hiddenLibraryKeys"
-    private let libraryOrderKey = "libraryOrder"
-    private let homeLibrariesKey = "librariesShownOnHome"
-    private let homeVisibilityConfiguredKey = "homeVisibilityConfigured"
+    private let hiddenLibrariesBaseKey = "hiddenLibraryKeys"
+    private let libraryOrderBaseKey = "libraryOrder"
+    private let homeLibrariesBaseKey = "librariesShownOnHome"
+    private let homeVisibilityConfiguredBaseKey = "homeVisibilityConfigured"
+
+    /// Current user ID for per-user settings (nil = default/no profile)
+    private var currentUserId: Int?
 
     // MARK: - Initialization
 
     private init() {
+        // Initialize with empty values - will be loaded when user is set
+        self.hiddenLibraryKeys = []
+        self.libraryOrder = []
+        self.librariesShownOnHome = []
+        self.homeVisibilityConfigured = false
+
+        // Load settings for current user (if any)
+        loadSettingsForCurrentUser()
+    }
+
+    // MARK: - Per-User Settings
+
+    /// Generate a user-specific key
+    private func currentKey(_ baseKey: String) -> String {
+        if let userId = currentUserId {
+            return "\(baseKey)_user_\(userId)"
+        }
+        return baseKey
+    }
+
+    /// Load settings for the current user from UserDefaults
+    private func loadSettingsForCurrentUser() {
         // Load hidden libraries
-        if let hidden = userDefaults.array(forKey: hiddenLibrariesKey) as? [String] {
+        if let hidden = userDefaults.array(forKey: currentKey(hiddenLibrariesBaseKey)) as? [String] {
             self.hiddenLibraryKeys = Set(hidden)
         } else {
             self.hiddenLibraryKeys = []
         }
 
         // Load library order
-        if let order = userDefaults.array(forKey: libraryOrderKey) as? [String] {
+        if let order = userDefaults.array(forKey: currentKey(libraryOrderBaseKey)) as? [String] {
             self.libraryOrder = order
         } else {
             self.libraryOrder = []
         }
 
         // Load Home screen libraries
-        if let homeLibs = userDefaults.array(forKey: homeLibrariesKey) as? [String] {
+        if let homeLibs = userDefaults.array(forKey: currentKey(homeLibrariesBaseKey)) as? [String] {
             self.librariesShownOnHome = Set(homeLibs)
         } else {
             self.librariesShownOnHome = []
         }
 
         // Load whether Home visibility has been configured
-        self.homeVisibilityConfigured = userDefaults.bool(forKey: homeVisibilityConfiguredKey)
+        self.homeVisibilityConfigured = userDefaults.bool(forKey: currentKey(homeVisibilityConfiguredBaseKey))
+
+        print("📚 LibrarySettings: Loaded settings for user \(currentUserId?.description ?? "default")")
+    }
+
+    /// Switch to a different user's settings
+    /// - Parameter userId: The user ID to switch to, or nil for default
+    func switchToUser(_ userId: Int?) {
+        guard currentUserId != userId else { return }
+
+        print("📚 LibrarySettings: Switching from user \(currentUserId?.description ?? "default") to \(userId?.description ?? "default")")
+        currentUserId = userId
+        loadSettingsForCurrentUser()
+    }
+
+    /// Called when profile is switched - reloads settings for the new user
+    func onProfileSwitched() {
+        let newUserId = PlexUserProfileManager.shared.selectedUserId
+        switchToUser(newUserId)
     }
 
     // MARK: - Public Methods
@@ -271,14 +315,14 @@ class LibrarySettingsManager: ObservableObject {
     // MARK: - Private Methods
 
     private func saveHiddenLibraries() {
-        userDefaults.set(Array(hiddenLibraryKeys), forKey: hiddenLibrariesKey)
+        userDefaults.set(Array(hiddenLibraryKeys), forKey: currentKey(hiddenLibrariesBaseKey))
     }
 
     private func saveLibraryOrder() {
-        userDefaults.set(libraryOrder, forKey: libraryOrderKey)
+        userDefaults.set(libraryOrder, forKey: currentKey(libraryOrderBaseKey))
     }
 
     private func saveHomeLibraries() {
-        userDefaults.set(Array(librariesShownOnHome), forKey: homeLibrariesKey)
+        userDefaults.set(Array(librariesShownOnHome), forKey: currentKey(homeLibrariesBaseKey))
     }
 }

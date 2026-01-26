@@ -492,6 +492,9 @@ class PlexAuthManager: ObservableObject {
         userDefaults.removeObject(forKey: serverNameKey)
         userDefaults.removeObject(forKey: serverTokenKey)
 
+        // Clear user profile selection
+        PlexUserProfileManager.shared.reset()
+
         state = .idle
     }
 
@@ -500,6 +503,15 @@ class PlexAuthManager: ObservableObject {
         pollingTask?.cancel()
         pollingTask = nil
         state = .idle
+    }
+
+    /// Update the server token for user profile switching
+    /// This is called when switching Plex Home users to use their specific token
+    func updateServerToken(_ token: String) {
+        selectedServerToken = token
+        // Note: We don't persist this to UserDefaults since it's session-specific
+        // On next app launch, we'll fetch users again and switch if needed
+        print("🔐 PlexAuthManager: Updated server token for user profile switch")
     }
 
     /// Check if currently authenticated (has valid credentials)
@@ -555,6 +567,11 @@ class PlexAuthManager: ObservableObject {
             print("🔐 PlexAuthManager: ✅ Current connection is working")
             isConnected = true
             connectionError = nil
+
+            // Fetch home users for profile switching (if not already loaded)
+            if !PlexUserProfileManager.shared.hasLoadedProfiles {
+                await PlexUserProfileManager.shared.fetchHomeUsers()
+            }
         } else {
             print("🔐 PlexAuthManager: ❌ Current connection failed")
             isConnected = false
@@ -643,6 +660,9 @@ class PlexAuthManager: ObservableObject {
 
         // Fetch user info
         await fetchUserInfo()
+
+        // Fetch home users (for profile switching)
+        await PlexUserProfileManager.shared.fetchHomeUsers()
 
         // Fetch available servers
         do {

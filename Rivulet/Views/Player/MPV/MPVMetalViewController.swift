@@ -104,6 +104,7 @@ final class MPVMetalViewController: UIViewController {
         if !hasSetupMpv {
             hasSetupMpv = true
             lastKnownSize = newSize
+            originalRenderSize = newSize  // Capture for later transform scaling if entering multiview
             previousDrawableSize = metalLayer.drawableSize
             setupMpv()
 
@@ -280,10 +281,38 @@ final class MPVMetalViewController: UIViewController {
         }
     }
 
+    // MARK: - Audio Session
+
+    /// Configure and activate the audio session before MPV initializes.
+    /// Sets .playback category required for Now Playing integration.
+    private func ensureAudioSessionActive() {
+        let session = AVAudioSession.sharedInstance()
+
+        // Try to set category - may fail if session is already active, but that's OK
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay])
+            print("🎬 MPV: Audio session category set to .playback")
+        } catch {
+            // Category might already be set or session already active - continue anyway
+            print("🎬 MPV: Could not set audio category (may already be configured): \(error.localizedDescription)")
+        }
+
+        // Always try to activate
+        do {
+            try session.setActive(true)
+            let routeType = session.currentRoute.outputs.first?.portType.rawValue ?? "unknown"
+            let category = session.category.rawValue
+            print("🎬 MPV: Audio session active (category: \(category), route: \(routeType), channels: \(session.outputNumberOfChannels))")
+        } catch {
+            print("🎬 MPV: Failed to activate audio session - \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Audio Route Change Handling
 
-    /// Set up observer for audio route changes (e.g., switching to AirPlay/HomePod).
-    /// Note: Audio session configuration is handled by NowPlayingService.
+    /// Set up observer for audio route changes (e.g., switching to AirPlay/HomePod)
+    /// Note: Audio session configuration is centralized in NowPlayingService.
+    /// This observer only handles route changes to reinitialize MPV's audio device.
     private func setupAudioRouteObserver() {
         guard audioRouteObserver == nil else { return }
 
@@ -294,10 +323,6 @@ final class MPVMetalViewController: UIViewController {
         ) { [weak self] notification in
             self?.handleAudioRouteChange(notification)
         }
-
-        let session = AVAudioSession.sharedInstance()
-        let routeType = session.currentRoute.outputs.first?.portType.rawValue ?? "unknown"
-        print("🎬 MPV: Audio route observer registered (current route: \(routeType))")
     }
 
     private func handleAudioRouteChange(_ notification: Notification) {
@@ -343,8 +368,10 @@ final class MPVMetalViewController: UIViewController {
     // MARK: - MPV Setup
 
     private func setupMpv() {
-        // Set up audio route change observer for handling AirPlay/HomePod switching
-        // Note: Audio session is configured by NowPlayingService before player starts
+        // Configure and activate audio session right before MPV initializes its audiounit.
+        ensureAudioSessionActive()
+
+        // Set up route change observer to handle audio device switching.
         setupAudioRouteObserver()
 
         mpv = mpv_create()

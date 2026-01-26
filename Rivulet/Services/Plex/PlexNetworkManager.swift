@@ -324,14 +324,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     // MARK: - Library Browsing
 
     /// Get all library sections (Movies, TV Shows, etc.)
-    func getLibraries(serverURL: String, authToken: String) async throws -> [PlexLibrary] {
+    func getLibraries(serverURL: String, authToken: String, userId: Int? = nil) async throws -> [PlexLibrary] {
         guard let url = URL(string: "\(serverURL)/library/sections") else {
             throw PlexAPIError.invalidURL
         }
 
         let container: PlexLibraryContainer = try await request(
             url,
-            headers: plexHeaders(authToken: authToken)
+            headers: plexHeaders(authToken: authToken, userId: userId)
         )
 
         return container.MediaContainer.Directory ?? []
@@ -712,7 +712,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
     /// Get home screen hubs (global recommendations)
     /// - Parameter count: Number of items per hub (default 24, Plex defaults to ~6)
-    func getHubs(serverURL: String, authToken: String, count: Int = 24) async throws -> [PlexHub] {
+    func getHubs(serverURL: String, authToken: String, userId: Int? = nil, count: Int = 24) async throws -> [PlexHub] {
         guard var components = URLComponents(string: "\(serverURL)/hubs") else {
             throw PlexAPIError.invalidURL
         }
@@ -727,7 +727,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         let container: PlexMediaContainerWrapper = try await request(
             url,
-            headers: plexHeaders(authToken: authToken)
+            headers: plexHeaders(authToken: authToken, userId: userId)
         )
 
         return container.MediaContainer.Hub ?? []
@@ -736,7 +736,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// Get library-specific hubs (recommendations for a specific library section)
     /// Returns Continue Watching, Recently Added, Recently Released, etc. for that library
     /// - Parameter count: Number of items per hub (default 24, Plex defaults to ~6)
-    func getLibraryHubs(serverURL: String, authToken: String, sectionId: String, count: Int = 24) async throws -> [PlexHub] {
+    func getLibraryHubs(serverURL: String, authToken: String, sectionId: String, userId: Int? = nil, count: Int = 24) async throws -> [PlexHub] {
         guard var components = URLComponents(string: "\(serverURL)/hubs/sections/\(sectionId)") else {
             throw PlexAPIError.invalidURL
         }
@@ -751,7 +751,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         let container: PlexMediaContainerWrapper = try await request(
             url,
-            headers: plexHeaders(authToken: authToken)
+            headers: plexHeaders(authToken: authToken, userId: userId)
         )
 
         return container.MediaContainer.Hub ?? []
@@ -1359,13 +1359,17 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// Returns both the URL and required HTTP headers (Plex HLS requires auth in headers, not query params)
     /// - Parameter hasHDR: Whether content has HDR (HDR10/HDR10+/HLG/DV) - adds useDoviCodecs=1 for proper TV mode switching
     /// - Parameter useDolbyVision: Whether to include DV enhancement layers (useDoviCodecs=1). Set to false to get HDR10 base layer only.
+    /// - Parameter forceVideoTranscode: Force video transcoding (not just remux) to get Apple-compatible codec tags. Required for MKV+DV.
+    /// - Parameter allowAudioDirectStream: Allow server to pass-through audio (AAC/AC3/EAC3). False forces AAC transcode for DTS/TrueHD safety.
     func buildHLSDirectPlayURL(
         serverURL: String,
         authToken: String,
         ratingKey: String,
         offsetMs: Int = 0,
         hasHDR: Bool = false,
-        useDolbyVision: Bool = true
+        useDolbyVision: Bool = true,
+        forceVideoTranscode: Bool = false,
+        allowAudioDirectStream: Bool = true
     ) -> (url: URL, headers: [String: String])? {
         // Request an HLS remux that keeps the HEVC/Dolby Vision bitstream intact
         // tvOS requires fMP4/CMAF segments for Dolby Vision profiles 5/8
@@ -1376,8 +1380,12 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         let sessionId = UUID().uuidString
 
-        // Client profile matching official Plex tvOS app for optimal AVPlayer compatibility
-        // Reference: https://github.com/l984-451/Rivulet/issues/45
+         // Match official Plex tvOS behavior for DV by using the "Plex Apple TV" profile name.
+         // Stick with "Generic" for non-DV to keep our custom extra profile.
+         let clientProfileName = useDolbyVision ? "Plex Apple TV" : "Generic"
+
+        // Client profile matching official Plex tvOS app for optimal AVPlayer compatibility.
+        // Keep our explicit limitations (dvhe/hev1 remap) to ensure Apple-friendly codec tags.
         let clientProfile = [
             // Direct play profiles - tells server what formats AVPlayer can play natively
             "add-direct-play-profile(type=videoProfile&protocol=http&container=mp4,mov&videoCodec=h264,mpeg4,hevc&audioCodec=aac,ac3,eac3&subtitleCodec=mov_text,tx3g,ttxt,text,webvtt)",
@@ -1385,14 +1393,18 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             "add-direct-play-profile(type=musicProfile&protocol=http&container=mp4&audioCodec=alac)",
 
             // Transcode targets - tells server how to transcode incompatible content
-            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&replace=true)",
+            // IMPORTANT: exclude flac here so Plex transcodes audio to AAC/AC3/EAC3 for DV HLS
+            // segmentContainer=mp4 forces CMAF/fMP4 segments instead of TS (required for DV on tvOS)
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentContainer=mp4&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&replace=true)",
             "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
             "add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)",
 
             // Limitations - tells server about codec/format restrictions
             "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=8&replace=true)",
-            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe&onlyDirectPlay=true)",
-            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1&onlyDirectPlay=true)",
+            // Block dvhe/hev1 codec tags - tvOS AVPlayer requires dvh1/hvc1 for Dolby Vision
+            // Removing onlyDirectPlay=true so this applies to HLS as well as direct play
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=4096&replace=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=2160&replace=true)"
         ].joined(separator: "+")
@@ -1401,12 +1413,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         // Without these headers, endpoint returns 400 Bad Request
         var headers = plexHeaders(authToken: authToken)
         headers["X-Plex-Client-Profile-Extra"] = clientProfile
-        headers["X-Plex-Client-Profile-Name"] = "Generic"
+        headers["X-Plex-Client-Profile-Name"] = clientProfileName
 
         // URL query params (no auth here - must be in headers)
-        components.queryItems = [
-            URLQueryItem(name: "X-Plex-Client-Profile-Extra", value: clientProfile),
-            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: clientProfileName),
             URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
             URLQueryItem(name: "mediaIndex", value: "0"),
             URLQueryItem(name: "partIndex", value: "0"),
@@ -1414,11 +1425,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "protocol", value: "hls"),
             URLQueryItem(name: "container", value: "mp4"),
             URLQueryItem(name: "segmentFormat", value: "mp4"),
+            URLQueryItem(name: "segmentContainer", value: "mp4"),  // Force CMAF/fMP4 segments (required for DV on tvOS)
             URLQueryItem(name: "directPlay", value: "0"),
-            URLQueryItem(name: "directStream", value: "1"),
+            // For MKV+DV, we must force video transcoding (not just remux) to get Apple-compatible codec tags (dvh1/hvc1)
+            // MKV files typically use dvhe/hev1 which AVPlayer cannot decode
+            URLQueryItem(name: "directStream", value: forceVideoTranscode ? "0" : "1"),
             // Direct stream audio when possible (AAC, AC3, EAC3 are supported by AVPlayer)
             // Server will still transcode DTS/TrueHD to AAC automatically
-            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: allowAudioDirectStream ? "1" : "0"),
             URLQueryItem(name: "fastSeek", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
@@ -1438,6 +1452,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "includeKeyframePlaylist", value: "1")
         ]
 
+        items.append(URLQueryItem(name: "X-Plex-Client-Profile-Extra", value: clientProfile))
+
+        components.queryItems = items
+
         // Add HDR-related parameters for proper TV mode switching
         // useDoviCodecs=1 causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
         // includeCodecs=1 is required with useDoviCodecs for correct HLS manifest generation
@@ -1446,6 +1464,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
             components.queryItems?.append(URLQueryItem(name: "includeCodecs", value: "1"))
         }
+
+        print("[Plex HLS] Using \(clientProfileName) profile for \(useDolbyVision ? "Dolby Vision" : "HDR/SDR") (session: \(sessionId))")
 
         guard let url = components.url else { return nil }
         return (url, headers)
@@ -1976,14 +1996,290 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
     // MARK: - Helper Methods
 
-    func plexHeaders(authToken: String) -> [String: String] {
-        [
+    /// Generate standard Plex API headers
+    /// - Parameters:
+    ///   - authToken: The authentication token
+    ///   - userId: Optional user ID for Plex Home profile switching (X-Plex-User-Id header)
+    func plexHeaders(authToken: String, userId: Int? = nil) -> [String: String] {
+        var headers = [
             "X-Plex-Token": authToken,
             "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,
             "X-Plex-Product": PlexAPI.productName,
             "X-Plex-Platform": PlexAPI.platform,
             "X-Plex-Device": PlexAPI.deviceName
         ]
+
+        // Add user context header for Plex Home profile switching
+        if let userId = userId {
+            headers["X-Plex-User-Id"] = String(userId)
+        }
+
+        return headers
+    }
+
+    // MARK: - Plex Home Users
+
+    /// Get all users in the Plex Home (managed profiles)
+    /// GET https://plex.tv/api/home/users (XML) or /api/v2/home/users (JSON)
+    func getHomeUsers(authToken: String) async throws -> [PlexHomeUser] {
+        // Try the v2 JSON endpoint first
+        let v2URL = URL(string: "\(PlexAPI.baseUrl)/api/v2/home/users")!
+
+        print("🌐 PlexNetwork: Fetching home users from \(v2URL)")
+
+        var headers = plexHeaders(authToken: authToken)
+        headers["Accept"] = "application/json"
+
+        do {
+            let data = try await requestData(v2URL, headers: headers)
+
+            // Debug: print the raw response
+            if let responseStr = String(data: data, encoding: .utf8) {
+                print("🌐 PlexNetwork: Home users response: \(responseStr.prefix(1500))")
+            }
+
+            let decoder = JSONDecoder()
+
+            // Try wrapped format: {"users": [...]} or {"home": {"users": [...]}}
+            if let response = try? decoder.decode(PlexHomeUsersResponse.self, from: data) {
+                print("🌐 PlexNetwork: Found \(response.users.count) home users (users array)")
+                return response.users
+            }
+
+            // Try home wrapper: {"home": {..., "users": [...]}}
+            if let homeWrapper = try? decoder.decode(PlexHomeWrapper.self, from: data) {
+                print("🌐 PlexNetwork: Found \(homeWrapper.users.count) home users (home wrapper)")
+                return homeWrapper.users
+            }
+
+            // Try direct array format: [...]
+            if let users = try? decoder.decode([PlexHomeUser].self, from: data) {
+                print("🌐 PlexNetwork: Found \(users.count) home users (direct array)")
+                return users
+            }
+
+            print("🌐 PlexNetwork: ❌ Could not decode home users JSON response")
+        } catch {
+            print("🌐 PlexNetwork: v2 endpoint failed: \(error)")
+        }
+
+        // Fallback: try the XML endpoint and parse it
+        print("🌐 PlexNetwork: Trying XML endpoint...")
+        let xmlURL = URL(string: "\(PlexAPI.baseUrl)/api/home/users")!
+
+        let xmlData = try await requestData(xmlURL, headers: plexHeaders(authToken: authToken))
+
+        if let xmlString = String(data: xmlData, encoding: .utf8) {
+            print("🌐 PlexNetwork: XML response: \(xmlString.prefix(1500))")
+            let users = parseHomeUsersXML(xmlString)
+            print("🌐 PlexNetwork: Parsed \(users.count) home users from XML")
+            return users
+        }
+
+        throw PlexAPIError.parsingError
+    }
+
+    /// Parse home users from XML response
+    /// Format: <home ...><users><user id="..." title="..." .../></users></home>
+    private func parseHomeUsersXML(_ xml: String) -> [PlexHomeUser] {
+        var users: [PlexHomeUser] = []
+
+        // Simple regex-based XML parsing for <user .../> elements
+        let userPattern = "<user\\s+([^>]+)/>"
+        guard let regex = try? NSRegularExpression(pattern: userPattern, options: []) else {
+            print("🌐 PlexNetwork: Failed to create user regex")
+            return users
+        }
+
+        let matches = regex.matches(in: xml, range: NSRange(xml.startIndex..., in: xml))
+        print("🌐 PlexNetwork: Found \(matches.count) <user/> elements in XML")
+
+        for match in matches {
+            guard let attrRange = Range(match.range(at: 1), in: xml) else { continue }
+            let attributes = String(xml[attrRange])
+
+            // Extract a single attribute value by name
+            func attr(_ name: String) -> String? {
+                let pattern = "\(name)=\"([^\"]*)\""
+                guard let attrRegex = try? NSRegularExpression(pattern: pattern),
+                      let attrMatch = attrRegex.firstMatch(in: attributes, range: NSRange(attributes.startIndex..., in: attributes)),
+                      let valueRange = Range(attrMatch.range(at: 1), in: attributes) else {
+                    return nil
+                }
+                return String(attributes[valueRange])
+            }
+
+            guard let idStr = attr("id"), let id = Int(idStr),
+                  let uuid = attr("uuid"),
+                  let title = attr("title") else {
+                continue
+            }
+
+            let user = PlexHomeUser(
+                id: id,
+                uuid: uuid,
+                title: title,
+                username: attr("username"),
+                friendlyName: attr("friendlyName"),
+                thumb: attr("thumb"),
+                email: attr("email"),
+                admin: attr("admin") == "1",
+                restricted: attr("restricted") == "1",
+                protected: attr("protected") == "1",
+                guest: attr("guest") == "1",
+                restrictionProfile: attr("restrictionProfile")
+            )
+            users.append(user)
+        }
+
+        return users
+    }
+
+    /// Get the access token for a specific server URL using the user's auth token
+    /// This is used after switching users to get a server-specific access token
+    func getServerAccessToken(authToken: String, serverURL: String) async -> String? {
+        do {
+            let servers = try await getServers(authToken: authToken)
+
+            print("🌐 PlexNetwork: Looking for server matching: \(serverURL)")
+            print("🌐 PlexNetwork: Found \(servers.count) servers in resources")
+
+            // Extract the machine identifier from plex.direct URL if present
+            // Format: https://IP.MACHINEID.plex.direct:PORT
+            var targetMachineId: String?
+            if serverURL.contains(".plex.direct") {
+                let components = serverURL.components(separatedBy: ".")
+                if components.count >= 3 {
+                    // The machine ID is the second-to-last component before "plex.direct"
+                    targetMachineId = components[1]
+                    print("🌐 PlexNetwork: Extracted machine ID from URL: \(targetMachineId ?? "none")")
+                }
+            }
+
+            // Find a server that matches
+            for server in servers {
+                print("🌐 PlexNetwork: Checking server '\(server.name)' (clientId: \(server.clientIdentifier), machineId: \(server.machineIdentifier ?? "nil"), accessToken: \(server.accessToken != nil ? "present" : "nil"))")
+                print("🌐 PlexNetwork: Server '\(server.name)' connections: \(server.connections.map { $0.uri })")
+
+                // Check if machine identifier matches
+                if let targetMachineId = targetMachineId,
+                   let serverMachineId = server.machineIdentifier,
+                   serverMachineId == targetMachineId {
+                    if let accessToken = server.accessToken {
+                        print("🌐 PlexNetwork: ✅ Found server by machine ID: \(server.name)")
+                        return accessToken
+                    }
+                }
+
+                // Also check by clientIdentifier (sometimes used interchangeably)
+                if let targetMachineId = targetMachineId,
+                   server.clientIdentifier == targetMachineId {
+                    if let accessToken = server.accessToken {
+                        print("🌐 PlexNetwork: ✅ Found server by client ID: \(server.name)")
+                        return accessToken
+                    }
+                }
+
+                // Check connections - look for matching plex.direct URL or same host
+                for connection in server.connections {
+                    // Direct match
+                    if serverURL == connection.uri {
+                        if let accessToken = server.accessToken {
+                            print("🌐 PlexNetwork: ✅ Found server by exact connection URI: \(server.name)")
+                            return accessToken
+                        }
+                    }
+
+                    // Check if connection URI contains the same plex.direct identifier
+                    if let targetMachineId = targetMachineId,
+                       connection.uri.contains(targetMachineId) {
+                        if let accessToken = server.accessToken {
+                            print("🌐 PlexNetwork: ✅ Found server by plex.direct ID in connection: \(server.name)")
+                            return accessToken
+                        }
+                    }
+
+                    // Partial match for same server
+                    if serverURL.contains(connection.uri) || connection.uri.contains(serverURL) {
+                        if let accessToken = server.accessToken {
+                            print("🌐 PlexNetwork: ✅ Found server by connection URI match: \(server.name)")
+                            return accessToken
+                        }
+                    }
+                }
+
+                // If we found a server with accessToken (last resort - only 1 server in list)
+                if servers.count == 1, let accessToken = server.accessToken {
+                    print("🌐 PlexNetwork: ✅ Using only available server: \(server.name)")
+                    return accessToken
+                }
+            }
+
+            // Fallback: return the authToken itself (works for server owners)
+            print("🌐 PlexNetwork: ⚠️ No server-specific token found, using plex.tv auth token")
+            return authToken
+        } catch {
+            print("🌐 PlexNetwork: ❌ Failed to get server access token: \(error)")
+            return authToken
+        }
+    }
+
+    /// Switch to a home user profile (validates PIN if protected)
+    /// POST https://plex.tv/api/v2/home/users/{uuid}/switch
+    /// - Returns: The user's auth token if switch succeeded, nil if PIN invalid
+    func switchToHomeUser(userUUID: String, pin: String?, authToken: String) async throws -> String? {
+        guard let url = URL(string: "\(PlexAPI.baseUrl)/api/v2/home/users/\(userUUID)/switch") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        // Add standard Plex headers
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        // Add PIN if provided
+        if let pin = pin, !pin.isEmpty {
+            request.addValue(pin, forHTTPHeaderField: "X-Plex-Pin")
+        }
+
+        print("🌐 PlexNetwork: Switching to home user \(userUUID)")
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw PlexAPIError.invalidResponse
+        }
+
+        // Log response for debugging
+        if let responseStr = String(data: data, encoding: .utf8) {
+            print("🌐 PlexNetwork: Switch response (\(httpResponse.statusCode)): \(responseStr.prefix(500))")
+        }
+
+        // 200/201 = success, 401 = invalid PIN, 403 = PIN required
+        switch httpResponse.statusCode {
+        case 200, 201:
+            // Parse the user's auth token from response
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let userToken = json["authToken"] as? String {
+                print("🌐 PlexNetwork: ✅ User switch successful, got user token")
+                return userToken
+            }
+            print("🌐 PlexNetwork: ✅ User switch successful (no token in response)")
+            return authToken // Fall back to original token
+        case 401:
+            print("🌐 PlexNetwork: ❌ Invalid PIN")
+            return nil
+        case 403:
+            print("🌐 PlexNetwork: ❌ PIN required but not provided")
+            return nil
+        default:
+            print("🌐 PlexNetwork: ❌ User switch failed with status \(httpResponse.statusCode)")
+            throw PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: data)
+        }
     }
 }
 

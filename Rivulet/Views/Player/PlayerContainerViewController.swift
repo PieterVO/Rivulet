@@ -22,6 +22,15 @@ class PlayerContainerViewController: UIViewController {
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
 
+    // Directional gesture recognizers for IR remote support
+    private var dPadLeftTapGesture: UITapGestureRecognizer?
+    private var dPadRightTapGesture: UITapGestureRecognizer?
+    private var dPadLeftLongPressGesture: UILongPressGestureRecognizer?
+    private var dPadRightLongPressGesture: UILongPressGestureRecognizer?
+
+    /// Tracks if we're currently in hold-based scrubbing from IR remote
+    private var isIRScrubbing = false
+
     /// Reference to the player view model for handling Menu button logic
     weak var viewModel: UniversalPlayerViewModel?
 
@@ -71,6 +80,10 @@ class PlayerContainerViewController: UIViewController {
 
         // Pan gesture for swipe-to-scrub on Siri Remote touchpad
         setupPanGesture()
+
+        // Directional gestures for IR remote support (learned remotes, universal remotes)
+        // These fire UIPress events with leftArrow/rightArrow, NOT GameController events
+        setupDirectionalGestures()
 
         // Observe viewModel's shouldDismiss property for programmatic dismissal
         viewModel?.$shouldDismiss
@@ -268,6 +281,131 @@ class PlayerContainerViewController: UIViewController {
         view.addGestureRecognizer(panRecognizer)
         panGestureRecognizer = panRecognizer
         print("🎮 [SETUP] Pan gesture recognizer added for swipe-to-scrub")
+    }
+
+    // MARK: - Directional Gestures (IR Remote Support)
+
+    /// Sets up gesture recognizers for left/right arrow key presses.
+    /// IR remotes (learned remotes, One For All, Harmony, etc.) send UIPress events
+    /// rather than GameController events. This ensures FF/RW works on all remote types.
+    private func setupDirectionalGestures() {
+        // Tap gestures for short press (skip 10 seconds)
+        let leftTap = UITapGestureRecognizer(target: self, action: #selector(handleDPadLeftTap))
+        leftTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.leftArrow.rawValue)]
+        view.addGestureRecognizer(leftTap)
+        dPadLeftTapGesture = leftTap
+
+        let rightTap = UITapGestureRecognizer(target: self, action: #selector(handleDPadRightTap))
+        rightTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.rightArrow.rawValue)]
+        view.addGestureRecognizer(rightTap)
+        dPadRightTapGesture = rightTap
+
+        // Long press gestures for hold (start scrubbing)
+        let leftLong = UILongPressGestureRecognizer(target: self, action: #selector(handleDPadLeftLongPress(_:)))
+        leftLong.allowedPressTypes = [NSNumber(value: UIPress.PressType.leftArrow.rawValue)]
+        leftLong.minimumPressDuration = 0.4  // Match RemoteInputHandler's holdThreshold
+        view.addGestureRecognizer(leftLong)
+        dPadLeftLongPressGesture = leftLong
+
+        let rightLong = UILongPressGestureRecognizer(target: self, action: #selector(handleDPadRightLongPress(_:)))
+        rightLong.allowedPressTypes = [NSNumber(value: UIPress.PressType.rightArrow.rawValue)]
+        rightLong.minimumPressDuration = 0.4
+        view.addGestureRecognizer(rightLong)
+        dPadRightLongPressGesture = rightLong
+
+        // Long press should prevent tap from firing
+        leftTap.require(toFail: leftLong)
+        rightTap.require(toFail: rightLong)
+
+        print("🎮 [SETUP] Directional gesture recognizers added for IR remote support")
+    }
+
+    @objc private func handleDPadLeftTap() {
+        guard let vm = viewModel else { return }
+        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+
+        print("🎮 [UIPress] Left tap - skip backward 10s")
+
+        if vm.isScrubbing {
+            // Adjust scrub position
+            vm.updateSwipeScrubPosition(by: -10)
+        } else if vm.playbackState == .paused {
+            // When paused, taps start scrubbing (match Siri Remote behavior)
+            vm.scrubInDirection(forward: false)
+        } else {
+            // Seek actual playback position
+            Task { await vm.seekRelative(by: -10) }
+        }
+        vm.showControlsTemporarily()
+    }
+
+    @objc private func handleDPadRightTap() {
+        guard let vm = viewModel else { return }
+        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+
+        print("🎮 [UIPress] Right tap - skip forward 10s")
+
+        if vm.isScrubbing {
+            // Adjust scrub position
+            vm.updateSwipeScrubPosition(by: 10)
+        } else if vm.playbackState == .paused {
+            // When paused, taps start scrubbing (match Siri Remote behavior)
+            vm.scrubInDirection(forward: true)
+        } else {
+            // Seek actual playback position
+            Task { await vm.seekRelative(by: 10) }
+        }
+        vm.showControlsTemporarily()
+    }
+
+    @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard let vm = viewModel else { return }
+        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+
+        switch gesture.state {
+        case .began:
+            print("🎮 [UIPress] Left long press began - start rewind scrub")
+            isIRScrubbing = true
+            vm.scrubInDirection(forward: false)
+            vm.showControlsTemporarily()
+
+        case .changed:
+            // Continue scrubbing - speed increases are handled by clicking again
+            break
+
+        case .ended, .cancelled:
+            print("🎮 [UIPress] Left long press ended")
+            // Don't auto-commit - wait for user to press select/play
+            isIRScrubbing = false
+
+        default:
+            break
+        }
+    }
+
+    @objc private func handleDPadRightLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard let vm = viewModel else { return }
+        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+
+        switch gesture.state {
+        case .began:
+            print("🎮 [UIPress] Right long press began - start fast forward scrub")
+            isIRScrubbing = true
+            vm.scrubInDirection(forward: true)
+            vm.showControlsTemporarily()
+
+        case .changed:
+            // Continue scrubbing - speed increases are handled by clicking again
+            break
+
+        case .ended, .cancelled:
+            print("🎮 [UIPress] Right long press ended")
+            // Don't auto-commit - wait for user to press select/play
+            isIRScrubbing = false
+
+        default:
+            break
+        }
     }
 
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {

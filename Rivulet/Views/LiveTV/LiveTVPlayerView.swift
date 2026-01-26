@@ -15,9 +15,13 @@ struct LiveTVPlayerView: View {
     @State private var showExitConfirmation = false
     @State private var showChannelBadges = true
     @State private var channelBadgeTimer: Timer?
+    @State private var showFocusBorder = true
+    @State private var focusBorderTimer: Timer?
 
     // Dismiss callback - used instead of @Environment(\.dismiss) since we use ZStack overlay
     private let onDismiss: () -> Void
+    // PIP callback - called when user wants to enter PIP mode instead of dismissing
+    private let onEnterPIP: (() -> Void)?
 
     // Focus management
     @FocusState private var focusArea: FocusArea?
@@ -28,9 +32,10 @@ struct LiveTVPlayerView: View {
         case exitConfirmButton(Int)
     }
 
-    init(channel: UnifiedChannel, onDismiss: @escaping () -> Void) {
+    init(channel: UnifiedChannel, onDismiss: @escaping () -> Void, onEnterPIP: (() -> Void)? = nil) {
         _viewModel = StateObject(wrappedValue: MultiStreamViewModel(initialChannel: channel))
         self.onDismiss = onDismiss
+        self.onEnterPIP = onEnterPIP
     }
 
     @Namespace private var playerFocusNamespace
@@ -99,6 +104,8 @@ struct LiveTVPlayerView: View {
         // Don't animate stream count changes - causes issues with MPV player resizing
         #if os(tvOS)
         .onPlayPauseCommand {
+            // Show focus border on any remote input
+            showFocusBorderTemporarily()
             // Physical play/pause button on remote - direct toggle
             viewModel.togglePlayPauseOnFocused()
         }
@@ -126,21 +133,25 @@ struct LiveTVPlayerView: View {
             }
         }
         .onChange(of: viewModel.focusedSlotIndex) { _, _ in
-            // Show channel badges briefly when switching focused stream in multiview
+            // Show channel badges and focus border briefly when switching focused stream in multiview
             if viewModel.streamCount > 1 {
                 showChannelBadgesTemporarily()
+                showFocusBorderTemporarily()
             }
         }
         .onChange(of: viewModel.showControls) { _, showControls in
-            // Show/hide badges with controls
+            // Show/hide badges and focus border with controls
             if showControls {
                 channelBadgeTimer?.invalidate()
+                focusBorderTimer?.invalidate()
                 withAnimation(.easeInOut(duration: 0.25)) {
                     showChannelBadges = true
+                    showFocusBorder = true
                 }
             } else {
-                // Start hide timer when controls hide
+                // Start hide timers when controls hide
                 showChannelBadgesTemporarily()
+                showFocusBorderTemporarily()
             }
         }
         .onAppear {
@@ -150,11 +161,13 @@ struct LiveTVPlayerView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 focusArea = .streamGrid
             }
-            // Show badges initially then auto-hide
+            // Show badges and focus border initially then auto-hide
             showChannelBadgesTemporarily()
+            showFocusBorderTemporarily()
         }
         .onDisappear {
             channelBadgeTimer?.invalidate()
+            focusBorderTimer?.invalidate()
             // Only stop streams if we're actually exiting (not showing confirmation)
             if !showExitConfirmation {
                 viewModel.stopAllStreams()
@@ -169,6 +182,7 @@ struct LiveTVPlayerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showExitConfirmation)
+        .preferredColorScheme(.dark)  // Ensure dark mode for all system UI
     }
 
     // MARK: - Stream Content
@@ -191,7 +205,8 @@ struct LiveTVPlayerView: View {
                         StreamSlotView(
                             slot: slot,
                             index: index,
-                            isFocused: viewModel.focusedSlotIndex == index && !viewModel.showControls,
+                            // Show focus border when: controls are visible OR the timed focus border is showing
+                            isFocused: viewModel.focusedSlotIndex == index && (viewModel.showControls || showFocusBorder),
                             showBorder: viewModel.streamCount > 1,
                             showChannelBadge: showChannelBadges,
                             // Pass .zero for single stream to use normal frame-based sizing
@@ -329,6 +344,9 @@ struct LiveTVPlayerView: View {
     private func handleStreamNavigation(_ direction: MoveCommandDirection) {
         guard !viewModel.showControls else { return }
 
+        // Show focus border on any remote input
+        showFocusBorderTemporarily()
+
         // Multi-stream: d-pad navigates between streams
         if viewModel.streamCount > 1 {
             // Handle focus layout mode differently - main stream on left, side streams stacked on right
@@ -438,6 +456,9 @@ struct LiveTVPlayerView: View {
     #endif
 
     private func showControlsWithFocus() {
+        // Show focus border on any remote input
+        showFocusBorderTemporarily()
+
         // In classic mode, Select does nothing - just watch TV
         guard !classicTVMode else { return }
 
@@ -461,6 +482,27 @@ struct LiveTVPlayerView: View {
                 if !viewModel.showControls {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         showChannelBadges = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func showFocusBorderTemporarily() {
+        // Cancel existing timer
+        focusBorderTimer?.invalidate()
+
+        // Show border
+        withAnimation(.easeInOut(duration: 0.25)) {
+            showFocusBorder = true
+        }
+
+        // Hide after 5 seconds (only if controls are not showing)
+        focusBorderTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
+            DispatchQueue.main.async {
+                if !viewModel.showControls && !viewModel.showChannelPicker && !showExitConfirmation {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showFocusBorder = false
                     }
                 }
             }
@@ -850,6 +892,9 @@ struct LiveTVPlayerView: View {
 
     #if os(tvOS)
     private func handleExitCommand() {
+        // Show focus border on any remote input
+        showFocusBorderTemporarily()
+
         if showExitConfirmation {
             // Cancel the confirmation and return to streams
             showExitConfirmation = false
@@ -860,15 +905,29 @@ struct LiveTVPlayerView: View {
             viewModel.showChannelPicker = false
         } else if viewModel.showControls && !classicTVMode {
             // Hide controls and return focus to stream grid (not in classic mode)
-            withAnimation(.easeOut(duration: 0.2)) {
+            // UNLESS we can enter PIP mode - then go directly to PIP
+            if viewModel.streamCount == 1, let onEnterPIP {
+                // Single stream with PIP available - go to PIP, hide controls
                 viewModel.showControls = false
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                focusArea = .streamGrid
+                onEnterPIP()
+            } else {
+                // Multi-stream or no PIP - just hide controls
+                withAnimation(.easeOut(duration: 0.2)) {
+                    viewModel.showControls = false
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    focusArea = .streamGrid
+                }
             }
         } else {
-            // In classic mode or when controls hidden, exit directly
-            dismissPlayer()
+            // Controls hidden
+            // For single stream, try to enter PIP mode if callback is provided
+            if viewModel.streamCount == 1, let onEnterPIP {
+                onEnterPIP()
+            } else {
+                // Multi-stream or no PIP callback - exit directly
+                dismissPlayer()
+            }
         }
     }
     #endif

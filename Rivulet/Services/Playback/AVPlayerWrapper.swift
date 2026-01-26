@@ -49,6 +49,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
     private var statusObservation: NSKeyValueObservation?
     private var rateObservation: NSKeyValueObservation?
+    private var timeControlStatusObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     private var errorObservationCancellable = Set<AnyCancellable>()
 
@@ -58,7 +59,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     private var videoRenderVerificationTask: Task<Void, Never>?
     private var currentStreamURL: URL?
     private var consecutive404Count: Int = 0
-    private let max404CountBeforeFail = 5  // Fail after 5 consecutive 404s
+    private var last404Time: Date?
+    private let max404CountBeforeFail = 8  // Fail after 8 consecutive 404s (increased for seek tolerance)
+    private let error404ResetInterval: TimeInterval = 3.0  // Reset counter if 3s between 404s
 
     // Video rendering detection
     private var hasReceivedVideoFrames: Bool = false
@@ -113,6 +116,31 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         NotificationCenter.default.removeObserver(self)
     }
 
+    // MARK: - Audio Session
+
+    /// Configure and activate the audio session before loading content.
+    /// Sets .playback category required for Now Playing integration.
+    private func ensureAudioSessionActive() {
+        let session = AVAudioSession.sharedInstance()
+
+        // Try to set category - may fail if session is already active, but that's OK
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay])
+            print("🎬 AVPlayerWrapper: Audio session category set to .playback")
+        } catch {
+            print("🎬 AVPlayerWrapper: Could not set audio category: \(error.localizedDescription)")
+        }
+
+        // Always try to activate
+        do {
+            try session.setActive(true)
+            let category = session.category.rawValue
+            print("🎬 AVPlayerWrapper: Audio session active (category: \(category))")
+        } catch {
+            print("🎬 AVPlayerWrapper: Failed to activate audio session - \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Playback Controls
 
     /// Load a URL for playback
@@ -122,9 +150,14 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     ///   - isLive: Whether this is a live stream (affects buffering behavior)
     func load(url: URL, headers: [String: String]?, isLive: Bool = false) async throws {
         print("🎬 AVPlayerWrapper: Loading URL: \(url) (isLive: \(isLive))")
+
+        // Ensure audio session is active before loading
+        ensureAudioSessionActive()
+
         playbackStateSubject.send(.loading)
         currentStreamURL = url
         consecutive404Count = 0  // Reset 404 counter for new load
+        last404Time = nil
 
         // Clean up previous player
         cleanupObservers()
@@ -268,6 +301,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     }
 
     func seek(to time: TimeInterval) async {
+        // Reset 404 counter when seeking - transient 404s are expected while server prepares segments
+        consecutive404Count = 0
+
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
         await player?.seek(to: cmTime)
         timeSubject.send(time)
@@ -308,6 +344,38 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                     }
                 } else if currentState == .playing {
                     self.playbackStateSubject.send(.paused)
+                }
+            }
+        }
+
+        // Observe timeControlStatus for buffering detection
+        timeControlStatusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            guard let self else { return }
+            let status = player.timeControlStatus
+            let reason = player.reasonForWaitingToPlay
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                // Don't change state if we're in a terminal state
+                if case .failed = self.playbackStateSubject.value { return }
+                if case .ended = self.playbackStateSubject.value { return }
+
+                switch status {
+                case .waitingToPlayAtSpecifiedRate:
+                    let reasonStr = reason?.rawValue ?? "unknown"
+                    print("🎬 AVPlayerWrapper: Waiting to play - reason: \(reasonStr)")
+                    self.playbackStateSubject.send(.buffering)
+                case .playing:
+                    // Only transition to playing if we were buffering
+                    if case .buffering = self.playbackStateSubject.value {
+                        print("🎬 AVPlayerWrapper: Resumed from buffering")
+                        self.playbackStateSubject.send(.playing)
+                    }
+                case .paused:
+                    // Handled by rate observer
+                    break
+                @unknown default:
+                    break
                 }
             }
         }
@@ -496,6 +564,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         rateObservation?.invalidate()
         rateObservation = nil
 
+        timeControlStatusObservation?.invalidate()
+        timeControlStatusObservation = nil
+
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
 
@@ -557,7 +628,16 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             errorSubject.send(.codecUnsupported(message))
         } else if errorCode == -12938 {
             // Content-not-found (HTTP 404) - track consecutive occurrences
-            // A few 404s can be transient, but many consecutive ones indicate the transcode isn't working
+            // A few 404s can be transient (especially after seeking), but many rapid consecutive ones
+            // indicate the transcode isn't working
+
+            // Reset counter if it's been a while since the last 404 (not a burst)
+            let now = Date()
+            if let lastTime = last404Time, now.timeIntervalSince(lastTime) > error404ResetInterval {
+                consecutive404Count = 0
+            }
+            last404Time = now
+
             consecutive404Count += 1
             if consecutive404Count >= max404CountBeforeFail {
                 print("🎬 AVPlayerWrapper: Too many consecutive 404 errors (\(consecutive404Count)) - transcode failed")
@@ -589,6 +669,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             if consecutive404Count > 0 {
                 print("🎬 AVPlayerWrapper: Successful transfer, resetting 404 counter")
                 consecutive404Count = 0
+                last404Time = nil
             }
             print("🎬 AVPlayerWrapper: Streaming - \(lastEvent.numberOfBytesTransferred) bytes, bitrate: \(Int(lastEvent.indicatedBitrate))")
         }
@@ -702,6 +783,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         _isMuted = false
         currentStreamURL = nil
         consecutive404Count = 0
+        last404Time = nil
         hasReceivedVideoFrames = false
         hasVerifiedVideoRendering = false
         lastVideoRect = .zero

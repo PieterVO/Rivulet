@@ -35,6 +35,7 @@ struct AddLiveTVSourceSheet: View {
                 }
             }
         }
+        .preferredColorScheme(.dark)  // Ensure dark mode for keyboard and UI
         #if os(tvOS)
         .onExitCommand {
             // Navigate back within sheet before dismissing
@@ -397,6 +398,7 @@ private struct DispatcharrConfigForm: View {
     let onComplete: () -> Void
 
     @StateObject private var dataStore = LiveTVDataStore.shared
+    @StateObject private var authManager = PlexAuthManager.shared
     @State private var serverURL = ""
     @State private var displayName = "Live TV"
     @State private var isAdding = false
@@ -404,10 +406,10 @@ private struct DispatcharrConfigForm: View {
     @State private var errorMessage: String?
     @State private var validationStatus: ValidationStatus = .idle
 
-    @FocusState private var focusedField: Field?
+    @FocusState private var focusedButton: ButtonType?
 
-    enum Field: Hashable {
-        case url, name, validate, add
+    enum ButtonType: Hashable {
+        case validate, add
     }
 
     enum ValidationStatus: Equatable {
@@ -417,46 +419,94 @@ private struct DispatcharrConfigForm: View {
         case invalid(String)
     }
 
+    /// Extract host/IP from Plex server URL, fallback to generic local IP
+    private var baseHost: String {
+        if let plexURLString = authManager.selectedServerURL,
+           let plexURL = URL(string: plexURLString),
+           let host = plexURL.host,
+           isLocalIP(host) {
+            return host
+        }
+        return "192.168.1.100"
+    }
+
+    /// Check if an IP address is local/private
+    private func isLocalIP(_ host: String) -> Bool {
+        host.hasPrefix("192.168.") ||
+        host.hasPrefix("10.") ||
+        host.hasPrefix("172.16.") ||
+        host.hasPrefix("172.17.") ||
+        host.hasPrefix("172.18.") ||
+        host.hasPrefix("172.19.") ||
+        host.hasPrefix("172.2") ||
+        host.hasPrefix("172.30.") ||
+        host.hasPrefix("172.31.") ||
+        host == "localhost" ||
+        host == "127.0.0.1"
+    }
+
+    /// Suggestions using the detected local IP from Plex server
+    private var serverSuggestions: [TextEntrySuggestion] {
+        [
+            TextEntrySuggestion("Dispatcharr", value: "http://\(baseHost):9191"),
+            TextEntrySuggestion("Threadfin", value: "http://\(baseHost):34400"),
+            TextEntrySuggestion("xTeVe", value: "http://\(baseHost):34400"),
+            TextEntrySuggestion("ErsatzTV", value: "http://\(baseHost):8409"),
+            TextEntrySuggestion("Cabernet", value: "http://\(baseHost):6077"),
+        ]
+    }
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 32) {
+                // Form description
+                Text("Enter the base URL of your M3U server. The app will automatically fetch channels and EPG data.")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+
                 // Form fields
-                VStack(spacing: 24) {
-                    // Server URL field
-                    TVTextField(
-                        label: "Server URL",
-                        placeholder: "http://192.168.1.100:9191",
-                        text: $serverURL,
-                        hint: "Base URL of your M3U server (expects /output/m3u and /output/epg)",
-                        isFocused: focusedField == .url
+                VStack(spacing: 12) {
+                    // Server URL field with common IPTV aggregator suggestions
+                    SettingsTextEntryRow(
+                        icon: "globe",
+                        iconColor: .blue,
+                        title: "Server URL",
+                        value: $serverURL,
+                        placeholder: "http://\(baseHost):9191",
+                        hint: "Base URL (expects /output/m3u and /output/epg)",
+                        suggestions: serverSuggestions,
+                        keyboardType: .URL
                     )
-                    .focused($focusedField, equals: .url)
 
                     // Display name field
-                    TVTextField(
-                        label: "Display Name",
-                        placeholder: "Live TV",
-                        text: $displayName,
-                        isFocused: focusedField == .name
+                    SettingsTextEntryRow(
+                        icon: "textformat",
+                        iconColor: .purple,
+                        title: "Display Name",
+                        value: $displayName,
+                        placeholder: "Live TV"
                     )
-                    .focused($focusedField, equals: .name)
+                }
 
-                    // Validation status
-                    if validationStatus != .idle {
-                        validationStatusView
-                    }
+                // Validation status
+                if validationStatus != .idle {
+                    validationStatusView
+                        .padding(.horizontal, 24)
+                }
 
-                    // Error message
-                    if let error = errorMessage {
-                        HStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.red)
-                            Text(error)
-                                .foregroundStyle(.red)
-                        }
-                        .font(.system(size: 20))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                // Error message
+                if let error = errorMessage {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .foregroundStyle(.red)
                     }
+                    .font(.system(size: 20))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
                 }
 
                 // Buttons
@@ -478,11 +528,19 @@ private struct DispatcharrConfigForm: View {
                         .padding(.vertical, 18)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(focusedField == .validate ? .white.opacity(0.25) : .white.opacity(0.15))
+                                .fill(focusedButton == .validate ? .white.opacity(0.25) : .white.opacity(0.15))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .strokeBorder(
+                                            focusedButton == .validate ? .white.opacity(0.3) : .white.opacity(0.1),
+                                            lineWidth: 1
+                                        )
+                                )
                         )
+                        .scaleEffect(focusedButton == .validate ? 1.03 : 1.0)
                     }
-                    .buttonStyle(.plain)
-                    .focused($focusedField, equals: .validate)
+                    .buttonStyle(SettingsButtonStyle())
+                    .focused($focusedButton, equals: .validate)
                     .disabled(serverURL.isEmpty || isValidating)
 
                     // Add button
@@ -502,23 +560,20 @@ private struct DispatcharrConfigForm: View {
                         .padding(.vertical, 18)
                         .background(
                             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(canAdd ? (focusedField == .add ? .blue : .blue.opacity(0.85)) : .gray.opacity(0.5))
+                                .fill(canAdd ? (focusedButton == .add ? .blue : .blue.opacity(0.85)) : .gray.opacity(0.5))
                         )
-                        .scaleEffect(focusedField == .add && canAdd ? 1.03 : 1.0)
+                        .scaleEffect(focusedButton == .add && canAdd ? 1.03 : 1.0)
                     }
-                    .buttonStyle(.plain)
-                    .focused($focusedField, equals: .add)
+                    .buttonStyle(SettingsButtonStyle())
+                    .focused($focusedButton, equals: .add)
                     .disabled(!canAdd || isAdding)
                 }
-                .animation(.easeOut(duration: 0.15), value: focusedField)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
 
                 Spacer(minLength: 60)
             }
             .padding(.horizontal, 80)
             .padding(.top, 24)
-        }
-        .onAppear {
-            focusedField = .url
         }
         #if os(tvOS)
         .onExitCommand {
@@ -627,57 +682,63 @@ private struct M3UConfigForm: View {
     @State private var isAdding = false
     @State private var errorMessage: String?
 
-    @FocusState private var focusedField: Field?
-
-    enum Field: Hashable {
-        case m3u, epg, name, add
-    }
+    @FocusState private var isAddButtonFocused: Bool
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 32) {
+                // Form description
+                Text("Add any M3U or M3U8 playlist URL. Optionally provide an XMLTV EPG URL for program guide data.")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+
                 // Form fields
-                VStack(spacing: 24) {
+                VStack(spacing: 12) {
                     // M3U URL field
-                    TVTextField(
-                        label: "M3U Playlist URL",
+                    SettingsTextEntryRow(
+                        icon: "list.bullet.rectangle",
+                        iconColor: .green,
+                        title: "M3U Playlist URL",
+                        value: $m3uURL,
                         placeholder: "http://example.com/playlist.m3u",
-                        text: $m3uURL,
-                        hint: "URL to your M3U or M3U8 playlist file",
-                        isFocused: focusedField == .m3u
+                        hint: "URL to your M3U or M3U8 playlist",
+                        keyboardType: .URL
                     )
-                    .focused($focusedField, equals: .m3u)
 
                     // EPG URL field (optional)
-                    TVTextField(
-                        label: "EPG URL (Optional)",
+                    SettingsTextEntryRow(
+                        icon: "calendar",
+                        iconColor: .orange,
+                        title: "EPG URL (Optional)",
+                        value: $epgURL,
                         placeholder: "http://example.com/epg.xml",
-                        text: $epgURL,
-                        hint: "XMLTV format EPG for program guide data",
-                        isFocused: focusedField == .epg
+                        hint: "XMLTV format for program guide",
+                        keyboardType: .URL
                     )
-                    .focused($focusedField, equals: .epg)
 
                     // Display name field
-                    TVTextField(
-                        label: "Display Name",
-                        placeholder: "IPTV",
-                        text: $displayName,
-                        isFocused: focusedField == .name
+                    SettingsTextEntryRow(
+                        icon: "textformat",
+                        iconColor: .purple,
+                        title: "Display Name",
+                        value: $displayName,
+                        placeholder: "IPTV"
                     )
-                    .focused($focusedField, equals: .name)
+                }
 
-                    // Error message
-                    if let error = errorMessage {
-                        HStack(spacing: 12) {
-                            Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.red)
-                            Text(error)
-                                .foregroundStyle(.red)
-                        }
-                        .font(.system(size: 20))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                // Error message
+                if let error = errorMessage {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .foregroundStyle(.red)
                     }
+                    .font(.system(size: 20))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
                 }
 
                 // Add button
@@ -698,22 +759,19 @@ private struct M3UConfigForm: View {
                     .padding(.vertical, 18)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(m3uURL.isEmpty ? .gray.opacity(0.5) : (focusedField == .add ? .green : .green.opacity(0.85)))
+                            .fill(m3uURL.isEmpty ? .gray.opacity(0.5) : (isAddButtonFocused ? .green : .green.opacity(0.85)))
                     )
-                    .scaleEffect(focusedField == .add && !m3uURL.isEmpty ? 1.03 : 1.0)
+                    .scaleEffect(isAddButtonFocused && !m3uURL.isEmpty ? 1.03 : 1.0)
                 }
-                .buttonStyle(.plain)
-                .focused($focusedField, equals: .add)
+                .buttonStyle(SettingsButtonStyle())
+                .focused($isAddButtonFocused)
                 .disabled(m3uURL.isEmpty || isAdding)
-                .animation(.easeOut(duration: 0.15), value: focusedField)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isAddButtonFocused)
 
                 Spacer(minLength: 60)
             }
             .padding(.horizontal, 80)
             .padding(.top, 24)
-        }
-        .onAppear {
-            focusedField = .m3u
         }
         #if os(tvOS)
         .onExitCommand {
@@ -795,50 +853,6 @@ private func sanitizeURL(_ input: String) -> String {
     }
 
     return url
-}
-
-// MARK: - TV Text Field
-
-private struct TVTextField: View {
-    let label: String
-    let placeholder: String
-    @Binding var text: String
-    var hint: String? = nil
-    var isFocused: Bool = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(label)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.white.opacity(0.7))
-
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 26))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(isFocused ? Color(white: 0.25) : Color(white: 0.15))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(isFocused ? .blue : .clear, lineWidth: 3)
-                )
-                .autocorrectionDisabled()
-                #if os(tvOS)
-                .keyboardType(.URL)
-                #endif
-
-            if let hint = hint {
-                Text(hint)
-                    .font(.system(size: 18))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-        }
-        .animation(.easeOut(duration: 0.15), value: isFocused)
-    }
 }
 
 #Preview {

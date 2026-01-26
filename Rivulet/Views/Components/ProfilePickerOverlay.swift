@@ -1,0 +1,228 @@
+//
+//  ProfilePickerOverlay.swift
+//  Rivulet
+//
+//  Full-screen profile picker shown on app launch (optional)
+//
+
+import SwiftUI
+
+/// Full-screen overlay for selecting a Plex Home user profile on app launch
+struct ProfilePickerOverlay: View {
+    @StateObject private var profileManager = PlexUserProfileManager.shared
+    @Binding var isPresented: Bool
+
+    @State private var selectedUserForPin: PlexHomeUser?
+    @State private var showPinEntry = false
+    @State private var pinEntryError: String?
+    @State private var isLoading = false
+    @FocusState private var focusedUserId: Int?
+
+    var body: some View {
+        ZStack {
+            // Background
+            Color.black
+                .ignoresSafeArea()
+
+            VStack(spacing: 50) {
+                // Header
+                VStack(spacing: 12) {
+                    Text("Who's Watching?")
+                        .font(.system(size: 64, weight: .bold))
+                        .foregroundStyle(.white)
+
+                    Text("Select a profile to continue")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .padding(.top, 80)
+
+                Spacer()
+
+                // Profile grid
+                LazyVGrid(columns: gridColumns, spacing: 40) {
+                    ForEach(profileManager.homeUsers) { user in
+                        ProfileAvatarButton(
+                            user: user,
+                            isLoading: isLoading && selectedUserForPin?.id == user.id,
+                            isFocused: focusedUserId == user.id
+                        ) {
+                            selectProfile(user)
+                        }
+                        .focused($focusedUserId, equals: user.id)
+                    }
+                }
+                .padding(.horizontal, 120)
+
+                Spacer()
+            }
+        }
+        .sheet(isPresented: $showPinEntry) {
+            if let user = selectedUserForPin {
+                PinEntrySheet(
+                    user: user,
+                    error: $pinEntryError,
+                    onSubmit: { pin in
+                        Task {
+                            await verifyAndSwitch(user: user, pin: pin)
+                        }
+                    },
+                    onCancel: {
+                        showPinEntry = false
+                        selectedUserForPin = nil
+                        pinEntryError = nil
+                    }
+                )
+            }
+        }
+        .onAppear {
+            // Focus first profile
+            if let first = profileManager.homeUsers.first {
+                focusedUserId = first.id
+            }
+        }
+    }
+
+    private var gridColumns: [GridItem] {
+        // Responsive columns based on number of users
+        let count = profileManager.homeUsers.count
+        let columnCount = min(count, 5)
+        return Array(repeating: GridItem(.flexible(), spacing: 40), count: columnCount)
+    }
+
+    private func selectProfile(_ user: PlexHomeUser) {
+        if user.requiresPin {
+            selectedUserForPin = user
+            pinEntryError = nil
+            showPinEntry = true
+        } else {
+            Task {
+                isLoading = true
+                selectedUserForPin = user
+                let success = await profileManager.selectUser(user, pin: nil)
+                isLoading = false
+                selectedUserForPin = nil
+                if success {
+                    isPresented = false
+                }
+            }
+        }
+    }
+
+    private func verifyAndSwitch(user: PlexHomeUser, pin: String) async {
+        isLoading = true
+        pinEntryError = nil
+
+        let success = await profileManager.selectUser(user, pin: pin)
+
+        if success {
+            showPinEntry = false
+            selectedUserForPin = nil
+            isPresented = false
+        } else {
+            pinEntryError = "Incorrect PIN. Please try again."
+        }
+
+        isLoading = false
+    }
+}
+
+// MARK: - Profile Avatar Button
+
+private struct ProfileAvatarButton: View {
+    let user: PlexHomeUser
+    let isLoading: Bool
+    let isFocused: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(spacing: 16) {
+                // Avatar
+                ZStack {
+                    avatarView
+                        .frame(width: 160, height: 160)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(
+                                    isFocused ? .white : .white.opacity(0.3),
+                                    lineWidth: isFocused ? 4 : 2
+                                )
+                        )
+                        .shadow(color: isFocused ? .white.opacity(0.3) : .clear, radius: 20)
+
+                    if isLoading {
+                        Circle()
+                            .fill(.black.opacity(0.5))
+                            .frame(width: 160, height: 160)
+
+                        ProgressView()
+                            .scaleEffect(1.5)
+                    }
+
+                    // PIN indicator
+                    if user.protected && !isLoading {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(Circle().fill(.black.opacity(0.6)))
+                            .offset(x: 60, y: 60)
+                    }
+                }
+
+                // Name
+                Text(user.displayName)
+                    .font(.system(size: 26, weight: isFocused ? .semibold : .regular))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isFocused ? 1.08 : 1.0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isFocused)
+    }
+
+    @ViewBuilder
+    private var avatarView: some View {
+        if let thumbURL = user.thumb, let url = URL(string: thumbURL) {
+            CachedAsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .empty:
+                    avatarPlaceholder
+                case .failure:
+                    avatarPlaceholder
+                @unknown default:
+                    avatarPlaceholder
+                }
+            }
+        } else {
+            avatarPlaceholder
+        }
+    }
+
+    private var avatarPlaceholder: some View {
+        ZStack {
+            Circle()
+                .fill(profileColor.gradient)
+
+            Text(user.displayName.prefix(1).uppercased())
+                .font(.system(size: 64, weight: .bold))
+                .foregroundStyle(.white)
+        }
+    }
+
+    private var profileColor: Color {
+        let colors: [Color] = [.blue, .purple, .pink, .orange, .green, .teal, .indigo]
+        return colors[abs(user.id) % colors.count]
+    }
+}
+
+#Preview {
+    ProfilePickerOverlay(isPresented: .constant(true))
+}

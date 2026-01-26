@@ -7,6 +7,13 @@ import SwiftUI
 
 #if os(tvOS)
 
+/// Display mode for Live TV player in guide view
+enum LiveTVDisplayMode: Equatable {
+    case hidden      // No player visible
+    case fullscreen  // Player is fullscreen overlay
+    case pip         // Player is in PIP (small, top-right)
+}
+
 struct GuideLayoutView: View {
     /// Optional source ID to filter channels. nil = show all sources.
     var sourceIdFilter: String?
@@ -23,7 +30,10 @@ struct GuideLayoutView: View {
         return dataStore.channels
     }
 
-    @State private var selectedChannel: UnifiedChannel?
+    // PIP state management
+    @State private var activeChannel: UnifiedChannel?
+    @State private var displayMode: LiveTVDisplayMode = .hidden
+
     @State private var guideStartTime = Date()
     @State private var focusedRow = 0
     @State private var focusedColumn = 0
@@ -31,39 +41,96 @@ struct GuideLayoutView: View {
     @FocusState private var hasFocus: Bool
 
     var body: some View {
-        ZStack {
-            GeometryReader { geo in
-                ZStack {
-                    Color.black.ignoresSafeArea()
+        GeometryReader { geo in
+            ZStack(alignment: .topLeading) {
+                // Background
+                Color.black.ignoresSafeArea()
 
-                    if channels.isEmpty {
-                        ProgressView()
-                    } else {
-                        guideView(size: geo.size)
-                    }
+                // Guide content - always rendered but visually hidden when fullscreen
+                if channels.isEmpty {
+                    ProgressView()
+                } else {
+                    guideView(size: geo.size)
+                        .opacity(displayMode == .fullscreen ? 0 : 1)
+                        .disabled(displayMode == .fullscreen)
                 }
-            }
-            .onAppear {
-                setupStartTime()
-                if !focusScopeManager.isScopeActive(.sidebar) {
-                    focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: true)
-                }
-            }
-            .task {
-                if dataStore.channels.isEmpty { await dataStore.loadChannels() }
-                if dataStore.epg.isEmpty { await dataStore.loadEPG(startDate: Date(), hours: 6) }
-            }
 
-            // Player overlay - using ZStack instead of fullScreenCover to control dismissal
-            if let channel = selectedChannel {
-                LiveTVPlayerView(channel: channel, onDismiss: {
-                    selectedChannel = nil
-                })
-                .transition(.opacity)
-                .zIndex(100)
+                // Player layer - present when activeChannel exists
+                if let channel = activeChannel {
+                    liveTVPlayerLayer(channel: channel, screenSize: geo.size)
+                        .zIndex(displayMode == .fullscreen ? 100 : 10)
+                }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: selectedChannel != nil)
+        .onAppear {
+            setupStartTime()
+            if !focusScopeManager.isScopeActive(.sidebar) {
+                focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: true)
+            }
+        }
+        .task {
+            if dataStore.channels.isEmpty { await dataStore.loadChannels() }
+            if dataStore.epg.isEmpty { await dataStore.loadEPG(startDate: Date(), hours: 6) }
+        }
+        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: displayMode)
+        .onChange(of: displayMode) { oldMode, newMode in
+            if oldMode == .fullscreen && newMode == .pip {
+                // Transitioning to PIP - focus guide after animation
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    hasFocus = true
+                }
+            } else if oldMode == .pip && newMode == .fullscreen {
+                // Returning to fullscreen - clear guide focus
+                hasFocus = false
+            } else if newMode == .hidden {
+                // Player dismissed - focus guide
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    hasFocus = true
+                }
+            }
+        }
+    }
+
+    // MARK: - PIP Player Layer
+
+    /// PIP sizing constants
+    private var pipScale: CGFloat { 0.28 }
+    private var pipMargin: CGFloat { 60 }
+
+    @ViewBuilder
+    private func liveTVPlayerLayer(channel: UnifiedChannel, screenSize: CGSize) -> some View {
+        let isPIP = displayMode == .pip
+
+        // Calculate where the PIP's top-right corner should be
+        // (screen width - margin from right edge)
+        let pipAnchorX = screenSize.width - pipMargin
+        let pipAnchorY = pipMargin
+
+        LiveTVPlayerView(
+            channel: channel,
+            onDismiss: {
+                displayMode = .hidden
+                activeChannel = nil
+            },
+            onEnterPIP: {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                    displayMode = .pip
+                }
+            }
+        )
+        // Always use full screen frame - scaleEffect handles the visual scaling
+        .frame(width: screenSize.width, height: screenSize.height)
+        // Scale from top-right corner area
+        .scaleEffect(
+            isPIP ? pipScale : 1.0,
+            anchor: UnitPoint(
+                x: pipAnchorX / screenSize.width,
+                y: pipAnchorY / screenSize.height
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: isPIP ? 12 / pipScale : 0))
+        .shadow(color: isPIP ? .black.opacity(0.5) : .clear, radius: 20, x: 0, y: 10)
+        .allowsHitTesting(displayMode == .fullscreen)
     }
 
     private func setupStartTime() {
@@ -87,7 +154,8 @@ struct GuideLayoutView: View {
 
         return Button {
             if focusedRow < channels.count {
-                selectedChannel = channels[focusedRow]
+                let channel = channels[focusedRow]
+                selectChannel(channel)
             }
         } label: {
             VStack(alignment: .leading, spacing: 0) {
@@ -155,27 +223,37 @@ struct GuideLayoutView: View {
         .buttonStyle(GuideButtonStyle())
         .focused($hasFocus)
         .focusSection()  // Prevent focus from escaping to sidebar trigger
-        .focusable(selectedChannel == nil)  // Disable focus when player is showing
+        .focusable(displayMode != .fullscreen)  // Disable focus when player is fullscreen
         .onAppear { hasFocus = true }
         .onMoveCommand { dir in
-            guard selectedChannel == nil else { return }  // Don't handle when player is showing
+            guard displayMode != .fullscreen else { return }  // Don't handle when player is fullscreen
             handleNav(dir)
         }
         .onExitCommand {
-            guard selectedChannel == nil else { return }  // Don't handle when player is showing
+            guard displayMode != .fullscreen else { return }  // Don't handle when player is fullscreen
             hasFocus = false
             openSidebar()
         }
         .onChange(of: focusScopeManager.isScopeActive(.sidebar)) { _, active in
-            if !active && selectedChannel == nil { hasFocus = true }
+            if !active && displayMode != .fullscreen { hasFocus = true }
         }
-        .onChange(of: selectedChannel) { oldChannel, newChannel in
-            // Restore focus when player is dismissed
-            if oldChannel != nil && newChannel == nil {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    hasFocus = true
-                }
+    }
+
+    // MARK: - Channel Selection
+
+    private func selectChannel(_ channel: UnifiedChannel) {
+        if displayMode == .pip {
+            // Already playing - switch channel if different, then go fullscreen
+            if activeChannel?.id != channel.id {
+                activeChannel = channel
             }
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                displayMode = .fullscreen
+            }
+        } else {
+            // Start fresh
+            activeChannel = channel
+            displayMode = .fullscreen
         }
     }
 
@@ -187,6 +265,11 @@ struct GuideLayoutView: View {
             if focusedRow > 0 {
                 focusedRow -= 1
                 clampCol()
+            } else if displayMode == .pip {
+                // At top of guide and PIP is showing - return to fullscreen
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                    displayMode = .fullscreen
+                }
             }
         case .down:
             if focusedRow < channels.count - 1 {

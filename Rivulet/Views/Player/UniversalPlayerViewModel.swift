@@ -418,8 +418,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var controlsTimer: Timer?
     private let controlsHideDelay: TimeInterval = 5
     private var scrubTimer: Timer?
-    private var appLifecycleObserver: Any?
     private var appBecameActiveObserver: Any?
+    private var appBackgroundObserver: Any?
     private var pausedDueToAppInactive: Bool = false
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
@@ -441,6 +441,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     @Published private(set) var streamURL: URL?
     private(set) var streamHeaders: [String: String] = [:]
+    private let allowAudioDirectStream: Bool
 
     // MARK: - Preloaded Next Episode Data
 
@@ -464,36 +465,48 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.startOffset = startOffset
         self.loadingArtImage = loadingArtImage
         self.loadingThumbImage = loadingThumbImage
+        self.allowAudioDirectStream = UniversalPlayerViewModel.isAudioDirectStreamCapable(metadata)
 
         // Determine which player to use based on content and settings
         let useAVPlayerForDV = UserDefaults.standard.bool(forKey: "useAVPlayerForDolbyVision")
         let useAVPlayerForAll = UserDefaults.standard.bool(forKey: "useAVPlayerForAllVideos")
         let hasDolbyVision = metadata.hasDolbyVision
 
+        // Get container format for logging
+        let container = metadata.Media?.first?.Part?.first?.container?.lowercased() ?? ""
+
         // Identify DV stream (could be second video track in dual-layer profile 7)
         let videoStreams = metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
         let dvStream = videoStreams.first { ($0.DOVIProfile != nil) || ($0.DOVIPresent == true) }
-        let primaryVideoStream = dvStream ?? videoStreams.first
 
         // Check DV profile compatibility - only Profile 5 and 8 work with Apple TV's native player
-        // Additionally, for Profile 8 we require BL Compat ID 1 (HDR10-compatible base layer) or 4 (P8.4 camera)
+        // Profile 8 requires BL Compat ID 1 (HDR10-compatible base layer) or 4 (P8.4 camera)
+        // Profile 7 (dual-layer) is NOT compatible with AVPlayer
         let dvProfile = dvStream?.DOVIProfile
         let doviBLCompatID = dvStream?.DOVIBLCompatID
         let isCompatibleDVProfile: Bool = {
+            // If Plex metadata doesn't report profile yet, assume compatible and let fallbacks handle errors.
+            guard let dvProfile else { return true }
+
             if dvProfile == 5 { return true }
             if dvProfile == 8 {
-                // Allow HDR10-compatible base (1) and Apple camera P8.4 (4); others fall back to MPV
-                return doviBLCompatID == 1 || doviBLCompatID == 4
+                // Allow HDR10-compatible base (1) and Apple camera P8.4 (4); unknown BLCompat also allowed
+                return doviBLCompatID == nil || doviBLCompatID == 1 || doviBLCompatID == 4
             }
             return false
         }()
 
-        print("[Player Selection] useAVPlayerForAll=\(useAVPlayerForAll), useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile)")
+        // For DV content via AVPlayer:
+        // - MP4/MOV containers: Direct play works
+        // - MKV containers: Plex HLS remux handles container conversion
+        let canUseAVPlayerForDV = hasDolbyVision && isCompatibleDVProfile
+
+        print("[Player Selection] useAVPlayerForAll=\(useAVPlayerForAll), useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile), container=\(container)")
 
         // Use AVPlayer if:
         // 1. "Use AVPlayer for All Videos" is enabled, OR
-        // 2. "Use AVPlayer for DV" is enabled AND content has compatible DV profile
-        if useAVPlayerForAll || (useAVPlayerForDV && hasDolbyVision && isCompatibleDVProfile) {
+        // 2. "Use AVPlayer for DV" is enabled AND content has compatible DV profile AND direct-playable container
+        if useAVPlayerForAll || (useAVPlayerForDV && canUseAVPlayerForDV) {
             if useAVPlayerForAll {
                 print("[Player Selection] → Using AVPlayer (all videos mode)")
             } else {
@@ -508,9 +521,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             self.mpvPlayerWrapper = MPVPlayerWrapper()
             self.avPlayerWrapper = nil
 
-            // If user wanted AVPlayer for DV but this variant is incompatible, show a brief notice
+            // Show notice explaining why we're using MPV instead of AVPlayer for DV
             if useAVPlayerForDV && hasDolbyVision && !isCompatibleDVProfile {
-                showCompatibilityNotice("This DV profile is not supported by AVPlayer — falling back to standard HDR")
+                showCompatibilityNotice("DV Profile \(dvProfile ?? 0) not supported — playing HDR10")
             }
         }
 
@@ -520,6 +533,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         Task { @MainActor in
             await prepareStreamURL()
         }
+
+        addPlaybackSelectionBreadcrumb(reason: "init")
     }
 
     private func setupPlayer() {
@@ -527,18 +542,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         observeAppLifecycle()
     }
 
-    /// Observe app lifecycle to pause playback when Apple TV goes to sleep
+    /// Observe app lifecycle to pause playback when app goes to background
+    /// Only pauses on actual background entry (not Control Center overlay)
     private func observeAppLifecycle() {
-        // Pause when Apple TV goes to sleep
-        appLifecycleObserver = NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
+        // Only pause when actually entering background (home button, sleep, etc.)
+        // This does NOT fire for Control Center overlay on tvOS
+        appBackgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            // Pause playback when Apple TV turns off / goes to sleep
+            print("🎬 [Lifecycle] App entered background - pausing")
             if self.playbackState == .playing {
-                print("🎬 [Lifecycle] App resigning active - pausing playback")
                 self.pausedDueToAppInactive = true
                 Task { @MainActor in
                     self.pause()
@@ -546,17 +562,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // Ensure we stay paused when waking up (prevent system auto-resume)
+        // When returning from background, keep paused (user must manually resume)
         appBecameActiveObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.pausedDueToAppInactive else { return }
-            // Force pause state in case system tried to resume
-            print("🎬 [Lifecycle] App became active - ensuring playback stays paused")
-            Task { @MainActor in
-                self.pause()
+            guard let self else { return }
+            if self.pausedDueToAppInactive {
+                print("🎬 [Lifecycle] Returning from background - keeping paused")
+                self.pausedDueToAppInactive = false
             }
         }
     }
@@ -598,19 +613,16 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             // Not direct-play compatible - use HLS remux
             // This handles: MKV containers, incompatible codecs, DTS/TrueHD audio, bad codec tags (dvhe/hev1)
+            // Note: For MKV + DV, player selection should have routed to MPV (more reliable)
+            // This path is hit when "Use AVPlayer for All" is enabled
             print("[AVPlayer] Not direct-play compatible (\(container.uppercased())) - using HLS remux")
 
-            // For DV content, decide whether to attempt DV HLS or skip to HDR10
-            // Plex's DV HLS remux from MKV containers is broken - produces blank output
-            // Only attempt DV HLS for native MP4/MOV containers (rare, usually handled as direct play above)
-            let isMKV = container == "mkv"
-            let useDV = metadata.hasDolbyVision && !isMKV
+            // For DV content via HLS remux, Plex handles container conversion
+            let useDV = metadata.hasDolbyVision
             isUsingDolbyVisionHLS = useDV
 
-            // If we're skipping DV due to MKV container, show notice
-            if metadata.hasDolbyVision && isMKV {
-                print("[AVPlayer] Skipping DV HLS for MKV - Plex remux produces broken output")
-                showCompatibilityNotice("Playing HDR10 (Plex can't remux DV from MKV)")
+            if metadata.hasDolbyVision {
+                print("[AVPlayer] Using DV HLS (container: \(container.uppercased()))")
             }
 
             if let result = networkManager.buildHLSDirectPlayURL(
@@ -619,7 +631,9 @@ final class UniversalPlayerViewModel: ObservableObject {
                 ratingKey: ratingKey,
                 offsetMs: Int((startOffset ?? 0) * 1000),
                 hasHDR: metadata.hasHDR,
-                useDolbyVision: useDV
+                useDolbyVision: useDV,
+                forceVideoTranscode: false,  // avoid transcoding; rely on DV remux + codec tag fixes
+                allowAudioDirectStream: allowAudioDirectStream
             ) {
                 streamURL = result.url
                 streamHeaders = result.headers
@@ -702,6 +716,24 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard ["aac", "ac3", "eac3"].contains(audioCodec) else { return false }
 
         return true
+    }
+
+    /// Determines whether audio can be safely direct-streamed to AVPlayer.
+    /// DTS/TrueHD should be transcoded to avoid playback failures in DV manifests.
+    private static func isAudioDirectStreamCapable(_ metadata: PlexMetadata) -> Bool {
+        guard let audioCodec = metadata.Media?
+            .first?
+            .Part?
+            .first?
+            .Stream?
+            .first(where: { $0.isAudio })?
+            .codec?
+            .lowercased() else {
+            // Unknown codec - prefer safety and allow server to transcode to AAC
+            return false
+        }
+
+        return ["aac", "ac3", "eac3"].contains(audioCodec)
     }
 
     private func bindPlayerState() {
@@ -871,6 +903,27 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Log the selection decision to Sentry for debugging DV routing.
+    private func addPlaybackSelectionBreadcrumb(reason: String) {
+        let videoStreams = metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
+        let dvStream = videoStreams.first { ($0.DOVIProfile != nil) || ($0.DOVIPresent == true) }
+        let audioStream = metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio })
+        let breadcrumb = Breadcrumb(level: .info, category: "playback.selection")
+        breadcrumb.message = "Playback selection (\(reason))"
+        breadcrumb.data = [
+            "player": playerType == .avplayer ? "avplayer" : "mpv",
+            "has_dv": metadata.hasDolbyVision,
+            "dv_profile": dvStream?.DOVIProfile ?? -1,
+            "dv_bl_compat": dvStream?.DOVIBLCompatID ?? -1,
+            "video_codec_id": dvStream?.codecID ?? "unknown",
+            "video_codec": dvStream?.codec ?? "unknown",
+            "audio_codec": audioStream?.codec ?? "unknown",
+            "container": metadata.Media?.first?.container ?? "unknown",
+            "allow_audio_direct_stream": allowAudioDirectStream
+        ]
+        SentrySDK.addBreadcrumb(breadcrumb)
+    }
+
     // MARK: - Playback Controls
 
     func startPlayback() async {
@@ -879,6 +932,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             playbackState = .failed(.invalidURL)
             return
         }
+
+        addPlaybackSelectionBreadcrumb(reason: "startPlayback")
 
         // Fetch detailed metadata with markers if not already present
         if metadata.Marker == nil || metadata.Marker?.isEmpty == true {
@@ -901,6 +956,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             switch playerType {
             case .mpv:
                 guard let mpv = mpvPlayerWrapper else { return }
+
+                // Configure display criteria to enable Match Frame Rate and Match Dynamic Range
+                // For DV content, MPV plays HDR10 fallback (can't decode DV enhancement layer)
+                #if os(tvOS)
+                DisplayCriteriaManager.shared.configureForContent(
+                    videoStream: metadata.primaryVideoStream,
+                    forceHDR10Fallback: metadata.hasDolbyVision  // MPV can't play DV
+                )
+                #endif
+
                 try await mpv.load(url: url, headers: streamHeaders, startTime: startOffset)
                 mpv.play()
                 self.duration = mpv.duration
@@ -1174,13 +1239,15 @@ final class UniversalPlayerViewModel: ObservableObject {
             throw PlayerError.loadFailed("Missing rating key")
         }
 
-        // Request new HLS session from server
         if let result = networkManager.buildHLSDirectPlayURL(
             serverURL: serverURL,
             authToken: authToken,
             ratingKey: ratingKey,
             offsetMs: Int(savedPosition * 1000),
-            hasHDR: metadata.hasHDR
+            hasHDR: metadata.hasHDR,
+            // No transcoding — rely on DV remux and codec tag fixes
+            forceVideoTranscode: false,
+            allowAudioDirectStream: allowAudioDirectStream
         ) {
             streamURL = result.url
             streamHeaders = result.headers
@@ -1195,6 +1262,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         print("🎬 [Restart] Loading new HLS session: \(url.absoluteString.prefix(100))...")
 
         // Load the new stream (offset is already baked into the HLS URL)
+        // Warm up the transcode session to avoid 404s on initial segments
+        let isHLS = url.absoluteString.contains(".m3u8")
+        if isHLS {
+            print("🎬 [Restart] Waiting for HLS transcode session...")
+            let ready = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
+            if !ready {
+                throw PlayerError.loadFailed("HLS transcode session failed to start on restart")
+            }
+        }
+
         try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
         newAVPlayer.play()
 
@@ -1258,7 +1335,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             ratingKey: ratingKey,
             offsetMs: Int(savedPosition * 1000),
             hasHDR: metadata.hasHDR,
-            useDolbyVision: false  // Key difference: no useDoviCodecs=1
+            useDolbyVision: false,  // Key difference: no useDoviCodecs=1
+            forceVideoTranscode: false,
+            allowAudioDirectStream: allowAudioDirectStream
         ) {
             streamURL = result.url
             streamHeaders = result.headers
@@ -1271,6 +1350,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         print("🎬 [HDR10 Fallback] Loading HDR10 stream: \(url.absoluteString.prefix(100))...")
+
+        // Warm up the HLS transcode (HDR10) before loading to avoid 404s
+        if url.absoluteString.contains(".m3u8") {
+            print("🎬 [HDR10 Fallback] Waiting for HLS transcode session...")
+            let ready = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
+            if !ready {
+                throw PlayerError.loadFailed("HLS transcode session failed to start for HDR10 fallback")
+            }
+        }
 
         // Load the new stream
         try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
@@ -1362,6 +1450,15 @@ final class UniversalPlayerViewModel: ObservableObject {
             throw PlayerError.loadFailed("MPV player not available")
         }
 
+        // Configure display criteria to enable Match Frame Rate and Match Dynamic Range
+        // For DV content, MPV plays HDR10 fallback (can't decode DV enhancement layer)
+        #if os(tvOS)
+        DisplayCriteriaManager.shared.configureForContent(
+            videoStream: metadata.primaryVideoStream,
+            forceHDR10Fallback: metadata.hasDolbyVision  // MPV can't play DV
+        )
+        #endif
+
         try await mpv.load(url: url, headers: streamHeaders, startTime: startOffset)
         mpv.play()
         self.duration = mpv.duration
@@ -1387,6 +1484,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         controlsTimer?.invalidate()
         hideCompatibilityNotice()
+
+        // Reset display criteria to default (allows TV to return to normal mode)
+        #if os(tvOS)
+        DisplayCriteriaManager.shared.reset()
+        #endif
+
         // Re-enable screensaver
         UIApplication.shared.isIdleTimerDisabled = false
     }
@@ -1968,15 +2071,30 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Check intro marker (show 5 seconds early)
         if let intro = metadata.introMarker {
+            // Skip malformed markers where end time is not after start time
+            guard intro.endTimeSeconds > intro.startTimeSeconds else {
+                // Invalid marker data - skip this check
+                return
+            }
+
             let previewStart = max(0, intro.startTimeSeconds - markerPreviewTime)
 
-            // Reset skip flag if user rewound before the marker
-            if time < previewStart && hasSkippedIntro {
-                hasSkippedIntro = false
+            // Reset skip flag if user rewound before the marker preview window.
+            // Special case: when intro starts at 0 (previewStart is also 0), we reset if:
+            // 1. User is at the very beginning (within 1 second of start), AND
+            // 2. We've already left the marker region (activeMarker is nil)
+            // This allows re-triggering after seeking back without causing repeated skips
+            // during initial playback.
+            if hasSkippedIntro {
+                if time < previewStart {
+                    hasSkippedIntro = false
+                } else if previewStart == 0 && time < intro.startTimeSeconds + 1.0 && activeMarker == nil {
+                    hasSkippedIntro = false
+                }
             }
 
             if time >= previewStart && time < intro.endTimeSeconds {
-                handleMarkerActive(intro, isIntro: true)
+                handleMarkerActive(intro, isIntro: true, currentTime: time)
                 return
             }
         }
@@ -2009,7 +2127,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Show skip button 5 seconds early (before credits actually start)
             // Only show if credits marker is in a valid position
             if creditsAreValid && time >= previewStart && time < credits.startTimeSeconds {
-                handleMarkerActive(credits, isIntro: false)
+                handleMarkerActive(credits, isIntro: false, currentTime: time)
                 return
             }
         }
@@ -2017,15 +2135,24 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Check commercial markers
         for commercial in metadata.commercialMarkers {
             guard let commercialId = commercial.id else { continue }
+
+            // Skip malformed markers
+            guard commercial.endTimeSeconds > commercial.startTimeSeconds else { continue }
+
             let previewStart = max(0, commercial.startTimeSeconds - markerPreviewTime)
 
             // Reset skip flag if user rewound before the marker
-            if time < previewStart && skippedCommercialIds.contains(commercialId) {
-                skippedCommercialIds.remove(commercialId)
+            // Same special case handling for commercials starting at 0 as intro markers
+            if skippedCommercialIds.contains(commercialId) {
+                if time < previewStart {
+                    skippedCommercialIds.remove(commercialId)
+                } else if previewStart == 0 && time < commercial.startTimeSeconds + 1.0 && activeMarker == nil {
+                    skippedCommercialIds.remove(commercialId)
+                }
             }
 
             if time >= previewStart && time < commercial.endTimeSeconds {
-                handleCommercialMarkerActive(commercial)
+                handleCommercialMarkerActive(commercial, currentTime: time)
                 return
             }
         }
@@ -2057,20 +2184,26 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Handle when playback enters a marker range
-    private func handleMarkerActive(_ marker: PlexMarker, isIntro: Bool) {
+    /// Handle when playback enters a marker range (or preview window)
+    /// Auto-skip only triggers when actually inside the marker (at or past startTimeSeconds),
+    /// not during the 5-second preview window before the marker starts.
+    private func handleMarkerActive(_ marker: PlexMarker, isIntro: Bool, currentTime: TimeInterval) {
         let autoSkipIntro = UserDefaults.standard.bool(forKey: "autoSkipIntro")
         let autoSkipCredits = UserDefaults.standard.bool(forKey: "autoSkipCredits")
         let showSkipButtonSetting = UserDefaults.standard.object(forKey: "showSkipButton") as? Bool ?? true
 
-        // Check for auto-skip
-        if isIntro && autoSkipIntro && !hasSkippedIntro {
+        // Only auto-skip when actually inside the marker (not during preview window)
+        // This ensures we use Plex's exact marker timing and don't cut off content
+        let insideMarker = currentTime >= marker.startTimeSeconds
+
+        // Check for auto-skip (only when inside actual marker range)
+        if isIntro && autoSkipIntro && !hasSkippedIntro && insideMarker {
             hasSkippedIntro = true
             Task { await skipMarker(marker) }
             return
         }
 
-        if !isIntro && autoSkipCredits && !hasSkippedCredits {
+        if !isIntro && autoSkipCredits && !hasSkippedCredits && insideMarker {
             hasSkippedCredits = true
             Task { await skipMarker(marker) }
             return
@@ -2089,15 +2222,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Handle when playback enters a commercial marker range
-    private func handleCommercialMarkerActive(_ marker: PlexMarker) {
+    /// Handle when playback enters a commercial marker range (or preview window)
+    /// Auto-skip only triggers when actually inside the marker (at or past startTimeSeconds).
+    private func handleCommercialMarkerActive(_ marker: PlexMarker, currentTime: TimeInterval) {
         guard let commercialId = marker.id else { return }
 
         let autoSkipAds = UserDefaults.standard.bool(forKey: "autoSkipAds")
         let showSkipButtonSetting = UserDefaults.standard.object(forKey: "showSkipButton") as? Bool ?? true
 
-        // Check for auto-skip
-        if autoSkipAds && !skippedCommercialIds.contains(commercialId) {
+        // Only auto-skip when actually inside the marker (not during preview window)
+        let insideMarker = currentTime >= marker.startTimeSeconds
+
+        // Check for auto-skip (only when inside actual marker range)
+        if autoSkipAds && !skippedCommercialIds.contains(commercialId) && insideMarker {
             skippedCommercialIds.insert(commercialId)
             Task { await skipMarker(marker) }
             return
@@ -2556,7 +2693,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         await startPlayback()
     }
 
-    /// Dismiss post-video overlay and reset state
+    /// Dismiss post-video overlay and return to fullscreen video
+    /// Note: Does NOT reset hasTriggeredPostVideo - that prevents re-triggering while still in the credits.
+    /// The flag is only reset when seeking backwards past the trigger point or starting new content.
     func dismissPostVideo() {
         countdownTimer?.invalidate()
         countdownTimer = nil
@@ -2566,7 +2705,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         recommendations = []
         countdownSeconds = 0
         isCountdownPaused = false
-        hasTriggeredPostVideo = false
+        // Don't reset hasTriggeredPostVideo here - prevents immediate re-trigger
         clearPreloadedData()
     }
 
@@ -2622,7 +2761,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         scrubTimer?.invalidate()
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
-        if let observer = appLifecycleObserver {
+        if let observer = appBackgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = appBecameActiveObserver {

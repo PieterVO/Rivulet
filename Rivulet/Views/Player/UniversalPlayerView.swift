@@ -416,6 +416,8 @@ struct UniversalPlayerView: View {
         // Manage focus scope when settings panel opens/closes
         .onChange(of: viewModel.showInfoPanel) { _, showPanel in
             if showPanel {
+                // Reset skip button focus when info panel opens (button becomes hidden)
+                isSkipButtonFocused = false
                 viewModel.resetSettingsPanel()
                 focusScopeManager.activate(.playerInfoBar)
             } else {
@@ -440,11 +442,25 @@ struct UniversalPlayerView: View {
         // Manage focus scope for post-video overlay
         .onChange(of: viewModel.postVideoState) { previous, state in
             if previous == .hidden && state != .hidden {
+                // Reset skip button focus when post-video opens (button becomes hidden)
+                isSkipButtonFocused = false
                 focusScopeManager.activate(.postVideo)
             } else if previous != .hidden && state == .hidden {
                 focusScopeManager.deactivate()
             }
         }
+        // Auto-focus skip button when controls hide (if skip button is visible)
+        .onChange(of: viewModel.showControls) { _, showControls in
+            if !showControls && viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
+                // Controls just hid, skip button is visible - focus it
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    if viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden && !viewModel.showControls {
+                        isSkipButtonFocused = true
+                    }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)  // Ensure dark mode for all system UI elements
     }
 
     // MARK: - Player Content Layer (all player UI except post-video)
@@ -680,7 +696,22 @@ struct UniversalPlayerView: View {
                     }
                     .font(.body)
 
-                    Spacer()
+                    // Description - prefer tagline (short), fallback to summary (long, ellipsed)
+                    if let tagline = viewModel.metadata.tagline, !tagline.isEmpty {
+                        Text(tagline)
+                            .font(.system(size: 32, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(3)
+                            .padding(.top, 24)
+                    } else if let summary = viewModel.metadata.summary, !summary.isEmpty {
+                        Text(summary)
+                            .font(.system(size: 28))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(6)
+                            .padding(.top, 24)
+                    }
+
+                    Spacer(minLength: 120)  // Leave room above scrubber
 
                     // Loading indicator (only show when actually loading, not when paused)
                     if !viewModel.showPausedPoster {
@@ -824,27 +855,39 @@ struct UniversalPlayerView: View {
                         Text(viewModel.skipButtonLabel)
                             .font(.system(size: 24, weight: .semibold))
                     }
-                    .foregroundStyle(isSkipButtonFocused ? .white : .white.opacity(0.9))
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 32)
                     .padding(.vertical, 16)
                     .background(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(isSkipButtonFocused ? .white.opacity(0.25) : .white.opacity(0.08))
+                            .fill(.black.opacity(isSkipButtonFocused ? 0.75 : 0.55))
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(.ultraThinMaterial)
+                            )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .strokeBorder(
-                                        isSkipButtonFocused ? .white.opacity(0.4) : .white.opacity(0.08),
-                                        lineWidth: isSkipButtonFocused ? 2 : 1
+                                        isSkipButtonFocused ? .white : .white.opacity(0.15),
+                                        lineWidth: isSkipButtonFocused ? 3 : 1
                                     )
                             )
                     )
+                    // Focused glow effect - makes selection very obvious
                     .shadow(
-                        color: isSkipButtonFocused ? .white.opacity(0.3) : .clear,
-                        radius: 12,
+                        color: isSkipButtonFocused ? .white.opacity(0.5) : .clear,
+                        radius: 16,
                         x: 0,
                         y: 0
                     )
-                    .scaleEffect(isSkipButtonFocused ? 1.04 : 1.0)
+                    // Drop shadow for depth
+                    .shadow(
+                        color: .black.opacity(0.4),
+                        radius: 8,
+                        x: 0,
+                        y: 4
+                    )
+                    .scaleEffect(isSkipButtonFocused ? 1.08 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSkipButtonFocused)
                 }
                 #if os(tvOS)
@@ -909,7 +952,9 @@ struct UniversalPlayerView: View {
     }
 
     private func handleSelectCommand() {
-        if isSkipButtonFocused {
+        // Only handle skip if button is actually visible AND focused
+        let skipButtonVisible = viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden
+        if isSkipButtonFocused && skipButtonVisible {
             // Skip button is focused - trigger skip
             Task { await viewModel.skipActiveMarker() }
             return

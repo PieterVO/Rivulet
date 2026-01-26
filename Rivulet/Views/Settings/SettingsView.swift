@@ -14,6 +14,7 @@ enum SettingsDestination: Hashable {
     case iptv
     case libraries
     case cache
+    case userProfiles
 }
 
 // MARK: - Autoplay Countdown
@@ -212,6 +213,7 @@ struct SettingsView: View {
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("allowFourStreams") private var allowFourStreams = false
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
+    @AppStorage("liveTVAboveLibraries") private var liveTVAboveLibraries = false
     @AppStorage("classicTVMode") private var classicTVMode = false
     @AppStorage("showSkipButton") private var showSkipButton = true
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
@@ -431,29 +433,46 @@ struct SettingsView: View {
                                 icon: "sparkles.tv",
                                 iconColor: .pink,
                                 title: "High Quality Scaling",
-                                subtitle: "Sharper upscaling for 720p/1080p content. Maybe you can tell a difference",
-                                isOn: $highQualityScaling
-                            )
+                                subtitle: "Sharper upscaling for 720p/1080p content",
+                                isOn: $highQualityScaling,
+                                helpTitle: "High Quality Scaling"
+                            ) {
+                                highQualityScalingHelpContent
+                            }
 
                             SettingsToggleRow(
                                 icon: "sparkles.tv",
                                 iconColor: .purple,
                                 title: "Use AVPlayer for Dolby Vision",
                                 subtitle: "If Plex can send it, we can play it",
-                                isOn: $useAVPlayerForDolbyVision
-                            )
+                                isOn: $useAVPlayerForDolbyVision,
+                                helpTitle: "AVPlayer for Dolby Vision"
+                            ) {
+                                avPlayerDVHelpContent
+                            }
 
                             SettingsToggleRow(
                                 icon: "play.rectangle",
                                 iconColor: .blue,
                                 title: "Use AVPlayer for All Videos",
                                 subtitle: "If you like remuxing and Direct Stream, here's to you",
-                                isOn: $useAVPlayerForAllVideos
-                            )
+                                isOn: $useAVPlayerForAllVideos,
+                                helpTitle: "AVPlayer for All Videos"
+                            ) {
+                                avPlayerAllHelpContent
+                            }
                         }
 
                         // Live TV section
                         SettingsSection(title: "Live TV") {
+                            SettingsToggleRow(
+                                icon: "arrow.up.arrow.down",
+                                iconColor: .cyan,
+                                title: "Live TV Above Libraries",
+                                subtitle: "Show Live TV section above Media libraries in sidebar",
+                                isOn: $liveTVAboveLibraries
+                            )
+
                             SettingsToggleRow(
                                 icon: "tv.fill",
                                 iconColor: .indigo,
@@ -520,6 +539,15 @@ struct SettingsView: View {
                             }
 
                             SettingsRow(
+                                icon: "person.crop.circle",
+                                iconColor: .cyan,
+                                title: "User Profiles",
+                                subtitle: PlexUserProfileManager.shared.selectedUser?.displayName ?? "Default"
+                            ) {
+                                navigationPath.append(SettingsDestination.userProfiles)
+                            }
+
+                            SettingsRow(
                                 icon: "tv.and.mediabox",
                                 iconColor: .blue,
                                 title: "Live TV Sources",
@@ -569,6 +597,8 @@ struct SettingsView: View {
                     LibrarySettingsView()
                 case .cache:
                     CacheSettingsView()
+                case .userProfiles:
+                    UserProfileSettingsView()
                 }
             }
         }
@@ -589,6 +619,106 @@ struct SettingsView: View {
                 nestedNavState.goBackAction = nil
             }
         }
+    }
+
+    // MARK: - Help Content
+
+    @ViewBuilder
+    private var highQualityScalingHelpContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HelpSection(
+                title: "What This Does",
+                content: "Enables advanced upscaling algorithms in MPV to make lower resolution content (720p, 1080p) look sharper on your 4K display."
+            )
+
+            HelpSection(
+                title: "How It Works",
+                content: "Uses the EWA Lanczos (jinc) scaling algorithm with anti-ringing. This produces sharper edges and finer detail than the default bilinear scaling, especially noticeable on text and fine patterns."
+            )
+
+            HelpSection(
+                title: "When to Use",
+                content: "Enable this if you watch a lot of 1080p or 720p content and want the best possible picture quality. Most beneficial on larger TVs where upscaling artifacts are more visible."
+            )
+
+            HelpSection(
+                title: "Performance",
+                content: "Uses slightly more GPU power on your Apple TV. On Apple TV 4K this is negligible, but if you experience stuttering on complex scenes, try disabling this option."
+            )
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var avPlayerDVHelpContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HelpSection(
+                title: "What This Does",
+                content: "Uses Apple's native video player (AVPlayer) for Dolby Vision content instead of MPV. This enables true Dolby Vision playback with proper TV mode switching."
+            )
+
+            HelpFormatTable(
+                title: "Supported Formats (MP4)",
+                rows: [
+                    ("HLG", true),
+                    ("HDR10", true),
+                    ("HDR10+", true),
+                    ("Dolby Vision Profile 5", true),
+                    ("Dolby Vision Profile 8.1", true),
+                    ("Dolby Vision Profile 8.4", true),
+                    ("Dolby Vision Profile 7", false),
+                    ("Dolby Vision Profile 8 (other)", false)
+                ]
+            )
+
+            HelpFormatTable(
+                title: "Supported Formats (MKV)",
+                rows: [
+                    ("HLG", true),
+                    ("HDR10", true),
+                    ("HDR10+", true),
+                    ("Dolby Vision Profile 5", true),
+                    ("Dolby Vision Profile 7/8", false)
+                ]
+            )
+
+            HelpSection(
+                title: "Why Use This?",
+                content: "AVPlayer provides native Dolby Vision and HDR10+ support that MPV cannot. Your TV will properly switch to DV/HDR mode for these formats."
+            )
+
+            HelpSection(
+                title: "Limitations",
+                content: "Profile 7 and most Profile 8 variants require MPV (they'll fall back automatically). MKV files with DV Profile 7/8 cannot be remuxed by Plex server yet. DTS and TrueHD audio will be transcoded to AAC."
+            )
+        }
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var avPlayerAllHelpContent: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HelpSection(
+                title: "What This Does",
+                content: "Uses Apple's native video player (AVPlayer) for ALL content, not just HDR/Dolby Vision. Your Plex server will remux incompatible containers (like MKV) to MP4."
+            )
+
+            HelpSection(
+                title: "Benefits",
+                content: "Native Apple TV video decoding with proper display mode switching for HDR content. Lower power consumption than software decoding."
+            )
+
+            HelpSection(
+                title: "Trade-offs",
+                content: "MKV files will be remuxed (repackaged) on the server. This uses minimal CPU but requires the server to process the stream. Some advanced subtitle formats may not work. DTS/TrueHD audio will be transcoded."
+            )
+
+            HelpSection(
+                title: "When to Use",
+                content: "Enable this if you prefer the native Apple experience and don't mind your server doing light remuxing. Most MP4 files will still direct play without any server processing."
+            )
+        }
+        .padding(.vertical, 8)
     }
 }
 

@@ -57,6 +57,7 @@ class PlexDataStore: ObservableObject {
     private let networkManager = PlexNetworkManager.shared
     private let cacheManager = CacheManager.shared
     private let authManager = PlexAuthManager.shared
+    private let profileManager = PlexUserProfileManager.shared
     let librarySettings = LibrarySettingsManager.shared
 
     // MARK: - Computed Properties
@@ -96,8 +97,104 @@ class PlexDataStore: ObservableObject {
     private var hubsLoadTask: Task<Void, Never>?
     private var librariesLoadTask: Task<Void, Never>?
 
+    /// Track whether we've already attempted connection recovery this session
+    /// Reset on successful fetch
+    private var hasAttemptedConnectionRecovery = false
+
     private init() {
         print("📦 PlexDataStore: Initialized")
+    }
+
+    // MARK: - Connection Recovery
+
+    /// Check if an error indicates a connection problem that might be fixable
+    private func isConnectionError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+
+        // Network-level connection errors
+        let connectionErrorCodes = [
+            NSURLErrorCannotConnectToHost,      // -1004
+            NSURLErrorTimedOut,                  // -1001
+            NSURLErrorNotConnectedToInternet,   // -1009
+            NSURLErrorNetworkConnectionLost,    // -1005
+            NSURLErrorCannotFindHost,           // -1003
+            NSURLErrorDNSLookupFailed,          // -1006
+            NSURLErrorSecureConnectionFailed    // -1200
+        ]
+
+        if connectionErrorCodes.contains(nsError.code) {
+            return true
+        }
+
+        // HTTP errors that suggest the server URL is wrong/stale
+        if case PlexAPIError.httpError(let statusCode, _) = error {
+            // 5xx errors often mean the URL is wrong (server not at that address)
+            return (500...599).contains(statusCode)
+        }
+
+        return false
+    }
+
+    /// Attempt to recover from a connection error by verifying/fixing the connection
+    /// Returns true if recovery was attempted and connection is now working
+    private func attemptConnectionRecovery() async -> Bool {
+        guard !hasAttemptedConnectionRecovery else {
+            print("📦 PlexDataStore: Connection recovery already attempted this session")
+            return false
+        }
+
+        hasAttemptedConnectionRecovery = true
+        print("📦 PlexDataStore: Attempting connection recovery...")
+
+        await authManager.verifyAndFixConnection()
+
+        if authManager.isConnected {
+            print("📦 PlexDataStore: ✅ Connection recovered")
+            return true
+        } else {
+            print("📦 PlexDataStore: ❌ Connection recovery failed")
+            return false
+        }
+    }
+
+    // MARK: - Profile Switching
+
+    /// Called when the user switches Plex Home profiles
+    /// Clears all user-specific cached data and reloads content
+    func onProfileSwitched() async {
+        print("📦 PlexDataStore: Profile switched - clearing user-specific data...")
+
+        // Switch library settings to the new user's preferences
+        LibrarySettingsManager.shared.onProfileSwitched()
+
+        // Clear user-specific caches
+        clearHeroCache()
+        clearNextEpisodeCache()
+
+        // Clear in-memory data (libraries may differ per user)
+        hubs = []
+        libraries = []
+        libraryHubs.removeAll()
+        hubsVersion = UUID()
+        libraryHubsVersion = UUID()
+
+        // Clear on-deck/continue watching cache
+        await cacheManager.clearOnDeckCache()
+
+        // Clear library caches (different users may have different library access)
+        await cacheManager.clearLibraryCache()
+
+        // Reset connection recovery flag (new profile may have different access)
+        hasAttemptedConnectionRecovery = false
+
+        print("📦 PlexDataStore: Reloading content for new profile...")
+
+        // Reload content for new profile (libraries first, then hubs)
+        await refreshLibraries()
+        await refreshHubs()
+        await refreshLibraryHubs()
+
+        print("📦 PlexDataStore: ✅ Profile switch complete")
     }
 
     // MARK: - Hubs (Home View)
@@ -154,11 +251,15 @@ class PlexDataStore: ObservableObject {
     }
 
     private func fetchHubsFromServer(serverURL: String, token: String, updateLoading: Bool) async {
-        print("📦 PlexDataStore: Fetching hubs from \(serverURL)/hubs")
+        let userId = profileManager.selectedUserId
+        print("📦 PlexDataStore: Fetching hubs from \(serverURL)/hubs (userId: \(userId.map(String.init) ?? "none"))")
 
         do {
-            let fetchedHubs = try await fetchHubsOffMain(serverURL: serverURL, token: token)
+            let fetchedHubs = try await fetchHubsOffMain(serverURL: serverURL, token: token, userId: userId)
             print("📦 PlexDataStore: ✅ Fetched \(fetchedHubs.count) hubs")
+
+            // Reset recovery flag on success
+            hasAttemptedConnectionRecovery = false
 
             // Only update if hubs actually changed (prevents unnecessary re-renders)
             if !hubsAreEqual(self.hubs, fetchedHubs) {
@@ -185,6 +286,18 @@ class PlexDataStore: ObservableObject {
             if nsError.code == NSURLErrorCancelled {
                 print("📦 PlexDataStore: Request was cancelled")
                 return
+            }
+
+            // Attempt connection recovery for connection-related errors
+            if isConnectionError(error) {
+                if await attemptConnectionRecovery(),
+                   let newServerURL = authManager.selectedServerURL,
+                   let newToken = authManager.selectedServerToken {
+                    // Retry with new connection
+                    print("📦 PlexDataStore: Retrying hubs fetch after connection recovery...")
+                    await fetchHubsFromServer(serverURL: newServerURL, token: newToken, updateLoading: updateLoading)
+                    return
+                }
             }
 
             if self.hubs.isEmpty {
@@ -231,7 +344,8 @@ class PlexDataStore: ObservableObject {
             return
         }
 
-        print("📦 PlexDataStore: Loading hubs for \(missingLibraries.count) libraries...")
+        let userId = profileManager.selectedUserId
+        print("📦 PlexDataStore: Loading hubs for \(missingLibraries.count) libraries... (userId: \(userId.map(String.init) ?? "none"))")
         isLoadingLibraryHubs = true
 
         // Fetch hubs for each library
@@ -244,6 +358,7 @@ class PlexDataStore: ObservableObject {
                     serverURL: serverURL,
                     authToken: token,
                     sectionId: sectionId,
+                    userId: userId,
                     count: 24
                 )
                 libraryHubs[library.key] = hubs
@@ -317,11 +432,15 @@ class PlexDataStore: ObservableObject {
     }
 
     private func fetchLibrariesFromServer(serverURL: String, token: String, updateLoading: Bool) async {
-        print("📦 PlexDataStore: Fetching libraries from \(serverURL)/library/sections")
+        let userId = profileManager.selectedUserId
+        print("📦 PlexDataStore: Fetching libraries from \(serverURL)/library/sections (userId: \(userId.map(String.init) ?? "none"))")
 
         do {
-            let fetched = try await fetchLibrariesOffMain(serverURL: serverURL, token: token)
+            let fetched = try await fetchLibrariesOffMain(serverURL: serverURL, token: token, userId: userId)
             print("📦 PlexDataStore: ✅ Fetched \(fetched.count) libraries")
+
+            // Reset recovery flag on success
+            hasAttemptedConnectionRecovery = false
 
             // Only update if libraries actually changed (prevents unnecessary re-renders)
             if !librariesAreEqual(self.libraries, fetched) {
@@ -348,6 +467,18 @@ class PlexDataStore: ObservableObject {
                 return
             }
 
+            // Attempt connection recovery for connection-related errors
+            if isConnectionError(error) {
+                if await attemptConnectionRecovery(),
+                   let newServerURL = authManager.selectedServerURL,
+                   let newToken = authManager.selectedServerToken {
+                    // Retry with new connection
+                    print("📦 PlexDataStore: Retrying libraries fetch after connection recovery...")
+                    await fetchLibrariesFromServer(serverURL: newServerURL, token: newToken, updateLoading: updateLoading)
+                    return
+                }
+            }
+
             if self.libraries.isEmpty {
                 self.librariesError = error.localizedDescription
             }
@@ -359,17 +490,17 @@ class PlexDataStore: ObservableObject {
 
     // MARK: - Off-main fetch helpers
 
-    private func fetchHubsOffMain(serverURL: String, token: String) async throws -> [PlexHub] {
+    private func fetchHubsOffMain(serverURL: String, token: String, userId: Int?) async throws -> [PlexHub] {
         try await Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
-            return try await PlexNetworkManager.shared.getHubs(serverURL: serverURL, authToken: token)
+            return try await PlexNetworkManager.shared.getHubs(serverURL: serverURL, authToken: token, userId: userId)
         }.value
     }
 
-    private func fetchLibrariesOffMain(serverURL: String, token: String) async throws -> [PlexLibrary] {
+    private func fetchLibrariesOffMain(serverURL: String, token: String, userId: Int?) async throws -> [PlexLibrary] {
         try await Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
-            return try await PlexNetworkManager.shared.getLibraries(serverURL: serverURL, authToken: token)
+            return try await PlexNetworkManager.shared.getLibraries(serverURL: serverURL, authToken: token, userId: userId)
         }.value
     }
 

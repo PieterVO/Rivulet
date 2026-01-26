@@ -131,18 +131,40 @@ struct SettingsInfoRow: View {
 
 // MARK: - Settings Toggle Row
 
-struct SettingsToggleRow: View {
+struct SettingsToggleRow<HelpContent: View>: View {
     let icon: String
     let iconColor: Color
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
+    let helpTitle: String?
+    let helpContent: HelpContent?
 
     @FocusState private var isFocused: Bool
+    @State private var showHelp = false
+
+    /// Initialize with help content
+    init(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        subtitle: String,
+        isOn: Binding<Bool>,
+        helpTitle: String?,
+        @ViewBuilder helpContent: () -> HelpContent
+    ) {
+        self.icon = icon
+        self.iconColor = iconColor
+        self.title = title
+        self.subtitle = subtitle
+        self._isOn = isOn
+        self.helpTitle = helpTitle
+        self.helpContent = helpContent()
+    }
 
     var body: some View {
         Button {
-            isOn.toggle()
+            // Action handled by LongPressButtonStyle to prevent toggle on long press
         } label: {
             HStack(spacing: 20) {
                 // Icon
@@ -162,9 +184,18 @@ struct SettingsToggleRow: View {
                         .font(.system(size: 29, weight: .medium))
                         .foregroundStyle(.white)
 
-                    Text(subtitle)
-                        .font(.system(size: 23))
-                        .foregroundStyle(.white.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(subtitle)
+                            .font(.system(size: 23))
+                            .foregroundStyle(.white.opacity(0.6))
+
+                        // Show help hint if help is available
+                        if helpContent != nil {
+                            Text("Press & hold to learn more")
+                                .font(.system(size: 19))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                    }
                 }
 
                 Spacer()
@@ -188,10 +219,299 @@ struct SettingsToggleRow: View {
                     )
             )
         }
-        .buttonStyle(SettingsButtonStyle())
+        .buttonStyle(LongPressButtonStyle(
+            onTap: { isOn.toggle() },
+            onLongPress: helpContent != nil ? { showHelp = true } : nil
+        ))
         .focused($isFocused)
         .scaleEffect(isFocused ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+        #if os(tvOS)
+        .sheet(isPresented: $showHelp) {
+            if let helpContent, let helpTitle {
+                SettingsHelpSheet(title: helpTitle, isPresented: $showHelp) {
+                    helpContent
+                }
+            }
+        }
+        #endif
+    }
+}
+
+// Extension for SettingsToggleRow without help content
+extension SettingsToggleRow where HelpContent == EmptyView {
+    init(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        subtitle: String,
+        isOn: Binding<Bool>
+    ) {
+        self.icon = icon
+        self.iconColor = iconColor
+        self.title = title
+        self.subtitle = subtitle
+        self._isOn = isOn
+        self.helpTitle = nil
+        self.helpContent = nil
+    }
+}
+
+// MARK: - Long Press Button Style
+
+/// Button style that detects long press and calls a separate action.
+/// When using this style, pass an empty action to Button and provide onTap here instead.
+/// This prevents the button from toggling when a long press is performed.
+struct LongPressButtonStyle: ButtonStyle {
+    var onTap: (() -> Void)?
+    var onLongPress: (() -> Void)?
+    private let longPressThreshold: TimeInterval = 0.5
+
+    func makeBody(configuration: Configuration) -> some View {
+        LongPressButtonContent(
+            configuration: configuration,
+            onTap: onTap,
+            onLongPress: onLongPress,
+            longPressThreshold: longPressThreshold
+        )
+    }
+}
+
+private struct LongPressButtonContent: View {
+    let configuration: ButtonStyleConfiguration
+    var onTap: (() -> Void)?
+    var onLongPress: (() -> Void)?
+    let longPressThreshold: TimeInterval
+
+    @State private var pressStartTime: Date?
+    @State private var longPressTriggered = false
+    @State private var holdProgress: CGFloat = 0
+    @State private var progressTimer: Timer?
+
+    var body: some View {
+        configuration.label
+            .overlay(alignment: .bottom) {
+                // Progress indicator during hold (only if long press is available)
+                if onLongPress != nil && holdProgress > 0 {
+                    GeometryReader { geo in
+                        Rectangle()
+                            .fill(.white.opacity(0.4))
+                            .frame(width: geo.size.width * holdProgress, height: 3)
+                            .animation(.linear(duration: 0.05), value: holdProgress)
+                    }
+                    .frame(height: 3)
+                    .clipShape(RoundedRectangle(cornerRadius: 1.5))
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+                }
+            }
+            .onChange(of: configuration.isPressed) { _, isPressed in
+                if isPressed {
+                    // Press started
+                    pressStartTime = Date()
+                    longPressTriggered = false
+                    holdProgress = 0
+
+                    // Start progress animation if long press is available
+                    if onLongPress != nil {
+                        // Update progress every 50ms
+                        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+                            guard let startTime = pressStartTime else {
+                                progressTimer?.invalidate()
+                                progressTimer = nil
+                                return
+                            }
+
+                            let elapsed = Date().timeIntervalSince(startTime)
+                            holdProgress = min(1.0, CGFloat(elapsed / longPressThreshold))
+
+                            if elapsed >= longPressThreshold && !longPressTriggered {
+                                longPressTriggered = true
+                                progressTimer?.invalidate()
+                                progressTimer = nil
+                                holdProgress = 0
+                                onLongPress?()
+                            }
+                        }
+                    }
+                } else {
+                    // Press ended
+                    // Only trigger tap if it wasn't a long press
+                    if !longPressTriggered {
+                        onTap?()
+                    }
+
+                    // Reset state
+                    pressStartTime = nil
+                    progressTimer?.invalidate()
+                    progressTimer = nil
+                    holdProgress = 0
+                    longPressTriggered = false
+                }
+            }
+    }
+}
+
+// MARK: - Settings Help Sheet
+
+struct SettingsHelpSheet<Content: View>: View {
+    let title: String
+    @Binding var isPresented: Bool
+    @ViewBuilder let content: Content
+
+    @FocusState private var isDismissButtonFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 24) {
+            // Header
+            Text(title)
+                .font(.system(size: 36, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(.top, 40)
+
+            // Scrollable content area with focusable sections
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    content
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 8)
+                }
+                .frame(maxHeight: 500)
+            }
+            .padding(.horizontal, 16)
+
+            Spacer(minLength: 16)
+
+            // Dismiss button
+            Button {
+                isPresented = false
+            } label: {
+                Text("Got it")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 48)
+                    .padding(.vertical, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(isDismissButtonFocused ? .white.opacity(0.25) : .white.opacity(0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(
+                                        isDismissButtonFocused ? .white.opacity(0.35) : .white.opacity(0.15),
+                                        lineWidth: 1
+                                    )
+                            )
+                    )
+            }
+            .buttonStyle(SettingsButtonStyle())
+            .focused($isDismissButtonFocused)
+            .scaleEffect(isDismissButtonFocused ? 1.05 : 1.0)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDismissButtonFocused)
+            .padding(.bottom, 32)
+        }
+        .frame(width: 650)
+        .background(
+            RoundedRectangle(cornerRadius: 32, style: .continuous)
+                .fill(.black.opacity(0.3))
+        )
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        #if os(tvOS)
+        .onExitCommand {
+            isPresented = false
+        }
+        #endif
+    }
+}
+
+// MARK: - Help Text Components
+
+struct HelpSection: View {
+    let title: String
+    let content: String
+    let id: String
+
+    @FocusState private var isFocused: Bool
+
+    init(title: String, content: String, id: String? = nil) {
+        self.title = title
+        self.content = content
+        self.id = id ?? title
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white)
+
+            Text(content)
+                .font(.system(size: 22))
+                .foregroundStyle(.white.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.08) : .clear)
+        )
+        .focusable()
+        .focused($isFocused)
+        .id(id)
+    }
+}
+
+struct HelpFormatTable: View {
+    let title: String
+    let rows: [(format: String, supported: Bool)]
+    let id: String
+
+    @FocusState private var isFocused: Bool
+
+    init(title: String, rows: [(format: String, supported: Bool)], id: String? = nil) {
+        self.title = title
+        self.rows = rows
+        self.id = id ?? title
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white)
+
+            VStack(spacing: 6) {
+                ForEach(rows, id: \.format) { row in
+                    HStack {
+                        Text(row.format)
+                            .font(.system(size: 21))
+                            .foregroundStyle(.white.opacity(0.75))
+
+                        Spacer()
+
+                        Image(systemName: row.supported ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(row.supported ? .green : .red.opacity(0.7))
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.white.opacity(0.06))
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(isFocused ? .white.opacity(0.08) : .clear)
+        )
+        .focusable()
+        .focused($isFocused)
+        .id(id)
     }
 }
 
@@ -522,5 +842,330 @@ struct ConnectButton: View {
             action()
         }
         .animation(.easeOut(duration: 0.15), value: isFocused)
+    }
+}
+
+// MARK: - Settings Text Entry Row
+
+/// A row that displays a title and current value, tapping opens a text entry sheet
+struct SettingsTextEntryRow: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    @Binding var value: String
+    var placeholder: String = ""
+    var hint: String? = nil
+    var suggestions: [TextEntrySuggestion] = []
+    var keyboardType: UIKeyboardType = .default
+
+    @FocusState private var isFocused: Bool
+    @State private var showEntrySheet = false
+
+    var body: some View {
+        Button {
+            showEntrySheet = true
+        } label: {
+            HStack(spacing: 20) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(iconColor.gradient)
+                        .frame(width: 64, height: 64)
+
+                    Image(systemName: icon)
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                // Text
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 29, weight: .medium))
+                        .foregroundStyle(.white)
+
+                    // Show value or placeholder
+                    if value.isEmpty {
+                        Text(placeholder.isEmpty ? "Not set" : placeholder)
+                            .font(.system(size: 23))
+                            .foregroundStyle(.white.opacity(0.35))
+                    } else {
+                        Text(value)
+                            .font(.system(size: 23))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                // Chevron
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(isFocused ? .white.opacity(0.8) : .white.opacity(0.4))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(SettingsButtonStyle())
+        .focused($isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+        .fullScreenCover(isPresented: $showEntrySheet) {
+            TextEntrySheet(
+                title: title,
+                text: $value,
+                placeholder: placeholder,
+                hint: hint,
+                suggestions: suggestions,
+                keyboardType: keyboardType,
+                isPresented: $showEntrySheet
+            )
+        }
+    }
+}
+
+// MARK: - Text Entry Suggestion
+
+/// A suggestion option for text entry (label + value)
+struct TextEntrySuggestion: Identifiable, Hashable {
+    let id = UUID()
+    let label: String
+    let value: String
+
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+}
+
+// MARK: - Text Entry Sheet
+
+/// A dedicated sheet for text entry with title, text field, hint, and action buttons
+struct TextEntrySheet: View {
+    let title: String
+    @Binding var text: String
+    var placeholder: String = ""
+    var hint: String? = nil
+    var suggestions: [TextEntrySuggestion] = []
+    var keyboardType: UIKeyboardType = .default
+    @Binding var isPresented: Bool
+
+    @State private var editingText: String = ""
+    @FocusState private var isTextFieldFocused: Bool
+    @FocusState private var focusedButton: ButtonType?
+    @FocusState private var focusedSuggestion: UUID?
+
+    enum ButtonType: Hashable {
+        case cancel, done
+    }
+
+    var body: some View {
+        ZStack {
+            // Solid black background - no transparency to avoid blur effects
+            Color.black
+                .ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                // Suggestions (if any)
+                if !suggestions.isEmpty {
+                    VStack(spacing: 12) {
+                        Text("Quick Select")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(suggestions) { suggestion in
+                                    SuggestionChip(
+                                        label: suggestion.label,
+                                        isFocused: focusedSuggestion == suggestion.id
+                                    ) {
+                                        editingText = suggestion.value
+                                    }
+                                    .focused($focusedSuggestion, equals: suggestion.id)
+                                }
+                            }
+                            .padding(.horizontal, 80)
+                        }
+                    }
+                    .padding(.top, 40)
+                    #if os(tvOS)
+                    .onMoveCommand { direction in
+                        if direction == .down {
+                            // Move focus from any suggestion to the text field
+                            focusedSuggestion = nil
+                            isTextFieldFocused = true
+                        }
+                    }
+                    #endif
+                }
+
+                Spacer()
+
+                // Title
+                Text(title)
+                    .font(.system(size: 42, weight: .bold))
+                    .foregroundStyle(.white)
+
+                // Text field container
+                VStack(spacing: 16) {
+                    ZStack(alignment: .leading) {
+                        // Placeholder
+                        if editingText.isEmpty {
+                            Text(placeholder)
+                                .font(.system(size: 32))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .padding(.horizontal, 24)
+                        }
+
+                        TextField("", text: $editingText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 32, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 20)
+                            .focused($isTextFieldFocused)
+                            .autocorrectionDisabled()
+                            .keyboardType(keyboardType)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            // Solid dark background for better text readability
+                            .fill(Color(white: isTextFieldFocused ? 0.18 : 0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .strokeBorder(
+                                        isTextFieldFocused ? .blue.opacity(0.7) : .white.opacity(0.2),
+                                        lineWidth: isTextFieldFocused ? 3 : 1
+                                    )
+                            )
+                    )
+                    .scaleEffect(isTextFieldFocused ? 1.01 : 1.0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isTextFieldFocused)
+
+                    // Hint
+                    if let hint = hint {
+                        Text(hint)
+                            .font(.system(size: 22))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: 700)
+
+                Spacer()
+
+                // Buttons
+                HStack(spacing: 24) {
+                    // Cancel button
+                    Button {
+                        isPresented = false
+                    } label: {
+                        Text("Cancel")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 180)
+                            .padding(.vertical, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(focusedButton == .cancel ? .white.opacity(0.25) : .white.opacity(0.12))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .strokeBorder(
+                                                focusedButton == .cancel ? .white.opacity(0.35) : .white.opacity(0.15),
+                                                lineWidth: 1
+                                            )
+                                    )
+                            )
+                    }
+                    .buttonStyle(SettingsButtonStyle())
+                    .focused($focusedButton, equals: .cancel)
+                    .scaleEffect(focusedButton == .cancel ? 1.05 : 1.0)
+
+                    // Done button
+                    Button {
+                        text = editingText
+                        isPresented = false
+                    } label: {
+                        Text("Done")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 180)
+                            .padding(.vertical, 18)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(focusedButton == .done ? .blue : .blue.opacity(0.85))
+                            )
+                    }
+                    .buttonStyle(SettingsButtonStyle())
+                    .focused($focusedButton, equals: .done)
+                    .scaleEffect(focusedButton == .done ? 1.05 : 1.0)
+                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: focusedButton)
+                .padding(.bottom, 60)
+            }
+            .padding(.horizontal, 80)
+        }
+        .preferredColorScheme(.dark)
+        .onAppear {
+            editingText = text
+            // Focus the first suggestion if available, otherwise the text field
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                if let first = suggestions.first {
+                    focusedSuggestion = first.id
+                } else {
+                    isTextFieldFocused = true
+                }
+            }
+        }
+        #if os(tvOS)
+        .onExitCommand {
+            isPresented = false
+        }
+        #endif
+    }
+}
+
+// MARK: - Suggestion Chip
+
+/// A small tappable chip for quick-select suggestions
+private struct SuggestionChip: View {
+    let label: String
+    let isFocused: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(isFocused ? .blue : Color(white: 0.2))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(
+                                    isFocused ? .blue.opacity(0.8) : .white.opacity(0.15),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+                .scaleEffect(isFocused ? 1.05 : 1.0)
+        }
+        .buttonStyle(SettingsButtonStyle())
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 }

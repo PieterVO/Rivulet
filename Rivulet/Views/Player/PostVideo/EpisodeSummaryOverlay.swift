@@ -129,10 +129,10 @@ struct EpisodeSummaryOverlay: View {
                             }
                         }
 
-                        // Close button - returns to fullscreen video
+                        // Dismiss button - returns to fullscreen video
                         if !hasNextEpisode || !countdownActive {
                             PostVideoButton(
-                                title: "Close",
+                                title: "Dismiss",
                                 icon: "xmark",
                                 isPrimary: !hasNextEpisode,  // Primary if no next episode
                                 isFocused: focusedButton == .close,

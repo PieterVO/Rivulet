@@ -90,9 +90,9 @@ struct MovieSummaryOverlay: View {
                         .frame(maxWidth: 1200)
                     }
 
-                    // Close button - returns to fullscreen video
+                    // Dismiss button - returns to fullscreen video
                     PostVideoButton(
-                        title: "Close",
+                        title: "Dismiss",
                         icon: "xmark",
                         isPrimary: true,
                         isFocused: focusedButton == .close

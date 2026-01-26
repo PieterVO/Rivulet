@@ -431,25 +431,16 @@ struct PlexHomeView: View {
 
             Spacer()
 
-            Button {
+            Button("Retry") {
                 Task {
                     await authManager.verifyAndFixConnection()
                     if authManager.isConnected {
                         await dataStore.refreshHubs()
                     }
                 }
-            } label: {
-                Text("Retry")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(.white.opacity(0.2))
-                    )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderedProminent)
+            .tint(.yellow.opacity(0.3))
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)

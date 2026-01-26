@@ -538,6 +538,12 @@ extension PlexMetadata {
         return videoStreams.contains(where: { $0.isHDR })
     }
 
+    /// Primary video stream (first video stream from first media/part)
+    /// Used for display criteria configuration (HDR/frame rate matching)
+    var primaryVideoStream: PlexStream? {
+        Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo })
+    }
+
     /// Audio format display (e.g., "Atmos", "5.1", "Stereo")
     var audioFormatDisplay: String? {
         guard let media = Media?.first else { return nil }
