@@ -1459,10 +1459,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         components.queryItems = items
 
-        // Add HDR-related parameters for proper TV mode switching
-        // useDoviCodecs=1 causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
+        // Add HDR-related parameters for proper DV remuxing and codec signaling
+        // useDoviCodecs=1 ensures Plex remuxes DV content (preserves DV metadata) rather than transcoding
         // includeCodecs=1 is required with useDoviCodecs for correct HLS manifest generation
-        // When useDolbyVision=false, we skip useDoviCodecs to get HDR10 base layer only (workaround for Plex HLS DV remux issues)
+        // Note: Plex outputs dvh1 in the CODECS string which AVPlayer rejects, but we patch the
+        // master playlist before loading (see AVPlayerWrapper) to change dvh1 → hvc1
         if hasHDR && useDolbyVision {
             components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
             components.queryItems?.append(URLQueryItem(name: "includeCodecs", value: "1"))

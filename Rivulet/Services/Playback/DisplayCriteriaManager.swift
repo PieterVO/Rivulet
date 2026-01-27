@@ -91,10 +91,17 @@ final class DisplayCriteriaManager {
         // Create a format description with HDR metadata
         var formatDescription: CMFormatDescription?
 
-        // Determine the codec type - HEVC for HDR content
-        let codecType: CMVideoCodecType = (isDolbyVision || isHDR10 || isHLG)
-            ? kCMVideoCodecType_HEVC
-            : kCMVideoCodecType_H264
+        // Determine the codec type
+        // Use DV-specific codec type (dvh1) for Dolby Vision to trigger DV display mode
+        // HEVC for other HDR content, H.264 for SDR
+        let codecType: CMVideoCodecType
+        if isDolbyVision {
+            codecType = 0x64766831 // 'dvh1' — Dolby Vision HEVC
+        } else if isHDR10 || isHLG {
+            codecType = kCMVideoCodecType_HEVC
+        } else {
+            codecType = kCMVideoCodecType_H264
+        }
 
         // Build extensions dictionary for HDR metadata
         var extensions: [CFString: Any] = [:]

@@ -429,7 +429,10 @@ struct PinEntrySheet: View {
         }
         .padding(60)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+        .background(Color(white: 0.12))
+        .onExitCommand {
+            onCancel()
+        }
         .onAppear {
             focusedButton = "1"
         }

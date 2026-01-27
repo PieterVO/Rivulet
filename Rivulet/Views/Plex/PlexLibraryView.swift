@@ -34,8 +34,10 @@ struct PlexLibraryView: View {
     @State private var totalItemCount: Int = 0  // Total items in this library
     @State private var cachedProcessedHubs: [PlexHub] = []  // Memoized hubs to avoid recalculation
     @State private var loadingTask: Task<Void, Never>?  // Track current loading task for cancellation
-    @State private var visibleItemCount: Int = 0  // Number of grid items to render initially
-    @State private var visibleItemExpandTask: Task<Void, Never>?  // Gradual reveal task
+    // Batching disabled — LazyVGrid handles lazy rendering natively.
+    // Uncomment if first-load performance regresses.
+    // @State private var visibleItemCount: Int = 0
+    // @State private var visibleItemExpandTask: Task<Void, Never>?
     @State private var recommendations: [PlexMetadata] = []
     @State private var isLoadingRecommendations = false
     @State private var recommendationsError: String?
@@ -45,10 +47,7 @@ struct PlexLibraryView: View {
     @FocusState private var focusedItemId: String?  // Track focused item by "context:itemId" format
     @State private var lastPrefetchIndex: Int = -18  // Track last prefetch position for throttling
     private var firstDisplayedItem: PlexMetadata? {
-        if visibleItemCount == 0 {
-            return items.first
-        }
-        return items.prefix(visibleItemCount).first
+        items.first
     }
 
     /// Create a unique focus ID for a grid item
@@ -76,7 +75,7 @@ struct PlexLibraryView: View {
     ]
     #endif
 
-    private let initialVisibleBatch = 24  // Limit first-frame layout work
+    // private let initialVisibleBatch = 36  // Limit first-frame layout work
 
     private var recommendationsContentType: RecommendationContentType {
         let libraryType = dataStore.libraries.first(where: { $0.key == libraryKey })?.type
@@ -222,8 +221,8 @@ struct PlexLibraryView: View {
                         hubs = []
                         cachedProcessedHubs = []
                         isLoading = true
-                        visibleItemCount = 0
-                        visibleItemExpandTask?.cancel()
+                        // visibleItemCount = 0
+                        // visibleItemExpandTask?.cancel()
                         lastLoadedLibraryKey = libraryKey
                         #if os(tvOS)
                         // Ensure we start in content scope with no stale focus when switching libraries
@@ -256,7 +255,7 @@ struct PlexLibraryView: View {
                         if !cachedItems.isEmpty {
                             items = cachedItems
                             isLoading = false
-                            updateVisibleItems(for: cachedItems.count, animated: true)
+                            // updateVisibleItems(for: cachedItems.count, animated: true)
 
                             if heroItem == nil {
                                 selectHeroItemFromCurrentData()
@@ -316,6 +315,28 @@ struct PlexLibraryView: View {
                 }
             } else {
                 nestedNavState.goBackAction = nil
+                #if os(tvOS)
+                // Restore focus to the previously selected grid item so the scroll
+                // position returns to where the user was before entering detail view.
+                // Deferred slightly so the NavigationStack pop animation completes
+                // and the grid items are focusable again.
+                let saved = focusScopeManager.focusedItem
+                print("🎯 [LIBRARY] Detail dismissed — saved focus: \(saved?.description ?? "nil"), current focusedItemId: \(focusedItemId ?? "nil")")
+                if let savedItem = saved {
+                    let targetId: String
+                    if let context = savedItem.context {
+                        targetId = "\(context):\(savedItem.itemId)"
+                    } else {
+                        targetId = savedItem.itemId
+                    }
+                    print("🎯 [LIBRARY] Will restore focus to: \(targetId)")
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+                        print("🎯 [LIBRARY] Restoring focusedItemId = \(targetId)")
+                        focusedItemId = targetId
+                    }
+                }
+                #endif
             }
         }
         .onChange(of: enablePersonalizedRecommendations) { _, _ in
@@ -627,17 +648,14 @@ struct PlexLibraryView: View {
     // MARK: - Library Grid View
 
     private var libraryGridView: some View {
-        let displayedItems: [PlexMetadata] = {
-            if visibleItemCount == 0 {
-                // Fallback: limit initial render even before the counter is set
-                return Array(items.prefix(initialVisibleBatch))
-            }
-            return Array(items.prefix(visibleItemCount))
-        }()
+        // NOTE: visibleItemCount batching removed — LazyVGrid already only
+        // measures on-screen items. Batching added complexity and could break
+        // scroll/focus restoration when returning from detail views.
+        // If performance regresses on first load, re-enable the batching logic
+        // (see visibleItemCount, updateVisibleItems, initialVisibleBatch).
 
-        return LazyVGrid(columns: columns, spacing: 40) {
-            ForEach(displayedItems.indices, id: \.self) { index in
-                let item = displayedItems[index]
+        LazyVGrid(columns: columns, spacing: 40) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 libraryGridItem(item: item, index: index)
             }
         }
@@ -1006,8 +1024,24 @@ struct PlexLibraryView: View {
                 hasMoreItems = result.items.count >= pageSize
             }
 
-            // Only update items if they're actually different (prevents unnecessary re-renders)
-            if !itemsAreEqual(items, result.items) {
+            // Only update items if they're actually different (prevents unnecessary re-renders).
+            // When refreshing in background (!updateLoading), don't truncate if we already
+            // have more items loaded via infinite scroll — just update the overlapping portion.
+            if !updateLoading && items.count > result.items.count {
+                // Merge: update existing items with fresh data, keep the rest
+                var merged = items
+                let existingKeys = Dictionary(uniqueKeysWithValues: result.items.compactMap { item in
+                    item.ratingKey.map { ($0, item) }
+                })
+                for i in merged.indices {
+                    if let key = merged[i].ratingKey, let fresh = existingKeys[key] {
+                        merged[i] = fresh
+                    }
+                }
+                if !itemsAreEqual(items, merged) {
+                    items = merged
+                }
+            } else if !itemsAreEqual(items, result.items) {
                 items = result.items
             }
 
@@ -1227,16 +1261,15 @@ struct PlexLibraryView: View {
 
     /// Handle items count change - triggers prefetch on tvOS
     private func handleItemsCountChange(oldCount: Int, newCount: Int) {
-        if newCount == 0 {
-            visibleItemExpandTask?.cancel()
-            visibleItemCount = 0
-        } else if oldCount == 0 {
-            // First load for this library: limit initial render then expand
-            updateVisibleItems(for: newCount, animated: true)
-        } else if newCount > visibleItemCount {
-            // Additional pages appended; show them immediately
-            updateVisibleItems(for: newCount, animated: false)
-        }
+        // Batching disabled — LazyVGrid handles lazy rendering natively.
+        // if newCount == 0 {
+        //     visibleItemExpandTask?.cancel()
+        //     visibleItemCount = 0
+        // } else if oldCount == 0 {
+        //     updateVisibleItems(for: newCount, animated: true)
+        // } else if newCount > visibleItemCount {
+        //     updateVisibleItems(for: newCount, animated: false)
+        // }
 
         #if os(tvOS)
         if oldCount == 0 && newCount > 0 {
@@ -1248,6 +1281,9 @@ struct PlexLibraryView: View {
         #endif
     }
 
+    // Batching disabled — LazyVGrid handles lazy rendering natively.
+    // Uncomment if first-load performance regresses.
+    /*
     /// Limit first-frame grid layout to a small batch, then reveal the rest
     private func updateVisibleItems(for total: Int, animated: Bool) {
         guard total > 0 else {
@@ -1273,6 +1309,7 @@ struct PlexLibraryView: View {
             }
         }
     }
+    */
 
     #if os(tvOS)
     /// Ensure the first grid item receives focus when entering a library

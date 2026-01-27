@@ -23,6 +23,13 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     // Keep a non-isolated reference for cleanup in deinit
     private nonisolated(unsafe) var _playerForCleanup: AVPlayer?
 
+    /// Resource loader for HLS codec patching (Dolby Vision hvc1 -> dvh1)
+    private var resourceLoader: HLSCodecPatchingResourceLoader?
+    private let resourceLoaderQueue = DispatchQueue(label: "com.rivulet.AVPlayerResourceLoader")
+
+    /// Local HTTP proxy for DV HLS master playlist patching
+    private var dvProxyServer: DVHLSProxyServer?
+
     // MARK: - Track Management
 
     private let tracksSubject = PassthroughSubject<Void, Never>()
@@ -148,8 +155,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     ///   - url: The URL to load
     ///   - headers: Optional HTTP headers for the request
     ///   - isLive: Whether this is a live stream (affects buffering behavior)
-    func load(url: URL, headers: [String: String]?, isLive: Bool = false) async throws {
-        print("🎬 AVPlayerWrapper: Loading URL: \(url) (isLive: \(isLive))")
+    ///   - isDolbyVision: Whether this is Dolby Vision content (enables codec tag patching for HLS)
+    func load(url: URL, headers: [String: String]?, isLive: Bool = false, isDolbyVision: Bool = false) async throws {
+        print("🎬 AVPlayerWrapper: Loading URL: \(url) (isLive: \(isLive), isDolbyVision: \(isDolbyVision))")
 
         // Ensure audio session is active before loading
         ensureAudioSessionActive()
@@ -174,7 +182,29 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             options["AVURLAssetHTTPHeaderFieldsKey"] = headers
         }
 
-        let asset = AVURLAsset(url: url, options: options)
+        let asset: AVURLAsset
+
+        // For Dolby Vision HLS: Plex outputs dvh1 in the CODECS string which AVPlayer rejects.
+        // We run a local HTTP reverse proxy that patches only the master playlist response
+        // (dvh1 → hvc1 in CODECS), while all other requests pass through to Plex unmodified.
+        // This avoids file:// limitations, resource loader timeouts, and custom URL scheme issues.
+        if isDolbyVision {
+            print("🎬 AVPlayerWrapper: Dolby Vision HLS - starting local proxy")
+
+            // Stop any previous proxy
+            dvProxyServer?.stop()
+
+            // Best working mode: master hvc1 (AVPlayer accepts), init hvc1 (matches). Plays as HDR10.
+            let proxy = DVHLSProxyServer(upstreamURL: url, headers: headers ?? [:], patchMode: .patchMasterToHVC1)
+            dvProxyServer = proxy
+            let proxyURL = try proxy.start()
+
+            print("🎬 AVPlayerWrapper: Using DV proxy URL: \(proxyURL)")
+            asset = AVURLAsset(url: proxyURL, options: options)
+        } else {
+            asset = AVURLAsset(url: url, options: options)
+        }
+        resourceLoader = nil
 
         // Create player item
         if isLive {
@@ -297,6 +327,9 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
         player = nil
         _playerForCleanup = nil
         playerItem = nil
+        resourceLoader = nil
+        dvProxyServer?.stop()
+        dvProxyServer = nil
         playbackStateSubject.send(.idle)
     }
 
@@ -802,8 +835,39 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     private func enumerateTracks(for item: AVPlayerItem) {
         let asset = item.asset
 
+        // Cache audio format info from asset tracks (codec FourCC, channels) before building MediaTracks
+        cacheAudioFormatInfo(from: asset)
+
         // Get audio tracks
         if let audioGroup = asset.mediaSelectionGroup(forMediaCharacteristic: .audible) {
+            // Log raw AVMediaSelectionOption details for audio diagnostics
+            print("🔊 [Audio] Raw audio selection group: \(audioGroup.options.count) options")
+            for (i, option) in audioGroup.options.enumerated() {
+                print("🔊 [Audio]   Option \(i): displayName=\"\(option.displayName)\", locale=\(option.locale?.identifier ?? "nil"), mediaType=\(option.mediaType.rawValue)")
+            }
+
+            // Log audio track format descriptions from AVAssetTrack (has codec details)
+            let audioAssetTracks = asset.tracks(withMediaType: .audio)
+            print("🔊 [Audio] Asset audio tracks: \(audioAssetTracks.count)")
+            for (i, track) in audioAssetTracks.enumerated() {
+                let formatDescriptions = track.formatDescriptions as? [CMFormatDescription] ?? []
+                for desc in formatDescriptions {
+                    let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
+                    let fourCC = fourCCToString(mediaSubType)
+                    print("🔊 [Audio]   Track \(i): codec=\(fourCC) (0x\(String(mediaSubType, radix: 16)))")
+                    if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
+                        let bd = asbd.pointee
+                        print("🔊 [Audio]     ASBD: sampleRate=\(bd.mSampleRate), channels=\(bd.mChannelsPerFrame), bitsPerChannel=\(bd.mBitsPerChannel), formatID=\(fourCCToString(bd.mFormatID))")
+                    }
+                    var layoutSize: Int = 0
+                    if let layout = CMAudioFormatDescriptionGetChannelLayout(desc, sizeOut: &layoutSize) {
+                        let tag = layout.pointee.mChannelLayoutTag
+                        let channelCount = AudioChannelLayoutTag_GetNumberOfChannels(tag)
+                        print("🔊 [Audio]     ChannelLayout: tag=0x\(String(tag, radix: 16)), channels=\(channelCount)")
+                    }
+                }
+            }
+
             _audioTracks = audioGroup.options.enumerated().compactMap { index, option in
                 mediaTrack(from: option, id: index, isAudio: true)
             }
@@ -812,14 +876,18 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: audioGroup),
                let index = audioGroup.options.firstIndex(of: selectedOption) {
                 _currentAudioTrackId = index
+                print("🔊 [Audio] Selected track: \(index) (\(selectedOption.displayName))")
             } else if !_audioTracks.isEmpty {
                 _currentAudioTrackId = 0  // Default to first track
+                print("🔊 [Audio] No track selected, defaulting to 0")
             }
 
             print("🎬 AVPlayerWrapper: Found \(_audioTracks.count) audio tracks")
             for track in _audioTracks {
-                print("🎬 AVPlayerWrapper:   Audio: \(track.name) (\(track.languageCode ?? "?")) - \(track.formattedCodec)")
+                print("🎬 AVPlayerWrapper:   Audio: \(track.name) (\(track.languageCode ?? "?")) - \(track.formattedCodec) [\(track.channels ?? 0)ch]")
             }
+        } else {
+            print("🔊 [Audio] No audible media selection group found")
         }
 
         // Get subtitle/legible tracks
@@ -887,26 +955,78 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     }
 
     /// Extract audio codec from AVMediaSelectionOption
+    /// Uses cached format info from asset tracks when available, falls back to display name
     private func extractAudioCodec(from option: AVMediaSelectionOption) -> String? {
-        // Check common audio types in the option's media type
-        let mediaType = option.mediaType
+        // Check cached codec from asset track format descriptions (set in enumerateTracks)
+        if let cached = cachedAudioCodec {
+            return cached
+        }
 
-        // Try to get from format descriptions if available
-        // AVMediaSelectionOption doesn't directly expose codec, so we infer from common patterns
+        // Fallback: infer from display name
         let displayName = option.displayName.lowercased()
-
         if displayName.contains("dolby") || displayName.contains("atmos") {
             return "eac3"
         } else if displayName.contains("dts") {
             return "dts"
-        } else if displayName.contains("stereo") || displayName.contains("aac") {
-            return "aac"
         } else if displayName.contains("ac3") || displayName.contains("ac-3") {
             return "ac3"
+        } else if displayName.contains("stereo") || displayName.contains("aac") {
+            return "aac"
         }
 
-        // Default to AAC for audio
-        return mediaType == .audio ? "aac" : nil
+        return option.mediaType == .audio ? "aac" : nil
+    }
+
+    /// Cached audio codec and channel count extracted from AVAssetTrack format descriptions
+    private var cachedAudioCodec: String?
+    private var cachedAudioChannels: Int?
+
+    /// Extract audio codec and channel info from AVAssetTrack format descriptions
+    /// Call this before building MediaTrack objects
+    private func cacheAudioFormatInfo(from asset: AVAsset) {
+        cachedAudioCodec = nil
+        cachedAudioChannels = nil
+
+        let audioTracks = asset.tracks(withMediaType: .audio)
+        guard let track = audioTracks.first,
+              let formatDescriptions = track.formatDescriptions as? [CMFormatDescription],
+              let desc = formatDescriptions.first else { return }
+
+        let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
+
+        // Map FourCC to codec name
+        switch mediaSubType {
+        case kAudioFormatMPEG4AAC, kAudioFormatMPEG4AAC_HE, kAudioFormatMPEG4AAC_HE_V2,
+             kAudioFormatMPEG4AAC_LD, kAudioFormatMPEG4AAC_ELD:
+            cachedAudioCodec = "aac"
+        case kAudioFormatAC3:
+            cachedAudioCodec = "ac3"
+        case kAudioFormatEnhancedAC3:
+            cachedAudioCodec = "eac3"
+        case kAudioFormatAppleLossless:
+            cachedAudioCodec = "alac"
+        case kAudioFormatLinearPCM:
+            cachedAudioCodec = "pcm"
+        case kAudioFormatFLAC:
+            cachedAudioCodec = "flac"
+        case kAudioFormatOpus:
+            cachedAudioCodec = "opus"
+        default:
+            let fourCC = fourCCToString(mediaSubType)
+            print("🔊 [Audio] Unknown audio FourCC: \(fourCC) (0x\(String(mediaSubType, radix: 16)))")
+        }
+
+        // Extract channel count from ASBD
+        if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
+            let channels = Int(asbd.pointee.mChannelsPerFrame)
+            if channels > 0 {
+                cachedAudioChannels = channels
+            }
+        }
+
+        if cachedAudioCodec != nil || cachedAudioChannels != nil {
+            print("🔊 [Audio] Cached format info: codec=\(cachedAudioCodec ?? "?"), channels=\(cachedAudioChannels ?? 0)")
+        }
     }
 
     /// Extract subtitle codec from AVMediaSelectionOption
@@ -925,9 +1045,13 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
     /// Extract channel count from AVMediaSelectionOption
     private func extractChannelCount(from option: AVMediaSelectionOption) -> Int? {
-        let displayName = option.displayName.lowercased()
+        // Use cached channel count from asset track format descriptions
+        if let cached = cachedAudioChannels {
+            return cached
+        }
 
-        // Parse channel info from display name
+        // Fallback: parse from display name
+        let displayName = option.displayName.lowercased()
         if displayName.contains("7.1") || displayName.contains("atmos") {
             return 8
         } else if displayName.contains("5.1") {
@@ -938,8 +1062,7 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
             return 1
         }
 
-        // Default to stereo if not specified
-        return 2
+        return nil
     }
 
     /// Select an audio track by ID

@@ -56,6 +56,7 @@ struct PlexDetailView: View {
     @FocusState private var focusedActionButton: String?  // Track focused action button
     @State private var savedAlbumFocus: String?  // Save focus when navigating to album
     @State private var savedTrackFocus: String?  // Save focus when playing track
+    @State private var isSummaryExpanded = false  // Expand summary text on focus/click
     #endif
 
     // New state for cast/crew, collections, and recommendations
@@ -162,12 +163,16 @@ struct PlexDetailView: View {
                             .transition(.opacity.animation(.easeOut(duration: 0.3)))
                     }
 
-                    // Summary
+                    // Summary (focusable on tvOS so it's a navigation stop between action buttons and rows below)
                     if let summary = fullMetadata?.summary ?? currentItem.summary, !summary.isEmpty {
+                        #if os(tvOS)
+                        summarySection(summary: summary)
+                        #else
                         Text(summary)
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .lineLimit(3)
+                        #endif
                     }
 
                     // TV Show specific: Seasons and Episodes
@@ -258,6 +263,9 @@ struct PlexDetailView: View {
             collectionName = nil
             recommendedItems = []
             nextUpEpisode = nil
+            #if os(tvOS)
+            isSummaryExpanded = false
+            #endif
 
             // Initialize watched state
             isWatched = currentItem.isWatched
@@ -686,6 +694,26 @@ struct PlexDetailView: View {
         }
         .frame(maxWidth: 500)
     }
+
+    // MARK: - Summary Section (tvOS)
+
+    #if os(tvOS)
+    @ViewBuilder
+    private func summarySection(summary: String) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isSummaryExpanded.toggle()
+            }
+        } label: {
+            Text(summary)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .lineLimit(isSummaryExpanded ? nil : 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
+    }
+    #endif
 
     // MARK: - Action Buttons
 

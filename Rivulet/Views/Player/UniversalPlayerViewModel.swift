@@ -479,20 +479,29 @@ final class UniversalPlayerViewModel: ObservableObject {
         let videoStreams = metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
         let dvStream = videoStreams.first { ($0.DOVIProfile != nil) || ($0.DOVIPresent == true) }
 
-        // Check DV profile compatibility - only Profile 5 and 8 work with Apple TV's native player
-        // Profile 8 requires BL Compat ID 1 (HDR10-compatible base layer) or 4 (P8.4 camera)
-        // Profile 7 (dual-layer) is NOT compatible with AVPlayer
+        // Check DV profile compatibility for AVPlayer + HLS proxy approach.
+        // The proxy patches dvh1→hvc1 in the HLS manifest so AVPlayer accepts the stream,
+        // while the hardware DV decoder processes RPU NAL units from the bitstream.
+        // Profile 7 (MEL) fails with -11855 "Cannot Decode" — AVPlayer can't handle the MEL
+        // enhancement layer structure, so it falls back to MPV for HDR10/SDR playback.
+        // Profile 8 with BL CompatID 6 fails with -11821 — the base layer has no standard
+        // HDR10 compatibility, and AVPlayer can't decode it even without DV codec tags.
         let dvProfile = dvStream?.DOVIProfile
         let doviBLCompatID = dvStream?.DOVIBLCompatID
         let isCompatibleDVProfile: Bool = {
             // If Plex metadata doesn't report profile yet, assume compatible and let fallbacks handle errors.
             guard let dvProfile else { return true }
 
+            // Profile 5: Single-layer DV (streaming), always works
             if dvProfile == 5 { return true }
+
+            // Profile 8: Works only with HDR10-compatible base layer (BL CompatID 1 or 4).
+            // CompatID 6 = no HDR10 base, AVPlayer can't decode the non-standard base layer.
             if dvProfile == 8 {
-                // Allow HDR10-compatible base (1) and Apple camera P8.4 (4); unknown BLCompat also allowed
-                return doviBLCompatID == nil || doviBLCompatID == 1 || doviBLCompatID == 4
+                let compatID = doviBLCompatID ?? 1 // Default to compatible if not reported
+                return compatID == 1 || compatID == 4
             }
+
             return false
         }()
 
@@ -523,7 +532,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             // Show notice explaining why we're using MPV instead of AVPlayer for DV
             if useAVPlayerForDV && hasDolbyVision && !isCompatibleDVProfile {
-                showCompatibilityNotice("DV Profile \(dvProfile ?? 0) not supported — playing HDR10")
+                showCompatibilityNotice("DV Profile \(dvProfile ?? 0) not supported by AVPlayer — playing HDR")
             }
         }
 
@@ -974,6 +983,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             case .avplayer:
                 guard let avp = avPlayerWrapper else { return }
 
+                // Configure display criteria for AVPlayer (HDR/DV mode switching)
+                // Unlike MPV, AVPlayer CAN play DV — no need to force HDR10 fallback
+                #if os(tvOS)
+                DisplayCriteriaManager.shared.configureForContent(
+                    videoStream: metadata.primaryVideoStream
+                )
+                #endif
+
                 // Set expected aspect ratio from source metadata for verification
                 if let videoStream = metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo }),
                    let width = videoStream.width, let height = videoStream.height, height > 0 {
@@ -996,7 +1013,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 }
 
                 // For AVPlayer, seek to start offset after loading if needed
-                try await avp.load(url: url, headers: streamHeaders)
+                // Pass isDolbyVision flag to enable HLS codec patching (hvc1 -> dvh1)
+                try await avp.load(url: url, headers: streamHeaders, isDolbyVision: isUsingDolbyVisionHLS)
                 if let offset = startOffset, offset > 0 {
                     await avp.seek(to: offset)
                 }
@@ -1272,7 +1290,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
+        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false, isDolbyVision: isUsingDolbyVisionHLS)
         newAVPlayer.play()
 
         // Update duration from new player
@@ -1282,9 +1300,6 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         updateTrackLists()
         startControlsHideTimer()
-
-        // Show brief notice to user
-        showCompatibilityNotice("Stream restarted")
 
         print("🎬 [Restart] HLS session restart complete, resuming from \(savedPosition)s")
     }
@@ -1360,8 +1375,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // Load the new stream
-        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
+        // Load the new stream (HDR10 fallback - no codec patching needed)
+        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false, isDolbyVision: false)
         newAVPlayer.play()
 
         // Update duration from new player

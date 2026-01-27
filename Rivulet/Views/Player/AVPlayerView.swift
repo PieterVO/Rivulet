@@ -65,8 +65,7 @@ final class AVPlayerUIView: UIView {
     /// Track last reported videoRect to avoid duplicate callbacks
     private var lastReportedVideoRect: CGRect = .zero
 
-    /// Track if we've set HDR display criteria (to reset on cleanup)
-    private var hasSetDisplayCriteria: Bool = false
+    /// Note: Display criteria is managed by DisplayCriteriaManager, not this view
 
     var player: AVPlayer? {
         get { playerLayer.player }
@@ -81,11 +80,6 @@ final class AVPlayerUIView: UIView {
             // Reset tracking for new player
             lastReportedVideoRect = .zero
 
-            // Reset display criteria when player changes
-            if newValue == nil {
-                resetDisplayCriteria()
-            }
-
             // Debug: Log video track info
             if let currentItem = newValue?.currentItem {
                 let asset = currentItem.asset
@@ -95,11 +89,11 @@ final class AVPlayerUIView: UIView {
                     print("🎬 AVPlayerUIView: Track \(i): naturalSize=\(track.naturalSize), enabled=\(track.isEnabled)")
                 }
 
-                // Observe player item status to configure HDR display mode when ready
-                playerItemStatusObservation = currentItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-                    guard let self, item.status == .readyToPlay else { return }
-                    self.configureDisplayCriteria(for: item)
-                }
+                // Note: Display criteria (HDR/DV mode switching) is handled by
+                // DisplayCriteriaManager in UniversalPlayerViewModel before loading.
+                // We intentionally do NOT derive criteria from the asset here because
+                // for DV content the proxy patches dvh1→hvc1 in the HLS manifest,
+                // which would cause asset-derived criteria to report HDR10 instead of DV.
             }
 
             // Start observing isReadyForDisplay to detect when video actually renders
@@ -137,13 +131,6 @@ final class AVPlayerUIView: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        // Try to configure display criteria when we get a window
-        // This handles the case where player was ready before we had a window
-        if window != nil, !hasSetDisplayCriteria,
-           let playerItem = player?.currentItem,
-           playerItem.status == .readyToPlay {
-            configureDisplayCriteria(for: playerItem)
-        }
     }
 
     override func layoutSubviews() {
@@ -168,40 +155,9 @@ final class AVPlayerUIView: UIView {
         }
     }
 
-    // MARK: - HDR Display Mode
-
-    /// Configure the TV's display mode based on the content's HDR/DV metadata
-    /// This tells the TV to switch to the appropriate HDR mode (HDR10, HLG, Dolby Vision)
-    private func configureDisplayCriteria(for playerItem: AVPlayerItem) {
-        let asset = playerItem.asset
-        let displayCriteria = asset.preferredDisplayCriteria
-
-        guard let displayManager = window?.avDisplayManager else {
-            print("🎬 AVPlayerUIView: No display manager available (window not ready)")
-            return
-        }
-
-        print("🎬 AVPlayerUIView: Setting display criteria for HDR/DV content")
-        displayManager.preferredDisplayCriteria = displayCriteria
-        hasSetDisplayCriteria = true
-    }
-
-    /// Reset display criteria when playback ends or player is removed
-    private func resetDisplayCriteria() {
-        guard hasSetDisplayCriteria else { return }
-
-        if let displayManager = window?.avDisplayManager {
-            print("🎬 AVPlayerUIView: Resetting display criteria")
-            displayManager.preferredDisplayCriteria = nil
-        }
-        hasSetDisplayCriteria = false
-    }
-
     deinit {
         readyForDisplayObservation?.invalidate()
         playerItemStatusObservation?.invalidate()
-        // Note: Can't call resetDisplayCriteria here as window may be nil
-        // The system will reset display mode automatically when the view is removed
     }
 }
 

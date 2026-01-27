@@ -25,8 +25,6 @@ actor CacheManager {
 
     // MARK: - Cache Configuration
 
-    private let cacheValidityDuration: TimeInterval = 365 * 24 * 60 * 60 // 1 year (effectively infinite)
-
     // MARK: - In-Memory Cache
 
     private var cachedTimestamps: [String: Date] = [:]
@@ -101,17 +99,6 @@ actor CacheManager {
         guard let cacheDir = cacheDirectory else { return }
         let fileURL = cacheDir.appendingPathComponent(cacheInfoFile)
         try? FileManager.default.removeItem(at: fileURL)
-    }
-
-    func isCacheValid(for key: String) -> Bool {
-        ensureTimestampsLoaded()
-        guard let timestamp = cachedTimestamps[key] else { return false }
-        return Date().timeIntervalSince(timestamp) < cacheValidityDuration
-    }
-
-    func getCacheTimestamp(for key: String) -> Date? {
-        ensureTimestampsLoaded()
-        return cachedTimestamps[key]
     }
 
     // MARK: - Generic Cache Operations

@@ -146,11 +146,10 @@ private struct ProfileAvatarButton: View {
                         .overlay(
                             Circle()
                                 .strokeBorder(
-                                    isFocused ? .white : .white.opacity(0.3),
-                                    lineWidth: isFocused ? 4 : 2
+                                    isFocused ? .white.opacity(0.4) : .white.opacity(0.15),
+                                    lineWidth: isFocused ? 3 : 1
                                 )
                         )
-                        .shadow(color: isFocused ? .white.opacity(0.3) : .clear, radius: 20)
 
                     if isLoading {
                         Circle()
@@ -175,13 +174,13 @@ private struct ProfileAvatarButton: View {
                 // Name
                 Text(user.displayName)
                     .font(.system(size: 26, weight: isFocused ? .semibold : .regular))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.7))
                     .lineLimit(1)
             }
         }
         .buttonStyle(.plain)
-        .scaleEffect(isFocused ? 1.08 : 1.0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isFocused)
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 
     @ViewBuilder
