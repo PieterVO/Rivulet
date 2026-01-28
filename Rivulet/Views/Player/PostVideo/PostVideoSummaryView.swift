@@ -26,10 +26,19 @@ struct PostVideoSummaryView: View {
                 EmptyView()
 
             case .loading:
-                // Loading state - subtle indicator
+                // Loading state - subtle indicator with blurred background
                 ZStack {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
+                    if let image = viewModel.loadingArtImage ?? viewModel.loadingThumbImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .blur(radius: 50)
+                            .overlay(Color.black.opacity(0.5))
+                            .ignoresSafeArea()
+                    } else {
+                        Color.black.opacity(0.5)
+                            .ignoresSafeArea()
+                    }
 
                     ProgressView()
                         .scaleEffect(1.5)

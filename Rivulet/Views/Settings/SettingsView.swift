@@ -232,6 +232,7 @@ struct SettingsView: View {
     @Environment(\.isSidebarVisible) private var isSidebarVisible
     #endif
     @State private var focusTrigger = 0  // Increment to trigger first row focus
+    @State private var showChangelog = false
 
     // Audio/Subtitle preference state (synced with preference managers)
     @State private var audioLanguage: LanguageOption = LanguageOption(languageCode: AudioPreferenceManager.current.languageCode)
@@ -561,6 +562,15 @@ struct SettingsView: View {
                         SettingsSection(title: "About") {
                             SettingsInfoRow(title: "App", value: "Rivulet")
                             SettingsInfoRow(title: "Version", value: appVersion)
+
+                            SettingsRow(
+                                icon: "list.bullet.rectangle",
+                                iconColor: .blue,
+                                title: "Changelog",
+                                subtitle: "See what's new in this version"
+                            ) {
+                                showChangelog = true
+                            }
                         }
                     }
                     .padding(.horizontal, 80)
@@ -568,6 +578,9 @@ struct SettingsView: View {
                 }
             }
             .background(Color.black)
+            .fullScreenCover(isPresented: $showChangelog) {
+                WhatsNewView(isPresented: $showChangelog, version: appVersion)
+            }
             #if os(tvOS)
             .onMoveCommand { direction in
                 // Open sidebar when pressing left at the edge

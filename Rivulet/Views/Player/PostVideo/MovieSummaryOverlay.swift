@@ -30,11 +30,25 @@ struct MovieSummaryOverlay: View {
     }
     #endif
 
+    /// Background image (art preferred, fallback to thumb)
+    private var backgroundImage: UIImage? {
+        viewModel.loadingArtImage ?? viewModel.loadingThumbImage
+    }
+
     var body: some View {
         ZStack {
-            // Semi-transparent background
-            Color.black.opacity(0.7)
-                .ignoresSafeArea()
+            // Blurred background image (or solid black fallback)
+            if let image = backgroundImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .blur(radius: 50)
+                    .overlay(Color.black.opacity(0.5))
+                    .ignoresSafeArea()
+            } else {
+                Color.black.opacity(0.7)
+                    .ignoresSafeArea()
+            }
 
             VStack(spacing: 0) {
                 Spacer()

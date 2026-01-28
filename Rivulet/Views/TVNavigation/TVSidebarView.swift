@@ -177,12 +177,20 @@ struct TVSidebarView: View {
             let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
             let current = "\(version) (\(build))"
 
+            print("📋 WhatsNew: current='\(current)' lastSeen='\(lastSeenBuild)'")
+            print("📋 WhatsNew: hasFeatures=\(WhatsNewView.features(for: current) != nil)")
+
             if current != lastSeenBuild {
                 if WhatsNewView.features(for: current) != nil {
                     whatsNewVersion = current
                     showWhatsNew = true
+                    print("📋 WhatsNew: Showing overlay for \(current)")
+                } else {
+                    print("📋 WhatsNew: No changelog entry for \(current)")
                 }
                 lastSeenBuild = current
+            } else {
+                print("📋 WhatsNew: Already seen \(current)")
             }
         }
         // Profile picker overlay

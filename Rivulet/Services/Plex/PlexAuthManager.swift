@@ -68,23 +68,34 @@ class PlexAuthManager: ObservableObject {
     private var serverSelectionTask: Task<Bool, Never>?
     private let userDefaults = UserDefaults.standard
 
-    // UserDefaults keys
-    private let tokenKey = "plexAuthToken"
+    // UserDefaults keys (non-sensitive data only)
     private let usernameKey = "plexUsername"
     private let serverURLKey = "selectedServerURL"
     private let serverNameKey = "selectedServerName"
-    private let serverTokenKey = "selectedServerToken"
+
+    // Legacy UserDefaults keys (for migration only)
+    private let legacyTokenKey = "plexAuthToken"
+    private let legacyServerTokenKey = "selectedServerToken"
+
+    // Keychain keys (secure storage for tokens)
+    private let keychainTokenKey = "plexAuthToken"
+    private let keychainServerTokenKey = "selectedServerToken"
 
     // MARK: - Initialization
 
     private init() {
-        // Load saved credentials
-        authToken = userDefaults.string(forKey: tokenKey)
+        // Migrate tokens from UserDefaults to Keychain (one-time migration)
+        migrateTokensToKeychain()
+
+        // Load tokens from Keychain (secure)
+        authToken = KeychainHelper.get(keychainTokenKey)
+
+        // Load non-sensitive data from UserDefaults
         username = userDefaults.string(forKey: usernameKey)
         selectedServerURL = userDefaults.string(forKey: serverURLKey)
 
-        // Load server-specific token, fall back to user's auth token for owned servers
-        let savedServerToken = userDefaults.string(forKey: serverTokenKey)
+        // Load server-specific token from Keychain, fall back to user's auth token for owned servers
+        let savedServerToken = KeychainHelper.get(keychainServerTokenKey)
         selectedServerToken = savedServerToken ?? authToken
 
         print("🔐 PlexAuthManager: Initialized")
@@ -106,6 +117,25 @@ class PlexAuthManager: ObservableObject {
                 selectedServerURL = nil
                 userDefaults.removeObject(forKey: serverURLKey)
             }
+        }
+    }
+
+    /// Migrate tokens from UserDefaults to Keychain (one-time, for existing users)
+    private func migrateTokensToKeychain() {
+        // Check if auth token exists in UserDefaults but not in Keychain
+        if let legacyToken = userDefaults.string(forKey: legacyTokenKey),
+           KeychainHelper.get(keychainTokenKey) == nil {
+            print("🔐 PlexAuthManager: Migrating auth token to Keychain")
+            KeychainHelper.set(legacyToken, forKey: keychainTokenKey)
+            userDefaults.removeObject(forKey: legacyTokenKey)
+        }
+
+        // Check if server token exists in UserDefaults but not in Keychain
+        if let legacyServerToken = userDefaults.string(forKey: legacyServerTokenKey),
+           KeychainHelper.get(keychainServerTokenKey) == nil {
+            print("🔐 PlexAuthManager: Migrating server token to Keychain")
+            KeychainHelper.set(legacyServerToken, forKey: keychainServerTokenKey)
+            userDefaults.removeObject(forKey: legacyServerTokenKey)
         }
     }
 
@@ -154,12 +184,12 @@ class PlexAuthManager: ObservableObject {
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
                 userDefaults.set(server.name, forKey: serverNameKey)
 
-                // Save the correct token for this server
+                // Save the correct token for this server (securely in Keychain)
                 // For shared servers, use server-specific accessToken; for owned, use user's authToken
                 let tokenForServer = server.accessToken ?? authToken
                 selectedServerToken = tokenForServer
                 if let token = tokenForServer {
-                    userDefaults.set(token, forKey: serverTokenKey)
+                    KeychainHelper.set(token, forKey: keychainServerTokenKey)
                 }
 
                 let isShared = server.owned == false
@@ -486,11 +516,18 @@ class PlexAuthManager: ObservableObject {
         isConnected = true  // Reset to default
         connectionError = nil
 
-        userDefaults.removeObject(forKey: tokenKey)
+        // Clear tokens from Keychain (secure storage)
+        KeychainHelper.delete(keychainTokenKey)
+        KeychainHelper.delete(keychainServerTokenKey)
+
+        // Clear non-sensitive data from UserDefaults
         userDefaults.removeObject(forKey: usernameKey)
         userDefaults.removeObject(forKey: serverURLKey)
         userDefaults.removeObject(forKey: serverNameKey)
-        userDefaults.removeObject(forKey: serverTokenKey)
+
+        // Clear any legacy tokens that might still exist
+        userDefaults.removeObject(forKey: legacyTokenKey)
+        userDefaults.removeObject(forKey: legacyServerTokenKey)
 
         // Clear user profile selection
         PlexUserProfileManager.shared.reset()
@@ -590,11 +627,11 @@ class PlexAuthManager: ObservableObject {
                         userDefaults.set(selectedServerURL, forKey: serverURLKey)
                         userDefaults.set(currentServer.name, forKey: serverNameKey)
 
-                        // Update server token for new server
+                        // Update server token for new server (securely in Keychain)
                         let tokenForServer = currentServer.accessToken ?? authToken
                         selectedServerToken = tokenForServer
                         if let newToken = tokenForServer {
-                            userDefaults.set(newToken, forKey: serverTokenKey)
+                            KeychainHelper.set(newToken, forKey: keychainServerTokenKey)
                         }
 
                         isConnected = true
@@ -656,7 +693,7 @@ class PlexAuthManager: ObservableObject {
 
     private func handleSuccessfulAuth(token: String) async {
         authToken = token
-        userDefaults.set(token, forKey: tokenKey)
+        KeychainHelper.set(token, forKey: keychainTokenKey)
 
         // Fetch user info
         await fetchUserInfo()
