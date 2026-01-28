@@ -103,7 +103,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.0.0 (35)", [
+        ("1.0.0 (36)", [
             "Trying an experimental Dolby Vision player; If DV does not work, or works well, let me know",
             "Added Plex Home Account support. Enable it in settings",
             "Added shuffle buttons to Seasons and Series",
@@ -111,6 +111,7 @@ struct WhatsNewView: View {
             "Fixed navigation bugs",
             "Fixed some Add Live TV GUI issues",
             "Fixed some Live TV endpoint issues and added more error logging to pinpoint more",
+            "Fixed audio not stopping",
             "Added Changelog popup and section in settings",
             "Removed percentage from Post Video summary",
             "Added background to post video summary"
