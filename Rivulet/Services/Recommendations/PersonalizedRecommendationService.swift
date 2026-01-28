@@ -64,7 +64,7 @@ actor PersonalizedRecommendationService {
     }
 
     private var cachedResults: [CacheKey: RecommendationResult] = [:]
-    private let cacheTTL: TimeInterval = 60 * 60 * 12  // 12 hours
+    private let cacheTTL: TimeInterval = 60 * 60 * 2  // 2 hours
     private let maxItemsPerLibrary = 200
     private let maxWatchedForProfile = 120
     private let maxRecommendations = 40
