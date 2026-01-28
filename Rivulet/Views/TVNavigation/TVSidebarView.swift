@@ -14,6 +14,7 @@ struct TVSidebarView: View {
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var liveTVDataStore = LiveTVDataStore.shared
     @StateObject private var profileManager = PlexUserProfileManager.shared
+    @StateObject private var librarySettings = LibrarySettingsManager.shared
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var focusScopeManager = FocusScopeManager()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
@@ -30,6 +31,9 @@ struct TVSidebarView: View {
     @State private var showProfilePicker = false
     @State private var hasCheckedProfilePicker = false
     @State private var isAwaitingProfileSelection = false
+    @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
+    @State private var showWhatsNew = false
+    @State private var whatsNewVersion = ""
 
     /// Computed property for sidebar visibility based on active scope
     private var isSidebarVisible: Bool {
@@ -124,22 +128,23 @@ struct TVSidebarView: View {
                 isAwaitingProfileSelection = true
             }
 
-            // Fetch home users first if profile picker is enabled
-            await profileManager.fetchHomeUsers()
-
-            // Check if we need to show profile picker (before loading content)
-            if !hasCheckedProfilePicker {
+            if profileManager.showProfilePickerOnLaunch && !hasCheckedProfilePicker {
+                // Must await profile data before showing picker
+                await profileManager.fetchHomeUsers()
                 hasCheckedProfilePicker = true
 
-                if profileManager.showProfilePickerOnLaunch && profileManager.hasMultipleProfiles {
+                if profileManager.hasMultipleProfiles {
                     print("👤 TVSidebarView: Showing profile picker on launch")
                     showProfilePicker = true
                     // Content will load after profile is selected
                     return
                 } else {
-                    // No picker needed, unblock content
                     isAwaitingProfileSelection = false
                 }
+            } else {
+                // Fire and forget — data used later in settings
+                Task { await profileManager.fetchHomeUsers() }
+                hasCheckedProfilePicker = true
             }
 
             // Load data optimistically (will use cache first, then background refresh)
@@ -147,8 +152,11 @@ struct TVSidebarView: View {
             async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
             _ = await (hubsLoad, librariesLoad)
 
+            // Load library hubs early so Home screen rows are ready from cache
+            await dataStore.loadLibraryHubsIfNeeded()
+
             // Start background prefetch of library content for faster navigation
-            dataStore.startBackgroundPrefetch()
+            dataStore.startBackgroundPrefetch(libraries: dataStore.visibleVideoLibraries)
         }
         .task {
             // Start background preloading of Live TV data (low priority)
@@ -159,6 +167,23 @@ struct TVSidebarView: View {
             guard let metadata else { return }
             presentPlayerForDeepLink(metadata)
             deepLinkHandler.pendingPlayback = nil
+        }
+        // What's New overlay
+        .fullScreenCover(isPresented: $showWhatsNew) {
+            WhatsNewView(isPresented: $showWhatsNew, version: whatsNewVersion)
+        }
+        .onAppear {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+            let current = "\(version) (\(build))"
+
+            if current != lastSeenBuild {
+                if WhatsNewView.features(for: current) != nil {
+                    whatsNewVersion = current
+                    showWhatsNew = true
+                }
+                lastSeenBuild = current
+            }
         }
         // Profile picker overlay
         .fullScreenCover(isPresented: $showProfilePicker) {
@@ -175,7 +200,8 @@ struct TVSidebarView: View {
                         async let hubsLoad: () = dataStore.loadHubsIfNeeded()
                         async let librariesLoad: () = dataStore.loadLibrariesIfNeeded()
                         _ = await (hubsLoad, librariesLoad)
-                        dataStore.startBackgroundPrefetch()
+                        await dataStore.loadLibraryHubsIfNeeded()
+                        dataStore.startBackgroundPrefetch(libraries: dataStore.visibleVideoLibraries)
                     }
                 }
             }

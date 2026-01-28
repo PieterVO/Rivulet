@@ -260,6 +260,7 @@ enum SeekIndicator: Equatable {
 enum PlayerType: Equatable {
     case mpv
     case avplayer
+    case dvSampleBuffer  // AVSampleBufferDisplayLayer pipeline for DV profiles AVPlayer rejects
 }
 
 @MainActor
@@ -398,6 +399,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// AVPlayer (used for Dolby Vision when enabled)
     @Published private(set) var avPlayerWrapper: AVPlayerWrapper?
 
+    /// DVSampleBufferPlayer (used for DV profiles AVPlayer rejects: Profile 8 CompatID 6, Profile 7 MEL)
+    @Published private(set) var dvSampleBufferPlayer: DVSampleBufferPlayer?
+
     // MARK: - Metadata
 
     private(set) var metadata: PlexMetadata
@@ -442,6 +446,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var streamURL: URL?
     private(set) var streamHeaders: [String: String] = [:]
     private let allowAudioDirectStream: Bool
+    /// Plex transcode session ID, extracted from HLS stream URL for cleanup on stop
+    private var plexSessionId: String?
+
+    // MARK: - Shuffled Queue
+
+    private var shuffledQueue: [PlexMetadata] = []
+    private var shuffledQueueIndex: Int = 0
+    var isShufflePlay: Bool { !shuffledQueue.isEmpty }
 
     // MARK: - Preloaded Next Episode Data
 
@@ -456,6 +468,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         serverURL: String,
         authToken: String,
         startOffset: TimeInterval? = nil,
+        shuffledQueue: [PlexMetadata] = [],
         loadingArtImage: UIImage? = nil,
         loadingThumbImage: UIImage? = nil
     ) {
@@ -463,6 +476,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.serverURL = serverURL
         self.authToken = authToken
         self.startOffset = startOffset
+        self.shuffledQueue = shuffledQueue
         self.loadingArtImage = loadingArtImage
         self.loadingThumbImage = loadingThumbImage
         self.allowAudioDirectStream = UniversalPlayerViewModel.isAudioDirectStreamCapable(metadata)
@@ -479,20 +493,29 @@ final class UniversalPlayerViewModel: ObservableObject {
         let videoStreams = metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
         let dvStream = videoStreams.first { ($0.DOVIProfile != nil) || ($0.DOVIPresent == true) }
 
-        // Check DV profile compatibility - only Profile 5 and 8 work with Apple TV's native player
-        // Profile 8 requires BL Compat ID 1 (HDR10-compatible base layer) or 4 (P8.4 camera)
-        // Profile 7 (dual-layer) is NOT compatible with AVPlayer
+        // Check DV profile compatibility for AVPlayer + HLS proxy approach.
+        // The proxy patches dvh1→hvc1 in the HLS manifest so AVPlayer accepts the stream,
+        // while the hardware DV decoder processes RPU NAL units from the bitstream.
+        // Profile 7 (MEL) fails with -11855 "Cannot Decode" — AVPlayer can't handle the MEL
+        // enhancement layer structure, so it falls back to MPV for HDR10/SDR playback.
+        // Profile 8 with BL CompatID 6 fails with -11821 — the base layer has no standard
+        // HDR10 compatibility, and AVPlayer can't decode it even without DV codec tags.
         let dvProfile = dvStream?.DOVIProfile
         let doviBLCompatID = dvStream?.DOVIBLCompatID
         let isCompatibleDVProfile: Bool = {
             // If Plex metadata doesn't report profile yet, assume compatible and let fallbacks handle errors.
             guard let dvProfile else { return true }
 
+            // Profile 5: Single-layer DV (streaming), always works
             if dvProfile == 5 { return true }
+
+            // Profile 8: Works only with HDR10-compatible base layer (BL CompatID 1 or 4).
+            // CompatID 6 = no HDR10 base, AVPlayer can't decode the non-standard base layer.
             if dvProfile == 8 {
-                // Allow HDR10-compatible base (1) and Apple camera P8.4 (4); unknown BLCompat also allowed
-                return doviBLCompatID == nil || doviBLCompatID == 1 || doviBLCompatID == 4
+                let compatID = doviBLCompatID ?? 1 // Default to compatible if not reported
+                return compatID == 1 || compatID == 4
             }
+
             return false
         }()
 
@@ -501,11 +524,23 @@ final class UniversalPlayerViewModel: ObservableObject {
         // - MKV containers: Plex HLS remux handles container conversion
         let canUseAVPlayerForDV = hasDolbyVision && isCompatibleDVProfile
 
-        print("[Player Selection] useAVPlayerForAll=\(useAVPlayerForAll), useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile), container=\(container)")
+        // Check if this incompatible DV profile could use the AVSBDL pipeline instead
+        // Profile 8 CompatID 6 and Profile 7 (MEL) are candidates for the sample buffer approach
+        let canUseDVSampleBuffer: Bool = {
+            guard useAVPlayerForDV && hasDolbyVision && !isCompatibleDVProfile else { return false }
+            guard let dvProfile else { return false }
+            // Profile 8 with CompatID 6 (non-standard base layer)
+            if dvProfile == 8 && (doviBLCompatID == 6) { return true }
+            // Profile 7 (MEL enhancement layer) — experimental
+            if dvProfile == 7 { return true }
+            return false
+        }()
+
+        print("[Player Selection] useAVPlayerForAll=\(useAVPlayerForAll), useAVPlayerForDV=\(useAVPlayerForDV), hasDolbyVision=\(hasDolbyVision), dvProfile=\(dvProfile ?? -1), blCompatID=\(doviBLCompatID ?? -1), isCompatible=\(isCompatibleDVProfile), canUseDVSB=\(canUseDVSampleBuffer), container=\(container)")
 
         // Use AVPlayer if:
         // 1. "Use AVPlayer for All Videos" is enabled, OR
-        // 2. "Use AVPlayer for DV" is enabled AND content has compatible DV profile AND direct-playable container
+        // 2. "Use AVPlayer for DV" is enabled AND content has compatible DV profile
         if useAVPlayerForAll || (useAVPlayerForDV && canUseAVPlayerForDV) {
             if useAVPlayerForAll {
                 print("[Player Selection] → Using AVPlayer (all videos mode)")
@@ -515,6 +550,15 @@ final class UniversalPlayerViewModel: ObservableObject {
             self.playerType = .avplayer
             self.avPlayerWrapper = AVPlayerWrapper()
             self.mpvPlayerWrapper = nil
+        } else if canUseDVSampleBuffer {
+            // Use DVSampleBufferPlayer for DV profiles that AVPlayer rejects
+            // This bypasses AVPlayer's HLS parser and feeds dvh1-tagged sample buffers
+            // directly to AVSampleBufferDisplayLayer / VideoToolbox
+            print("[Player Selection] → Using DVSampleBuffer for DV Profile \(dvProfile ?? 0) (CompatID \(doviBLCompatID ?? -1))")
+            self.playerType = .dvSampleBuffer
+            self.dvSampleBufferPlayer = DVSampleBufferPlayer()
+            self.mpvPlayerWrapper = nil
+            self.avPlayerWrapper = nil
         } else {
             print("[Player Selection] → Using MPV")
             self.playerType = .mpv
@@ -523,7 +567,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             // Show notice explaining why we're using MPV instead of AVPlayer for DV
             if useAVPlayerForDV && hasDolbyVision && !isCompatibleDVProfile {
-                showCompatibilityNotice("DV Profile \(dvProfile ?? 0) not supported — playing HDR10")
+                showCompatibilityNotice("DV Profile \(dvProfile ?? 0) not supported by AVPlayer — playing HDR")
             }
         }
 
@@ -637,9 +681,36 @@ final class UniversalPlayerViewModel: ObservableObject {
             ) {
                 streamURL = result.url
                 streamHeaders = result.headers
+                plexSessionId = URLComponents(url: result.url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "session" })?.value
                 print("[AVPlayer] HLS URL: \(result.url.absoluteString)")
             }
 
+            return
+        }
+
+        // DVSampleBuffer: Use HLS remux URL (same as AVPlayer DV path) but feed segments manually
+        if playerType == .dvSampleBuffer {
+            print("[DVSampleBuffer] Preparing HLS URL for sample buffer pipeline")
+            isUsingDolbyVisionHLS = true
+
+            if let result = networkManager.buildHLSDirectPlayURL(
+                serverURL: serverURL,
+                authToken: authToken,
+                ratingKey: ratingKey,
+                offsetMs: Int((startOffset ?? 0) * 1000),
+                hasHDR: metadata.hasHDR,
+                useDolbyVision: true,
+                forceVideoTranscode: false,
+                allowAudioDirectStream: allowAudioDirectStream
+            ) {
+                streamURL = result.url
+                streamHeaders = result.headers
+                // Extract session ID from URL for cleanup on stop
+                plexSessionId = URLComponents(url: result.url, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "session" })?.value
+                print("[DVSampleBuffer] HLS URL: \(result.url.absoluteString)")
+            }
             return
         }
 
@@ -753,6 +824,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             statePublisher = avp.playbackStatePublisher
             timePublisher = avp.timePublisher
             errorPublisher = avp.errorPublisher
+        case .dvSampleBuffer:
+            guard let dvp = dvSampleBufferPlayer else { return }
+            statePublisher = dvp.playbackStatePublisher
+            timePublisher = dvp.timePublisher
+            errorPublisher = dvp.errorPublisher
         }
 
         statePublisher
@@ -807,6 +883,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                     if let wrapper = self.avPlayerWrapper, wrapper.duration > 0 {
                         self.duration = wrapper.duration
                     }
+                case .dvSampleBuffer:
+                    if let wrapper = self.dvSampleBufferPlayer, wrapper.duration > 0 {
+                        self.duration = wrapper.duration
+                    }
                 }
                 // Check for markers at current time
                 self.checkMarkers(at: time)
@@ -819,7 +899,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 self.errorMessage = error.localizedDescription
 
-                // Handle AVPlayer errors with HLS restart or fallbacks
+                // Handle AVPlayer errors with fallbacks
                 if self.playerType == .avplayer {
                     print("🎬 [Error] AVPlayer failed: \(error.localizedDescription)")
 
@@ -827,9 +907,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     let isCodecError = if case .codecUnsupported = error { true } else { false }
 
                     Task {
-                        // For codec/rendering errors with DV content, try HDR10 fallback first
-                        // This is specifically for Plex's broken DV HLS remux from MKV sources
-                        if isCodecError && self.isUsingDolbyVisionHLS && !self.hasAttemptedHDR10Fallback {
+                        // For AVPlayer codec/rendering errors with DV content, try HDR10 fallback first
+                        if self.playerType == .avplayer && isCodecError && self.isUsingDolbyVisionHLS && !self.hasAttemptedHDR10Fallback {
                             print("🎬 [Fallback] DV HLS rendering failed - attempting HDR10 base layer fallback...")
                             do {
                                 try await self.fallbackToHDR10()
@@ -842,9 +921,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                             }
                         }
 
-                        // If playback had previously started successfully (e.g., after pause/resume),
-                        // try restarting the HLS session first before falling back to MPV
-                        if self.hasPlaybackEverStarted && !self.hasAttemptedHLSRestart && !isCodecError {
+                        // For AVPlayer: try restarting the HLS session first before falling back to MPV
+                        if self.playerType == .avplayer && self.hasPlaybackEverStarted && !self.hasAttemptedHLSRestart && !isCodecError {
                             print("🎬 [Restart] Playback was working before - attempting HLS session restart...")
                             do {
                                 try await self.restartHLSSession()
@@ -890,6 +968,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                 }
                 .store(in: &cancellables)
         }
+
+        if let dvp = dvSampleBufferPlayer {
+            dvp.tracksPublisher
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] in
+                    self?.updateTrackLists()
+                }
+                .store(in: &cancellables)
+        }
     }
 
     // MARK: - Computed Properties
@@ -900,6 +987,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             return mpvPlayerWrapper?.isPlaying ?? false
         case .avplayer:
             return avPlayerWrapper?.isPlaying ?? false
+        case .dvSampleBuffer:
+            return dvSampleBufferPlayer?.isPlaying ?? false
         }
     }
 
@@ -911,7 +1000,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         let breadcrumb = Breadcrumb(level: .info, category: "playback.selection")
         breadcrumb.message = "Playback selection (\(reason))"
         breadcrumb.data = [
-            "player": playerType == .avplayer ? "avplayer" : "mpv",
+            "player": playerType == .avplayer ? "avplayer" : playerType == .dvSampleBuffer ? "dvSampleBuffer" : "mpv",
             "has_dv": metadata.hasDolbyVision,
             "dv_profile": dvStream?.DOVIProfile ?? -1,
             "dv_bl_compat": dvStream?.DOVIBLCompatID ?? -1,
@@ -974,6 +1063,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             case .avplayer:
                 guard let avp = avPlayerWrapper else { return }
 
+                // Configure display criteria for AVPlayer (HDR/DV mode switching)
+                // Unlike MPV, AVPlayer CAN play DV — no need to force HDR10 fallback
+                #if os(tvOS)
+                DisplayCriteriaManager.shared.configureForContent(
+                    videoStream: metadata.primaryVideoStream
+                )
+                #endif
+
                 // Set expected aspect ratio from source metadata for verification
                 if let videoStream = metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo }),
                    let width = videoStream.width, let height = videoStream.height, height > 0 {
@@ -996,12 +1093,112 @@ final class UniversalPlayerViewModel: ObservableObject {
                 }
 
                 // For AVPlayer, seek to start offset after loading if needed
-                try await avp.load(url: url, headers: streamHeaders)
+                // Pass isDolbyVision flag to enable HLS codec patching (hvc1 -> dvh1)
+                try await avp.load(url: url, headers: streamHeaders, isDolbyVision: isUsingDolbyVisionHLS)
                 if let offset = startOffset, offset > 0 {
                     await avp.seek(to: offset)
                 }
                 avp.play()
                 self.duration = avp.duration
+
+            case .dvSampleBuffer:
+                guard let dvp = dvSampleBufferPlayer else { return }
+
+                // Configure display criteria for DV (same as AVPlayer DV path)
+                #if os(tvOS)
+                DisplayCriteriaManager.shared.configureForContent(
+                    videoStream: metadata.primaryVideoStream
+                )
+                #endif
+
+                // Wait for HLS transcode to be ready
+                let isHLSStream = url.absoluteString.contains(".m3u8")
+                if isHLSStream {
+                    print("🎬 [DVSampleBuffer] Waiting for HLS transcode session...")
+                    let transcodeReady = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
+                    if !transcodeReady {
+                        throw PlayerError.loadFailed("HLS transcode session failed to start")
+                    }
+                    print("🎬 [DVSampleBuffer] Transcode ready, loading stream...")
+                }
+
+                // Load via sample buffer pipeline, with one full retry on a fresh Plex session.
+                // The init segment can timeout if the server is still busy (e.g. returning 500s,
+                // cleaning up a previous transcode, or slow to start muxing a large MKV).
+                do {
+                    try await dvp.load(url: url, headers: streamHeaders, startTime: startOffset)
+                } catch {
+                    print("🎬 [DVSampleBuffer] First load attempt failed: \(error.localizedDescription)")
+                    print("🎬 [DVSampleBuffer] Stopping old session and retrying with fresh session...")
+
+                    // Kill the old Plex session and create a fresh one
+                    dvp.prepareForReuse()
+                    if let oldSessionId = plexSessionId {
+                        await PlexNetworkManager.shared.stopTranscodeSession(
+                            serverURL: serverURL, authToken: authToken, sessionId: oldSessionId
+                        )
+                    }
+
+                    // Wait for the server to clean up
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+
+                    // Ping /decision to kick-start the server's remux engine.
+                    // Some content (e.g. certain DV MKV files) won't start muxing without this.
+                    // Use a throwaway URL for decision so it doesn't invalidate our actual session.
+                    let networkManager = PlexNetworkManager.shared
+                    if let decisionURL = networkManager.buildHLSDirectPlayURL(
+                        serverURL: serverURL,
+                        authToken: authToken,
+                        ratingKey: metadata.ratingKey ?? "",
+                        offsetMs: Int((startOffset ?? 0) * 1000),
+                        hasHDR: metadata.hasHDR,
+                        useDolbyVision: true,
+                        forceVideoTranscode: false,
+                        allowAudioDirectStream: allowAudioDirectStream
+                    ) {
+                        print("🎬 [DVSampleBuffer] Sending decision ping to wake server...")
+                        await PlexNetworkManager.shared.startTranscodeDecision(
+                            hlsURL: decisionURL.url, headers: decisionURL.headers
+                        )
+                        // Stop the decision session so it doesn't interfere
+                        if let decisionSessionId = URLComponents(url: decisionURL.url, resolvingAgainstBaseURL: false)?
+                            .queryItems?.first(where: { $0.name == "session" })?.value {
+                            await PlexNetworkManager.shared.stopTranscodeSession(
+                                serverURL: serverURL, authToken: authToken, sessionId: decisionSessionId
+                            )
+                        }
+                    }
+
+                    // Build the actual retry URL (fresh session ID)
+                    guard let result = networkManager.buildHLSDirectPlayURL(
+                        serverURL: serverURL,
+                        authToken: authToken,
+                        ratingKey: metadata.ratingKey ?? "",
+                        offsetMs: Int((startOffset ?? 0) * 1000),
+                        hasHDR: metadata.hasHDR,
+                        useDolbyVision: true,
+                        forceVideoTranscode: false,
+                        allowAudioDirectStream: allowAudioDirectStream
+                    ) else {
+                        throw PlayerError.loadFailed("Failed to build retry HLS URL")
+                    }
+
+                    streamURL = result.url
+                    streamHeaders = result.headers
+                    plexSessionId = URLComponents(url: result.url, resolvingAgainstBaseURL: false)?
+                        .queryItems?.first(where: { $0.name == "session" })?.value
+                    print("🎬 [DVSampleBuffer] Retry with new session: \(plexSessionId ?? "?")")
+
+                    let retryReady = await waitForHLSTranscodeReady(url: result.url, headers: result.headers)
+                    if !retryReady {
+                        throw PlayerError.loadFailed("HLS transcode session failed to start on retry")
+                    }
+
+                    try await dvp.load(url: result.url, headers: result.headers, startTime: startOffset)
+                }
+
+                dvp.play()
+                self.duration = dvp.duration
             }
 
             // Preload thumbnails for scrubbing
@@ -1014,7 +1211,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 print("🎬 [Fallback] AVPlayer failed to load: \(error.localizedDescription)")
                 print("🎬 [Fallback] Attempting fallback to MPV player...")
 
-                // Capture the AVPlayer failure to Sentry before fallback
+                // Capture the failure to Sentry before fallback
                 SentrySDK.capture(error: error) { scope in
                     scope.setTag(value: "playback", key: "component")
                     scope.setTag(value: "avplayer", key: "player_type")
@@ -1042,7 +1239,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Capture playback load failure to Sentry
             SentrySDK.capture(error: error) { scope in
                 scope.setTag(value: "playback", key: "component")
-                scope.setTag(value: self.playerType == .avplayer ? "avplayer" : "mpv", key: "player_type")
+                scope.setTag(value: self.playerType == .avplayer ? "avplayer" : self.playerType == .dvSampleBuffer ? "dvSampleBuffer" : "mpv", key: "player_type")
                 scope.setExtra(value: url.absoluteString, key: "stream_url")
                 scope.setExtra(value: self.metadata.title ?? "unknown", key: "media_title")
                 scope.setExtra(value: self.metadata.type ?? "unknown", key: "media_type")
@@ -1272,7 +1469,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
+        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false, isDolbyVision: isUsingDolbyVisionHLS)
         newAVPlayer.play()
 
         // Update duration from new player
@@ -1282,9 +1479,6 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         updateTrackLists()
         startControlsHideTimer()
-
-        // Show brief notice to user
-        showCompatibilityNotice("Stream restarted")
 
         print("🎬 [Restart] HLS session restart complete, resuming from \(savedPosition)s")
     }
@@ -1360,8 +1554,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // Load the new stream
-        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false)
+        // Load the new stream (HDR10 fallback - no codec patching needed)
+        try await newAVPlayer.load(url: url, headers: streamHeaders, isLive: false, isDolbyVision: false)
         newAVPlayer.play()
 
         // Update duration from new player
@@ -1386,9 +1580,17 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         hasAttemptedMPVFallback = true
 
-        // Stop AVPlayer
+        // Stop current player and Plex transcode session
         avPlayerWrapper?.stop()
         avPlayerWrapper = nil
+        dvSampleBufferPlayer?.stop()
+        dvSampleBufferPlayer = nil
+        if let sessionId = plexSessionId {
+            plexSessionId = nil
+            await PlexNetworkManager.shared.stopTranscodeSession(
+                serverURL: serverURL, authToken: authToken, sessionId: sessionId
+            )
+        }
 
         // Switch to MPV
         playerType = .mpv
@@ -1481,7 +1683,26 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper?.stop()
         case .avplayer:
             avPlayerWrapper?.stop()
+        case .dvSampleBuffer:
+            dvSampleBufferPlayer?.stop()
         }
+
+        // Stop the Plex transcode session so the server frees resources immediately.
+        // Without this, switching between DV files can timeout waiting for the init segment
+        // because the server is still busy with the previous transcode.
+        if let sessionId = plexSessionId {
+            let serverURL = self.serverURL
+            let authToken = self.authToken
+            plexSessionId = nil
+            Task {
+                await PlexNetworkManager.shared.stopTranscodeSession(
+                    serverURL: serverURL,
+                    authToken: authToken,
+                    sessionId: sessionId
+                )
+            }
+        }
+
         controlsTimer?.invalidate()
         hideCompatibilityNotice()
 
@@ -1509,6 +1730,12 @@ final class UniversalPlayerViewModel: ObservableObject {
             } else {
                 avPlayerWrapper?.play()
             }
+        case .dvSampleBuffer:
+            if dvSampleBufferPlayer?.isPlaying == true {
+                dvSampleBufferPlayer?.pause()
+            } else {
+                dvSampleBufferPlayer?.play()
+            }
         }
         showControlsTemporarily()
     }
@@ -1522,6 +1749,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper?.play()
         case .avplayer:
             avPlayerWrapper?.play()
+        case .dvSampleBuffer:
+            dvSampleBufferPlayer?.play()
         }
         showControlsTemporarily()
     }
@@ -1533,6 +1762,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper?.pause()
         case .avplayer:
             avPlayerWrapper?.pause()
+        case .dvSampleBuffer:
+            dvSampleBufferPlayer?.pause()
         }
         showControlsTemporarily()
     }
@@ -1553,6 +1784,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             await mpvPlayerWrapper?.seek(to: time)
         case .avplayer:
             await avPlayerWrapper?.seek(to: time)
+        case .dvSampleBuffer:
+            await dvSampleBufferPlayer?.seek(to: time)
         }
         showControlsTemporarily()
     }
@@ -1566,6 +1799,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             // AVPlayer doesn't have seekRelative, so calculate new time
             let newTime = max(0, min(duration, currentTime + seconds))
             await avPlayerWrapper?.seek(to: newTime)
+        case .dvSampleBuffer:
+            await dvSampleBufferPlayer?.seekRelative(by: seconds)
         }
         showControlsTemporarily()
 
@@ -1824,6 +2059,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper?.selectAudioTrack(id: id)
         } else if avPlayerWrapper != nil {
             avPlayerWrapper?.selectAudioTrack(id: id)
+        } else if dvSampleBufferPlayer != nil {
+            dvSampleBufferPlayer?.selectAudioTrack(id: id)
         }
         currentAudioTrackId = id
 
@@ -1840,6 +2077,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper?.selectAudioTrack(id: id)
         } else if avPlayerWrapper != nil {
             avPlayerWrapper?.selectAudioTrack(id: id)
+        } else if dvSampleBufferPlayer != nil {
+            dvSampleBufferPlayer?.selectAudioTrack(id: id)
         }
         currentAudioTrackId = id
     }
@@ -1850,6 +2089,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             mpvPlayerWrapper?.selectSubtitleTrack(id: id)
         } else if avPlayerWrapper != nil {
             avPlayerWrapper?.selectSubtitleTrack(id: id)
+        } else if dvSampleBufferPlayer != nil {
+            dvSampleBufferPlayer?.selectSubtitleTrack(id: id)
         }
         currentSubtitleTrackId = id
 
@@ -1887,6 +2128,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             newSubtitleTracks = avp.subtitleTracks
             newCurrentAudioTrackId = avp.currentAudioTrackId
             newCurrentSubtitleTrackId = avp.currentSubtitleTrackId
+        } else if let dvp = dvSampleBufferPlayer {
+            newAudioTracks = dvp.audioTracks
+            newSubtitleTracks = dvp.subtitleTracks
+            newCurrentAudioTrackId = dvp.currentAudioTrackId
+            newCurrentSubtitleTrackId = dvp.currentSubtitleTrackId
         } else {
             // No active player
             return
@@ -2430,6 +2676,13 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Fetch the next episode for TV shows
     func fetchNextEpisode() async -> PlexMetadata? {
+        // Shuffled queue: return next shuffled episode instead of sequential
+        if !shuffledQueue.isEmpty {
+            shuffledQueueIndex += 1
+            guard shuffledQueueIndex < shuffledQueue.count else { return nil }
+            return shuffledQueue[shuffledQueueIndex]
+        }
+
         print("🎬 [PostVideo] fetchNextEpisode called")
         print("🎬 [PostVideo] seasonKey (parentRatingKey): \(metadata.parentRatingKey ?? "nil")")
         print("🎬 [PostVideo] currentIndex: \(metadata.index ?? -1)")

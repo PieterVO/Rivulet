@@ -614,6 +614,13 @@ struct UniversalPlayerView: View {
                         .offset(viewModel.videoFrameState.offset)
                         .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
                 }
+            case .dvSampleBuffer:
+                if let dvp = viewModel.dvSampleBufferPlayer {
+                    DVSampleBufferView(player: dvp)
+                        .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
+                        .offset(viewModel.videoFrameState.offset)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
+                }
             }
         }
     }

@@ -1401,10 +1401,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
             // Limitations - tells server about codec/format restrictions
             "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=8&replace=true)",
-            // Block dvhe/hev1 codec tags - tvOS AVPlayer requires dvh1/hvc1 for Dolby Vision
-            // Removing onlyDirectPlay=true so this applies to HLS as well as direct play
-            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe)",
-            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1)",
+            // Block dvhe/hev1 for direct play only - forces server to remux to dvh1/hvc1 for HLS
+            // With onlyDirectPlay=true: Server remuxes dvhe→dvh1 (preserves DV)
+            // Without it: Server may transcode HEVC→H.264 (loses DV)
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=dvhe&onlyDirectPlay=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=notMatch&name=video.codecID&value=hev1&onlyDirectPlay=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=4096&replace=true)",
             "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=2160&replace=true)"
         ].joined(separator: "+")
@@ -1426,13 +1427,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "container", value: "mp4"),
             URLQueryItem(name: "segmentFormat", value: "mp4"),
             URLQueryItem(name: "segmentContainer", value: "mp4"),  // Force CMAF/fMP4 segments (required for DV on tvOS)
-            URLQueryItem(name: "directPlay", value: "0"),
+            // directPlay=1 tells server we CAN direct play mp4/mov - without this, server may transcode instead of remux
+            URLQueryItem(name: "directPlay", value: "1"),
             // For MKV+DV, we must force video transcoding (not just remux) to get Apple-compatible codec tags (dvh1/hvc1)
             // MKV files typically use dvhe/hev1 which AVPlayer cannot decode
             URLQueryItem(name: "directStream", value: forceVideoTranscode ? "0" : "1"),
-            // Direct stream audio when possible (AAC, AC3, EAC3 are supported by AVPlayer)
-            // Server will still transcode DTS/TrueHD to AAC automatically
-            URLQueryItem(name: "directStreamAudio", value: allowAudioDirectStream ? "1" : "0"),
+            // Always set directStreamAudio=1 for DV/HDR content (matches official Plex app behavior)
+            // Server will still transcode DTS/TrueHD to EAC3 automatically, but this ensures fMP4 segments
+            // Setting to 0 may force Plex to use MPEG-TS which breaks DV playback
+            URLQueryItem(name: "directStreamAudio", value: "1"),
             URLQueryItem(name: "fastSeek", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
@@ -1456,10 +1459,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         components.queryItems = items
 
-        // Add HDR-related parameters for proper TV mode switching
-        // useDoviCodecs=1 causes the server to add appropriate HLS manifest levels (level=153 for DV, level=51 for HDR)
+        // Add HDR-related parameters for proper DV remuxing and codec signaling
+        // useDoviCodecs=1 ensures Plex remuxes DV content (preserves DV metadata) rather than transcoding
         // includeCodecs=1 is required with useDoviCodecs for correct HLS manifest generation
-        // When useDolbyVision=false, we skip useDoviCodecs to get HDR10 base layer only (workaround for Plex HLS DV remux issues)
+        // Note: Plex outputs dvh1 in the CODECS string which AVPlayer rejects, but we patch the
+        // master playlist before loading (see AVPlayerWrapper) to change dvh1 → hvc1
         if hasHDR && useDolbyVision {
             components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
             components.queryItems?.append(URLQueryItem(name: "includeCodecs", value: "1"))
@@ -1469,6 +1473,61 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         guard let url = components.url else { return nil }
         return (url, headers)
+    }
+
+    /// Ping the `/decision` endpoint to tell Plex to actually start the transcode/remux session.
+    /// Without this, Plex may return a playlist with segment URLs but never begin muxing,
+    /// causing the init segment (`/base/header`) to hang indefinitely.
+    /// Takes the `start.m3u8` URL and swaps the path to `/decision`.
+    func startTranscodeDecision(hlsURL: URL, headers: [String: String]) async {
+        guard var components = URLComponents(url: hlsURL, resolvingAgainstBaseURL: false) else { return }
+
+        // Swap start.m3u8 → decision
+        let currentPath = components.path
+        components.path = currentPath.replacingOccurrences(
+            of: "/video/:/transcode/universal/start.m3u8",
+            with: "/video/:/transcode/universal/decision"
+        )
+
+        guard let decisionURL = components.url else { return }
+
+        var request = URLRequest(url: decisionURL)
+        request.httpMethod = "GET"
+        for (key, value) in headers {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[Plex] Decision response: HTTP \(status)")
+        } catch {
+            print("[Plex] Decision request failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Stop a Plex transcode session. Call this when stopping playback to free server resources
+    /// and prevent timeouts when immediately starting a new session.
+    func stopTranscodeSession(serverURL: String, authToken: String, sessionId: String) async {
+        let endpoint = "/video/:/transcode/universal/stop"
+        guard var components = URLComponents(string: "\(serverURL)\(endpoint)") else { return }
+        components.queryItems = [URLQueryItem(name: "session", value: sessionId)]
+        guard let url = components.url else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[Plex] Stopped transcode session \(sessionId) (HTTP \(status))")
+        } catch {
+            // Best-effort — don't block on failure
+            print("[Plex] Failed to stop transcode session \(sessionId): \(error.localizedDescription)")
+        }
     }
 
     /// Detect if a server URL is on the local network
