@@ -94,11 +94,13 @@ final class DVSampleBufferPlayer: ObservableObject {
         playbackStateSubject.send(.loading)
 
         // Ensure audio session is configured for playback
+        // IMPORTANT: .allowAirPlay is required for HomePod audio routing on tvOS
         do {
             let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .moviePlayback)
+            try audioSession.setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay])
             try audioSession.setActive(true)
-            print("🎬 [DVPlayer] Audio session configured: category=\(audioSession.category.rawValue), mode=\(audioSession.mode.rawValue)")
+            let routeType = audioSession.currentRoute.outputs.first?.portType.rawValue ?? "unknown"
+            print("🎬 [DVPlayer] Audio session configured: category=\(audioSession.category.rawValue), mode=\(audioSession.mode.rawValue), route=\(routeType)")
         } catch {
             print("🎬 [DVPlayer] ⚠️ Audio session setup failed: \(error)")
         }
@@ -122,9 +124,15 @@ final class DVSampleBufferPlayer: ObservableObject {
         print("🎬 [DVPlayer] Loaded: \(fetcher.segments.count) segments, duration=\(duration)s, dvh1=\(demuxer.hasDVFormatDescription)")
         print("🎬 [DVPlayer] Audio renderer: volume=\(audioRenderer.volume), isMuted=\(audioRenderer.isMuted), status=\(audioRenderer.status.rawValue)")
 
-        // Populate basic track info
+        // Populate track info using demuxer codec info (enables enrichment with Plex metadata)
         if demuxer.audioTrackID != nil {
-            audioTracks = [MediaTrack(id: 1, name: "Default Audio", isDefault: true)]
+            let codecName = demuxer.audioCodecType?.uppercased() ?? "Audio"
+            audioTracks = [MediaTrack(
+                id: 1,
+                name: codecName,
+                codec: demuxer.audioCodecType,
+                isDefault: true
+            )]
             currentAudioTrackId = 1
         }
         tracksSubject.send()
@@ -541,9 +549,31 @@ final class DVSampleBufferPlayer: ObservableObject {
         }
     }
 
-    /// Enqueue a video sample buffer, waiting if the layer isn't ready
+    /// Enqueue a video sample buffer, pacing to stay within lookahead window
     private func enqueueVideoSample(_ sampleBuffer: CMSampleBuffer) async {
-        // Wait for the display layer to be ready, tracking stall duration
+        let samplePTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let sampleTime = CMTimeGetSeconds(samplePTS)
+
+        // Pace enqueue: wait if sample is too far ahead of synchronizer time.
+        // This prevents flooding the display layer buffer and causing long stalls.
+        // Allow 2 seconds of lookahead for smooth playback runway.
+        let maxLookahead: TimeInterval = 2.0
+
+        while !Task.isCancelled {
+            let syncTime = CMTimeGetSeconds(renderSynchronizer.currentTime())
+            let ahead = sampleTime - syncTime
+
+            // If we're within lookahead window or sync hasn't started, proceed
+            if ahead <= maxLookahead || syncTime < 0.1 {
+                break
+            }
+
+            // Sleep for a fraction of the excess time, then re-check
+            let sleepTime = min(ahead - maxLookahead, 0.1) // max 100ms sleep
+            try? await Task.sleep(nanoseconds: UInt64(sleepTime * 1_000_000_000))
+        }
+
+        // Now wait for display layer readiness (should be brief with proper pacing)
         if !displayLayer.isReadyForMoreMediaData {
             let stallStart = CFAbsoluteTimeGetCurrent()
             while !displayLayer.isReadyForMoreMediaData && !Task.isCancelled {
@@ -630,6 +660,8 @@ struct PlaybackJitterStats {
     private var syncDriftSamples: [Double] = []  // drift rate samples (sync advance / wall advance)
     private var maxSyncDrift: Double = 0         // max deviation from 1.0 rate
     private var syncDriftAlerts: Int = 0         // significant drift events
+    private var consecutiveDriftCount: Int = 0   // consecutive samples with same drift direction
+    private var lastDriftDirection: Int = 0      // -1 = slow, 0 = normal, +1 = fast
 
     // Reporting
     private var lastReportTime: CFAbsoluteTime = 0
@@ -658,6 +690,8 @@ struct PlaybackJitterStats {
         syncDriftSamples = []
         maxSyncDrift = 0
         syncDriftAlerts = 0
+        consecutiveDriftCount = 0
+        lastDriftDirection = 0
         lastReportTime = CFAbsoluteTimeGetCurrent()
         lastReportFrameCount = 0
     }
@@ -774,11 +808,30 @@ struct PlaybackJitterStats {
             maxSyncDrift = deviation
         }
 
-        // Alert on significant drift (>5% speed difference)
-        if deviation > 0.05 {
-            syncDriftAlerts += 1
-            print("📊 [Jitter] ⚠️ Sync drift: \(String(format: "%.1f", driftRate * 100))% (wall: \(String(format: "%.0f", wallDelta * 1000))ms, sync: \(String(format: "%.0f", syncDelta * 1000))ms)")
+        // Track drift direction for sustained drift detection
+        let currentDirection: Int
+        if driftRate < 0.95 {
+            currentDirection = -1  // running slow
+        } else if driftRate > 1.05 {
+            currentDirection = 1   // running fast
+        } else {
+            currentDirection = 0   // normal
         }
+
+        // Only alert on sustained drift (3+ consecutive samples in same direction)
+        // This filters out momentary clock jitter from measurement timing
+        if currentDirection != 0 && currentDirection == lastDriftDirection {
+            consecutiveDriftCount += 1
+            if consecutiveDriftCount >= 3 {
+                syncDriftAlerts += 1
+                let direction = currentDirection < 0 ? "slow" : "fast"
+                print("📊 [Jitter] ⚠️ Sustained sync drift (\(direction)): \(String(format: "%.1f", driftRate * 100))% (wall: \(String(format: "%.0f", wallDelta * 1000))ms, sync: \(String(format: "%.0f", syncDelta * 1000))ms)")
+                consecutiveDriftCount = 0  // Reset after alerting
+            }
+        } else {
+            consecutiveDriftCount = currentDirection != 0 ? 1 : 0
+        }
+        lastDriftDirection = currentDirection
 
         lastSyncCheckWallTime = now
         lastSyncCheckPlaybackTime = syncTime

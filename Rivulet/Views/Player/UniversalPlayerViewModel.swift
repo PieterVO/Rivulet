@@ -402,6 +402,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// DVSampleBufferPlayer (used for DV profiles AVPlayer rejects: Profile 8 CompatID 6, Profile 7 MEL)
     @Published private(set) var dvSampleBufferPlayer: DVSampleBufferPlayer?
 
+    /// Subtitle manager for DVSampleBufferPlayer (handles external subtitle rendering)
+    let subtitleManager = SubtitleManager()
+
     // MARK: - Metadata
 
     private(set) var metadata: PlexMetadata
@@ -624,6 +627,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         let networkManager = PlexNetworkManager.shared
 
         guard let ratingKey = metadata.ratingKey else { return }
+
+        // Fetch full metadata if Media array is missing (needed for info overlay display)
+        // This happens when starting playback from Continue Watching or other hubs with minimal metadata
+        if metadata.Media == nil || metadata.Media?.isEmpty == true {
+            print("🎬 [Metadata] Media array missing, fetching full metadata for info overlay...")
+            await fetchFullMetadataIfNeeded()
+        }
 
         // Check if this is audio content
         let isAudio = metadata.type == "track" || metadata.type == "album" || metadata.type == "artist"
@@ -887,6 +897,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     if let wrapper = self.dvSampleBufferPlayer, wrapper.duration > 0 {
                         self.duration = wrapper.duration
                     }
+                    // Update subtitle manager for DV player
+                    self.subtitleManager.update(time: time)
                 }
                 // Check for markers at current time
                 self.checkMarkers(at: time)
@@ -1685,6 +1697,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             avPlayerWrapper?.stop()
         case .dvSampleBuffer:
             dvSampleBufferPlayer?.stop()
+            subtitleManager.clear()
         }
 
         // Stop the Plex transcode session so the server frees resources immediately.
@@ -1786,6 +1799,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             await avPlayerWrapper?.seek(to: time)
         case .dvSampleBuffer:
             await dvSampleBufferPlayer?.seek(to: time)
+            subtitleManager.didSeek()
         }
         showControlsTemporarily()
     }
@@ -1801,6 +1815,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             await avPlayerWrapper?.seek(to: newTime)
         case .dvSampleBuffer:
             await dvSampleBufferPlayer?.seekRelative(by: seconds)
+            subtitleManager.didSeek()
         }
         showControlsTemporarily()
 
@@ -2091,6 +2106,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             avPlayerWrapper?.selectSubtitleTrack(id: id)
         } else if dvSampleBufferPlayer != nil {
             dvSampleBufferPlayer?.selectSubtitleTrack(id: id)
+            // Load external subtitles for DV player
+            loadExternalSubtitleForDVPlayer(trackId: id)
         }
         currentSubtitleTrackId = id
 
@@ -2101,6 +2118,60 @@ final class UniversalPlayerViewModel: ObservableObject {
         } else {
             SubtitlePreferenceManager.current = .off
             print("🎬 [SUBTITLE PREF] Saved: Off")
+        }
+    }
+
+    /// Load external subtitle file for DVSampleBufferPlayer
+    private func loadExternalSubtitleForDVPlayer(trackId: Int?) {
+        guard dvSampleBufferPlayer != nil else { return }
+
+        // Clear subtitles if no track selected
+        guard let trackId = trackId,
+              let track = subtitleTracks.first(where: { $0.id == trackId }) else {
+            subtitleManager.clear()
+            return
+        }
+
+        // Check if this is a text-based subtitle we can render
+        let supportedCodecs = ["srt", "subrip", "vtt", "webvtt", "ass", "ssa"]
+        guard let codec = track.codec?.lowercased(),
+              supportedCodecs.contains(codec) else {
+            print("🎬 [Subtitles] Unsupported format for DV player: \(track.codec ?? "unknown")")
+            subtitleManager.clear()
+            return
+        }
+
+        // Get subtitle URL from Plex
+        let subtitleURLString: String
+        if let trackKey = track.subtitleKey {
+            // Direct key available
+            subtitleURLString = serverURL + trackKey
+        } else {
+            // Try to get part ID for subtitle extraction
+            guard let part = metadata.Media?.first?.Part?.first,
+                  let partId = part.id else {
+                print("🎬 [Subtitles] No part ID available")
+                subtitleManager.clear()
+                return
+            }
+
+            // Try format: /library/parts/<partId>/indexes/sd/<streamId>
+            subtitleURLString = "\(serverURL)/library/parts/\(partId)/indexes/sd/\(trackId)?X-Plex-Token=\(authToken)"
+
+            print("🎬 [Subtitles] Part-based URL: \(subtitleURLString)")
+        }
+        guard let subtitleURL = URL(string: subtitleURLString) else {
+            print("🎬 [Subtitles] Invalid subtitle URL: \(subtitleURLString)")
+            subtitleManager.clear()
+            return
+        }
+
+        // Load the subtitle file
+        let headers = ["X-Plex-Token": authToken]
+        let format = SubtitleFormat(from: codec)
+
+        Task {
+            await subtitleManager.load(url: subtitleURL, headers: headers, format: format)
         }
     }
 
@@ -2123,25 +2194,45 @@ final class UniversalPlayerViewModel: ObservableObject {
             newSubtitleTracks = mpv.subtitleTracks
             newCurrentAudioTrackId = mpv.currentAudioTrackId
             newCurrentSubtitleTrackId = mpv.currentSubtitleTrackId
+
+            // Enrich MPV tracks with Plex stream metadata (for channel info, etc.)
+            if let streams = metadata.Media?.first?.Part?.first?.Stream {
+                newAudioTracks = enrichTracksWithPlexStreams(newAudioTracks, plexStreams: streams, type: .audio)
+                newSubtitleTracks = enrichTracksWithPlexStreams(newSubtitleTracks, plexStreams: streams, type: .subtitle)
+            }
         } else if let avp = avPlayerWrapper {
+            // Use AVPlayer's actual tracks (these are the ones that work for selection)
+            // but enrich with Plex metadata for better display names
             newAudioTracks = avp.audioTracks
             newSubtitleTracks = avp.subtitleTracks
             newCurrentAudioTrackId = avp.currentAudioTrackId
             newCurrentSubtitleTrackId = avp.currentSubtitleTrackId
-        } else if let dvp = dvSampleBufferPlayer {
-            newAudioTracks = dvp.audioTracks
-            newSubtitleTracks = dvp.subtitleTracks
-            newCurrentAudioTrackId = dvp.currentAudioTrackId
-            newCurrentSubtitleTrackId = dvp.currentSubtitleTrackId
+
+            // Enrich AVPlayer tracks with Plex stream metadata for better display names
+            if let streams = metadata.Media?.first?.Part?.first?.Stream {
+                newAudioTracks = enrichTracksWithPlexStreams(newAudioTracks, plexStreams: streams, type: .audio)
+                newSubtitleTracks = enrichTracksWithPlexStreams(newSubtitleTracks, plexStreams: streams, type: .subtitle)
+            }
+        } else if dvSampleBufferPlayer != nil {
+            // DVSampleBufferPlayer doesn't report tracks properly - use Plex metadata directly
+            // This gives us all audio/subtitle tracks with proper displayTitles
+            if let streams = metadata.Media?.first?.Part?.first?.Stream {
+                newAudioTracks = streams.filter { $0.isAudio }.map { MediaTrack(from: $0) }
+                newSubtitleTracks = streams.filter { $0.isSubtitle }.map { MediaTrack(from: $0) }
+
+                // Set current track to default or first
+                newCurrentAudioTrackId = newAudioTracks.first(where: { $0.isDefault })?.id ?? newAudioTracks.first?.id
+                newCurrentSubtitleTrackId = newSubtitleTracks.first(where: { $0.isDefault })?.id
+            } else {
+                // Fallback to player-reported tracks if no Plex metadata
+                newAudioTracks = dvSampleBufferPlayer!.audioTracks
+                newSubtitleTracks = dvSampleBufferPlayer!.subtitleTracks
+                newCurrentAudioTrackId = dvSampleBufferPlayer!.currentAudioTrackId
+                newCurrentSubtitleTrackId = dvSampleBufferPlayer!.currentSubtitleTrackId
+            }
         } else {
             // No active player
             return
-        }
-
-        // Enrich with Plex stream metadata (for channel info, etc.)
-        if let streams = metadata.Media?.first?.Part?.first?.Stream {
-            newAudioTracks = enrichTracksWithPlexStreams(newAudioTracks, plexStreams: streams)
-            newSubtitleTracks = enrichTracksWithPlexStreams(newSubtitleTracks, plexStreams: streams)
         }
 
         audioTracks = newAudioTracks
@@ -2162,33 +2253,47 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Enrich MPV tracks with Plex stream metadata (channels, etc.)
-    private func enrichTracksWithPlexStreams(_ tracks: [MediaTrack], plexStreams: [PlexStream]) -> [MediaTrack] {
+    enum StreamType { case audio, subtitle }
+
+    /// Enrich player tracks with Plex stream metadata (display name, channels, subtitle keys, etc.)
+    private func enrichTracksWithPlexStreams(_ tracks: [MediaTrack], plexStreams: [PlexStream], type: StreamType) -> [MediaTrack] {
+        // Filter Plex streams to only match the correct type
+        let filteredStreams = plexStreams.filter { stream in
+            switch type {
+            case .audio: return stream.isAudio
+            case .subtitle: return stream.isSubtitle
+            }
+        }
+
         return tracks.map { track in
             // Try to find matching Plex stream by language code and codec
-            let matchingStream = plexStreams.first { stream in
+            let matchingStream = filteredStreams.first { stream in
                 // Match by language code and codec type
                 let langMatch = track.languageCode?.lowercased() == stream.languageCode?.lowercased()
                 let codecMatch = track.codec?.lowercased() == stream.codec?.lowercased()
                 return langMatch && codecMatch
-            } ?? plexStreams.first { stream in
+            } ?? filteredStreams.first { stream in
                 // Fallback: just match by language
                 track.languageCode?.lowercased() == stream.languageCode?.lowercased()
             }
 
             guard let stream = matchingStream else { return track }
 
-            // Create enriched track with Plex channel info
+            // Use Plex displayTitle for better formatting (e.g., "English (AAC 7.1)" instead of "Track 1")
+            let enrichedName = stream.displayTitle ?? stream.extendedDisplayTitle ?? track.name
+
+            // Create enriched track with Plex metadata - keep original ID for selection to work
             return MediaTrack(
                 id: track.id,
-                name: track.name,
-                language: track.language,
-                languageCode: track.languageCode,
-                codec: track.codec,
-                isDefault: track.isDefault,
-                isForced: track.isForced,
+                name: enrichedName,
+                language: stream.language ?? track.language,
+                languageCode: stream.languageCode ?? track.languageCode,
+                codec: stream.codec ?? track.codec,
+                isDefault: stream.default ?? track.isDefault,
+                isForced: stream.forced ?? track.isForced,
                 isHearingImpaired: stream.hearingImpaired ?? track.isHearingImpaired,
-                channels: stream.channels ?? track.channels
+                channels: stream.channels ?? track.channels,
+                subtitleKey: stream.key ?? track.subtitleKey
             )
         }
     }
@@ -2232,7 +2337,14 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Select subtitle track without saving preference (for auto-selection)
     private func selectSubtitleTrackWithoutSaving(id: Int?) {
-        mpvPlayerWrapper?.selectSubtitleTrack(id: id)
+        if mpvPlayerWrapper != nil {
+            mpvPlayerWrapper?.selectSubtitleTrack(id: id)
+        } else if avPlayerWrapper != nil {
+            avPlayerWrapper?.selectSubtitleTrack(id: id)
+        } else if dvSampleBufferPlayer != nil {
+            dvSampleBufferPlayer?.selectSubtitleTrack(id: id)
+            loadExternalSubtitleForDVPlayer(trackId: id)
+        }
         currentSubtitleTrackId = id
     }
 
@@ -2631,10 +2743,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Fetch full metadata if parent keys are missing (e.g., from Continue Watching)
+    /// Fetch full metadata if parent keys or Media info are missing (e.g., from Continue Watching)
     private func fetchFullMetadataIfNeeded() async {
         guard let ratingKey = metadata.ratingKey else {
-            print("🎬 [PostVideo] No rating key for full metadata fetch")
+            print("🎬 [Metadata] No rating key for full metadata fetch")
             return
         }
 
@@ -2664,13 +2776,19 @@ final class UniversalPlayerViewModel: ObservableObject {
                 metadata.index = fullMetadata.index
             }
 
-            print("🎬 [PostVideo] Updated metadata from full fetch:")
-            print("🎬 [PostVideo]   parentRatingKey: \(metadata.parentRatingKey ?? "nil")")
-            print("🎬 [PostVideo]   grandparentRatingKey: \(metadata.grandparentRatingKey ?? "nil")")
-            print("🎬 [PostVideo]   parentIndex (season): \(metadata.parentIndex ?? -1)")
-            print("🎬 [PostVideo]   index (episode): \(metadata.index ?? -1)")
+            // Update Media array if missing (needed for info overlay display)
+            if metadata.Media == nil || metadata.Media?.isEmpty == true {
+                metadata.Media = fullMetadata.Media
+                print("🎬 [Metadata] Updated Media array from full fetch (streams: \(fullMetadata.Media?.first?.Part?.first?.Stream?.count ?? 0))")
+            }
+
+            print("🎬 [Metadata] Updated metadata from full fetch:")
+            print("🎬 [Metadata]   parentRatingKey: \(metadata.parentRatingKey ?? "nil")")
+            print("🎬 [Metadata]   grandparentRatingKey: \(metadata.grandparentRatingKey ?? "nil")")
+            print("🎬 [Metadata]   parentIndex (season): \(metadata.parentIndex ?? -1)")
+            print("🎬 [Metadata]   index (episode): \(metadata.index ?? -1)")
         } catch {
-            print("🎬 [PostVideo] Failed to fetch full metadata: \(error)")
+            print("🎬 [Metadata] Failed to fetch full metadata: \(error)")
         }
     }
 

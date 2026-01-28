@@ -21,6 +21,9 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
     // Audio-specific
     let channels: Int?
 
+    // Subtitle-specific
+    let subtitleKey: String?  // Plex URL path for external subtitles (e.g., "/library/streams/12345")
+
     init(
         id: Int,
         name: String,
@@ -30,7 +33,8 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         isDefault: Bool = false,
         isForced: Bool = false,
         isHearingImpaired: Bool = false,
-        channels: Int? = nil
+        channels: Int? = nil,
+        subtitleKey: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +45,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isForced = isForced
         self.isHearingImpaired = isHearingImpaired
         self.channels = channels
+        self.subtitleKey = subtitleKey
     }
 
     /// Creates a MediaTrack from a PlexStream
@@ -54,6 +59,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isForced = stream.forced ?? false
         self.isHearingImpaired = stream.hearingImpaired ?? false
         self.channels = stream.channels
+        self.subtitleKey = stream.key
     }
 
     /// Display name with additional info

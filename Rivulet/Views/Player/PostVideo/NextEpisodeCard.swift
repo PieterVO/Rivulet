@@ -102,6 +102,7 @@ struct NextEpisodeCard: View {
         .background(
             RoundedRectangle(cornerRadius: 20)
                 .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)  // Force dark on bright HDR/DV content
                 .overlay(
                     RoundedRectangle(cornerRadius: 20)
                         .strokeBorder(.white.opacity(0.1), lineWidth: 1)

@@ -176,16 +176,16 @@ struct PlayerControlsOverlay: View {
                 // Right Column: Media Info
                 settingsColumn(title: "MEDIA INFO", columnIndex: 2) {
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 10) {
                             // Title
                             Text(viewModel.title)
-                                .font(.system(size: 17, weight: .semibold))
+                                .font(.system(size: 26, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .lineLimit(2)
 
                             if let subtitle = viewModel.subtitle {
                                 Text(subtitle)
-                                    .font(.system(size: 15))
+                                    .font(.system(size: 20))
                                     .foregroundStyle(.white.opacity(0.6))
                             }
 
@@ -226,9 +226,16 @@ struct PlayerControlsOverlay: View {
             .frame(maxWidth: .infinity)
             .contentShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
             .clipped()
-            .glassEffect(
-                .regular,
-                in: RoundedRectangle(cornerRadius: 32, style: .continuous)
+            // Use dark translucent material instead of glassEffect for HDR/DV compatibility
+            // glassEffect adapts to content behind it, appearing light on bright HDR video
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+            )
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.black.opacity(0.6))
             )
             // GPU-accelerated shadow
             .background(
@@ -256,7 +263,7 @@ struct PlayerControlsOverlay: View {
         VStack(alignment: .leading, spacing: 8) {
             // Column header
             Text(title)
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: 15, weight: .bold))
                 .tracking(1.5)
                 .foregroundStyle(viewModel.focusedColumn == columnIndex ? .white : .white.opacity(0.5))
                 .padding(.horizontal, 16)
@@ -269,21 +276,21 @@ struct PlayerControlsOverlay: View {
 
     /// Simple text row for media info
     private func mediaInfoText(label: String, value: String, highlight: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: 12) {
             Text(label)
-                .font(.system(size: 14))
+                .font(.system(size: 20))
                 .foregroundStyle(.white.opacity(0.5))
-                .frame(width: 60, alignment: .leading)
+                .frame(width: 90, alignment: .leading)
 
             Text(value)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(highlight ? .yellow : .white.opacity(0.8))
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(highlight ? .yellow : .white.opacity(0.9))
         }
     }
 
     private func settingsSectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 13, weight: .bold))
+            .font(.system(size: 15, weight: .bold))
             .tracking(1.5)
             .foregroundStyle(.white.opacity(0.5))
             .padding(.horizontal, 36)
@@ -370,10 +377,17 @@ struct PlayerControlsOverlay: View {
     }
 
     private var audioInfoString: String? {
+        // Prefer stream displayTitle if available (e.g., "English (AAC 7.1)")
+        if let audioStream = viewModel.metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio }),
+           let displayTitle = audioStream.displayTitle {
+            return displayTitle
+        }
+
+        // Fall back to media-level info
         guard let media = viewModel.metadata.Media?.first else { return nil }
         var parts: [String] = []
 
-        // Codec
+        // Codec - handle common fourcc codes
         if let codec = media.audioCodec?.uppercased() {
             if codec.contains("TRUEHD") {
                 parts.append("TrueHD")
@@ -385,12 +399,16 @@ struct PlayerControlsOverlay: View {
                 }
             } else if codec.contains("EAC3") || codec.contains("E-AC-3") {
                 parts.append("Dolby Digital+")
-            } else if codec.contains("AC3") {
+            } else if codec.contains("AC3") && !codec.contains("EAC3") {
                 parts.append("Dolby Digital")
-            } else if codec.contains("AAC") {
+            } else if codec.contains("AAC") || codec.contains("MP4A") {
                 parts.append("AAC")
             } else if codec.contains("FLAC") {
                 parts.append("FLAC")
+            } else if codec.contains("OPUS") {
+                parts.append("Opus")
+            } else if codec.contains("DCA") {
+                parts.append("DTS")
             } else {
                 parts.append(codec)
             }
@@ -675,14 +693,14 @@ private struct PlaybackSettingsRow: View {
                 .frame(width: 26)
 
             // Text content
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
+                    .font(.system(size: 24, weight: isSelected ? .semibold : .regular))
                     .lineLimit(1)
 
                 if !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(.system(size: 15))
+                        .font(.system(size: 19))
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                 }

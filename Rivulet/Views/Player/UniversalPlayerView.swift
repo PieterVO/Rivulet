@@ -476,6 +476,15 @@ struct UniversalPlayerView: View {
             playerLayer
                 .ignoresSafeArea()
 
+            // Subtitle Overlay (for DVSampleBufferPlayer)
+            if viewModel.playerType == .dvSampleBuffer {
+                SubtitleOverlayView(
+                    subtitleManager: viewModel.subtitleManager,
+                    bottomOffset: viewModel.showControls ? 140 : 60
+                )
+                .ignoresSafeArea()
+            }
+
             // Loading State or Paused Poster (shows after 5s pause)
             if viewModel.playbackState == .loading || viewModel.playbackState == .idle || viewModel.showPausedPoster {
                 loadingView

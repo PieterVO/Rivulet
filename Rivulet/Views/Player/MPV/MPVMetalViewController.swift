@@ -29,6 +29,7 @@ final class MPVMetalViewController: UIViewController {
     private var timeObserverActive = false
     private var currentState: MPVPlayerState = .idle
     private var isShuttingDown = false
+    private var mutedForPause = false
     private var lastKnownSize: CGSize = .zero
     private var previousDrawableSize: CGSize = .zero
     private var audioRouteObserver: NSObjectProtocol?
@@ -555,9 +556,20 @@ final class MPVMetalViewController: UIViewController {
 
     func play() {
         setFlag(MPVProperty.pause, false)
+        // Unmute only if we muted during pause (preserve user's manual mute)
+        if mutedForPause {
+            setFlag(MPVProperty.mute, false)
+            mutedForPause = false
+        }
     }
 
     func pause() {
+        // Mute immediately to prevent audio buffer from draining audibly
+        // Only if not already muted (preserve user's manual mute state)
+        if !isMuted {
+            setFlag(MPVProperty.mute, true)
+            mutedForPause = true
+        }
         setFlag(MPVProperty.pause, true)
     }
 
