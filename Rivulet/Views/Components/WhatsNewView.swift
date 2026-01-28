@@ -38,21 +38,25 @@ struct WhatsNewView: View {
                 .padding(.top, 40)
 
                 // Feature list
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(features.enumerated()), id: \.offset) { _, feature in
-                        HStack(alignment: .top, spacing: 14) {
-                            Circle()
-                                .fill(.white.opacity(0.4))
-                                .frame(width: 8, height: 8)
-                                .padding(.top, 10)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(features.enumerated()), id: \.offset) { _, feature in
+                            HStack(alignment: .top, spacing: 14) {
+                                Circle()
+                                    .fill(.white.opacity(0.4))
+                                    .frame(width: 8, height: 8)
+                                    .padding(.top, 10)
 
-                            Text(feature)
-                                .font(.system(size: 26, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.85))
+                                Text(feature)
+                                    .font(.system(size: 26, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.85))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
+                    .padding(.horizontal, 40)
                 }
-                .padding(.horizontal, 40)
+                .frame(maxHeight: 400)
 
                 // Continue button
                 Button {
