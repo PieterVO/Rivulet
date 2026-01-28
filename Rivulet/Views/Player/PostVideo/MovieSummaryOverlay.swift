@@ -14,11 +14,6 @@ struct MovieSummaryOverlay: View {
     @Namespace private var buttonNamespace
     @FocusState private var focusedButton: PostVideoFocusTarget?
 
-    private var completionPercentage: Int {
-        guard viewModel.duration > 0 else { return 100 }
-        return Int((viewModel.currentTime / viewModel.duration) * 100)
-    }
-
     private var durationString: String {
         let totalMinutes = Int(viewModel.duration / 60)
         let hours = totalMinutes / 60
@@ -58,12 +53,9 @@ struct MovieSummaryOverlay: View {
                             .lineLimit(2)
                             .multilineTextAlignment(.center)
 
-                        HStack(spacing: 16) {
-                            Label(durationString, systemImage: "clock")
-                            Text("\(completionPercentage)% complete")
-                        }
-                        .font(.system(size: 20))
-                        .foregroundStyle(.white.opacity(0.5))
+                        Label(durationString, systemImage: "clock")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white.opacity(0.5))
                     }
 
                     // Recommendations

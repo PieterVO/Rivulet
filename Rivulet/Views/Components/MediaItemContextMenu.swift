@@ -36,6 +36,7 @@ struct MediaItemContextMenu: ViewModifier {
     var onShowInfo: MediaItemNavigationCallback?
     var onGoToSeason: MediaItemNavigationCallback?
     var onGoToShow: MediaItemNavigationCallback?
+    var onShufflePlay: MediaItemNavigationCallback?
 
     @State private var isPerformingAction = false
 
@@ -123,6 +124,17 @@ struct MediaItemContextMenu: ViewModifier {
                 }
             }
 
+            // Shuffle Play (for shows and seasons)
+            if item.type == "show" || item.type == "season" {
+                if let onShufflePlay {
+                    Button {
+                        onShufflePlay()
+                    } label: {
+                        Label("Shuffle Play", systemImage: "shuffle")
+                    }
+                }
+            }
+
             Divider()
 
             // More Info (navigate to detail view)
@@ -184,7 +196,8 @@ extension View {
         onRefreshNeeded: MediaItemRefreshCallback? = nil,
         onShowInfo: MediaItemNavigationCallback? = nil,
         onGoToSeason: MediaItemNavigationCallback? = nil,
-        onGoToShow: MediaItemNavigationCallback? = nil
+        onGoToShow: MediaItemNavigationCallback? = nil,
+        onShufflePlay: MediaItemNavigationCallback? = nil
     ) -> some View {
         modifier(MediaItemContextMenu(
             item: item,
@@ -194,7 +207,8 @@ extension View {
             onRefreshNeeded: onRefreshNeeded,
             onShowInfo: onShowInfo,
             onGoToSeason: onGoToSeason,
-            onGoToShow: onGoToShow
+            onGoToShow: onGoToShow,
+            onShufflePlay: onShufflePlay
         ))
     }
 }

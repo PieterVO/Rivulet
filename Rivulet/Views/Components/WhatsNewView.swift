@@ -1,0 +1,118 @@
+//
+//  WhatsNewView.swift
+//  Rivulet
+//
+//  Shows a one-time "What's New" overlay when the app updates
+//  to a version with a changelog entry.
+//
+
+import SwiftUI
+
+#if os(tvOS)
+
+struct WhatsNewView: View {
+    @Binding var isPresented: Bool
+    let version: String
+
+    @FocusState private var isContinueFocused: Bool
+
+    private var features: [String] {
+        Self.features(for: version) ?? []
+    }
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 32) {
+                // Header
+                VStack(spacing: 8) {
+                    Text("What's New")
+                        .font(.system(size: 46, weight: .bold))
+                        .foregroundStyle(.white)
+
+                    Text("Version \(version)")
+                        .font(.system(size: 23, weight: .regular))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(.top, 40)
+
+                // Feature list
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(Array(features.enumerated()), id: \.offset) { _, feature in
+                        HStack(alignment: .top, spacing: 14) {
+                            Circle()
+                                .fill(.white.opacity(0.4))
+                                .frame(width: 8, height: 8)
+                                .padding(.top, 10)
+
+                            Text(feature)
+                                .font(.system(size: 26, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
+                        }
+                    }
+                }
+                .padding(.horizontal, 40)
+
+                // Continue button
+                Button {
+                    isPresented = false
+                } label: {
+                    Text("Continue")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(isContinueFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .strokeBorder(
+                                            isContinueFocused ? .white.opacity(0.3) : .white.opacity(0.1),
+                                            lineWidth: 1
+                                        )
+                                )
+                        )
+                }
+                .buttonStyle(GlassRowButtonStyle())
+                .focused($isContinueFocused)
+                .scaleEffect(isContinueFocused ? 1.02 : 1.0)
+                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isContinueFocused)
+                .padding(.horizontal, 32)
+                .padding(.bottom, 36)
+            }
+            .frame(width: 520)
+            .background(
+                RoundedRectangle(cornerRadius: 32, style: .continuous)
+                    .fill(.black.opacity(0.3))
+            )
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+
+            Spacer()
+        }
+        .onExitCommand {
+            isPresented = false
+        }
+    }
+
+    // MARK: - Changelog Data
+
+    static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.0 (34)", [
+            "Trying an experimental Dolby Vision player; If DV does not work, or works well, let me know",
+            "Added Plex Home Account support. Enable it in settings",
+            "Added shuffle buttons to Seasons and Series",
+            "Library sections now appear individually on Home - Long-press libraries to toggle Home visibility",
+            "Fixed navigation bugs",
+            "Fixed some Add Live TV GUI issues",
+            "Fixed some Live TV endpoint issues and added more error logging to pinpoint more"
+        ]),
+    ]
+
+    static func features(for version: String) -> [String]? {
+        changelogs.first(where: { $0.version == version })?.features
+    }
+}
+
+#endif

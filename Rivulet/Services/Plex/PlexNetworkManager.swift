@@ -1475,6 +1475,61 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return (url, headers)
     }
 
+    /// Ping the `/decision` endpoint to tell Plex to actually start the transcode/remux session.
+    /// Without this, Plex may return a playlist with segment URLs but never begin muxing,
+    /// causing the init segment (`/base/header`) to hang indefinitely.
+    /// Takes the `start.m3u8` URL and swaps the path to `/decision`.
+    func startTranscodeDecision(hlsURL: URL, headers: [String: String]) async {
+        guard var components = URLComponents(url: hlsURL, resolvingAgainstBaseURL: false) else { return }
+
+        // Swap start.m3u8 → decision
+        let currentPath = components.path
+        components.path = currentPath.replacingOccurrences(
+            of: "/video/:/transcode/universal/start.m3u8",
+            with: "/video/:/transcode/universal/decision"
+        )
+
+        guard let decisionURL = components.url else { return }
+
+        var request = URLRequest(url: decisionURL)
+        request.httpMethod = "GET"
+        for (key, value) in headers {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[Plex] Decision response: HTTP \(status)")
+        } catch {
+            print("[Plex] Decision request failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Stop a Plex transcode session. Call this when stopping playback to free server resources
+    /// and prevent timeouts when immediately starting a new session.
+    func stopTranscodeSession(serverURL: String, authToken: String, sessionId: String) async {
+        let endpoint = "/video/:/transcode/universal/stop"
+        guard var components = URLComponents(string: "\(serverURL)\(endpoint)") else { return }
+        components.queryItems = [URLQueryItem(name: "session", value: sessionId)]
+        guard let url = components.url else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[Plex] Stopped transcode session \(sessionId) (HTTP \(status))")
+        } catch {
+            // Best-effort — don't block on failure
+            print("[Plex] Failed to stop transcode session \(sessionId): \(error.localizedDescription)")
+        }
+    }
+
     /// Detect if a server URL is on the local network
     private func isLocalServer(_ serverURL: String) -> Bool {
         guard let url = URL(string: serverURL), let host = url.host else {

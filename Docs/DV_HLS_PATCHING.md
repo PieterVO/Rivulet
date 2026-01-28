@@ -79,10 +79,11 @@ This means AVPlayer can't play DV content from Plex MKV sources via HLS.
 | 7 | Proxy: master hvc1, init hvc1 | **Plays as HDR10** | hvc1 signaling = no DV pipeline activation |
 | 7b | Proxy: keep dvh1 in master | -11848 | AVPlayer still rejects dvh1 even via real HTTP |
 | 7c | Proxy: master hvc1, init patched dvh1 | **Plays as HDR10** | Init dvh1 tolerated (no -12881!) but DV not activated |
+| **8** | **DVSampleBufferPlayer** | **✅ Full DV** | **Bypass AVPlayer, feed dvh1-tagged samples to display layer** |
 
-**Best result so far**: #7/#7c play smoothly on real Apple TV 4K. Video renders correctly, no stalling, no errors. However, AVPlayer treats the stream as HDR10 (PQ) instead of Dolby Vision.
+**Current solution**: Approach #8 (DVSampleBufferPlayer) successfully plays Dolby Vision content with full DV pipeline activation. TV enters Dolby Vision display mode.
 
-**The fundamental problem**: AVPlayer rejects `dvh1` in HLS CODECS (-11848) regardless of transport (custom scheme, file://, real HTTP). When `hvc1` is used instead, AVPlayer never activates the DV pipeline - not from the master CODECS, not from the init segment codec tag, and not from RPU NAL units in the bitstream. DV activation requires `dvh1` signaling at the HLS manifest level, which AVPlayer refuses to accept.
+**The AVPlayer problem** (for historical reference): AVPlayer rejects `dvh1` in HLS CODECS (-11848) regardless of transport (custom scheme, file://, real HTTP). When `hvc1` is used instead, AVPlayer never activates the DV pipeline. Approach #8 bypasses AVPlayer entirely.
 
 ### 7. Local HTTP reverse proxy (master hvc1, init hvc1)
 - **Proxy**: NWListener on `127.0.0.1:PORT` (random available port)
@@ -196,11 +197,15 @@ ALL requests went through the resource loader, causing timeout issues (-12889).
 
 | File | Purpose |
 |------|---------|
-| `Services/Playback/DVHLSProxyServer.swift` | Local HTTP reverse proxy (NWListener) - patches master playlist |
-| `Services/Playback/AVPlayerWrapper.swift` | Starts/stops DVHLSProxyServer, loads from proxy URL |
-| `Services/Playback/HLSCodecPatchingResourceLoader.swift` | Original resource loader (no longer used, kept for reference) |
-| `Services/Plex/PlexNetworkManager.swift` | `buildHLSDirectPlayURL()` - constructs Plex HLS URL with `useDoviCodecs=1` |
-| `Views/Player/UniversalPlayerViewModel.swift` | Passes `isDolbyVision` flag to AVPlayerWrapper |
+| `Services/Playback/DVSampleBufferPlayer.swift` | **Current**: Main DV player - fetching, demuxing, sample buffer pipeline |
+| `Services/Playback/HLSSegmentFetcher.swift` | **Current**: Parses HLS playlists, downloads segments |
+| `Services/Playback/FMP4Demuxer.swift` | **Current**: Demuxes fMP4, creates dvh1-tagged CMSampleBuffers |
+| `Views/Player/DVSampleBufferView.swift` | **Current**: SwiftUI wrapper for AVSampleBufferDisplayLayer |
+| `Services/Playback/DVHLSProxyServer.swift` | Legacy: Local HTTP reverse proxy (approach #7) |
+| `Services/Playback/AVPlayerWrapper.swift` | Used for non-DV content via AVPlayer |
+| `Services/Playback/HLSCodecPatchingResourceLoader.swift` | Legacy: Resource loader approach (approaches #1-3) |
+| `Services/Plex/PlexNetworkManager.swift` | `buildHLSDirectPlayURL()`, `startTranscodeDecision()`, `stopTranscodeSession()` |
+| `Views/Player/UniversalPlayerViewModel.swift` | Routes to DVSampleBufferPlayer vs AVPlayer based on content |
 
 ## Open Questions
 
@@ -208,7 +213,263 @@ ALL requests went through the resource loader, causing timeout issues (-12889).
 - ~~With `hvc1` codec signaling, will the Apple TV hardware DV pipeline detect RPU NAL units and activate Dolby Vision display mode?~~ **NO** - plays as HDR10 only
 - ~~Does real HTTP avoid -11848 for dvh1?~~ **NO** - -11848 is transport-independent (tested #7b)
 - ~~Does patching init to dvh1 (while master=hvc1) trigger DV?~~ **NO** - tolerated but DV not activated (tested #7c)
-- Is HDR10 (PQ) display acceptable as a fallback for DV Profile 8 content?
-- Is there ANY way to get AVPlayer to activate DV via HLS? The official Plex app presumably does this - what codec string or container configuration do they use?
-- Could we use `AVAssetWriter` to remux the fMP4 segments into a proper DV MP4 container that AVPlayer accepts for DV?
-- Is there a private/undocumented AVPlayer API or configuration that enables DV HLS playback?
+- ~~Is HDR10 (PQ) display acceptable as a fallback for DV Profile 8 content?~~ **NO** - we found a better way
+- ~~Is there ANY way to get AVPlayer to activate DV via HLS?~~ **YES** - bypass AVPlayer entirely with AVSampleBufferDisplayLayer (approach #8)
+- ~~Could we use `AVAssetWriter` to remux the fMP4 segments into a proper DV MP4 container that AVPlayer accepts for DV?~~ Not needed - direct sample buffer feeding works
+- ~~Is there a private/undocumented AVPlayer API or configuration that enables DV HLS playback?~~ Not needed
+
+---
+
+## Approach #8: DVSampleBufferPlayer (SUCCESS - Full Dolby Vision)
+
+### Summary
+
+Bypass AVPlayer's HLS parser entirely. Manually fetch HLS playlists, download fMP4 segments, demux them, patch the codec tag to `dvh1`, and feed CMSampleBuffers directly to `AVSampleBufferDisplayLayer`. This activates the full Dolby Vision pipeline.
+
+### Why It Works
+
+AVPlayer's HLS parser rejects `dvh1` in the CODECS string (-11848). But `AVSampleBufferDisplayLayer` doesn't care about HLS manifests - it only sees the `CMFormatDescription` attached to each sample buffer. By patching the format description to use `dvh1` (FourCC `0x64766831`), VideoToolbox activates the DV decoder and the TV enters Dolby Vision display mode.
+
+### Architecture
+
+```
+┌─────────────┐   playlists    ┌──────────────────┐   CMSampleBuffer   ┌─────────────────────────┐
+│ Plex Server │───────────────▶│ HLSSegmentFetcher │                    │ AVSampleBufferDisplayLayer│
+│             │   + segments   │ (parses m3u8)     │                    │ (renders video)          │
+│             │                └────────┬─────────┘                    └────────────▲────────────┘
+│             │                         │                                           │
+│             │                         ▼                                           │
+│             │                ┌──────────────────┐   dvh1-tagged samples          │
+│             │                │   FMP4Demuxer    │─────────────────────────────────┘
+│             │                │ (extracts NALUs, │
+│             │                │  patches codec)  │
+│             │                └──────────────────┘
+└─────────────┘
+                               ┌──────────────────┐
+                               │ AVSampleBuffer   │◀─── Audio samples
+                               │ AudioRenderer    │
+                               └────────┬─────────┘
+                                        │
+                                        ▼
+                               ┌──────────────────┐
+                               │ AVSampleBuffer   │◀─── Coordinates A/V timing
+                               │ RenderSynchronizer│
+                               └──────────────────┘
+```
+
+### Components
+
+| File | Purpose |
+|------|---------|
+| `DVSampleBufferPlayer.swift` | Main player: coordinates fetching, demuxing, enqueuing, time updates |
+| `HLSSegmentFetcher.swift` | Parses master + variant playlists, downloads init + media segments |
+| `FMP4Demuxer.swift` | Parses fMP4 boxes, extracts NALUs, creates dvh1-tagged CMSampleBuffers |
+| `DVSampleBufferView.swift` | SwiftUI wrapper hosting the AVSampleBufferDisplayLayer |
+| `UniversalPlayerViewModel.swift` | Decides AVPlayer vs DVSampleBuffer based on `isDolbyVision` flag |
+
+### Producer/Consumer Pipeline
+
+The player uses a bounded buffer pattern to decouple downloading from decoding:
+
+```
+Download Task (Producer)              Segment Buffer (3 slots)           Enqueue Task (Consumer)
+        │                                     │                                   │
+        ├── fetch segment 0 ──────────────────▶ [seg0] ◀──────────────────────────┤
+        ├── fetch segment 1 ──────────────────▶ [seg1]                            │
+        ├── fetch segment 2 ──────────────────▶ [seg2]                            │
+        │   (waits - buffer full)              │                                  │
+        │                                      │ ◀── take seg0 ───────────────────┤
+        ├── fetch segment 3 ──────────────────▶ [seg3]                            │
+        │                                      │ ◀── take seg1 ───────────────────┤
+        ...                                    ...                               ...
+```
+
+- **Producer** downloads segments with retry (3 attempts, exponential backoff)
+- **Buffer** holds up to 3 segments (keeps download ahead of playback)
+- **Consumer** demuxes and enqueues samples to display layer + audio renderer
+
+### Plex Session Management
+
+Plex's HLS transcode sessions can be finicky:
+
+1. **Initial load**: Request `start.m3u8` directly (no `/decision` call)
+2. **Init segment retry**: If init segment times out, retry up to 3 times with backoff (Plex may still be muxing)
+3. **Full retry path** (on persistent failure):
+   - Stop old transcode session via `/video/:/transcode/universal/stop`
+   - Wait 3 seconds for cleanup
+   - Send `/decision` ping to kick-start new session
+   - Build fresh session URL with new `session` UUID
+   - Retry load
+
+### Seeking
+
+1. Cancel download + enqueue tasks
+2. Flush display layer and audio renderer
+3. Find target segment via binary search on cumulative start times
+4. Set synchronizer to target time (paused)
+5. Restart feeding loop
+6. After first video sample enqueues, restore playback rate
+
+**Seek while paused**: The feeding loop starts regardless of play state. When paused, it enqueues one frame (so the seeked position displays) then stops.
+
+### Initial Sync
+
+The user's requested start time (e.g., resume at 38:20) may not align with the first keyframe in that segment (which could be at 38:29). To avoid a gap where the synchronizer runs but no frames display:
+
+1. Set `needsInitialSync = true` on load with start time
+2. Don't start synchronizer rate until first video sample enqueues
+3. When first video sample arrives, sync to its actual PTS
+
+---
+
+## Playback Jitter Diagnostics
+
+### Purpose
+
+Detect micro-stutters that are hard to perceive visually but affect playback quality. The `PlaybackJitterStats` struct tracks multiple metrics to identify the source of any smoothness issues.
+
+### Metrics Tracked
+
+| Metric | What It Measures | Warning Threshold |
+|--------|------------------|-------------------|
+| **PTS gaps** | Time between consecutive video frame PTS values | >24× expected frame duration (~1 second) |
+| **Buffer underruns** | Enqueue loop found download buffer empty | Any occurrence |
+| **Enqueue stalls** | Display layer wasn't ready for more data | >100ms |
+| **Sync drift** | Synchronizer clock vs wall clock deviation | >5% speed difference |
+
+### FPS Detection
+
+B-frame decode ordering makes consecutive PTS gaps unreliable for FPS detection. Instead:
+
+1. Track `minPTS` and `maxPTS` across all frames
+2. After 100 frames: `expectedFrameDuration = (maxPTS - minPTS) / 99`
+3. Detected FPS = `1.0 / expectedFrameDuration`
+
+This gives accurate results (23.5fps for 23.976fps content) regardless of B-frame patterns.
+
+### Synchronizer Drift
+
+Measures whether the `AVSampleBufferRenderSynchronizer` clock advances at the expected rate:
+
+```
+driftRate = (synchronizer time advance) / (wall time advance × playback rate)
+```
+
+- 100% = perfect sync
+- <100% = sync running slow (potential stutters)
+- >100% = sync running fast (unlikely)
+
+High standard deviation indicates inconsistent clock advancement.
+
+### Log Output
+
+Every 30 seconds during playback:
+```
+📊 [Jitter] ✅ 2847 frames | 23.5fps | gaps: avg=42.1ms σ=18.32ms max=333.3ms | drops: 0 | underruns: 1 (1250.0ms) | stalls: 28 (max=1050.0ms total=29400.0ms) | sync: 100.0%±0.2% alerts:0
+```
+
+Immediate alerts for significant issues:
+```
+📊 [Jitter] ⚠️ Large PTS gap: 1200ms at frame 1523 (expected ~42ms)
+📊 [Jitter] ⏱️ Enqueue stall: 150ms (frame 1842)
+📊 [Jitter] ⚠️ Sync drift: 94.5% (wall: 250ms, sync: 236ms)
+```
+
+### Interpreting Results
+
+| Symptom | Likely Cause | Solution |
+|---------|--------------|----------|
+| High `drops` count | PTS gaps >1 second | Network issues, server load |
+| High `underruns` | Download can't keep up | Increase buffer capacity, check bandwidth |
+| High `stalls` (>100ms) | Display layer backpressure | Content bitrate too high, decoder overloaded |
+| Sync drift <95% | Synchronizer falling behind | Investigate sample timestamps |
+| High sync σ (>2%) | Inconsistent clock | Display layer timing issues |
+
+### Clean Diagnostics But Still Stuttery?
+
+If diagnostics show clean stats but playback still feels stuttery on fast motion:
+
+1. **TV processing**: Some TVs add motion interpolation that can look off
+2. **Frame rate mismatch**: 23.976fps content on 60Hz display without proper cadence
+3. **Display layer presentation**: AVSampleBufferDisplayLayer may have its own timing quirks
+4. **Bitrate spikes**: Individual frames may exceed decode capacity without triggering stalls
+
+---
+
+## Troubleshooting
+
+### Init Segment Timeout
+
+```
+🎬 [HLSFetcher] ❌ Init segment fetch failed after 4 attempts
+```
+
+**Cause**: Plex server hasn't finished muxing the init segment yet.
+
+**Fix**: The retry logic (3 attempts, 3s/6s/9s delays) usually handles this. If persistent:
+- Check Plex server load
+- Try stopping other transcodes
+- Restart Plex Media Server
+
+### Segment Download Failures
+
+```
+🎬 [DVPlayer] ⚠️ Segment 45 download failed (attempt 2/4): HTTP 500
+```
+
+**Cause**: Plex server error during transcode.
+
+**Fix**: Retry logic handles transient errors. For persistent 500s:
+- Check Plex server logs
+- Reduce concurrent streams
+- File may have problematic sections
+
+### Display Layer Error
+
+```
+🎬 [DVPlayer] ⚠️ Display layer error: The operation could not be completed
+```
+
+**Cause**: VideoToolbox decoder failure.
+
+**Fix**: Usually recoverable on seek. May indicate:
+- Corrupted segment data
+- Unsupported codec parameters
+- Memory pressure
+
+### Audio Not Playing
+
+Check audio session configuration:
+```swift
+let audioSession = AVAudioSession.sharedInstance()
+try audioSession.setCategory(.playback, mode: .moviePlayback)
+try audioSession.setActive(true)
+```
+
+Also verify:
+- `audioRenderer.isMuted` is false
+- `audioRenderer.volume` is 1.0
+- Content has audio track (`demuxer.audioTrackID != nil`)
+
+### Playback Ends Early
+
+If playback ends before content finishes:
+1. Check `currentSegmentIndex >= segmentCount` condition
+2. Verify `fetcher.segments.count` matches expected
+3. Look for download errors that terminated the pipeline
+
+---
+
+## Key Learnings from DVSampleBufferPlayer
+
+1. **AVSampleBufferDisplayLayer activates DV**: Unlike AVPlayer's HLS parser, the display layer respects the `dvh1` codec tag in CMFormatDescription.
+
+2. **FourCC patching is sufficient**: Changing `hvc1` (0x68766331) to `dvh1` (0x64766831) in the format description triggers DV mode. No need to modify the actual HEVC bitstream.
+
+3. **Producer/consumer decouples network from decode**: Bounded buffer absorbs network jitter, keeps playback smooth.
+
+4. **Sync to first frame PTS**: Don't start the synchronizer at the requested time - wait for the actual first keyframe's PTS to avoid gaps.
+
+5. **Retry with fresh Plex session**: Some failures require stopping the old transcode session and starting fresh with a new UUID.
+
+6. **B-frames make PTS gaps unreliable**: Use min/max PTS range for FPS detection, not consecutive gaps.

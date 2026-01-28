@@ -31,6 +31,9 @@ struct TVSidebarView: View {
     @State private var showProfilePicker = false
     @State private var hasCheckedProfilePicker = false
     @State private var isAwaitingProfileSelection = false
+    @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
+    @State private var showWhatsNew = false
+    @State private var whatsNewVersion = ""
 
     /// Computed property for sidebar visibility based on active scope
     private var isSidebarVisible: Bool {
@@ -164,6 +167,23 @@ struct TVSidebarView: View {
             guard let metadata else { return }
             presentPlayerForDeepLink(metadata)
             deepLinkHandler.pendingPlayback = nil
+        }
+        // What's New overlay
+        .fullScreenCover(isPresented: $showWhatsNew) {
+            WhatsNewView(isPresented: $showWhatsNew, version: whatsNewVersion)
+        }
+        .onAppear {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+            let current = "\(version) (\(build))"
+
+            if current != lastSeenBuild {
+                if WhatsNewView.features(for: current) != nil {
+                    whatsNewVersion = current
+                    showWhatsNew = true
+                }
+                lastSeenBuild = current
+            }
         }
         // Profile picker overlay
         .fullScreenCover(isPresented: $showProfilePicker) {

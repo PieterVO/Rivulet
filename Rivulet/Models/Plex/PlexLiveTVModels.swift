@@ -221,6 +221,23 @@ extension PlexDVRDevice: Encodable {}
 // MARK: - Converters
 
 extension PlexLiveTVChannel {
+    /// Build a Plex HLS transcode URL for Live TV channels without an HDHomeRun stream URL.
+    /// This is how official Plex clients stream from DVB tuners (e.g. TBS cards) — through
+    /// the Plex server's universal transcode endpoint.
+    private func buildPlexLiveTVStreamURL(serverURL: String, authToken: String) -> URL? {
+        var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8")
+        components?.queryItems = [
+            URLQueryItem(name: "path", value: key),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "directPlay", value: "0"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "context", value: "streaming"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
+        ]
+        return components?.url
+    }
+
     /// Convert to UnifiedChannel
     func toUnifiedChannel(sourceId: String, serverURL: String, authToken: String) -> UnifiedChannel {
         let channelId = UnifiedChannel.makeId(
@@ -229,12 +246,13 @@ extension PlexLiveTVChannel {
             channelId: ratingKey
         )
 
-        // Use the HDHomeRun stream URL if available
+        // Use the HDHomeRun stream URL if available, otherwise fall back to
+        // Plex server transcode URL (needed for DVB tuners without HDHomeRun)
         let streamURLValue: URL? = {
             if let hdhrURL = streamURL {
                 return URL(string: hdhrURL)
             }
-            return nil
+            return buildPlexLiveTVStreamURL(serverURL: serverURL, authToken: authToken)
         }()
 
         // Build logo URL - handle both external URLs and Plex paths

@@ -179,6 +179,8 @@ final class MultiStreamViewModel: ObservableObject {
             } catch {
                 print("MultiStream: Failed to load '\(channel.name)': \(error)")
             }
+        } else {
+            print("MultiStream: No stream URL available for channel '\(channel.name)' (id: \(channel.id))")
         }
     }
 
@@ -307,6 +309,8 @@ final class MultiStreamViewModel: ObservableObject {
             } catch {
                 print("MultiStream: Failed to load replacement '\(channel.name)': \(error)")
             }
+        } else {
+            print("MultiStream: No stream URL available for replacement channel '\(channel.name)' (id: \(channel.id))")
         }
 
         replaceSlotIndex = nil
