@@ -44,7 +44,8 @@ enum PlayerError: Error, Equatable, Sendable {
     case codecUnsupported(String)
     case unknown(String)
 
-    var localizedDescription: String {
+    /// Technical description for logging and Sentry - includes internal details
+    var technicalDescription: String {
         switch self {
         case .invalidURL:
             return "Invalid media URL"
@@ -57,6 +58,32 @@ enum PlayerError: Error, Equatable, Sendable {
         case .unknown(let message):
             return "Playback error: \(message)"
         }
+    }
+
+    /// User-friendly description shown in the UI
+    var userFacingDescription: String {
+        switch self {
+        case .invalidURL:
+            return "This video couldn't be played. The link may be invalid."
+        case .loadFailed(let message):
+            if message.contains("HLS transcode session failed") {
+                return "Your Plex server is taking too long to prepare the video. Please try again."
+            } else if message.contains("transcode") {
+                return "Your server couldn't prepare this video for playback. Please try again."
+            }
+            return "This video couldn't be loaded. Please check your connection and try again."
+        case .networkError:
+            return "Couldn't connect to the server. Please check your network connection."
+        case .codecUnsupported:
+            return "This video format isn't supported on this device."
+        case .unknown:
+            return "Something went wrong during playback. Please try again."
+        }
+    }
+
+    /// For Error protocol conformance - uses technical description
+    var localizedDescription: String {
+        technicalDescription
     }
 }
 

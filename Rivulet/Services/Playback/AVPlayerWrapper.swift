@@ -311,11 +311,18 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     }
 
     func play() {
+        // Ensure audio session is active before playing
+        try? AVAudioSession.sharedInstance().setActive(true)
         player?.play()
     }
 
     func pause() {
         player?.pause()
+        // Briefly deactivate audio session to flush AirPlay buffer on HomePod
+        // This should cause AirPlay to stop immediately rather than draining its ~2s buffer
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     func stop() {

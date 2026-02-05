@@ -1432,16 +1432,18 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // For MKV+DV, we must force video transcoding (not just remux) to get Apple-compatible codec tags (dvh1/hvc1)
             // MKV files typically use dvhe/hev1 which AVPlayer cannot decode
             URLQueryItem(name: "directStream", value: forceVideoTranscode ? "0" : "1"),
-            // Always set directStreamAudio=1 for DV/HDR content (matches official Plex app behavior)
-            // Server will still transcode DTS/TrueHD to EAC3 automatically, but this ensures fMP4 segments
-            // Setting to 0 may force Plex to use MPEG-TS which breaks DV playback
-            URLQueryItem(name: "directStreamAudio", value: "1"),
+            // directStreamAudio controls whether Plex passes through compatible audio or transcodes it
+            // When allowAudioDirectStream=false (e.g., AirPlay/HomePod with multichannel AAC), force transcode
+            // HomePod supports Dolby Digital surround (EAC3/AC3) but NOT multichannel AAC
+            // Note: segmentContainer=mp4 ensures fMP4 segments regardless of this setting
+            URLQueryItem(name: "directStreamAudio", value: allowAudioDirectStream ? "1" : "0"),
             URLQueryItem(name: "fastSeek", value: "1"),
             URLQueryItem(name: "videoCodec", value: "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
             URLQueryItem(name: "videoQuality", value: "100"),
             URLQueryItem(name: "segmentDuration", value: "6"),
-            URLQueryItem(name: "audioCodec", value: "aac,eac3,ac3"),
+            // EAC3 preferred for surround (HomePod compatible), AAC for stereo fallback
+            URLQueryItem(name: "audioCodec", value: allowAudioDirectStream ? "aac,eac3,ac3" : "eac3,ac3,aac"),
             URLQueryItem(name: "audioBitrate", value: "1024"),
             URLQueryItem(name: "audioChannels", value: "8"),
             URLQueryItem(name: "subtitles", value: "auto"),

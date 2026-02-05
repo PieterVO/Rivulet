@@ -9,6 +9,7 @@ import SwiftUI
 import Combine
 import UIKit
 import Sentry
+import AVFoundation
 
 // MARK: - Subtitle Preference
 
@@ -801,20 +802,56 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Determines whether audio can be safely direct-streamed to AVPlayer.
     /// DTS/TrueHD should be transcoded to avoid playback failures in DV manifests.
+    /// Multichannel AAC should be transcoded when output is AirPlay (HomePod only supports Dolby surround formats).
     private static func isAudioDirectStreamCapable(_ metadata: PlexMetadata) -> Bool {
-        guard let audioCodec = metadata.Media?
+        guard let audioStream = metadata.Media?
             .first?
             .Part?
             .first?
             .Stream?
-            .first(where: { $0.isAudio })?
-            .codec?
-            .lowercased() else {
-            // Unknown codec - prefer safety and allow server to transcode to AAC
+            .first(where: { $0.isAudio }),
+              let audioCodec = audioStream.codec?.lowercased() else {
+            // Unknown codec - prefer safety and allow server to transcode
             return false
         }
 
-        return ["aac", "ac3", "eac3"].contains(audioCodec)
+        // DTS/TrueHD must always be transcoded
+        guard ["aac", "ac3", "eac3"].contains(audioCodec) else {
+            return false
+        }
+
+        // AC3/EAC3 (Dolby Digital) can always be direct streamed - HomePod supports these
+        if audioCodec == "ac3" || audioCodec == "eac3" {
+            return true
+        }
+
+        // For AAC, check if it's multichannel AND output is AirPlay (HomePod)
+        // HomePod supports Dolby Digital surround but NOT multichannel AAC
+        let channelCount = audioStream.channels ?? 2
+        if audioCodec == "aac" && channelCount > 2 {
+            if isAirPlayOutput() {
+                print("🎬 [Audio] Multichannel AAC (\(channelCount)ch) with AirPlay output - forcing transcode to EAC3")
+                return false
+            }
+        }
+
+        return true
+    }
+
+    /// Check if the current audio output is AirPlay (HomePod)
+    /// HomePod supports Dolby Atmos/5.1/7.1 but only in Dolby Digital formats, not multichannel AAC
+    private static func isAirPlayOutput() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+
+        for output in route.outputs {
+            if output.portType == .airPlay {
+                print("🎬 [Audio] Detected AirPlay output: \(output.portName)")
+                return true
+            }
+        }
+
+        return false
     }
 
     private func bindPlayerState() {
@@ -909,11 +946,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] error in
                 guard let self else { return }
-                self.errorMessage = error.localizedDescription
+                self.errorMessage = error.userFacingDescription
 
                 // Handle AVPlayer errors with fallbacks
                 if self.playerType == .avplayer {
-                    print("🎬 [Error] AVPlayer failed: \(error.localizedDescription)")
+                    print("🎬 [Error] AVPlayer failed: \(error.technicalDescription)")
 
                     // Check if this is a codec/rendering issue (likely DV HLS remux problem)
                     let isCodecError = if case .codecUnsupported = error { true } else { false }
@@ -1066,6 +1103,18 @@ final class UniversalPlayerViewModel: ObservableObject {
                     forceHDR10Fallback: metadata.hasDolbyVision  // MPV can't play DV
                 )
                 #endif
+
+                // Wait for HLS transcode to be ready before loading (same as AVPlayer path)
+                // Without this, MPV may try to load the manifest before Plex starts transcoding
+                let isHLSStream = url.absoluteString.contains(".m3u8")
+                if isHLSStream {
+                    print("🎬 [MPV] Waiting for HLS transcode session...")
+                    let transcodeReady = await waitForHLSTranscodeReady(url: url, headers: streamHeaders)
+                    if !transcodeReady {
+                        throw PlayerError.loadFailed("HLS transcode session failed to start")
+                    }
+                    print("🎬 [MPV] Transcode ready, loading stream...")
+                }
 
                 try await mpv.load(url: url, headers: streamHeaders, startTime: startOffset)
                 mpv.play()
@@ -1240,13 +1289,19 @@ final class UniversalPlayerViewModel: ObservableObject {
                     try await fallbackToMPV()
                     return  // Success - don't show error
                 } catch {
-                    print("🎬 [Fallback] MPV fallback also failed: \(error.localizedDescription)")
+                    print("🎬 [Fallback] MPV fallback also failed: \(error)")
                     // Fall through to show the original error
                 }
             }
 
-            errorMessage = error.localizedDescription
-            playbackState = .failed(.loadFailed(error.localizedDescription))
+            // Show user-friendly message, but keep technical details for Sentry
+            let technicalError = error.localizedDescription
+            if let playerError = error as? PlayerError {
+                errorMessage = playerError.userFacingDescription
+            } else {
+                errorMessage = "Something went wrong during playback. Please try again."
+            }
+            playbackState = .failed(.loadFailed(technicalError))
 
             // Capture playback load failure to Sentry
             SentrySDK.capture(error: error) { scope in
@@ -2147,18 +2202,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Direct key available
             subtitleURLString = serverURL + trackKey
         } else {
-            // Try to get part ID for subtitle extraction
-            guard let part = metadata.Media?.first?.Part?.first,
-                  let partId = part.id else {
-                print("🎬 [Subtitles] No part ID available")
-                subtitleManager.clear()
-                return
-            }
-
-            // Try format: /library/parts/<partId>/indexes/sd/<streamId>
-            subtitleURLString = "\(serverURL)/library/parts/\(partId)/indexes/sd/\(trackId)?X-Plex-Token=\(authToken)"
-
-            print("🎬 [Subtitles] Part-based URL: \(subtitleURLString)")
+            // No direct key available - subtitle is likely embedded in the container.
+            // Plex doesn't provide a direct download endpoint for embedded subtitles.
+            // They can only be extracted during transcode playback.
+            print("🎬 [Subtitles] Track \(trackId) has no key - embedded subtitles not supported in DV player")
+            print("🎬 [Subtitles] Tip: Use external sidecar .srt files (same name as video) for DV playback")
+            subtitleManager.clear()
+            return
         }
         guard let subtitleURL = URL(string: subtitleURLString) else {
             print("🎬 [Subtitles] Invalid subtitle URL: \(subtitleURLString)")
