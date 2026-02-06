@@ -45,7 +45,8 @@ struct ProfilePickerOverlay: View {
                         ProfileAvatarButton(
                             user: user,
                             isLoading: isLoading && selectedUserForPin?.id == user.id,
-                            isFocused: focusedUserId == user.id
+                            isFocused: focusedUserId == user.id,
+                            hasRememberedPin: profileManager.usersWithRememberedPins.contains(user.uuid)
                         ) {
                             selectProfile(user)
                         }
@@ -62,9 +63,9 @@ struct ProfilePickerOverlay: View {
                 PinEntrySheet(
                     user: user,
                     error: $pinEntryError,
-                    onSubmit: { pin in
+                    onSubmit: { pin, rememberPin in
                         Task {
-                            await verifyAndSwitch(user: user, pin: pin)
+                            await verifyAndSwitch(user: user, pin: pin, rememberPin: rememberPin)
                         }
                     },
                     onCancel: {
@@ -92,9 +93,28 @@ struct ProfilePickerOverlay: View {
 
     private func selectProfile(_ user: PlexHomeUser) {
         if user.requiresPin {
-            selectedUserForPin = user
-            pinEntryError = nil
-            showPinEntry = true
+            // Try remembered PIN first
+            if profileManager.hasRememberedPin(for: user) {
+                Task {
+                    isLoading = true
+                    selectedUserForPin = user
+                    let (success, pinWasInvalid) = await profileManager.selectUserWithRememberedPin(user)
+                    if success {
+                        isLoading = false
+                        selectedUserForPin = nil
+                        isPresented = false
+                    } else {
+                        isLoading = false
+                        // Show PIN entry with error if PIN was invalid
+                        pinEntryError = pinWasInvalid ? "Saved PIN is no longer valid. Please enter your PIN." : nil
+                        showPinEntry = true
+                    }
+                }
+            } else {
+                selectedUserForPin = user
+                pinEntryError = nil
+                showPinEntry = true
+            }
         } else {
             Task {
                 isLoading = true
@@ -109,13 +129,16 @@ struct ProfilePickerOverlay: View {
         }
     }
 
-    private func verifyAndSwitch(user: PlexHomeUser, pin: String) async {
+    private func verifyAndSwitch(user: PlexHomeUser, pin: String, rememberPin: Bool) async {
         isLoading = true
         pinEntryError = nil
 
         let success = await profileManager.selectUser(user, pin: pin)
 
         if success {
+            if rememberPin {
+                profileManager.rememberPin(pin, for: user)
+            }
             showPinEntry = false
             selectedUserForPin = nil
             isPresented = false
@@ -133,6 +156,7 @@ private struct ProfileAvatarButton: View {
     let user: PlexHomeUser
     let isLoading: Bool
     let isFocused: Bool
+    let hasRememberedPin: Bool
     let onSelect: () -> Void
 
     var body: some View {
@@ -146,7 +170,7 @@ private struct ProfileAvatarButton: View {
                         .overlay(
                             Circle()
                                 .strokeBorder(
-                                    isFocused ? .white.opacity(0.4) : .white.opacity(0.15),
+                                    isFocused ? .white.opacity(0.8) : .white.opacity(0.15),
                                     lineWidth: isFocused ? 3 : 1
                                 )
                         )
@@ -162,9 +186,9 @@ private struct ProfileAvatarButton: View {
 
                     // PIN indicator
                     if user.protected && !isLoading {
-                        Image(systemName: "lock.fill")
+                        Image(systemName: hasRememberedPin ? "lock.open.fill" : "lock.fill")
                             .font(.system(size: 20))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(hasRememberedPin ? .green : .white)
                             .padding(8)
                             .background(Circle().fill(.black.opacity(0.6)))
                             .offset(x: 60, y: 60)
@@ -178,8 +202,8 @@ private struct ProfileAvatarButton: View {
                     .lineLimit(1)
             }
         }
-        .buttonStyle(.plain)
-        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .buttonStyle(SettingsButtonStyle())
+        .scaleEffect(isFocused ? 1.05 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 

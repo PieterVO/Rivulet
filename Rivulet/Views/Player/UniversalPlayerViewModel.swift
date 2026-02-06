@@ -290,7 +290,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var activeMarker: PlexMarker?
     @Published private(set) var showSkipButton = false
     private var hasSkippedIntro = false
-    private var hasSkippedCredits = false
+    private var skippedCreditsIds: Set<Int> = []  // Track skipped credits by ID (can have multiple)
     private var skippedCommercialIds: Set<Int> = []  // Track skipped commercials by ID
     private var hasTriggeredPostVideo = false
     @Published var scrubTime: TimeInterval = 0
@@ -1083,8 +1083,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         if let intro = metadata.introMarker {
             print("⏭️ [Skip] Intro marker found: \(intro.startTimeSeconds)s - \(intro.endTimeSeconds)s")
         }
-        if let credits = metadata.creditsMarker {
-            print("⏭️ [Skip] Credits marker found: \(credits.startTimeSeconds)s - \(credits.endTimeSeconds)s")
+        for (index, credits) in metadata.creditsMarkers.enumerated() {
+            print("⏭️ [Skip] Credits marker \(index + 1) found: \(credits.startTimeSeconds)s - \(credits.endTimeSeconds)s")
         }
         if metadata.Marker == nil || metadata.Marker?.isEmpty == true {
             print("⏭️ [Skip] No markers found in metadata (even after fetch)")
@@ -2507,9 +2507,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // Check credits marker - trigger post-video when credits START
-        // But only if credits are in a sensible position (last 50% of video or < 5 min remaining)
-        if let credits = metadata.creditsMarker {
+        // Check credits markers - can have multiple (e.g., mid-credits and post-credits)
+        // Trigger post-video when FIRST credits marker starts
+        for credits in metadata.creditsMarkers {
+            guard let creditsId = credits.id else { continue }
+
+            // Skip malformed markers
+            guard credits.endTimeSeconds > credits.startTimeSeconds else { continue }
+
             let previewStart = max(0, credits.startTimeSeconds - markerPreviewTime)
             let creditsStartPercent = duration > 0 ? credits.startTimeSeconds / duration : 1.0
             let remainingAfterCredits = duration - credits.startTimeSeconds
@@ -2517,25 +2522,35 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Sanity check: credits should be in the last half of the video OR < 5 min of content remains
             let creditsAreValid = creditsStartPercent >= 0.5 || remainingAfterCredits < 300
 
-            // Reset flags if user rewound before the marker
-            if time < previewStart {
-                if hasSkippedCredits { hasSkippedCredits = false }
+            // Reset skip flag if user rewound before the marker
+            if skippedCreditsIds.contains(creditsId) {
+                if time < previewStart {
+                    skippedCreditsIds.remove(creditsId)
+                } else if previewStart == 0 && time < credits.startTimeSeconds + 1.0 && activeMarker == nil {
+                    skippedCreditsIds.remove(creditsId)
+                }
+            }
+
+            // Reset post-video trigger if rewound before first credits marker
+            if let firstCredits = metadata.firstCreditsMarker,
+               time < max(0, firstCredits.startTimeSeconds - markerPreviewTime) {
                 if hasTriggeredPostVideo { hasTriggeredPostVideo = false }
             }
 
-            // Trigger post-video summary when credits start (not when skip button would show)
-            // Only if the credits marker is in a valid position
-            if time >= credits.startTimeSeconds && !hasTriggeredPostVideo && creditsAreValid {
-                hasTriggeredPostVideo = true
-                print("🎬 [PostVideo] Credits marker started at \(credits.startTimeSeconds)s, triggering summary")
-                Task { await handlePlaybackEnded() }
-                return
-            }
-
-            // Show skip button 5 seconds early (before credits actually start)
+            // Show skip button during entire credits range (5s preview through end)
             // Only show if credits marker is in a valid position
-            if creditsAreValid && time >= previewStart && time < credits.startTimeSeconds {
-                handleMarkerActive(credits, isIntro: false, currentTime: time)
+            if creditsAreValid && time >= previewStart && time < credits.endTimeSeconds {
+                handleCreditsMarkerActive(credits, currentTime: time)
+
+                // Trigger post-video summary when FIRST credits marker actually starts
+                // (skip button will be hidden by UI when postVideoState != .hidden)
+                if let firstCredits = metadata.firstCreditsMarker,
+                   credits.id == firstCredits.id,
+                   time >= credits.startTimeSeconds && !hasTriggeredPostVideo {
+                    hasTriggeredPostVideo = true
+                    print("🎬 [PostVideo] Credits marker started at \(credits.startTimeSeconds)s, triggering summary")
+                    Task { await handlePlaybackEnded() }
+                }
                 return
             }
         }
@@ -2565,9 +2580,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // No credits marker - trigger post-video 45 seconds before end
+        // No credits markers - trigger post-video 45 seconds before end
         // BUT require at least 85% completion to avoid triggering too early on short videos
-        if metadata.creditsMarker == nil && duration > 60 {
+        if metadata.creditsMarkers.isEmpty && duration > 60 {
             let triggerTime = duration - 45
             let minCompletionTime = duration * 0.85  // At least 85% watched
 
@@ -2592,12 +2607,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Handle when playback enters a marker range (or preview window)
+    /// Handle when playback enters an intro marker range (or preview window)
     /// Auto-skip only triggers when actually inside the marker (at or past startTimeSeconds),
     /// not during the 5-second preview window before the marker starts.
     private func handleMarkerActive(_ marker: PlexMarker, isIntro: Bool, currentTime: TimeInterval) {
         let autoSkipIntro = UserDefaults.standard.bool(forKey: "autoSkipIntro")
-        let autoSkipCredits = UserDefaults.standard.bool(forKey: "autoSkipCredits")
         let showSkipButtonSetting = UserDefaults.standard.object(forKey: "showSkipButton") as? Bool ?? true
 
         // Only auto-skip when actually inside the marker (not during preview window)
@@ -2611,21 +2625,40 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        if !isIntro && autoSkipCredits && !hasSkippedCredits && insideMarker {
-            hasSkippedCredits = true
+        // Show skip button if enabled and not already skipped
+        if showSkipButtonSetting {
+            if !hasSkippedIntro && activeMarker == nil {
+                activeMarker = marker
+                showSkipButton = true
+                print("⏭️ [Skip] Showing skip button for intro marker: \(marker.startTimeSeconds)s - \(marker.endTimeSeconds)s")
+            }
+        }
+    }
+
+    /// Handle when playback enters a credits marker range (or preview window)
+    /// Auto-skip only triggers when actually inside the marker (at or past startTimeSeconds).
+    private func handleCreditsMarkerActive(_ marker: PlexMarker, currentTime: TimeInterval) {
+        guard let creditsId = marker.id else { return }
+
+        let autoSkipCredits = UserDefaults.standard.bool(forKey: "autoSkipCredits")
+        let showSkipButtonSetting = UserDefaults.standard.object(forKey: "showSkipButton") as? Bool ?? true
+
+        // Only auto-skip when actually inside the marker (not during preview window)
+        let insideMarker = currentTime >= marker.startTimeSeconds
+
+        // Check for auto-skip (only when inside actual marker range)
+        if autoSkipCredits && !skippedCreditsIds.contains(creditsId) && insideMarker {
+            skippedCreditsIds.insert(creditsId)
             Task { await skipMarker(marker) }
             return
         }
 
         // Show skip button if enabled and not already skipped
         if showSkipButtonSetting {
-            let alreadySkipped = isIntro ? hasSkippedIntro : hasSkippedCredits
-            if !alreadySkipped && activeMarker == nil {
-                // Only log and set when first entering the marker range
+            if !skippedCreditsIds.contains(creditsId) && activeMarker == nil {
                 activeMarker = marker
                 showSkipButton = true
-                let markerType = isIntro ? "intro" : "credits"
-                print("⏭️ [Skip] Showing skip button for \(markerType) marker: \(marker.startTimeSeconds)s - \(marker.endTimeSeconds)s")
+                print("⏭️ [Skip] Showing skip button for credits marker: \(marker.startTimeSeconds)s - \(marker.endTimeSeconds)s")
             }
         }
     }
@@ -2669,8 +2702,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Mark as skipped to prevent re-showing button if user seeks back
         if marker.isIntro {
             hasSkippedIntro = true
-        } else if marker.isCredits {
-            hasSkippedCredits = true
+        } else if marker.isCredits, let creditsId = marker.id {
+            skippedCreditsIds.insert(creditsId)
         } else if marker.isCommercial, let commercialId = marker.id {
             skippedCommercialIds.insert(commercialId)
         }
@@ -2744,52 +2777,50 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         let isEpisode = metadata.type == "episode"
 
-        if isEpisode {
-            // If parent metadata is missing (e.g., from Continue Watching), fetch full metadata first
-            if metadata.parentRatingKey == nil || metadata.index == nil {
-                print("🎬 [PostVideo] Missing parent metadata, fetching full metadata...")
-                await fetchFullMetadataIfNeeded()
-                print("🎬 [PostVideo] After fetch - parentRatingKey: \(metadata.parentRatingKey ?? "nil"), index: \(metadata.index ?? -1)")
-            }
+        // Movies: No PostVideo - just let the video play through to the end
+        guard isEpisode else {
+            print("🎬 [PostVideo] Movie content - skipping PostVideo, letting playback continue")
+            postVideoState = .hidden
+            return
+        }
 
-            // Fetch next episode
-            nextEpisode = await fetchNextEpisode()
-            print("🎬 [PostVideo] Next episode result: \(nextEpisode?.title ?? "nil")")
+        // TV Show: Only show PostVideo if there's a next episode
 
-            // Animate video shrink
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
-                videoFrameState = .shrunk
-            }
-            print("🎬 [PostVideo] Video frame set to shrunk")
+        // If parent metadata is missing (e.g., from Continue Watching), fetch full metadata first
+        if metadata.parentRatingKey == nil || metadata.index == nil {
+            print("🎬 [PostVideo] Missing parent metadata, fetching full metadata...")
+            await fetchFullMetadataIfNeeded()
+            print("🎬 [PostVideo] After fetch - parentRatingKey: \(metadata.parentRatingKey ?? "nil"), index: \(metadata.index ?? -1)")
+        }
 
-            // Show episode summary after brief delay
-            try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
-            postVideoState = .showingEpisodeSummary
-            print("🎬 [PostVideo] State set to showingEpisodeSummary")
+        // Fetch next episode
+        nextEpisode = await fetchNextEpisode()
+        print("🎬 [PostVideo] Next episode result: \(nextEpisode?.title ?? "nil")")
 
-            // Start countdown and preload if next episode exists
-            if nextEpisode != nil {
-                print("🎬 [PostVideo] Starting autoplay countdown")
-                startAutoplayCountdown()
-                // Preload next episode in background for instant playback
-                Task {
-                    await preloadNextEpisode()
-                }
-            } else {
-                print("🎬 [PostVideo] No next episode, skipping countdown")
-            }
-        } else {
-            // Movie - fetch recommendations
-            recommendations = await fetchRecommendations()
+        // No next episode: Skip PostVideo - just let the video play through
+        guard nextEpisode != nil else {
+            print("🎬 [PostVideo] No next episode available - skipping PostVideo, letting playback continue")
+            postVideoState = .hidden
+            return
+        }
 
-            // Animate video shrink
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
-                videoFrameState = .shrunk
-            }
+        // Animate video shrink
+        withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+            videoFrameState = .shrunk
+        }
+        print("🎬 [PostVideo] Video frame set to shrunk")
 
-            // Show movie summary after brief delay
-            try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
-            postVideoState = .showingMovieSummary
+        // Show episode summary after brief delay
+        try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
+        postVideoState = .showingEpisodeSummary
+        print("🎬 [PostVideo] State set to showingEpisodeSummary")
+
+        // Start countdown and preload
+        print("🎬 [PostVideo] Starting autoplay countdown")
+        startAutoplayCountdown()
+        // Preload next episode in background for instant playback
+        Task {
+            await preloadNextEpisode()
         }
     }
 
@@ -3086,7 +3117,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Reset skip tracking for new episode
         hasSkippedIntro = false
-        hasSkippedCredits = false
+        skippedCreditsIds.removeAll()
         skippedCommercialIds.removeAll()
         hasTriggeredPostVideo = false
         nextEpisode = nil
@@ -3205,4 +3236,10 @@ extension Notification.Name {
     /// Posted when Plex data needs to be refreshed (e.g., after playback ends)
     /// Views showing Plex content should refresh their data when receiving this
     static let plexDataNeedsRefresh = Notification.Name("plexDataNeedsRefresh")
+
+    /// Posted when video playback starts (pauses hub polling)
+    static let plexPlaybackStarted = Notification.Name("plexPlaybackStarted")
+
+    /// Posted when video playback stops (resumes hub polling)
+    static let plexPlaybackStopped = Notification.Name("plexPlaybackStopped")
 }

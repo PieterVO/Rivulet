@@ -32,11 +32,11 @@ final class MPVMetalViewController: UIViewController {
     private var lastKnownSize: CGSize = .zero
     private var previousDrawableSize: CGSize = .zero
     private var audioRouteObserver: NSObjectProtocol?
+    private let debugId = String(UUID().uuidString.prefix(8))
 
     /// Explicit target size set by parent - when set, enables transform-based scaling
     /// to avoid swapchain recreation during multiview layout changes
     private var explicitTargetSize: CGSize?
-
     /// The original size at which MPV was initialized - used as reference for transform scaling
     private var originalRenderSize: CGSize?
 
@@ -64,6 +64,7 @@ final class MPVMetalViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        print("🎬 [MPVController \(debugId)] viewDidLoad threadMain=\(Thread.isMainThread)")
 
         // Ensure the view clips its contents to bounds
         view.clipsToBounds = true
@@ -117,11 +118,12 @@ final class MPVMetalViewController: UIViewController {
     /// Set explicit target size hint from parent (for multi-stream layout)
     /// Pass .zero to exit multiview mode and use normal frame-based sizing
     func setExplicitSize(_ size: CGSize) {
+        print("🎬 [MPVController \(debugId)] setExplicitSize size=\(Int(size.width))x\(Int(size.height)), viewBounds=\(Int(view.bounds.width))x\(Int(view.bounds.height)), hasSetupMpv=\(hasSetupMpv)")
+
         if size == .zero {
             // Exiting multiview mode - reset to normal frame-based sizing
             let wasSet = explicitTargetSize != nil
             explicitTargetSize = nil
-            originalRenderSize = nil
 
             // Reset layer to use normal frame-based sizing
             if wasSet && hasSetupMpv {
@@ -165,6 +167,8 @@ final class MPVMetalViewController: UIViewController {
     private func updateLayerTransform(for targetSize: CGSize) {
         guard targetSize.width > 0 && targetSize.height > 0 else { return }
 
+        print("🎬 [MPVController \(debugId)] updateLayerTransform: target=\(Int(targetSize.width))x\(Int(targetSize.height)), viewBounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))")
+
         // If MPV isn't set up yet, initialize at current size and save as original
         if !hasSetupMpv {
             CATransaction.begin()
@@ -184,17 +188,20 @@ final class MPVMetalViewController: UIViewController {
             return
         }
 
-        // Use the original render size (saved at initialization) as reference
-        // This ensures we're scaling from a fixed known size, not the current drawable
-        guard let originalSize = originalRenderSize,
-              originalSize.width > 0 && originalSize.height > 0 else {
-            // Fallback: just set frame if we don't have original size yet
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            metalLayer.frame = CGRect(origin: .zero, size: targetSize)
-            CATransaction.commit()
-            return
+        // Use the original render size (saved at initialization) as reference.
+        // Preserve drawable size stability by deriving a fallback render size
+        // instead of changing the layer frame when this value is missing.
+        if originalRenderSize == nil {
+            let currentLayerSize = metalLayer.bounds.size
+            if currentLayerSize.width > 0 && currentLayerSize.height > 0 {
+                originalRenderSize = currentLayerSize
+            } else {
+                originalRenderSize = targetSize
+            }
         }
+
+        guard let originalSize = originalRenderSize,
+              originalSize.width > 0 && originalSize.height > 0 else { return }
 
         // Calculate scale factors to fit original render size into target size
         let scaleX = targetSize.width / originalSize.width
@@ -214,8 +221,7 @@ final class MPVMetalViewController: UIViewController {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        // IMPORTANT: Keep the layer at its ORIGINAL size (so drawable doesn't change)
-        // Use anchorPoint + position + transform to scale and position it
+        // Keep the layer at its original size (drawable stays stable).
         metalLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         metalLayer.bounds = CGRect(origin: .zero, size: originalSize)
         metalLayer.position = CGPoint(x: offsetX + scaledWidth / 2, y: offsetY + scaledHeight / 2)
@@ -225,12 +231,14 @@ final class MPVMetalViewController: UIViewController {
     }
 
     deinit {
+        print("🎬 [MPVController \(debugId)] deinit threadMain=\(Thread.isMainThread)")
         shutdownMpv()
     }
 
     private func shutdownMpv() {
         guard let mpvHandle = mpv, !isShuttingDown else { return }
         isShuttingDown = true
+        print("🎬 [MPVController \(debugId)] shutdownMpv begin threadMain=\(Thread.isMainThread)")
 
         // Clear delegate to prevent callbacks during shutdown
         delegate = nil
@@ -255,6 +263,7 @@ final class MPVMetalViewController: UIViewController {
 
         // Capture metal layer reference for cleanup after MPV destruction
         let layerToRemove = metalLayer
+        let logId = debugId
 
         // Do the heavy Vulkan/GPU cleanup on background thread
         // This prevents blocking the UI during mpv_terminate_destroy
@@ -272,10 +281,12 @@ final class MPVMetalViewController: UIViewController {
 
             // Now safe to destroy - this does the heavy Vulkan cleanup
             mpv_terminate_destroy(mpvHandle)
+            print("🎬 [MPVController \(logId)] shutdownMpv mpv_terminate_destroy complete")
 
             // Only remove metal layer AFTER MPV has fully released all GPU resources
             // This ensures no command buffers reference the layer's textures
             DispatchQueue.main.async {
+                print("🎬 [MPVController \(logId)] shutdownMpv removing metal layer on main thread")
                 layerToRemove.removeFromSuperlayer()
             }
         }
@@ -368,6 +379,11 @@ final class MPVMetalViewController: UIViewController {
     // MARK: - MPV Setup
 
     private func setupMpv() {
+        // Suppress MoltenVK info logging to avoid console spam during animations
+        // Level: 0=off, 1=fatal, 2=error, 3=warn, 4=info (default), 5=debug
+        // Set to warn (3) to hide info messages about swapchain recreation
+        setenv("MVK_CONFIG_LOG_LEVEL", "3", 0)  // 0 = don't overwrite if already set
+
         // Configure and activate audio session right before MPV initializes its audiounit.
         ensureAudioSessionActive()
 
@@ -400,14 +416,15 @@ final class MPVMetalViewController: UIViewController {
             checkError(mpv_set_option_string(mpv, "vulkan-swap-mode", "fifo"))  // Sync mode for stability
             print("🎬 MPV: Using simulator-safe settings (gpu + software decode)")
         } else if isLiveStreamMode {
-            // Live TV: Use 'gpu' with OpenGL - lighter weight, no HDR needed
-            // Skips Vulkan/MoltenVK translation layer for lower resource usage
+            // Live TV: Use 'gpu' with Vulkan (via MoltenVK) - tvOS doesn't have OpenGL
+            // Use simpler 'gpu' instead of 'gpu-next' for lower resource usage (no HDR needed)
             checkError(mpv_set_option_string(mpv, "vo", "gpu"))
-            checkError(mpv_set_option_string(mpv, "gpu-api", "opengl"))
-            checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))  // Still use hardware decode
+            checkError(mpv_set_option_string(mpv, "gpu-api", "vulkan"))
+            checkError(mpv_set_option_string(mpv, "hwdec", "videotoolbox"))  // Hardware decode
             checkError(mpv_set_option_string(mpv, "gpu-hwdec-interop", "videotoolbox"))
+            checkError(mpv_set_option_string(mpv, "vulkan-swap-mode", "fifo"))  // VSync for smooth playback
 
-            print("🎬 MPV: Using live stream settings (gpu + OpenGL + VideoToolbox)")
+            print("🎬 MPV: Using live stream settings (gpu + Vulkan + VideoToolbox)")
         } else {
             // VOD: Use gpu-next with Vulkan (via MoltenVK) for HDR support
             // Note: gpu-next uses libplacebo which requires Vulkan; there's no native Metal path
@@ -569,6 +586,7 @@ final class MPVMetalViewController: UIViewController {
     }
 
     func stop() {
+        print("🎬 [MPVController \(debugId)] stop called threadMain=\(Thread.isMainThread)")
         // Flush audio buffers immediately (buffer would otherwise drain for ~1 second)
         command("ao-reload")
         command("stop")
@@ -715,6 +733,11 @@ final class MPVMetalViewController: UIViewController {
         case MPV_EVENT_FILE_LOADED:
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                if self.isLiveStreamMode {
+                    // Prevent default live subtitle/caption selection from reintroducing
+                    // viewport margins after file metadata arrives.
+                    self.setString(MPVProperty.sid, "no")
+                }
                 let tracks = self.getTracks()
                 self.delegate?.mpvPlayerDidUpdateTracks(audio: tracks.audio, subtitles: tracks.subtitles)
                 self.updateState(.playing)
@@ -843,6 +866,9 @@ final class MPVMetalViewController: UIViewController {
 
     private func command(_ command: String, args: [String] = []) {
         guard mpv != nil else { return }
+        if command == "loadfile" || command == "stop" || command == "quit" {
+            print("🎬 [MPVController \(debugId)] command \(command) args=\(args)")
+        }
 
         let allArgs = [command] + args
         var cStrings = allArgs.map { strdup($0) }

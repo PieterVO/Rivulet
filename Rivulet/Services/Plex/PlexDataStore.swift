@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import UIKit
 
 @MainActor
 class PlexDataStore: ObservableObject {
@@ -101,8 +102,101 @@ class PlexDataStore: ObservableObject {
     /// Reset on successful fetch
     private var hasAttemptedConnectionRecovery = false
 
+    // MARK: - Background Polling
+
+    /// Timer for periodic hub refresh (3 minutes)
+    private var pollingTimer: Timer?
+    private let pollingInterval: TimeInterval = 180 // 3 minutes
+
+    /// Track if playback is active (pause polling during playback)
+    private var isPlaybackActive = false
+
+    /// Track if app is in foreground
+    private var isInForeground = true
+
     private init() {
         print("📦 PlexDataStore: Initialized")
+        setupPollingObservers()
+    }
+
+    private func setupPollingObservers() {
+        // Observe app lifecycle
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isInForeground = true
+                self?.startPollingIfNeeded()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isInForeground = false
+                self?.stopPolling()
+            }
+        }
+
+        // Observe playback state
+        NotificationCenter.default.addObserver(
+            forName: .plexPlaybackStarted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isPlaybackActive = true
+                self?.stopPolling()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .plexPlaybackStopped,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.isPlaybackActive = false
+                self?.startPollingIfNeeded()
+            }
+        }
+    }
+
+    /// Start polling if conditions are met (foreground, not playing, authenticated)
+    func startPollingIfNeeded() {
+        guard isInForeground,
+              !isPlaybackActive,
+              authManager.selectedServerURL != nil,
+              pollingTimer == nil else { return }
+
+        print("📦 PlexDataStore: Starting hub polling (every 3 min)")
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.pollHubs()
+            }
+        }
+    }
+
+    /// Stop polling
+    private func stopPolling() {
+        guard pollingTimer != nil else { return }
+        print("📦 PlexDataStore: Stopping hub polling")
+        pollingTimer?.invalidate()
+        pollingTimer = nil
+    }
+
+    /// Poll hubs silently (no loading indicator)
+    private func pollHubs() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+
+        print("📦 PlexDataStore: Polling hubs...")
+        await fetchHubsFromServer(serverURL: serverURL, token: token, updateLoading: false)
     }
 
     // MARK: - Connection Recovery
@@ -317,6 +411,8 @@ class PlexDataStore: ObservableObject {
         print("📦 PlexDataStore: Refreshing hubs...")
         isLoadingHubs = true
         await cacheManager.clearOnDeckCache()
+        await cacheManager.clearHubsCache()
+        clearNextEpisodeCache()
         await fetchHubsFromServer(serverURL: serverURL, token: token, updateLoading: true)
     }
 
@@ -437,6 +533,7 @@ class PlexDataStore: ObservableObject {
     /// Refresh hubs for all libraries on Home screen
     func refreshLibraryHubs() async {
         libraryHubs.removeAll()
+        await cacheManager.clearLibraryHubsCache()
         await loadLibraryHubsIfNeeded()
     }
 
@@ -950,6 +1047,7 @@ class PlexDataStore: ObservableObject {
 
     func reset() {
         print("📦 PlexDataStore: Resetting all data")
+        stopPolling()
         hubsLoadTask?.cancel()
         librariesLoadTask?.cancel()
         prefetchTask?.cancel()

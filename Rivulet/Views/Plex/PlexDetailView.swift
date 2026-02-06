@@ -1334,31 +1334,47 @@ struct PlexDetailView: View {
     #if os(tvOS)
     /// Present player using UIViewController to intercept Menu button
     private func presentPlayer() {
-        // Use prefetched full metadata for episodes (has Stream data for DV detection)
-        // Fall back to basic metadata if prefetch hasn't completed
-        let playItem: PlexMetadata
-        if let episode = selectedEpisode {
-            // Use prefetched full metadata if available, otherwise fall back to basic
-            if let ratingKey = episode.ratingKey, let fullEpisode = fullEpisodeMetadata[ratingKey] {
-                playItem = fullEpisode
-            } else {
-                playItem = episode
-            }
-        } else if selectedTrack != nil {
-            playItem = selectedTrack!
-        } else {
-            // For main item (movie), prefer fullMetadata as it has Stream data for DV/HDR detection
-            playItem = fullMetadata ?? item
-        }
-
-        // Use fullMetadata for updated viewOffset when playing the main item (not episodes/tracks)
-        let viewOffset = (selectedEpisode == nil && selectedTrack == nil)
-            ? (fullMetadata?.viewOffset ?? playItem.viewOffset)
-            : playItem.viewOffset
-        let resumeOffset = playFromBeginning ? nil : (Double(viewOffset ?? 0) / 1000.0)
-
-        // Get images for loading screen (from cache or fetch if needed)
+        // Get images and metadata, then present player
         Task {
+            // Determine which item to play and fetch full metadata if needed (for DV/HDR detection)
+            let playItem: PlexMetadata
+            if let episode = selectedEpisode {
+                // Fetch full metadata on-demand for episodes (avoids N+1 prefetch - Fixes RIVULET-V)
+                if let ratingKey = episode.ratingKey, let fullEpisode = fullEpisodeMetadata[ratingKey] {
+                    playItem = fullEpisode
+                } else if let ratingKey = episode.ratingKey,
+                          let serverURL = authManager.selectedServerURL,
+                          let token = authManager.selectedServerToken {
+                    // Fetch full metadata now (single request vs N+1 prefetch)
+                    do {
+                        let metadata = try await networkManager.getFullMetadata(
+                            serverURL: serverURL,
+                            authToken: token,
+                            ratingKey: ratingKey
+                        )
+                        fullEpisodeMetadata[ratingKey] = metadata
+                        playItem = metadata
+                    } catch {
+                        // Fall back to basic metadata if fetch fails
+                        playItem = episode
+                    }
+                } else {
+                    playItem = episode
+                }
+            } else if selectedTrack != nil {
+                playItem = selectedTrack!
+            } else {
+                // For main item (movie), prefer fullMetadata as it has Stream data for DV/HDR detection
+                playItem = fullMetadata ?? item
+            }
+
+            // Use fullMetadata for updated viewOffset when playing the main item (not episodes/tracks)
+            let viewOffset = (selectedEpisode == nil && selectedTrack == nil)
+                ? (fullMetadata?.viewOffset ?? playItem.viewOffset)
+                : playItem.viewOffset
+            let resumeOffset = playFromBeginning ? nil : (Double(viewOffset ?? 0) / 1000.0)
+
+            // Get images for loading screen (from cache or fetch if needed)
             let (artImage, thumbImage) = await getPlayerImages(for: playItem)
 
             await MainActor.run {
@@ -1375,14 +1391,16 @@ struct PlexDetailView: View {
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
                 )
+                let inputCoordinator = PlaybackInputCoordinator()
 
                 // Create view with the external viewModel
-                let playerView = UniversalPlayerView(viewModel: viewModel)
+                let playerView = UniversalPlayerView(viewModel: viewModel, inputCoordinator: inputCoordinator)
 
                 // Create container that intercepts Menu button, passing the same viewModel
                 let container = PlayerContainerViewController(
                     rootView: playerView,
-                    viewModel: viewModel
+                    viewModel: viewModel,
+                    inputCoordinator: inputCoordinator
                 )
 
                 // Update SwiftUI state when player is dismissed
@@ -1807,9 +1825,8 @@ struct PlexDetailView: View {
                 ratingKey: ratingKey
             )
             episodes = fetchedEpisodes
-
-            // Prefetch full metadata for all episodes in background (for DV/HDR detection)
-            prefetchEpisodeMetadata(episodes: fetchedEpisodes)
+            // Note: Full metadata is fetched on-demand when user plays an episode
+            // to avoid N+1 API calls (Fixes RIVULET-V)
         } catch {
             print("Failed to load episodes: \(error)")
         }
@@ -1832,9 +1849,8 @@ struct PlexDetailView: View {
                 ratingKey: ratingKey
             )
             episodes = fetchedEpisodes
-
-            // Prefetch full metadata for all episodes in background (for DV/HDR detection)
-            prefetchEpisodeMetadata(episodes: fetchedEpisodes)
+            // Note: Full metadata is fetched on-demand when user plays an episode
+            // to avoid N+1 API calls (Fixes RIVULET-V)
         } catch {
             print("Failed to load episodes for season: \(error)")
         }
@@ -1870,33 +1886,6 @@ struct PlexDetailView: View {
         }
     }
 
-    /// Prefetch full metadata for episodes in background
-    /// This ensures Stream data (for DV/HDR detection) is ready when user presses play
-    private func prefetchEpisodeMetadata(episodes: [PlexMetadata]) {
-        guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return }
-
-        // Clear old prefetched data when switching seasons
-        fullEpisodeMetadata.removeAll()
-
-        // Fetch full metadata for each episode concurrently in background
-        for episode in episodes {
-            guard let ratingKey = episode.ratingKey else { continue }
-
-            Task {
-                do {
-                    let metadata = try await networkManager.getFullMetadata(
-                        serverURL: serverURL,
-                        authToken: token,
-                        ratingKey: ratingKey
-                    )
-                    fullEpisodeMetadata[ratingKey] = metadata
-                } catch {
-                    // Silently fail - we'll fall back to basic metadata on playback
-                }
-            }
-        }
-    }
 
     private func loadTracks() async {
         guard let serverURL = authManager.selectedServerURL,

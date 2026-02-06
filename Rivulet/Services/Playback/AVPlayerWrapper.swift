@@ -432,17 +432,29 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                 case .readyToPlay:
                     print("🎬 AVPlayerWrapper: Ready to play")
                     self._duration = duration.isFinite ? duration : 0
-                    // Log track details for debugging (resolution/codec)
-                    let videoTracks = item.asset.tracks(withMediaType: .video)
-                    for (index, track) in videoTracks.enumerated() {
-                        let formatDescriptions = track.formatDescriptions as? [CMFormatDescription] ?? []
-                        let codecType = formatDescriptions.first.map { CMFormatDescriptionGetMediaSubType($0) }
-                        let codecString = codecType.map { self.fourCCToString($0) } ?? "unknown"
-                        let naturalSize = track.naturalSize
-                        print("🎬 AVPlayerWrapper: Video track \(index) codec=\(codecString) size=\(Int(abs(naturalSize.width)))x\(Int(abs(naturalSize.height))) fps=\(track.nominalFrameRate)")
+                    // Log track details for debugging (async to avoid blocking main thread on XPC)
+                    let asset = item.asset
+                    Task {
+                        do {
+                            let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                            for (index, track) in videoTracks.enumerated() {
+                                let formatDescriptions = try await track.load(.formatDescriptions) as? [CMFormatDescription] ?? []
+                                let codecType = formatDescriptions.first.map { CMFormatDescriptionGetMediaSubType($0) }
+                                let codecString = codecType.map { self.fourCCToString($0) } ?? "unknown"
+                                let naturalSize = try await track.load(.naturalSize)
+                                let nominalFrameRate = try await track.load(.nominalFrameRate)
+                                print("🎬 AVPlayerWrapper: Video track \(index) codec=\(codecString) size=\(Int(abs(naturalSize.width)))x\(Int(abs(naturalSize.height))) fps=\(nominalFrameRate)")
+                                // Cache video codec for error messages (avoids sync XPC call during error handling)
+                                if index == 0, let codecType {
+                                    self.cachedVideoCodec = self.mapVideoCodecToReadableName(codecType)
+                                }
+                            }
+                        } catch {
+                            print("🎬 AVPlayerWrapper: Failed to load video track info: \(error)")
+                        }
                     }
                     // Enumerate available audio/subtitle tracks
-                    self.enumerateTracks(for: item)
+                    await self.enumerateTracks(for: item)
                     // Don't set playing here - let rate observation handle it
                 case .failed:
                     self.cancelLoadingTimeout()
@@ -790,15 +802,16 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                         print("🎬 AVPlayerWrapper: Video rect is empty/invalid: \(self.lastVideoRect)")
                     }
 
-                    // Log to Sentry
+                    // Gather additional diagnostics for Sentry (Fixes RIVULET-1K)
+                    let diagnostics = await self.gatherRenderFailureDiagnostics()
+
+                    // Log to Sentry with enhanced diagnostics
                     let renderError = NSError(domain: "AVPlayerWrapper", code: -1001, userInfo: [
                         NSLocalizedDescriptionKey: "Video rendering verification failed - no video frames"
                     ])
-                    self.logStreamFailureToSentry(
+                    self.logRenderFailureToSentry(
                         error: renderError,
-                        errorCode: -1001,
-                        errorDomain: "AVPlayerWrapper",
-                        isCompatibilityError: true
+                        diagnostics: diagnostics
                     )
 
                     // Report as codec/rendering failure to trigger fallback
@@ -808,6 +821,98 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    /// Gather diagnostic info when video fails to render (for RIVULET-1K)
+    private func gatherRenderFailureDiagnostics() async -> [String: Any] {
+        var diagnostics: [String: Any] = [
+            "video_rect": "\(lastVideoRect)",
+            "has_received_frames": hasReceivedVideoFrames,
+            "cached_video_codec": cachedVideoCodec ?? "unknown"
+        ]
+
+        if let item = playerItem {
+            diagnostics["player_item_status"] = item.status.rawValue
+            diagnostics["player_item_duration"] = item.duration.seconds
+            diagnostics["player_item_current_time"] = item.currentTime().seconds
+
+            // Check video tracks
+            let asset = item.asset
+            do {
+                let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                diagnostics["video_track_count"] = videoTracks.count
+
+                if let firstTrack = videoTracks.first {
+                    let size = try await firstTrack.load(.naturalSize)
+                    diagnostics["video_natural_size"] = "\(Int(size.width))x\(Int(size.height))"
+
+                    let formatDescs = try await firstTrack.load(.formatDescriptions) as? [CMFormatDescription] ?? []
+                    if let desc = formatDescs.first {
+                        let codecType = CMFormatDescriptionGetMediaSubType(desc)
+                        diagnostics["video_codec_fourcc"] = fourCCToString(codecType)
+                    }
+                }
+            } catch {
+                diagnostics["track_load_error"] = error.localizedDescription
+            }
+
+            // Check if there are audio tracks (stream might be audio-only)
+            do {
+                let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+                diagnostics["audio_track_count"] = audioTracks.count
+            } catch {
+                diagnostics["audio_track_error"] = error.localizedDescription
+            }
+        }
+
+        if let url = currentStreamURL {
+            diagnostics["stream_host"] = url.host ?? "unknown"
+            diagnostics["stream_path"] = url.path
+            diagnostics["is_transcode"] = url.path.contains("transcode")
+        }
+
+        return diagnostics
+    }
+
+    /// Log render failure with enhanced diagnostics
+    private func logRenderFailureToSentry(error: Error, diagnostics: [String: Any]) {
+        let event = Event(level: .error)
+
+        var messageParts: [String] = ["AVPlayer stream failed"]
+        messageParts.append("Error: \(error.localizedDescription)")
+        messageParts.append("Code: -1001")
+        if let codec = diagnostics["video_codec_fourcc"] as? String {
+            messageParts.append("Codec: \(codec)")
+        }
+        if let host = diagnostics["stream_host"] as? String {
+            messageParts.append("Host: \(host)")
+        }
+        messageParts.append("(Compatibility issue)")
+
+        event.message = SentryMessage(formatted: messageParts.joined(separator: " | "))
+
+        event.tags = [
+            "component": "avplayer",
+            "error_code": "-1001",
+            "error_domain": "AVPlayerWrapper",
+            "is_compatibility_error": "true"
+        ]
+
+        // Add codec tag if available
+        if let codec = diagnostics["video_codec_fourcc"] as? String {
+            event.tags?["video_codec"] = codec
+        }
+
+        // Add track count tag for filtering
+        if let trackCount = diagnostics["video_track_count"] as? Int {
+            event.tags?["video_track_count"] = String(trackCount)
+        }
+
+        event.fingerprint = ["avplayer", "no-video-frames"]
+        event.extra = diagnostics
+
+        SentrySDK.capture(event: event)
+        print("🎬 AVPlayerWrapper: Logged render failure to Sentry with diagnostics: \(diagnostics)")
     }
 
     private func cancelVideoRenderVerification() {
@@ -839,83 +944,93 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     // MARK: - Track Management
 
     /// Enumerate audio and subtitle tracks from AVMediaSelectionGroup
-    private func enumerateTracks(for item: AVPlayerItem) {
+    private func enumerateTracks(for item: AVPlayerItem) async {
         let asset = item.asset
 
         // Cache audio format info from asset tracks (codec FourCC, channels) before building MediaTracks
-        cacheAudioFormatInfo(from: asset)
+        await cacheAudioFormatInfo(from: asset)
 
-        // Get audio tracks
-        if let audioGroup = asset.mediaSelectionGroup(forMediaCharacteristic: .audible) {
-            // Log raw AVMediaSelectionOption details for audio diagnostics
-            print("🔊 [Audio] Raw audio selection group: \(audioGroup.options.count) options")
-            for (i, option) in audioGroup.options.enumerated() {
-                print("🔊 [Audio]   Option \(i): displayName=\"\(option.displayName)\", locale=\(option.locale?.identifier ?? "nil"), mediaType=\(option.mediaType.rawValue)")
-            }
+        // Get audio tracks (use async API to avoid blocking main thread on XPC)
+        do {
+            let audioGroup = try await asset.loadMediaSelectionGroup(for: .audible)
+            if let audioGroup {
+                // Log raw AVMediaSelectionOption details for audio diagnostics
+                print("🔊 [Audio] Raw audio selection group: \(audioGroup.options.count) options")
+                for (i, option) in audioGroup.options.enumerated() {
+                    print("🔊 [Audio]   Option \(i): displayName=\"\(option.displayName)\", locale=\(option.locale?.identifier ?? "nil"), mediaType=\(option.mediaType.rawValue)")
+                }
 
-            // Log audio track format descriptions from AVAssetTrack (has codec details)
-            let audioAssetTracks = asset.tracks(withMediaType: .audio)
-            print("🔊 [Audio] Asset audio tracks: \(audioAssetTracks.count)")
-            for (i, track) in audioAssetTracks.enumerated() {
-                let formatDescriptions = track.formatDescriptions as? [CMFormatDescription] ?? []
-                for desc in formatDescriptions {
-                    let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
-                    let fourCC = fourCCToString(mediaSubType)
-                    print("🔊 [Audio]   Track \(i): codec=\(fourCC) (0x\(String(mediaSubType, radix: 16)))")
-                    if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
-                        let bd = asbd.pointee
-                        print("🔊 [Audio]     ASBD: sampleRate=\(bd.mSampleRate), channels=\(bd.mChannelsPerFrame), bitsPerChannel=\(bd.mBitsPerChannel), formatID=\(fourCCToString(bd.mFormatID))")
-                    }
-                    var layoutSize: Int = 0
-                    if let layout = CMAudioFormatDescriptionGetChannelLayout(desc, sizeOut: &layoutSize) {
-                        let tag = layout.pointee.mChannelLayoutTag
-                        let channelCount = AudioChannelLayoutTag_GetNumberOfChannels(tag)
-                        print("🔊 [Audio]     ChannelLayout: tag=0x\(String(tag, radix: 16)), channels=\(channelCount)")
+                // Log audio track format descriptions from AVAssetTrack (has codec details)
+                let audioAssetTracks = try await asset.loadTracks(withMediaType: .audio)
+                print("🔊 [Audio] Asset audio tracks: \(audioAssetTracks.count)")
+                for (i, track) in audioAssetTracks.enumerated() {
+                    let formatDescriptions = try await track.load(.formatDescriptions) as? [CMFormatDescription] ?? []
+                    for desc in formatDescriptions {
+                        let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
+                        let fourCC = fourCCToString(mediaSubType)
+                        print("🔊 [Audio]   Track \(i): codec=\(fourCC) (0x\(String(mediaSubType, radix: 16)))")
+                        if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
+                            let bd = asbd.pointee
+                            print("🔊 [Audio]     ASBD: sampleRate=\(bd.mSampleRate), channels=\(bd.mChannelsPerFrame), bitsPerChannel=\(bd.mBitsPerChannel), formatID=\(fourCCToString(bd.mFormatID))")
+                        }
+                        var layoutSize: Int = 0
+                        if let layout = CMAudioFormatDescriptionGetChannelLayout(desc, sizeOut: &layoutSize) {
+                            let tag = layout.pointee.mChannelLayoutTag
+                            let channelCount = AudioChannelLayoutTag_GetNumberOfChannels(tag)
+                            print("🔊 [Audio]     ChannelLayout: tag=0x\(String(tag, radix: 16)), channels=\(channelCount)")
+                        }
                     }
                 }
-            }
 
-            _audioTracks = audioGroup.options.enumerated().compactMap { index, option in
-                mediaTrack(from: option, id: index, isAudio: true)
-            }
+                _audioTracks = audioGroup.options.enumerated().compactMap { index, option in
+                    mediaTrack(from: option, id: index, isAudio: true)
+                }
 
-            // Determine currently selected audio track
-            if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: audioGroup),
-               let index = audioGroup.options.firstIndex(of: selectedOption) {
-                _currentAudioTrackId = index
-                print("🔊 [Audio] Selected track: \(index) (\(selectedOption.displayName))")
-            } else if !_audioTracks.isEmpty {
-                _currentAudioTrackId = 0  // Default to first track
-                print("🔊 [Audio] No track selected, defaulting to 0")
-            }
+                // Determine currently selected audio track
+                if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: audioGroup),
+                   let index = audioGroup.options.firstIndex(of: selectedOption) {
+                    _currentAudioTrackId = index
+                    print("🔊 [Audio] Selected track: \(index) (\(selectedOption.displayName))")
+                } else if !_audioTracks.isEmpty {
+                    _currentAudioTrackId = 0  // Default to first track
+                    print("🔊 [Audio] No track selected, defaulting to 0")
+                }
 
-            print("🎬 AVPlayerWrapper: Found \(_audioTracks.count) audio tracks")
-            for track in _audioTracks {
-                print("🎬 AVPlayerWrapper:   Audio: \(track.name) (\(track.languageCode ?? "?")) - \(track.formattedCodec) [\(track.channels ?? 0)ch]")
+                print("🎬 AVPlayerWrapper: Found \(_audioTracks.count) audio tracks")
+                for track in _audioTracks {
+                    print("🎬 AVPlayerWrapper:   Audio: \(track.name) (\(track.languageCode ?? "?")) - \(track.formattedCodec) [\(track.channels ?? 0)ch]")
+                }
+            } else {
+                print("🔊 [Audio] No audible media selection group found")
             }
-        } else {
-            print("🔊 [Audio] No audible media selection group found")
+        } catch {
+            print("🔊 [Audio] Failed to load audio tracks: \(error)")
         }
 
         // Get subtitle/legible tracks
-        if let subtitleGroup = asset.mediaSelectionGroup(forMediaCharacteristic: .legible) {
-            _subtitleTracks = subtitleGroup.options.enumerated().compactMap { index, option in
-                // Filter out closed captions if they're duplicates (AVPlayer often includes both)
-                mediaTrack(from: option, id: index, isAudio: false)
-            }
+        do {
+            let subtitleGroup = try await asset.loadMediaSelectionGroup(for: .legible)
+            if let subtitleGroup {
+                _subtitleTracks = subtitleGroup.options.enumerated().compactMap { index, option in
+                    // Filter out closed captions if they're duplicates (AVPlayer often includes both)
+                    mediaTrack(from: option, id: index, isAudio: false)
+                }
 
-            // Determine currently selected subtitle track
-            if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: subtitleGroup),
-               let index = subtitleGroup.options.firstIndex(of: selectedOption) {
-                _currentSubtitleTrackId = index
-            } else {
-                _currentSubtitleTrackId = nil  // Subtitles off by default
-            }
+                // Determine currently selected subtitle track
+                if let selectedOption = item.currentMediaSelection.selectedMediaOption(in: subtitleGroup),
+                   let index = subtitleGroup.options.firstIndex(of: selectedOption) {
+                    _currentSubtitleTrackId = index
+                } else {
+                    _currentSubtitleTrackId = nil  // Subtitles off by default
+                }
 
-            print("🎬 AVPlayerWrapper: Found \(_subtitleTracks.count) subtitle tracks")
-            for track in _subtitleTracks {
-                print("🎬 AVPlayerWrapper:   Subtitle: \(track.name) (\(track.languageCode ?? "?"))")
+                print("🎬 AVPlayerWrapper: Found \(_subtitleTracks.count) subtitle tracks")
+                for track in _subtitleTracks {
+                    print("🎬 AVPlayerWrapper:   Subtitle: \(track.name) (\(track.languageCode ?? "?"))")
+                }
             }
+        } catch {
+            print("🎬 AVPlayerWrapper: Failed to load subtitle tracks: \(error)")
         }
 
         // Notify subscribers that tracks are available
@@ -987,52 +1102,58 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
     /// Cached audio codec and channel count extracted from AVAssetTrack format descriptions
     private var cachedAudioCodec: String?
     private var cachedAudioChannels: Int?
+    /// Cached video codec for error messages (avoids sync XPC call during error handling)
+    private var cachedVideoCodec: String?
 
     /// Extract audio codec and channel info from AVAssetTrack format descriptions
     /// Call this before building MediaTrack objects
-    private func cacheAudioFormatInfo(from asset: AVAsset) {
+    private func cacheAudioFormatInfo(from asset: AVAsset) async {
         cachedAudioCodec = nil
         cachedAudioChannels = nil
 
-        let audioTracks = asset.tracks(withMediaType: .audio)
-        guard let track = audioTracks.first,
-              let formatDescriptions = track.formatDescriptions as? [CMFormatDescription],
-              let desc = formatDescriptions.first else { return }
+        do {
+            let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            guard let track = audioTracks.first else { return }
+            let formatDescriptions = try await track.load(.formatDescriptions) as? [CMFormatDescription]
+            guard let desc = formatDescriptions?.first else { return }
 
-        let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
+            let mediaSubType = CMFormatDescriptionGetMediaSubType(desc)
 
-        // Map FourCC to codec name
-        switch mediaSubType {
-        case kAudioFormatMPEG4AAC, kAudioFormatMPEG4AAC_HE, kAudioFormatMPEG4AAC_HE_V2,
-             kAudioFormatMPEG4AAC_LD, kAudioFormatMPEG4AAC_ELD:
-            cachedAudioCodec = "aac"
-        case kAudioFormatAC3:
-            cachedAudioCodec = "ac3"
-        case kAudioFormatEnhancedAC3:
-            cachedAudioCodec = "eac3"
-        case kAudioFormatAppleLossless:
-            cachedAudioCodec = "alac"
-        case kAudioFormatLinearPCM:
-            cachedAudioCodec = "pcm"
-        case kAudioFormatFLAC:
-            cachedAudioCodec = "flac"
-        case kAudioFormatOpus:
-            cachedAudioCodec = "opus"
-        default:
-            let fourCC = fourCCToString(mediaSubType)
-            print("🔊 [Audio] Unknown audio FourCC: \(fourCC) (0x\(String(mediaSubType, radix: 16)))")
-        }
-
-        // Extract channel count from ASBD
-        if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
-            let channels = Int(asbd.pointee.mChannelsPerFrame)
-            if channels > 0 {
-                cachedAudioChannels = channels
+            // Map FourCC to codec name
+            switch mediaSubType {
+            case kAudioFormatMPEG4AAC, kAudioFormatMPEG4AAC_HE, kAudioFormatMPEG4AAC_HE_V2,
+                 kAudioFormatMPEG4AAC_LD, kAudioFormatMPEG4AAC_ELD:
+                cachedAudioCodec = "aac"
+            case kAudioFormatAC3:
+                cachedAudioCodec = "ac3"
+            case kAudioFormatEnhancedAC3:
+                cachedAudioCodec = "eac3"
+            case kAudioFormatAppleLossless:
+                cachedAudioCodec = "alac"
+            case kAudioFormatLinearPCM:
+                cachedAudioCodec = "pcm"
+            case kAudioFormatFLAC:
+                cachedAudioCodec = "flac"
+            case kAudioFormatOpus:
+                cachedAudioCodec = "opus"
+            default:
+                let fourCC = fourCCToString(mediaSubType)
+                print("🔊 [Audio] Unknown audio FourCC: \(fourCC) (0x\(String(mediaSubType, radix: 16)))")
             }
-        }
 
-        if cachedAudioCodec != nil || cachedAudioChannels != nil {
-            print("🔊 [Audio] Cached format info: codec=\(cachedAudioCodec ?? "?"), channels=\(cachedAudioChannels ?? 0)")
+            // Extract channel count from ASBD
+            if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc) {
+                let channels = Int(asbd.pointee.mChannelsPerFrame)
+                if channels > 0 {
+                    cachedAudioChannels = channels
+                }
+            }
+
+            if cachedAudioCodec != nil || cachedAudioChannels != nil {
+                print("🔊 [Audio] Cached format info: codec=\(cachedAudioCodec ?? "?"), channels=\(cachedAudioChannels ?? 0)")
+            }
+        } catch {
+            print("🔊 [Audio] Failed to cache audio format info: \(error)")
         }
     }
 
@@ -1115,40 +1236,28 @@ final class AVPlayerWrapper: NSObject, ObservableObject {
 
     // MARK: - Codec Detection
 
-    /// Attempts to extract codec information from the current player item's asset
-    private func detectCodecInfo() -> String? {
-        guard let asset = playerItem?.asset else { return nil }
-
-        // Try to get video track info
-        let videoTracks = asset.tracks(withMediaType: .video)
-        if let videoTrack = videoTracks.first {
-            let formatDescriptions = videoTrack.formatDescriptions as? [CMFormatDescription] ?? []
-            if let formatDesc = formatDescriptions.first {
-                let codecType = CMFormatDescriptionGetMediaSubType(formatDesc)
-                let codecString = fourCCToString(codecType)
-
-                // Map common codec types to readable names
-                let readableName: String
-                switch codecType {
-                case kCMVideoCodecType_H264:
-                    readableName = "H.264/AVC"
-                case kCMVideoCodecType_HEVC:
-                    readableName = "H.265/HEVC"
-                case kCMVideoCodecType_MPEG4Video:
-                    readableName = "MPEG-4"
-                case kCMVideoCodecType_MPEG2Video:
-                    readableName = "MPEG-2"
-                case kCMVideoCodecType_VP9:
-                    readableName = "VP9"
-                default:
-                    readableName = codecString
-                }
-
-                return readableName
-            }
+    /// Maps a video codec FourCC to a human-readable name
+    private func mapVideoCodecToReadableName(_ codecType: FourCharCode) -> String {
+        switch codecType {
+        case kCMVideoCodecType_H264:
+            return "H.264/AVC"
+        case kCMVideoCodecType_HEVC:
+            return "H.265/HEVC"
+        case kCMVideoCodecType_MPEG4Video:
+            return "MPEG-4"
+        case kCMVideoCodecType_MPEG2Video:
+            return "MPEG-2"
+        case kCMVideoCodecType_VP9:
+            return "VP9"
+        default:
+            return fourCCToString(codecType)
         }
+    }
 
-        return nil
+    /// Returns cached codec info (populated async during readyToPlay)
+    /// This avoids blocking the main thread on XPC calls during error handling
+    private func detectCodecInfo() -> String? {
+        return cachedVideoCodec
     }
 
     /// Converts a FourCC code to a readable string

@@ -8,8 +8,235 @@
 import SwiftUI
 import Combine
 
+#if os(tvOS)
+@MainActor
+private final class LiveTVPlaybackInputTarget: PlaybackInputTarget {
+    weak var viewModel: MultiStreamViewModel?
+    var canHandleTransport: (() -> Bool)?
+    var canHandleDirectionalNavigation: (() -> Bool)?
+    var onDirectionalNavigation: ((MoveCommandDirection) -> Void)?
+    var onFocusPulse: (() -> Void)?
+    var onBack: (() -> Void)?
+    var onShowInfo: (() -> Void)?
+
+    init(viewModel: MultiStreamViewModel) {
+        self.viewModel = viewModel
+    }
+
+    var isScrubbingForInput: Bool {
+        viewModel?.isScrubbing ?? false
+    }
+
+    private func transitionForScrubNudge(
+        wasScrubbing: Bool,
+        speedBefore: Int,
+        speedAfter: Int
+    ) -> PlaybackInputTelemetry.ScrubTransition {
+        if !wasScrubbing || speedBefore == 0 {
+            return .start
+        }
+
+        let beforeDirection = speedBefore > 0 ? 1 : -1
+        let afterDirection = speedAfter > 0 ? 1 : -1
+        if beforeDirection != afterDirection {
+            return .reverse
+        }
+        if abs(speedAfter) > abs(speedBefore) {
+            return .speedUp
+        }
+        if abs(speedAfter) < abs(speedBefore) {
+            return .slowDown
+        }
+        return .start
+    }
+
+    private func navigationDirection(
+        for action: PlaybackInputAction,
+        source: PlaybackInputSource
+    ) -> MoveCommandDirection? {
+        // In multiview, left/right directional intent should switch focused stream.
+        switch action {
+        case .scrubNudge(let forward):
+            return forward ? .right : .left
+        case .seekRelative(let seconds):
+            guard source != .mpRemoteCommand else { return nil }
+            guard abs(seconds) < InputConfig.jumpSeekSeconds else { return nil }
+            return seconds >= 0 ? .right : .left
+        default:
+            return nil
+        }
+    }
+
+    func handleInputAction(_ action: PlaybackInputAction, source: PlaybackInputSource) {
+        guard let viewModel else { return }
+
+        if viewModel.streamCount > 1,
+           canHandleDirectionalNavigation?() ?? true,
+           let direction = navigationDirection(for: action, source: source) {
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .cancel,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                viewModel.cancelScrubFocused()
+            }
+            onDirectionalNavigation?(direction)
+            onFocusPulse?()
+            return
+        }
+
+        switch action {
+        case .play:
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                viewModel.commitScrubFocused()
+            } else {
+                viewModel.playFocused()
+            }
+            onFocusPulse?()
+
+        case .pause:
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                viewModel.commitScrubFocused()
+            } else {
+                viewModel.pauseFocused()
+            }
+            onFocusPulse?()
+
+        case .playPause:
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                viewModel.commitScrubFocused()
+            } else {
+                viewModel.togglePlayPauseOnFocused()
+            }
+            onFocusPulse?()
+
+        case .seekRelative(let seconds):
+            guard canHandleTransport?() ?? true else { return }
+            if viewModel.isScrubbing {
+                viewModel.updateScrubFocusedPosition(by: seconds)
+            } else {
+                viewModel.seekFocused(by: seconds)
+            }
+            onFocusPulse?()
+
+        case .seekAbsolute:
+            // Live TV does not currently expose absolute seek control.
+            break
+
+        case .stepSeek, .jumpSeek:
+            // Coordinator normalizes these to .seekRelative before dispatch.
+            break
+
+        case .scrubNudge(let forward):
+            guard canHandleTransport?() ?? true else { return }
+            let wasScrubbing = viewModel.isScrubbing
+            let speedBefore = viewModel.scrubSpeed
+            viewModel.scrubFocusedInDirection(forward: forward)
+            let speedAfter = viewModel.scrubSpeed
+            PlaybackInputTelemetry.shared.recordScrubTransition(
+                surface: .liveTV,
+                transition: transitionForScrubNudge(
+                    wasScrubbing: wasScrubbing,
+                    speedBefore: speedBefore,
+                    speedAfter: speedAfter
+                ),
+                source: source,
+                speedBefore: speedBefore,
+                speedAfter: speedAfter
+            )
+            onFocusPulse?()
+
+        case .scrubRelative(let seconds):
+            guard canHandleTransport?() ?? true else { return }
+            viewModel.updateScrubFocusedPosition(by: seconds)
+            onFocusPulse?()
+
+        case .scrubCommit:
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+            }
+            viewModel.commitScrubFocused()
+            onFocusPulse?()
+
+        case .scrubCancel:
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .cancel,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+            }
+            viewModel.cancelScrubFocused()
+            onFocusPulse?()
+
+        case .showInfo:
+            onShowInfo?()
+
+        case .back:
+            if viewModel.isScrubbing {
+                let speedBefore = viewModel.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .liveTV,
+                    transition: .cancel,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                viewModel.cancelScrubFocused()
+            } else {
+                onBack?()
+            }
+            onFocusPulse?()
+        }
+    }
+}
+#endif
+
 struct LiveTVPlayerView: View {
     @StateObject private var viewModel: MultiStreamViewModel
+    #if os(tvOS)
+    @StateObject private var remoteInput = RemoteInputHandler()
+    @State private var inputCoordinator = PlaybackInputCoordinator()
+    @State private var inputTarget: LiveTVPlaybackInputTarget?
+    #endif
     @AppStorage("confirmExitMultiview") private var confirmExitMultiview = true
     @AppStorage("classicTVMode") private var classicTVMode = false
     @State private var showExitConfirmation = false
@@ -17,11 +244,15 @@ struct LiveTVPlayerView: View {
     @State private var channelBadgeTimer: Timer?
     @State private var showFocusBorder = true
     @State private var focusBorderTimer: Timer?
+    @State private var hasStoppedStreams = false
+    @State private var debugId = String(UUID().uuidString.prefix(8))
 
     // Dismiss callback - used instead of @Environment(\.dismiss) since we use ZStack overlay
     private let onDismiss: () -> Void
     // PIP callback - called when user wants to enter PIP mode instead of dismissing
     private let onEnterPIP: (() -> Void)?
+    // When false, player doesn't capture focus (used for PIP mode)
+    private let isInteractive: Bool
 
     // Focus management
     @FocusState private var focusArea: FocusArea?
@@ -32,10 +263,11 @@ struct LiveTVPlayerView: View {
         case exitConfirmButton(Int)
     }
 
-    init(channel: UnifiedChannel, onDismiss: @escaping () -> Void, onEnterPIP: (() -> Void)? = nil) {
+    init(channel: UnifiedChannel, onDismiss: @escaping () -> Void, onEnterPIP: (() -> Void)? = nil, isInteractive: Bool = true) {
         _viewModel = StateObject(wrappedValue: MultiStreamViewModel(initialChannel: channel))
         self.onDismiss = onDismiss
         self.onEnterPIP = onEnterPIP
+        self.isInteractive = isInteractive
     }
 
     @Namespace private var playerFocusNamespace
@@ -53,14 +285,24 @@ struct LiveTVPlayerView: View {
                     transaction.animation = nil
                 }
 
-            // Controls overlay (hidden in classic TV mode)
-            if viewModel.showControls && !classicTVMode {
+            #if os(tvOS)
+            if isInteractive && !viewModel.showControls && !viewModel.showChannelPicker && !showExitConfirmation {
+                LiveTVPressCatcher { action in
+                    inputCoordinator.handle(action: action, source: .irPress)
+                }
+                .ignoresSafeArea()
+                .zIndex(50)
+            }
+            #endif
+
+            // Controls overlay (hidden in classic TV mode and PIP mode)
+            if isInteractive && viewModel.showControls && !classicTVMode {
                 controlsOverlay
                     .transition(.opacity.animation(.easeInOut(duration: 0.25)))
             }
 
-            // Channel picker (for adding or replacing streams)
-            if viewModel.showChannelPicker {
+            // Channel picker (for adding or replacing streams, not shown in PIP mode)
+            if isInteractive && viewModel.showChannelPicker {
                 // When replacing, don't exclude the current channel (user might want to re-select it)
                 let excludedIds: Set<String> = {
                     if viewModel.replaceSlotIndex != nil,
@@ -90,8 +332,8 @@ struct LiveTVPlayerView: View {
                 .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
 
-            // Exit confirmation overlay
-            if showExitConfirmation {
+            // Exit confirmation overlay (not shown in PIP mode)
+            if isInteractive && showExitConfirmation {
                 exitConfirmationOverlay
                     .transition(.opacity.animation(.easeInOut(duration: 0.2)))
             }
@@ -99,18 +341,18 @@ struct LiveTVPlayerView: View {
         .focusScope(playerFocusNamespace)
         .focusSection()
         .defaultFocus($focusArea, .streamGrid)
+        .disabled(!isInteractive)  // Disable focus capture when in PIP mode
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.easeInOut(duration: 0.25), value: showChannelBadges)
         // Don't animate stream count changes - causes issues with MPV player resizing
         #if os(tvOS)
         .onPlayPauseCommand {
-            // Show focus border on any remote input
-            showFocusBorderTemporarily()
-            // Physical play/pause button on remote - direct toggle
-            viewModel.togglePlayPauseOnFocused()
+            guard isInteractive else { return }  // Ignore when in PIP mode
+            inputCoordinator.handle(action: .playPause, source: .swiftUICommand)
         }
         .onExitCommand {
-            handleExitCommand()
+            guard isInteractive else { return }  // Ignore when in PIP mode
+            inputCoordinator.handle(action: .back, source: .swiftUICommand)
         }
         #endif
         .onChange(of: viewModel.showControls) { _, showControls in
@@ -155,6 +397,46 @@ struct LiveTVPlayerView: View {
             }
         }
         .onAppear {
+            print("📺 [LiveTVPlayer \(debugId)] onAppear interactive=\(isInteractive), streams=\(viewModel.streamCount), focusedIndex=\(viewModel.focusedSlotIndex)")
+            #if os(tvOS)
+            if isInteractive {
+                let target = LiveTVPlaybackInputTarget(viewModel: viewModel)
+                target.canHandleTransport = { [viewModel] in
+                    !viewModel.showControls && !viewModel.showChannelPicker
+                }
+                target.canHandleDirectionalNavigation = { [viewModel] in
+                    !viewModel.showControls && !viewModel.showChannelPicker
+                }
+                target.onDirectionalNavigation = { direction in
+                    handleStreamNavigation(direction)
+                }
+                target.onFocusPulse = {
+                    showFocusBorderTemporarily()
+                }
+                target.onBack = {
+                    handleExitCommand()
+                }
+                target.onShowInfo = {
+                    showControlsWithFocus()
+                }
+                inputTarget = target
+                inputCoordinator.target = target
+
+                remoteInput.isScrubbingCheck = { [weak viewModel] in
+                    viewModel?.isScrubbing ?? false
+                }
+                remoteInput.isActivelyScrubbing = { [weak viewModel] in
+                    (viewModel?.scrubSpeed ?? 0) != 0
+                }
+                remoteInput.isPostVideoCheck = { false }
+                remoteInput.isErrorCheck = { false }
+                remoteInput.isPausedCheck = { false }
+                remoteInput.onAction = { [inputCoordinator] action, source in
+                    inputCoordinator.handle(action: action, source: source)
+                }
+                remoteInput.startMonitoring()
+            }
+            #endif
             // Start with controls hidden, focus on stream grid
             viewModel.showControls = false
             // Delay focus grab slightly to ensure view is laid out
@@ -166,14 +448,24 @@ struct LiveTVPlayerView: View {
             showFocusBorderTemporarily()
         }
         .onDisappear {
+            print("📺 [LiveTVPlayer \(debugId)] onDisappear showExitConfirmation=\(showExitConfirmation), hasStoppedStreams=\(hasStoppedStreams), streams=\(viewModel.streamCount)")
+            #if os(tvOS)
+            remoteInput.stopMonitoring()
+            remoteInput.reset()
+            inputCoordinator.invalidate()
+            inputTarget = nil
+            #endif
             channelBadgeTimer?.invalidate()
             focusBorderTimer?.invalidate()
             // Only stop streams if we're actually exiting (not showing confirmation)
-            if !showExitConfirmation {
+            if !showExitConfirmation && !hasStoppedStreams {
+                hasStoppedStreams = true
+                print("📺 [LiveTVPlayer \(debugId)] onDisappear -> stopAllStreams()")
                 viewModel.stopAllStreams()
             }
         }
         .onChange(of: showExitConfirmation) { _, show in
+            print("📺 [LiveTVPlayer \(debugId)] showExitConfirmation=\(show)")
             if show {
                 // Focus the Cancel button (index 0) when confirmation appears
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -209,9 +501,9 @@ struct LiveTVPlayerView: View {
                             isFocused: viewModel.focusedSlotIndex == index && (viewModel.showControls || showFocusBorder),
                             showBorder: viewModel.streamCount > 1,
                             showChannelBadge: showChannelBadges,
-                            // Pass .zero for single stream to use normal frame-based sizing
-                            // Pass actual size for multi-stream to use transform-based scaling
-                            containerSize: viewModel.streamCount > 1 ? rect.size : .zero,
+                            // Keep explicit sizing active for multistream and non-interactive
+                            // PiP mode so the same MPV instance can be resized without rebuild.
+                            containerSize: (viewModel.streamCount > 1 || !isInteractive) ? rect.size : .zero,
                             onControllerReady: { controller in
                                 viewModel.setPlayerController(controller, for: slot.id)
                             }
@@ -233,7 +525,8 @@ struct LiveTVPlayerView: View {
             }
 
             // Invisible focusable overlay for stream navigation
-            if !viewModel.showControls && !showExitConfirmation {
+            // Only render when interactive (not in PIP mode)
+            if isInteractive && !viewModel.showControls && !showExitConfirmation {
                 Color.clear
                     .contentShape(Rectangle())
                     .focusable()
@@ -248,12 +541,12 @@ struct LiveTVPlayerView: View {
                         handleStreamNavigation(direction)
                     }
                     .onExitCommand {
-                        handleExitCommand()
+                        inputCoordinator.handle(action: .back, source: .swiftUICommand)
                     }
                     #endif
             }
         }
-        .ignoresSafeArea()
+        .ignoresSafeArea(edges: isInteractive ? .all : [])
     }
 
     private func layoutFrames(for size: CGSize) -> [UUID: CGRect] {
@@ -795,9 +1088,6 @@ struct LiveTVPlayerView: View {
     private func buildControlButtons() -> [ControlButtonConfig] {
         var buttons: [ControlButtonConfig] = []
 
-        // Note: Pause/play removed for live TV since time-shifting isn't implemented
-        // Live TV streams are real-time only for now
-
         // Layout controls (only when multiple streams)
         if viewModel.streamCount > 1 {
             if viewModel.isFocusedStreamInSidebar {
@@ -819,10 +1109,10 @@ struct LiveTVPlayerView: View {
                     }
                 ))
             } else {
-                // Grid layout - offer to enlarge focused stream
+                // Grid layout - offer to expand focused stream
                 buttons.append(ControlButtonConfig(
-                    icon: "rectangle.expand.vertical",
-                    label: "Enlarge",
+                    icon: "arrow.up.left.and.arrow.down.right",
+                    label: "Expand",
                     action: {
                         if let slotId = viewModel.focusedStream?.id {
                             viewModel.setFocusedLayout(on: slotId)
@@ -892,26 +1182,36 @@ struct LiveTVPlayerView: View {
 
     #if os(tvOS)
     private func handleExitCommand() {
+        print("📺 [LiveTVPlayer \(debugId)] handleExitCommand controls=\(viewModel.showControls), picker=\(viewModel.showChannelPicker), confirmation=\(showExitConfirmation), streamCount=\(viewModel.streamCount), hasPIPCallback=\(onEnterPIP != nil)")
         // Show focus border on any remote input
         showFocusBorderTemporarily()
 
+        if viewModel.isScrubbing {
+            viewModel.cancelScrubFocused()
+            return
+        }
+
         if showExitConfirmation {
             // Cancel the confirmation and return to streams
+            print("📺 [LiveTVPlayer \(debugId)] exit: cancelling confirmation")
             showExitConfirmation = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 focusArea = .streamGrid
             }
         } else if viewModel.showChannelPicker {
+            print("📺 [LiveTVPlayer \(debugId)] exit: closing channel picker")
             viewModel.showChannelPicker = false
         } else if viewModel.showControls && !classicTVMode {
             // Hide controls and return focus to stream grid (not in classic mode)
             // UNLESS we can enter PIP mode - then go directly to PIP
             if viewModel.streamCount == 1, let onEnterPIP {
                 // Single stream with PIP available - go to PIP, hide controls
+                print("📺 [LiveTVPlayer \(debugId)] exit: controls visible -> enter PIP")
                 viewModel.showControls = false
                 onEnterPIP()
             } else {
                 // Multi-stream or no PIP - just hide controls
+                print("📺 [LiveTVPlayer \(debugId)] exit: controls visible -> hide controls")
                 withAnimation(.easeOut(duration: 0.2)) {
                     viewModel.showControls = false
                 }
@@ -923,9 +1223,11 @@ struct LiveTVPlayerView: View {
             // Controls hidden
             // For single stream, try to enter PIP mode if callback is provided
             if viewModel.streamCount == 1, let onEnterPIP {
+                print("📺 [LiveTVPlayer \(debugId)] exit: controls hidden -> enter PIP")
                 onEnterPIP()
             } else {
                 // Multi-stream or no PIP callback - exit directly
+                print("📺 [LiveTVPlayer \(debugId)] exit: controls hidden -> dismiss player")
                 dismissPlayer()
             }
         }
@@ -933,6 +1235,7 @@ struct LiveTVPlayerView: View {
     #endif
 
     private func dismissPlayer() {
+        print("📺 [LiveTVPlayer \(debugId)] dismissPlayer confirmExitMultiview=\(confirmExitMultiview), streamCount=\(viewModel.streamCount)")
         // Check if we should show confirmation for multiview
         if confirmExitMultiview && viewModel.streamCount > 1 {
             showExitConfirmation = true
@@ -942,10 +1245,16 @@ struct LiveTVPlayerView: View {
     }
 
     private func forceExitPlayer() {
-        // Dismiss UI immediately
+        print("📺 [LiveTVPlayer \(debugId)] forceExitPlayer hasStoppedStreams=\(hasStoppedStreams), streamCount=\(viewModel.streamCount)")
+        if !hasStoppedStreams {
+            hasStoppedStreams = true
+            // Stop streams - MPV cleanup now runs on background thread
+            print("📺 [LiveTVPlayer \(debugId)] forceExitPlayer -> stopAllStreams()")
+            viewModel.stopAllStreams()
+        }
+        // Dismiss UI after cleanup request is issued
+        print("📺 [LiveTVPlayer \(debugId)] forceExitPlayer -> onDismiss()")
         onDismiss()
-        // Stop streams - MPV cleanup now runs on background thread
-        viewModel.stopAllStreams()
     }
 }
 

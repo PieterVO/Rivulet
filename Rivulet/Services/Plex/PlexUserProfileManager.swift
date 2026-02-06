@@ -34,6 +34,9 @@ class PlexUserProfileManager: ObservableObject {
         }
     }
 
+    /// Set of user UUIDs that have remembered PINs (for UI updates)
+    @Published var usersWithRememberedPins: Set<String> = []
+
     // MARK: - UserDefaults Keys
 
     private let userDefaults = UserDefaults.standard
@@ -104,6 +107,9 @@ class PlexUserProfileManager: ObservableObject {
             for user in users {
                 print("👤   - \(user.displayName) (id: \(user.id), admin: \(user.admin), protected: \(user.protected))")
             }
+
+            // Update remembered PINs state for UI
+            updateRememberedPinsState()
 
             // Restore previously selected user or default to admin
             await restoreOrSelectDefaultUser()
@@ -203,16 +209,73 @@ class PlexUserProfileManager: ObservableObject {
 
     /// Reset profile state (call on sign out)
     func reset() {
+        // Clear all remembered PINs before clearing homeUsers
+        let userUUIDs = homeUsers.map { $0.uuid }
+        KeychainHelper.deleteAllPins(forUserUUIDs: userUUIDs)
+
         homeUsers = []
         selectedUser = nil
         usersError = nil
+        usersWithRememberedPins = []
 
         // Clear persisted selection
         userDefaults.removeObject(forKey: selectedUserIdKey)
         userDefaults.removeObject(forKey: selectedUserUUIDKey)
         userDefaults.removeObject(forKey: selectedUserNameKey)
 
-        print("👤 PlexUserProfileManager: Reset - cleared all profile data")
+        print("👤 PlexUserProfileManager: Reset - cleared all profile data and remembered PINs")
+    }
+
+    // MARK: - Remember PIN Methods
+
+    /// Check if a user has a remembered PIN
+    func hasRememberedPin(for user: PlexHomeUser) -> Bool {
+        KeychainHelper.hasSavedPin(forUserUUID: user.uuid)
+    }
+
+    /// Store a PIN for a user after successful validation
+    func rememberPin(_ pin: String, for user: PlexHomeUser) {
+        KeychainHelper.setPin(pin, forUserUUID: user.uuid)
+        usersWithRememberedPins.insert(user.uuid)
+        print("👤 PlexUserProfileManager: Remembered PIN for \(user.displayName)")
+    }
+
+    /// Delete a stored PIN for a user
+    func forgetPin(for user: PlexHomeUser) {
+        KeychainHelper.deletePin(forUserUUID: user.uuid)
+        usersWithRememberedPins.remove(user.uuid)
+        print("👤 PlexUserProfileManager: Forgot PIN for \(user.displayName)")
+    }
+
+    /// Attempt to select a user with their remembered PIN
+    /// - Returns: A tuple of (success: Bool, pinWasInvalid: Bool)
+    ///   - success: True if the user was successfully selected
+    ///   - pinWasInvalid: True if the remembered PIN was invalid (cleared automatically)
+    func selectUserWithRememberedPin(_ user: PlexHomeUser) async -> (success: Bool, pinWasInvalid: Bool) {
+        guard let savedPin = KeychainHelper.getPin(forUserUUID: user.uuid) else {
+            return (false, false)
+        }
+
+        let success = await selectUser(user, pin: savedPin)
+
+        if success {
+            return (true, false)
+        } else {
+            // PIN is no longer valid - clear it
+            forgetPin(for: user)
+            print("👤 PlexUserProfileManager: Remembered PIN invalid for \(user.displayName), cleared")
+            return (false, true)
+        }
+    }
+
+    /// Update the set of users with remembered PINs based on current homeUsers
+    private func updateRememberedPinsState() {
+        usersWithRememberedPins = Set(
+            homeUsers
+                .filter { KeychainHelper.hasSavedPin(forUserUUID: $0.uuid) }
+                .map { $0.uuid }
+        )
+        print("👤 PlexUserProfileManager: \(usersWithRememberedPins.count) users have remembered PINs")
     }
 
     // MARK: - Private Methods
@@ -230,9 +293,18 @@ class PlexUserProfileManager: ObservableObject {
                     print("👤 PlexUserProfileManager: Restored previous user: \(savedUser.displayName)")
                     return
                 }
+            } else if hasRememberedPin(for: savedUser) {
+                // Try remembered PIN for protected users
+                let (success, pinWasInvalid) = await selectUserWithRememberedPin(savedUser)
+                if success {
+                    print("👤 PlexUserProfileManager: Restored protected user with remembered PIN: \(savedUser.displayName)")
+                    return
+                } else if pinWasInvalid {
+                    print("👤 PlexUserProfileManager: Remembered PIN was invalid for \(savedUser.displayName)")
+                }
             }
 
-            // For protected users or if switch failed, just set locally
+            // For protected users without remembered PIN or if switch failed, just set locally
             // They'll need to re-enter PIN if they want their specific content
             selectedUser = savedUser
             print("👤 PlexUserProfileManager: Restored previous user (PIN required): \(savedUser.displayName)")

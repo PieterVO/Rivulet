@@ -29,6 +29,7 @@ final class NowPlayingService: ObservableObject {
     private var cachedArtwork: MPMediaItemArtwork?
     private var cachedArtworkURL: String?
     private var interruptionObserver: NSObjectProtocol?
+    private var inputCoordinator: PlaybackInputCoordinator?
     /// Track if we've set Now Playing info with valid duration (> 0)
     /// This prevents the system from ignoring our Now Playing registration
     private var hasValidNowPlayingInfo: Bool = false
@@ -120,11 +121,12 @@ final class NowPlayingService: ObservableObject {
     }
 
     /// Attach to a player view model to sync Now Playing state
-    func attach(to viewModel: UniversalPlayerViewModel) {
+    func attach(to viewModel: UniversalPlayerViewModel, inputCoordinator: PlaybackInputCoordinator? = nil) {
         // Detach from previous if any
         detach()
 
         self.viewModel = viewModel
+        self.inputCoordinator = inputCoordinator
 
         // Note: We use MPNowPlayingInfoCenter.default() and MPRemoteCommandCenter.shared()
         // MPNowPlayingSession requires AVPlayer instances, which we don't have with MPV
@@ -230,6 +232,7 @@ final class NowPlayingService: ObservableObject {
     func detach() {
         cancellables.removeAll()
         viewModel = nil
+        inputCoordinator = nil
         artworkTask?.cancel()
         artworkTask = nil
         hasValidNowPlayingInfo = false
@@ -245,57 +248,43 @@ final class NowPlayingService: ObservableObject {
         // Play command
         commandCenter.playCommand.isEnabled = true
         commandCenter.playCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
-                self?.viewModel?.resume()
-            }
+            self?.dispatchInputAction(.play)
             return .success
         }
 
         // Pause command
         commandCenter.pauseCommand.isEnabled = true
         commandCenter.pauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
-                self?.viewModel?.pause()
-            }
+            self?.dispatchInputAction(.pause)
             return .success
         }
 
         // Toggle play/pause
         commandCenter.togglePlayPauseCommand.isEnabled = true
         commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
-            Task { @MainActor in
-                self?.viewModel?.togglePlayPause()
-            }
+            self?.dispatchInputAction(.playPause)
             return .success
         }
 
         // Skip forward (10 seconds)
         commandCenter.skipForwardCommand.isEnabled = true
-        commandCenter.skipForwardCommand.preferredIntervals = [10]
+        commandCenter.skipForwardCommand.preferredIntervals = [NSNumber(value: InputConfig.tapSeekSeconds)]
         commandCenter.skipForwardCommand.addTarget { [weak self] event in
             guard let skipEvent = event as? MPSkipIntervalCommandEvent else {
                 return .commandFailed
             }
-            Task { @MainActor in
-                guard let viewModel = self?.viewModel else { return }
-                let newTime = min(viewModel.currentTime + skipEvent.interval, viewModel.duration)
-                await viewModel.seek(to: newTime)
-            }
+            self?.dispatchInputAction(.seekRelative(seconds: skipEvent.interval))
             return .success
         }
 
         // Skip backward (10 seconds)
         commandCenter.skipBackwardCommand.isEnabled = true
-        commandCenter.skipBackwardCommand.preferredIntervals = [10]
+        commandCenter.skipBackwardCommand.preferredIntervals = [NSNumber(value: InputConfig.tapSeekSeconds)]
         commandCenter.skipBackwardCommand.addTarget { [weak self] event in
             guard let skipEvent = event as? MPSkipIntervalCommandEvent else {
                 return .commandFailed
             }
-            Task { @MainActor in
-                guard let viewModel = self?.viewModel else { return }
-                let newTime = max(viewModel.currentTime - skipEvent.interval, 0)
-                await viewModel.seek(to: newTime)
-            }
+            self?.dispatchInputAction(.seekRelative(seconds: -skipEvent.interval))
             return .success
         }
 
@@ -305,9 +294,7 @@ final class NowPlayingService: ObservableObject {
             guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
-            Task { @MainActor in
-                await self?.viewModel?.seek(to: positionEvent.positionTime)
-            }
+            self?.dispatchInputAction(.seekAbsolute(positionEvent.positionTime))
             return .success
         }
 
@@ -319,19 +306,15 @@ final class NowPlayingService: ObservableObject {
             guard let seekEvent = event as? MPSeekCommandEvent else {
                 return .commandFailed
             }
-            Task { @MainActor in
-                guard let vm = self?.viewModel else { return }
-                switch seekEvent.type {
-                case .beginSeeking:
-                    print("🎵 NowPlaying: seekForward beginSeeking")
-                    vm.scrubInDirection(forward: true)
-                case .endSeeking:
-                    print("🎵 NowPlaying: seekForward endSeeking")
-                    // Don't auto-commit - wait for user to press play/select
-                    // Just stop the speed from increasing further
-                @unknown default:
-                    break
-                }
+            switch seekEvent.type {
+            case .beginSeeking:
+                print("🎵 NowPlaying: seekForward beginSeeking")
+                self?.dispatchInputAction(.scrubNudge(forward: true))
+            case .endSeeking:
+                print("🎵 NowPlaying: seekForward endSeeking")
+                // Keep current hold-seek behavior: no auto commit on release.
+            @unknown default:
+                break
             }
             return .success
         }
@@ -343,18 +326,15 @@ final class NowPlayingService: ObservableObject {
             guard let seekEvent = event as? MPSeekCommandEvent else {
                 return .commandFailed
             }
-            Task { @MainActor in
-                guard let vm = self?.viewModel else { return }
-                switch seekEvent.type {
-                case .beginSeeking:
-                    print("🎵 NowPlaying: seekBackward beginSeeking")
-                    vm.scrubInDirection(forward: false)
-                case .endSeeking:
-                    print("🎵 NowPlaying: seekBackward endSeeking")
-                    // Don't auto-commit - wait for user to press play/select
-                @unknown default:
-                    break
-                }
+            switch seekEvent.type {
+            case .beginSeeking:
+                print("🎵 NowPlaying: seekBackward beginSeeking")
+                self?.dispatchInputAction(.scrubNudge(forward: false))
+            case .endSeeking:
+                print("🎵 NowPlaying: seekBackward endSeeking")
+                // Keep current hold-seek behavior: no auto commit on release.
+            @unknown default:
+                break
             }
             return .success
         }
@@ -366,6 +346,40 @@ final class NowPlayingService: ObservableObject {
         commandCenter.changeShuffleModeCommand.isEnabled = false
 
         print("🎵 NowPlaying: Remote command center configured (shared)")
+    }
+
+    private func dispatchInputAction(_ action: PlaybackInputAction) {
+        if let inputCoordinator {
+            inputCoordinator.handle(action: action, source: .mpRemoteCommand)
+            return
+        }
+
+        guard let viewModel else { return }
+
+        switch action {
+        case .play:
+            viewModel.resume()
+        case .pause:
+            viewModel.pause()
+        case .playPause:
+            if viewModel.isScrubbing {
+                Task { await viewModel.commitScrub() }
+            } else {
+                viewModel.togglePlayPause()
+            }
+        case .seekRelative(let seconds):
+            Task { await viewModel.seekRelative(by: seconds) }
+        case .seekAbsolute(let time):
+            Task { await viewModel.seek(to: time) }
+        case .scrubNudge(let forward):
+            viewModel.scrubInDirection(forward: forward)
+        case .scrubCommit:
+            Task { await viewModel.commitScrub() }
+        case .scrubCancel:
+            viewModel.cancelScrub()
+        default:
+            break
+        }
     }
 
     // MARK: - Now Playing Info Updates

@@ -173,25 +173,12 @@ struct TVSidebarView: View {
             WhatsNewView(isPresented: $showWhatsNew, version: whatsNewVersion)
         }
         .onAppear {
-            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
-            let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
-            let current = "\(version) (\(build))"
-
-            print("📋 WhatsNew: current='\(current)' lastSeen='\(lastSeenBuild)'")
-            print("📋 WhatsNew: hasFeatures=\(WhatsNewView.features(for: current) != nil)")
-
-            if current != lastSeenBuild {
-                if WhatsNewView.features(for: current) != nil {
-                    whatsNewVersion = current
-                    showWhatsNew = true
-                    print("📋 WhatsNew: Showing overlay for \(current)")
-                } else {
-                    print("📋 WhatsNew: No changelog entry for \(current)")
-                }
-                lastSeenBuild = current
-            } else {
-                print("📋 WhatsNew: Already seen \(current)")
+            // Defer What's New check if profile picker needs to be shown first
+            if profileManager.showProfilePickerOnLaunch && authManager.selectedServerToken != nil {
+                print("📋 WhatsNew: Deferring check until after profile selection")
+                return
             }
+            checkAndShowWhatsNew()
         }
         // Profile picker overlay
         .fullScreenCover(isPresented: $showProfilePicker) {
@@ -212,6 +199,9 @@ struct TVSidebarView: View {
                         dataStore.startBackgroundPrefetch(libraries: dataStore.visibleVideoLibraries)
                     }
                 }
+
+                // Now show What's New if applicable (was deferred for profile picker)
+                checkAndShowWhatsNew()
             }
         }
     }
@@ -233,11 +223,13 @@ struct TVSidebarView: View {
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
                 )
+                let inputCoordinator = PlaybackInputCoordinator()
 
-                let playerView = UniversalPlayerView(viewModel: viewModel)
+                let playerView = UniversalPlayerView(viewModel: viewModel, inputCoordinator: inputCoordinator)
                 let container = PlayerContainerViewController(
                     rootView: playerView,
-                    viewModel: viewModel
+                    viewModel: viewModel,
+                    inputCoordinator: inputCoordinator
                 )
 
                 // Present from top-most view controller
@@ -619,6 +611,34 @@ struct TVSidebarView: View {
     private func navigateToSettings() {
         selectedDestination = .settings
         selectedLibraryKey = nil
+    }
+
+    // MARK: - What's New
+
+    /// Check and show What's New overlay if applicable
+    private func checkAndShowWhatsNew() {
+        // Don't show if profile picker is still pending
+        guard !isAwaitingProfileSelection else { return }
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        let current = "\(version) (\(build))"
+
+        print("📋 WhatsNew: current='\(current)' lastSeen='\(lastSeenBuild)'")
+        print("📋 WhatsNew: hasFeatures=\(WhatsNewView.features(for: current) != nil)")
+
+        if current != lastSeenBuild {
+            if WhatsNewView.features(for: current) != nil {
+                whatsNewVersion = current
+                showWhatsNew = true
+                print("📋 WhatsNew: Showing overlay for \(current)")
+            } else {
+                print("📋 WhatsNew: No changelog entry for \(current)")
+            }
+            lastSeenBuild = current
+        } else {
+            print("📋 WhatsNew: Already seen \(current)")
+        }
     }
 }
 

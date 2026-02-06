@@ -28,8 +28,7 @@ class PlayerContainerViewController: UIViewController {
     private var dPadLeftLongPressGesture: UILongPressGestureRecognizer?
     private var dPadRightLongPressGesture: UILongPressGestureRecognizer?
 
-    /// Tracks if we're currently in hold-based scrubbing from IR remote
-    private var isIRScrubbing = false
+    private let inputCoordinator: PlaybackInputCoordinator
 
     /// Reference to the player view model for handling Menu button logic
     weak var viewModel: UniversalPlayerViewModel?
@@ -39,8 +38,13 @@ class PlayerContainerViewController: UIViewController {
 
     // MARK: - Initialization
 
-    init<Content: View>(rootView: Content, viewModel: UniversalPlayerViewModel? = nil) {
+    init<Content: View>(
+        rootView: Content,
+        viewModel: UniversalPlayerViewModel? = nil,
+        inputCoordinator: PlaybackInputCoordinator
+    ) {
         self.viewModel = viewModel
+        self.inputCoordinator = inputCoordinator
         super.init(nibName: nil, bundle: nil)
 
         self.modalPresentationStyle = .fullScreen
@@ -153,6 +157,8 @@ class PlayerContainerViewController: UIViewController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        blockDismissResetWorkItem?.cancel()
+        blockDismissResetWorkItem = nil
 
         // Notify when dismissed
         if isBeingDismissed || isMovingFromParent {
@@ -172,6 +178,7 @@ class PlayerContainerViewController: UIViewController {
     /// This prevents the double-handling issue where handleMenuButton() closes something,
     /// then SwiftUI's responder chain also calls dismiss().
     private var blockNextDismiss = false
+    private var blockDismissResetWorkItem: DispatchWorkItem?
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
@@ -184,7 +191,7 @@ class PlayerContainerViewController: UIViewController {
                 if let vm = viewModel {
                     if vm.isScrubbing {
                         isHandlingSelectPress = true
-                        Task { await vm.commitScrub() }
+                        inputCoordinator.handle(action: .scrubCommit, source: .irPress)
                         return
                     } else if vm.showInfoPanel {
                         isHandlingSelectPress = true
@@ -238,32 +245,33 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
-        print("🎮 [MENU] State check: postVideo=\(vm.postVideoState), scrubbing=\(vm.isScrubbing), infoPanel=\(vm.showInfoPanel), controls=\(vm.showControls)")
-
-        if vm.postVideoState != .hidden {
-            print("🎮 [MENU] Dismissing post-video overlay and player")
-            vm.dismissPostVideo()
-            dismissPlayer()
-        } else if vm.isScrubbing {
-            print("🎮 [MENU] Cancelling scrub")
-            blockNextDismiss = true  // Block any subsequent dismiss from SwiftUI
-            vm.cancelScrub()
-        } else if vm.showInfoPanel {
-            print("🎮 [MENU] Closing info panel")
-            blockNextDismiss = true  // Block any subsequent dismiss from SwiftUI
-            withAnimation(.easeOut(duration: 0.3)) {
-                vm.showInfoPanel = false
+        if inputCoordinator.target == nil {
+            if vm.postVideoState != .hidden {
+                vm.dismissPostVideo()
+                dismissPlayer()
+            } else if vm.isScrubbing {
+                vm.cancelScrub()
+            } else if vm.showInfoPanel {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    vm.showInfoPanel = false
+                }
+            } else if vm.showControls {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    vm.showControls = false
+                }
+            } else {
+                dismissPlayer()
             }
-        } else if vm.showControls {
-            print("🎮 [MENU] Hiding controls")
-            blockNextDismiss = true  // Block any subsequent dismiss from SwiftUI
-            withAnimation(.easeOut(duration: 0.25)) {
-                vm.showControls = false
-            }
-        } else {
-            print("🎮 [MENU] Nothing to close - dismissing player")
-            dismissPlayer()
+            return
         }
+
+        // If we're consuming this menu press in-app (not dismissing), block SwiftUI fallback dismiss briefly.
+        let shouldBlockDismiss = vm.postVideoState == .hidden && (vm.isScrubbing || vm.showInfoPanel || vm.showControls)
+        if shouldBlockDismiss {
+            blockDismissTemporarily()
+        }
+
+        inputCoordinator.handle(action: .back, source: .irPress)
     }
 
     /// Handle Select button press when info panel is open
@@ -303,13 +311,13 @@ class PlayerContainerViewController: UIViewController {
         // Long press gestures for hold (start scrubbing)
         let leftLong = UILongPressGestureRecognizer(target: self, action: #selector(handleDPadLeftLongPress(_:)))
         leftLong.allowedPressTypes = [NSNumber(value: UIPress.PressType.leftArrow.rawValue)]
-        leftLong.minimumPressDuration = 0.4  // Match RemoteInputHandler's holdThreshold
+        leftLong.minimumPressDuration = InputConfig.holdThreshold
         view.addGestureRecognizer(leftLong)
         dPadLeftLongPressGesture = leftLong
 
         let rightLong = UILongPressGestureRecognizer(target: self, action: #selector(handleDPadRightLongPress(_:)))
         rightLong.allowedPressTypes = [NSNumber(value: UIPress.PressType.rightArrow.rawValue)]
-        rightLong.minimumPressDuration = 0.4
+        rightLong.minimumPressDuration = InputConfig.holdThreshold
         view.addGestureRecognizer(rightLong)
         dPadRightLongPressGesture = rightLong
 
@@ -325,18 +333,7 @@ class PlayerContainerViewController: UIViewController {
         guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
 
         print("🎮 [UIPress] Left tap - skip backward 10s")
-
-        if vm.isScrubbing {
-            // Adjust scrub position
-            vm.updateSwipeScrubPosition(by: -10)
-        } else if vm.playbackState == .paused {
-            // When paused, taps start scrubbing (match Siri Remote behavior)
-            vm.scrubInDirection(forward: false)
-        } else {
-            // Seek actual playback position
-            Task { await vm.seekRelative(by: -10) }
-        }
-        vm.showControlsTemporarily()
+        inputCoordinator.handle(action: .stepSeek(forward: false), source: .irPress)
     }
 
     @objc private func handleDPadRightTap() {
@@ -344,18 +341,7 @@ class PlayerContainerViewController: UIViewController {
         guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
 
         print("🎮 [UIPress] Right tap - skip forward 10s")
-
-        if vm.isScrubbing {
-            // Adjust scrub position
-            vm.updateSwipeScrubPosition(by: 10)
-        } else if vm.playbackState == .paused {
-            // When paused, taps start scrubbing (match Siri Remote behavior)
-            vm.scrubInDirection(forward: true)
-        } else {
-            // Seek actual playback position
-            Task { await vm.seekRelative(by: 10) }
-        }
-        vm.showControlsTemporarily()
+        inputCoordinator.handle(action: .stepSeek(forward: true), source: .irPress)
     }
 
     @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -365,9 +351,7 @@ class PlayerContainerViewController: UIViewController {
         switch gesture.state {
         case .began:
             print("🎮 [UIPress] Left long press began - start rewind scrub")
-            isIRScrubbing = true
-            vm.scrubInDirection(forward: false)
-            vm.showControlsTemporarily()
+            inputCoordinator.handle(action: .scrubNudge(forward: false), source: .irPress)
 
         case .changed:
             // Continue scrubbing - speed increases are handled by clicking again
@@ -375,8 +359,6 @@ class PlayerContainerViewController: UIViewController {
 
         case .ended, .cancelled:
             print("🎮 [UIPress] Left long press ended")
-            // Don't auto-commit - wait for user to press select/play
-            isIRScrubbing = false
 
         default:
             break
@@ -390,9 +372,7 @@ class PlayerContainerViewController: UIViewController {
         switch gesture.state {
         case .began:
             print("🎮 [UIPress] Right long press began - start fast forward scrub")
-            isIRScrubbing = true
-            vm.scrubInDirection(forward: true)
-            vm.showControlsTemporarily()
+            inputCoordinator.handle(action: .scrubNudge(forward: true), source: .irPress)
 
         case .changed:
             // Continue scrubbing - speed increases are handled by clicking again
@@ -400,8 +380,6 @@ class PlayerContainerViewController: UIViewController {
 
         case .ended, .cancelled:
             print("🎮 [UIPress] Right long press ended")
-            // Don't auto-commit - wait for user to press select/play
-            isIRScrubbing = false
 
         default:
             break
@@ -425,18 +403,14 @@ class PlayerContainerViewController: UIViewController {
         switch gesture.state {
         case .began:
             print("🎮 [PAN] Began - starting swipe scrub (paused)")
-            // Only initialize scrub position if not already scrubbing
-            // This allows multiple swipes to accumulate
-            if !vm.isScrubbing {
-                vm.startSwipeScrubbing()
-            }
+            inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
 
         case .changed:
             // Proportional scrubbing: horizontal translation maps to seek time
             // Sensitivity: ~1 second per 2 points of horizontal movement
             // Positive translation.x = swipe right = forward
             let seekDelta = translation.x * 0.5
-            vm.updateSwipeScrubPosition(by: seekDelta)
+            inputCoordinator.handle(action: .scrubRelative(seconds: seekDelta), source: .irPress)
             gesture.setTranslation(.zero, in: view)
 
         case .ended, .cancelled:
@@ -444,7 +418,7 @@ class PlayerContainerViewController: UIViewController {
             // If significant horizontal velocity, apply a final "flick" adjustment
             if abs(velocity.x) > 500 {
                 let flickSeekDelta = velocity.x * 0.02  // Small multiplier for flick
-                vm.updateSwipeScrubPosition(by: flickSeekDelta)
+                inputCoordinator.handle(action: .scrubRelative(seconds: flickSeekDelta), source: .irPress)
             }
             // Don't auto-commit - wait for user to press play/select to confirm position
 
@@ -458,6 +432,18 @@ class PlayerContainerViewController: UIViewController {
         super.dismiss(animated: true) { [weak self] in
             self?.onDismiss?()
         }
+    }
+
+    private func blockDismissTemporarily() {
+        blockNextDismiss = true
+        blockDismissResetWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.blockNextDismiss = false
+            self?.blockDismissResetWorkItem = nil
+        }
+        blockDismissResetWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + InputConfig.blockDismissTimeout, execute: workItem)
     }
 }
 

@@ -254,8 +254,41 @@ actor PlexLiveTVProvider: LiveTVProvider {
     }
 
     nonisolated func buildStreamURL(for channel: UnifiedChannel) -> URL? {
-        // The stream URL is already built into the channel
-        return channel.streamURL
+        guard let originalURL = channel.streamURL else {
+            print("📺 PlexLiveTVProvider.buildStreamURL: No stream URL for channel '\(channel.name)'")
+            return nil
+        }
+
+        // For Plex transcode URLs, generate a fresh session ID each time
+        // The session ID was baked in when channels were fetched, but Plex
+        // may reject reused session IDs for subsequent playback attempts
+        guard originalURL.path.contains("/transcode/") else {
+            // HDHomeRun or other direct URLs - use as-is
+            print("📺 PlexLiveTVProvider.buildStreamURL: Using direct URL for '\(channel.name)' (HDHomeRun)")
+            return originalURL
+        }
+
+        // Replace the session parameter with a fresh UUID
+        guard var components = URLComponents(url: originalURL, resolvingAgainstBaseURL: false) else {
+            print("📺 PlexLiveTVProvider.buildStreamURL: Failed to parse URL components for '\(channel.name)'")
+            return originalURL
+        }
+
+        let newSessionId = UUID().uuidString.uppercased()
+        var queryItems = components.queryItems ?? []
+
+        // Find and replace the session parameter
+        if let sessionIndex = queryItems.firstIndex(where: { $0.name == "session" }) {
+            queryItems[sessionIndex] = URLQueryItem(name: "session", value: newSessionId)
+        } else {
+            // No session parameter exists, add one
+            queryItems.append(URLQueryItem(name: "session", value: newSessionId))
+        }
+
+        components.queryItems = queryItems
+        let newURL = components.url ?? originalURL
+        print("📺 PlexLiveTVProvider.buildStreamURL: Generated fresh session '\(newSessionId.prefix(8))...' for '\(channel.name)' (Plex transcode)")
+        return newURL
     }
 
     // MARK: - Private Methods

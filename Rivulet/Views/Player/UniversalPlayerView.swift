@@ -18,17 +18,23 @@ import GameController
 /// Reads dpad position synchronously when button is pressed to avoid race conditions.
 @MainActor
 final class RemoteInputHandler: ObservableObject {
-    private var holdTimer: Timer?
-    private var clickedDirection: Bool?  // direction when click started
-    private var currentDpadDirection: Bool?  // current finger position (just tracking)
-    private var isButtonDown = false  // true while buttonA is pressed
-    private let holdThreshold: TimeInterval = 0.4
+    private enum DirectionalInputKey: Hashable {
+        case microClick
+        case extendedLeft
+        case extendedRight
+        case keyboardLeft
+        case keyboardRight
+    }
+
+    private var holdTimers: [DirectionalInputKey: Timer] = [:]
+    private var holdDirections: [DirectionalInputKey: Bool] = [:]
+    private var clickedDirection: Bool?
+    private var currentDpadDirection: Bool?
+    private var isButtonDown = false
 
     // Click wheel rotation tracking (iPod-style)
     private var lastAngle: Float?
     private var accumulatedRotation: Float = 0
-    private let rotationThreshold: Float = 0.3  // ~17 degrees before triggering
-    private let radiusThreshold: Float = 0.7    // Only track rotation on outer edge
 
     // Check viewModel's scrubbing state (single source of truth)
     var isScrubbingCheck: (() -> Bool)?
@@ -41,14 +47,12 @@ final class RemoteInputHandler: ObservableObject {
     // Check if player is paused (taps start scrubbing when paused)
     var isPausedCheck: (() -> Bool)?
 
-    var onTap: ((Bool) -> Void)?           // forward: Bool
-    var onScrubStart: ((Bool) -> Void)?    // forward: Bool
-    var onSpeedChange: ((Bool) -> Void)?   // forward: Bool
-    var onScrubConfirm: (() -> Void)?
-    var onScrubCancel: (() -> Void)?
-    var onWheelRotation: ((Float) -> Void)?  // rotation delta in radians (clockwise = positive)
+    var onAction: ((PlaybackInputAction, PlaybackInputSource) -> Void)?
 
     private var controllerObserver: NSObjectProtocol?
+    private var controllerDisconnectObserver: NSObjectProtocol?
+    private var keyboardConnectObserver: NSObjectProtocol?
+    private var keyboardDisconnectObserver: NSObjectProtocol?
 
     private var isScrubbing: Bool {
         isScrubbingCheck?() ?? false
@@ -58,6 +62,7 @@ final class RemoteInputHandler: ObservableObject {
         for controller in GCController.controllers() {
             setupController(controller)
         }
+        setupKeyboard()
 
         controllerObserver = NotificationCenter.default.addObserver(
             forName: .GCControllerDidConnect,
@@ -65,29 +70,97 @@ final class RemoteInputHandler: ObservableObject {
             queue: .main
         ) { [weak self] notification in
             if let controller = notification.object as? GCController {
-                self?.setupController(controller)
+                Task { @MainActor [weak self] in
+                    self?.setupController(controller)
+                }
+            }
+        }
+
+        controllerDisconnectObserver = NotificationCenter.default.addObserver(
+            forName: .GCControllerDidDisconnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let controller = notification.object as? GCController {
+                Task { @MainActor [weak self] in
+                    self?.teardownController(controller)
+                }
+            }
+        }
+
+        keyboardConnectObserver = NotificationCenter.default.addObserver(
+            forName: .GCKeyboardDidConnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.setupKeyboard()
+            }
+        }
+
+        keyboardDisconnectObserver = NotificationCenter.default.addObserver(
+            forName: .GCKeyboardDidDisconnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.teardownKeyboard()
             }
         }
     }
 
     func stopMonitoring() {
         for controller in GCController.controllers() {
-            controller.microGamepad?.dpad.valueChangedHandler = nil
-            controller.microGamepad?.buttonA.pressedChangedHandler = nil
+            teardownController(controller)
         }
+        teardownKeyboard()
+
         if let observer = controllerObserver {
             NotificationCenter.default.removeObserver(observer)
             controllerObserver = nil
         }
-        holdTimer?.invalidate()
-        holdTimer = nil
+        if let observer = controllerDisconnectObserver {
+            NotificationCenter.default.removeObserver(observer)
+            controllerDisconnectObserver = nil
+        }
+        if let observer = keyboardConnectObserver {
+            NotificationCenter.default.removeObserver(observer)
+            keyboardConnectObserver = nil
+        }
+        if let observer = keyboardDisconnectObserver {
+            NotificationCenter.default.removeObserver(observer)
+            keyboardDisconnectObserver = nil
+        }
+        holdTimers.values.forEach { $0.invalidate() }
+        holdTimers.removeAll()
+        holdDirections.removeAll()
     }
 
     private func setupController(_ controller: GCController) {
-        guard let micro = controller.microGamepad else { return }
-        micro.reportsAbsoluteDpadValues = true
+        if let extended = controller.extendedGamepad {
+            setupExtendedGamepad(extended)
+            return
+        }
 
-        let threshold: Float = 0.3
+        guard let micro = controller.microGamepad else { return }
+        setupMicroGamepad(micro)
+    }
+
+    private func teardownController(_ controller: GCController) {
+        controller.microGamepad?.dpad.valueChangedHandler = nil
+        controller.microGamepad?.buttonA.pressedChangedHandler = nil
+
+        controller.extendedGamepad?.dpad.left.pressedChangedHandler = nil
+        controller.extendedGamepad?.dpad.right.pressedChangedHandler = nil
+        controller.extendedGamepad?.leftShoulder.pressedChangedHandler = nil
+        controller.extendedGamepad?.rightShoulder.pressedChangedHandler = nil
+        controller.extendedGamepad?.buttonA.pressedChangedHandler = nil
+        controller.extendedGamepad?.buttonB.pressedChangedHandler = nil
+        controller.extendedGamepad?.buttonX.pressedChangedHandler = nil
+    }
+
+    private func setupMicroGamepad(_ micro: GCMicroGamepad) {
+        micro.reportsAbsoluteDpadValues = true
 
         // Track dpad position and detect circular rotation (iPod-style click wheel)
         micro.dpad.valueChangedHandler = { [weak self] (dpad, xValue, yValue) in
@@ -98,9 +171,9 @@ final class RemoteInputHandler: ObservableObject {
                 return
             }
 
-            let dir: Bool? = if xValue > threshold {
+            let dir: Bool? = if xValue > InputConfig.dpadThreshold {
                 true  // right
-            } else if xValue < -threshold {
+            } else if xValue < -InputConfig.dpadThreshold {
                 false  // left
             } else {
                 nil  // center
@@ -121,7 +194,7 @@ final class RemoteInputHandler: ObservableObject {
                 self.currentDpadDirection = dir
 
                 // Click wheel rotation: only track when finger is on outer edge
-                if radius > self.radiusThreshold {
+                if radius > InputConfig.wheelRadiusThreshold {
                     if let lastAngle = self.lastAngle {
                         var delta = angle - lastAngle
 
@@ -132,10 +205,13 @@ final class RemoteInputHandler: ObservableObject {
                         self.accumulatedRotation += delta
 
                         // Trigger rotation callback when threshold exceeded
-                        if abs(self.accumulatedRotation) > self.rotationThreshold {
+                        if abs(self.accumulatedRotation) > InputConfig.wheelRotationThreshold {
                             let rotation = self.accumulatedRotation
                             self.accumulatedRotation = 0
-                            self.onWheelRotation?(rotation)
+                            if self.isPausedCheck?() == true {
+                                let seekSeconds = TimeInterval(rotation) * InputConfig.wheelSecondsPerRadian
+                                self.emit(.scrubRelative(seconds: seekSeconds), source: .siriMicroGamepad)
+                            }
                         }
                     }
                     self.lastAngle = angle
@@ -168,10 +244,126 @@ final class RemoteInputHandler: ObservableObject {
                     self.handleClickDown(direction: self.currentDpadDirection)
                 } else {
                     self.isButtonDown = false
-                    self.handleClickUp()
+                    self.handleClickUp(source: .siriMicroGamepad)
                 }
             }
         }
+    }
+
+    private func setupExtendedGamepad(_ extended: GCExtendedGamepad) {
+        extended.leftShoulder.pressedChangedHandler = { [weak self] _, _, pressed in
+            guard pressed else { return }
+            Task { @MainActor [weak self] in
+                self?.emit(.jumpSeek(forward: false), source: .extendedGamepad)
+            }
+        }
+
+        extended.rightShoulder.pressedChangedHandler = { [weak self] _, _, pressed in
+            guard pressed else { return }
+            Task { @MainActor [weak self] in
+                self?.emit(.jumpSeek(forward: true), source: .extendedGamepad)
+            }
+        }
+
+        extended.buttonA.pressedChangedHandler = { [weak self] _, _, pressed in
+            guard pressed else { return }
+            Task { @MainActor [weak self] in
+                self?.emit(.playPause, source: .extendedGamepad)
+            }
+        }
+
+        extended.buttonB.pressedChangedHandler = { [weak self] _, _, pressed in
+            guard pressed else { return }
+            Task { @MainActor [weak self] in
+                self?.emit(.back, source: .extendedGamepad)
+            }
+        }
+
+        extended.buttonX.pressedChangedHandler = { [weak self] _, _, pressed in
+            guard pressed else { return }
+            Task { @MainActor [weak self] in
+                self?.emit(.showInfo, source: .extendedGamepad)
+            }
+        }
+
+        extended.dpad.left.pressedChangedHandler = { [weak self] _, _, pressed in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if pressed {
+                    self.beginDirectionalInput(key: .extendedLeft, forward: false, source: .extendedGamepad)
+                } else {
+                    self.endDirectionalInput(key: .extendedLeft, source: .extendedGamepad)
+                }
+            }
+        }
+
+        extended.dpad.right.pressedChangedHandler = { [weak self] _, _, pressed in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if pressed {
+                    self.beginDirectionalInput(key: .extendedRight, forward: true, source: .extendedGamepad)
+                } else {
+                    self.endDirectionalInput(key: .extendedRight, source: .extendedGamepad)
+                }
+            }
+        }
+    }
+
+    private func setupKeyboard() {
+        guard let keyboardInput = GCKeyboard.coalesced?.keyboardInput else { return }
+
+        keyboardInput.keyChangedHandler = { [weak self] keyboard, _, keyCode, pressed in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                switch keyCode {
+                case .spacebar:
+                    if pressed { self.emit(.playPause, source: .keyboard) }
+                case .returnOrEnter:
+                    if pressed { self.emit(.playPause, source: .keyboard) }
+                case .escape:
+                    if pressed { self.emit(.back, source: .keyboard) }
+                case .keyI:
+                    if pressed { self.emit(.showInfo, source: .keyboard) }
+                case .leftArrow:
+                    if pressed {
+                        self.beginDirectionalInput(key: .keyboardLeft, forward: false, source: .keyboard)
+                    } else {
+                        self.endDirectionalInput(
+                            key: .keyboardLeft,
+                            source: .keyboard,
+                            tapAction: self.isShiftPressed(keyboard) ? .jumpSeek(forward: false) : .stepSeek(forward: false)
+                        )
+                    }
+                case .rightArrow:
+                    if pressed {
+                        self.beginDirectionalInput(key: .keyboardRight, forward: true, source: .keyboard)
+                    } else {
+                        self.endDirectionalInput(
+                            key: .keyboardRight,
+                            source: .keyboard,
+                            tapAction: self.isShiftPressed(keyboard) ? .jumpSeek(forward: true) : .stepSeek(forward: true)
+                        )
+                    }
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    private func teardownKeyboard() {
+        GCKeyboard.coalesced?.keyboardInput?.keyChangedHandler = nil
+    }
+
+    private func isShiftPressed(_ keyboard: GCKeyboardInput) -> Bool {
+        let leftShift = keyboard.button(forKeyCode: .leftShift)?.isPressed ?? false
+        let rightShift = keyboard.button(forKeyCode: .rightShift)?.isPressed ?? false
+        return leftShift || rightShift
+    }
+
+    private func emit(_ action: PlaybackInputAction, source: PlaybackInputSource) {
+        onAction?(action, source)
     }
 
     private func handleClickDown(direction: Bool?) {
@@ -181,58 +373,77 @@ final class RemoteInputHandler: ObservableObject {
             // Center click - handled by SwiftUI (play/pause) or confirm scrub
             if isScrubbing {
                 print("🎮 [Remote] Center click confirms scrub")
-                holdTimer?.invalidate()
-                holdTimer = nil
-                onScrubConfirm?()
+                endDirectionalInput(key: .microClick, source: .siriMicroGamepad)
+                emit(.scrubCommit, source: .siriMicroGamepad)
             }
+            return
+        }
+
+        clickedDirection = forward
+        beginDirectionalInput(key: .microClick, forward: forward, source: .siriMicroGamepad)
+    }
+
+    private func handleClickUp(source: PlaybackInputSource) {
+        print("🎮 [Remote] Click UP, clickedDirection: \(clickedDirection.map { $0 ? "RIGHT" : "LEFT" } ?? "nil")")
+        if let forward = clickedDirection {
+            let action: PlaybackInputAction = .stepSeek(forward: forward)
+            endDirectionalInput(key: .microClick, source: source, tapAction: action)
+        }
+        clickedDirection = nil
+    }
+
+    private func beginDirectionalInput(key: DirectionalInputKey, forward: Bool, source: PlaybackInputSource) {
+        if isErrorCheck?() == true {
+            return
+        }
+        if isPostVideoCheck?() == true {
             return
         }
 
         let activelyScrubbingWithTimer = isActivelyScrubbing?() ?? false
         if isScrubbing && activelyScrubbingWithTimer {
-            // Actively scrubbing with timer (hold-based) - click changes speed
-            print("🎮 [Remote] Speed change while scrubbing")
-            onSpeedChange?(forward)
-        } else {
-            // Not scrubbing, OR passively scrubbing (swipe/wheel) - allow tap detection
-            // Start hold detection
-            clickedDirection = forward
-            holdTimer?.invalidate()
-            holdTimer = Timer.scheduledTimer(withTimeInterval: holdThreshold, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.clickedDirection != nil else { return }
-                    print("🎮 [Remote] Hold detected - starting scrub")
-                    self.onScrubStart?(forward)
-                }
+            emit(.scrubNudge(forward: forward), source: source)
+            return
+        }
+
+        holdDirections[key] = forward
+        holdTimers[key]?.invalidate()
+        holdTimers[key] = Timer.scheduledTimer(withTimeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.holdDirections[key] != nil else { return }
+                self.emit(.scrubNudge(forward: forward), source: source)
             }
         }
     }
 
-    private func handleClickUp() {
-        print("🎮 [Remote] Click UP, clickedDirection: \(clickedDirection.map { $0 ? "RIGHT" : "LEFT" } ?? "nil")")
-
-        // If hold timer is still running, it was a tap (quick click)
-        if let timer = holdTimer, timer.isValid {
-            timer.invalidate()
-            holdTimer = nil
-
-            if let forward = clickedDirection, !isScrubbing {
-                // When paused, taps start scrubbing instead of seeking
-                if isPausedCheck?() == true {
-                    print("🎮 [Remote] Tap while paused - starting scrub \(forward ? "forward" : "backward")")
-                    onScrubStart?(forward)
-                } else {
-                    print("🎮 [Remote] Tap detected - seeking \(forward ? "+10s" : "-10s")")
-                    onTap?(forward)
-                }
-            }
+    private func endDirectionalInput(
+        key: DirectionalInputKey,
+        source: PlaybackInputSource,
+        tapAction: PlaybackInputAction? = nil
+    ) {
+        defer {
+            holdTimers[key]?.invalidate()
+            holdTimers[key] = nil
+            holdDirections[key] = nil
         }
-        clickedDirection = nil
+
+        guard let timer = holdTimers[key], timer.isValid else { return }
+        timer.invalidate()
+
+        if let tapAction {
+            emit(tapAction, source: source)
+            return
+        }
+
+        if let forward = holdDirections[key] {
+            emit(.stepSeek(forward: forward), source: source)
+        }
     }
 
     func reset() {
-        holdTimer?.invalidate()
-        holdTimer = nil
+        holdTimers.values.forEach { $0.invalidate() }
+        holdTimers.removeAll()
+        holdDirections.removeAll()
         clickedDirection = nil
         currentDpadDirection = nil
         isButtonDown = false
@@ -243,11 +454,233 @@ final class RemoteInputHandler: ObservableObject {
 }
 #endif
 
+#if os(tvOS)
+@MainActor
+private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
+    weak var viewModel: UniversalPlayerViewModel?
+    var onResetRemoteInput: (() -> Void)?
+
+    init(viewModel: UniversalPlayerViewModel) {
+        self.viewModel = viewModel
+    }
+
+    var isScrubbingForInput: Bool {
+        viewModel?.isScrubbing ?? false
+    }
+
+    private func transitionForScrubNudge(
+        wasScrubbing: Bool,
+        speedBefore: Int,
+        speedAfter: Int
+    ) -> PlaybackInputTelemetry.ScrubTransition {
+        if !wasScrubbing || speedBefore == 0 {
+            return .start
+        }
+
+        let beforeDirection = speedBefore > 0 ? 1 : -1
+        let afterDirection = speedAfter > 0 ? 1 : -1
+        if beforeDirection != afterDirection {
+            return .reverse
+        }
+        if abs(speedAfter) > abs(speedBefore) {
+            return .speedUp
+        }
+        if abs(speedAfter) < abs(speedBefore) {
+            return .slowDown
+        }
+        return .start
+    }
+
+    func handleInputAction(_ action: PlaybackInputAction, source: PlaybackInputSource) {
+        guard let vm = viewModel else { return }
+
+        if vm.playbackState.isFailed {
+            if case .back = action {
+                vm.shouldDismiss = true
+            }
+            return
+        }
+
+        switch action {
+        case .play:
+            if vm.isScrubbing {
+                let speedBefore = vm.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .vod,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                Task { await vm.commitScrub() }
+                onResetRemoteInput?()
+            } else {
+                vm.resume()
+            }
+            vm.showControlsTemporarily()
+
+        case .pause:
+            if vm.isScrubbing {
+                let speedBefore = vm.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .vod,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                Task { await vm.commitScrub() }
+                onResetRemoteInput?()
+            } else {
+                vm.pause()
+            }
+            vm.showControlsTemporarily()
+
+        case .playPause:
+            if vm.isScrubbing {
+                let speedBefore = vm.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .vod,
+                    transition: .commit,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                Task { await vm.commitScrub() }
+                onResetRemoteInput?()
+            } else {
+                vm.togglePlayPause()
+            }
+            vm.showControlsTemporarily()
+
+        case .seekRelative(let seconds):
+            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            if vm.isScrubbing {
+                vm.updateSwipeScrubPosition(by: seconds)
+            } else {
+                Task { await vm.seekRelative(by: seconds) }
+            }
+            vm.showControlsTemporarily()
+
+        case .seekAbsolute(let time):
+            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            Task { await vm.seek(to: time) }
+            vm.showControlsTemporarily()
+
+        case .stepSeek, .jumpSeek:
+            break
+
+        case .scrubNudge(let forward):
+            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            let wasScrubbing = vm.isScrubbing
+            let speedBefore = vm.scrubSpeed
+            vm.scrubInDirection(forward: forward)
+            let speedAfter = vm.scrubSpeed
+            PlaybackInputTelemetry.shared.recordScrubTransition(
+                surface: .vod,
+                transition: transitionForScrubNudge(
+                    wasScrubbing: wasScrubbing,
+                    speedBefore: speedBefore,
+                    speedAfter: speedAfter
+                ),
+                source: source,
+                speedBefore: speedBefore,
+                speedAfter: speedAfter
+            )
+            vm.showControlsTemporarily()
+
+        case .scrubRelative(let seconds):
+            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.playbackState == .paused else { return }
+            vm.updateSwipeScrubPosition(by: seconds)
+            vm.showControlsTemporarily()
+
+        case .scrubCommit:
+            guard vm.isScrubbing else { return }
+            let speedBefore = vm.scrubSpeed
+            PlaybackInputTelemetry.shared.recordScrubTransition(
+                surface: .vod,
+                transition: .commit,
+                source: source,
+                speedBefore: speedBefore,
+                speedAfter: 0
+            )
+            Task { await vm.commitScrub() }
+            onResetRemoteInput?()
+            vm.showControlsTemporarily()
+
+        case .scrubCancel:
+            guard vm.isScrubbing else { return }
+            let speedBefore = vm.scrubSpeed
+            PlaybackInputTelemetry.shared.recordScrubTransition(
+                surface: .vod,
+                transition: .cancel,
+                source: source,
+                speedBefore: speedBefore,
+                speedAfter: 0
+            )
+            vm.cancelScrub()
+            onResetRemoteInput?()
+
+        case .showInfo:
+            guard vm.postVideoState == .hidden else { return }
+            if vm.isScrubbing {
+                let speedBefore = vm.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .vod,
+                    transition: .cancel,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                vm.cancelScrub()
+                onResetRemoteInput?()
+            }
+            if !vm.showInfoPanel {
+                vm.resetSettingsPanel()
+                withAnimation(.easeOut(duration: 0.3)) {
+                    vm.showInfoPanel = true
+                }
+            }
+
+        case .back:
+            if vm.postVideoState != .hidden {
+                vm.dismissPostVideo()
+                vm.shouldDismiss = true
+            } else if vm.isScrubbing {
+                let speedBefore = vm.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .vod,
+                    transition: .cancel,
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: 0
+                )
+                vm.cancelScrub()
+                onResetRemoteInput?()
+            } else if vm.showInfoPanel {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    vm.showInfoPanel = false
+                }
+            } else if vm.showControls {
+                withAnimation(.easeOut(duration: 0.25)) {
+                    vm.showControls = false
+                }
+            } else {
+                vm.shouldDismiss = true
+            }
+        }
+    }
+}
+#endif
+
 struct UniversalPlayerView: View {
     @StateObject private var viewModel: UniversalPlayerViewModel
     @StateObject private var focusScopeManager = FocusScopeManager()
     #if os(tvOS)
     @StateObject private var remoteInput = RemoteInputHandler()
+    @State private var inputTarget: UniversalPlaybackInputTarget?
+    private let inputCoordinator: PlaybackInputCoordinator
     #endif
     @Environment(\.dismiss) private var dismiss
 
@@ -257,11 +690,30 @@ struct UniversalPlayerView: View {
     @FocusState private var isSkipButtonFocused: Bool
 
     /// Initialize with metadata (creates viewModel internally)
+    @MainActor
     init(
         metadata: PlexMetadata,
         serverURL: String,
         authToken: String,
         startOffset: TimeInterval? = nil
+    ) {
+        self.init(
+            metadata: metadata,
+            serverURL: serverURL,
+            authToken: authToken,
+            startOffset: startOffset,
+            inputCoordinator: PlaybackInputCoordinator()
+        )
+    }
+
+    /// Initialize with metadata (creates viewModel internally)
+    @MainActor
+    init(
+        metadata: PlexMetadata,
+        serverURL: String,
+        authToken: String,
+        startOffset: TimeInterval? = nil,
+        inputCoordinator: PlaybackInputCoordinator
     ) {
         _viewModel = StateObject(wrappedValue: UniversalPlayerViewModel(
             metadata: metadata,
@@ -269,11 +721,24 @@ struct UniversalPlayerView: View {
             authToken: authToken,
             startOffset: startOffset
         ))
+        #if os(tvOS)
+        self.inputCoordinator = inputCoordinator
+        #endif
     }
 
     /// Initialize with an externally-created viewModel (for UIViewController presentation)
+    @MainActor
     init(viewModel: UniversalPlayerViewModel) {
+        self.init(viewModel: viewModel, inputCoordinator: PlaybackInputCoordinator())
+    }
+
+    /// Initialize with an externally-created viewModel and shared input coordinator.
+    @MainActor
+    init(viewModel: UniversalPlayerViewModel, inputCoordinator: PlaybackInputCoordinator) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        #if os(tvOS)
+        self.inputCoordinator = inputCoordinator
+        #endif
     }
 
     var body: some View {
@@ -302,7 +767,7 @@ struct UniversalPlayerView: View {
 
             if viewModel.showInfoPanel {
                 // Play/pause should still work when panel is open
-                viewModel.togglePlayPause()
+                inputCoordinator.handle(action: .playPause, source: .swiftUICommand)
             } else {
                 handleSelectCommand()
             }
@@ -320,6 +785,13 @@ struct UniversalPlayerView: View {
         .onAppear {
             #if os(tvOS)
             // Wire up remote input callbacks
+            let target = UniversalPlaybackInputTarget(viewModel: viewModel)
+            target.onResetRemoteInput = { [remoteInput] in
+                remoteInput.reset()
+            }
+            inputTarget = target
+            inputCoordinator.target = target
+
             remoteInput.isScrubbingCheck = { [weak viewModel] in
                 viewModel?.isScrubbing ?? false
             }
@@ -337,42 +809,8 @@ struct UniversalPlayerView: View {
             remoteInput.isPausedCheck = { [weak viewModel] in
                 viewModel?.playbackState == .paused
             }
-            remoteInput.onTap = { [weak viewModel] forward in
-                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                if vm.isScrubbing {
-                    // Passively scrubbing (swipe/wheel) - adjust scrub position
-                    vm.updateSwipeScrubPosition(by: forward ? 10 : -10)
-                } else {
-                    // Not scrubbing - seek actual playback position
-                    Task { await vm.seekRelative(by: forward ? 10 : -10) }
-                }
-                vm.showControlsTemporarily()
-            }
-            remoteInput.onScrubStart = { [weak viewModel] forward in
-                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                vm.scrubInDirection(forward: forward)
-                vm.showControlsTemporarily()
-            }
-            remoteInput.onSpeedChange = { [weak viewModel] forward in
-                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                vm.scrubInDirection(forward: forward)
-                vm.showControlsTemporarily()
-            }
-            remoteInput.onWheelRotation = { [weak viewModel] radians in
-                guard let vm = viewModel, !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
-                // Click wheel scrubbing only works when paused (same as swipe)
-                guard vm.playbackState == .paused else { return }
-                vm.handleWheelRotation(radians)
-                vm.showControlsTemporarily()
-            }
-            remoteInput.onScrubConfirm = { [weak viewModel] in
-                guard let vm = viewModel else { return }
-                // Commit scrub position and resume playback
-                Task {
-                    await vm.commitScrub()
-                    vm.resume()
-                }
-                vm.showControlsTemporarily()
+            remoteInput.onAction = { [inputCoordinator] action, source in
+                inputCoordinator.handle(action: action, source: source)
             }
             remoteInput.startMonitoring()
             #endif
@@ -380,30 +818,35 @@ struct UniversalPlayerView: View {
         .task {
             guard !hasStartedPlayback else { return }
             hasStartedPlayback = true
+            // Notify that playback is starting (pauses hub polling)
+            NotificationCenter.default.post(name: .plexPlaybackStarted, object: nil)
             // Activate player scope when player starts
             focusScopeManager.activate(.player)
             // Activate audio session BEFORE playback starts
             // This ensures MPV's AudioUnit is created with correct session config
+            #if os(tvOS)
+            NowPlayingService.shared.attach(to: viewModel, inputCoordinator: inputCoordinator)
+            #else
             NowPlayingService.shared.attach(to: viewModel)
+            #endif
             await viewModel.startPlayback()
         }
         .onDisappear {
+            // Notify that playback is stopping (resumes hub polling)
+            NotificationCenter.default.post(name: .plexPlaybackStopped, object: nil)
             // Stop playback first, then detach from Now Playing
             // (audio session must remain active until player stops)
             viewModel.stopPlayback()
             NowPlayingService.shared.detach()
-            reportFinalProgress()
+            reportFinalProgressAndRefresh()
             #if os(tvOS)
             remoteInput.stopMonitoring()
             remoteInput.reset()
+            inputCoordinator.invalidate()
+            inputTarget = nil
             #endif
             // Deactivate player scope when leaving
             focusScopeManager.deactivate()
-            // Notify that Plex data should be refreshed (watch progress may have changed)
-            // Delay slightly to let Plex server process the progress update before we request fresh hubs
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
-            }
         }
         .onChange(of: viewModel.currentTime) { _, newTime in
             // Report progress periodically
@@ -928,11 +1371,10 @@ struct UniversalPlayerView: View {
         viewModel.hidePausedPoster()
 
         switch direction {
-        case .left, .right:
-            // Left/right are handled by GameController via RemoteHoldDetector
-            // which gives us actual press/release timing for tap vs hold detection.
-            // We ignore onMoveCommand for these directions.
-            break
+        case .left:
+            inputCoordinator.handle(action: .stepSeek(forward: false), source: .swiftUICommand)
+        case .right:
+            inputCoordinator.handle(action: .stepSeek(forward: true), source: .swiftUICommand)
         case .down:
             if isSkipButtonFocused {
                 // Down from skip button: unfocus skip button, show controls
@@ -942,15 +1384,9 @@ struct UniversalPlayerView: View {
             }
             // Show info panel (cancels any active scrubbing)
             if viewModel.isScrubbing {
-                viewModel.cancelScrub()
-                remoteInput.reset()
+                inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
             }
-            if !viewModel.showInfoPanel {
-                viewModel.resetSettingsPanel()
-                withAnimation(.easeOut(duration: 0.3)) {
-                    viewModel.showInfoPanel = true
-                }
-            }
+            inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
         case .up:
             // If skip button is visible and controls are showing, focus skip button
             if viewModel.showSkipButton && viewModel.showControls && !isSkipButtonFocused {
@@ -959,8 +1395,7 @@ struct UniversalPlayerView: View {
             }
             // Cancel scrubbing on up
             if viewModel.isScrubbing {
-                viewModel.cancelScrub()
-                remoteInput.reset()
+                inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
             }
         @unknown default:
             break
@@ -975,19 +1410,7 @@ struct UniversalPlayerView: View {
             Task { await viewModel.skipActiveMarker() }
             return
         }
-        if viewModel.isScrubbing {
-            // Commit scrub position and resume playback
-            // (swipe-scrubbing only works when paused, so resume after confirming position)
-            Task {
-                await viewModel.commitScrub()
-                viewModel.resume()
-            }
-            remoteInput.reset()
-        } else {
-            // Normal play/pause toggle
-            viewModel.togglePlayPause()
-        }
-        viewModel.showControlsTemporarily()
+        inputCoordinator.handle(action: .playPause, source: .swiftUICommand)
     }
     #endif
 
@@ -1010,8 +1433,9 @@ struct UniversalPlayerView: View {
         }
     }
 
-    private func reportFinalProgress() {
+    private func reportFinalProgressAndRefresh() {
         Task {
+            // 1. Report stopped state to Plex
             await PlexProgressReporter.shared.reportProgress(
                 ratingKey: viewModel.metadata.ratingKey ?? "",
                 time: viewModel.currentTime,
@@ -1020,11 +1444,19 @@ struct UniversalPlayerView: View {
                 forceReport: true
             )
 
-            // Mark as watched if > 90% complete
+            // 2. Mark as watched if > 90% complete
             if viewModel.duration > 0 && viewModel.currentTime / viewModel.duration > 0.9 {
                 await PlexProgressReporter.shared.markAsWatched(
                     ratingKey: viewModel.metadata.ratingKey ?? ""
                 )
+            }
+
+            // 3. Wait for Plex server to process (2 seconds)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+            // 4. Trigger refresh after progress is confirmed
+            await MainActor.run {
+                NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
             }
         }
     }

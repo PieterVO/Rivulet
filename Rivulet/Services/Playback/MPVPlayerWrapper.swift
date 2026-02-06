@@ -38,6 +38,7 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
 
     /// The URL that was actually loaded into MPV (preserved for error reporting)
     private var loadedURL: URL?
+    private let debugId = String(UUID().uuidString.prefix(8))
 
     // MARK: - Publishers
 
@@ -93,11 +94,13 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
 
     override init() {
         super.init()
+        print("🎬 [MPVWrapper \(debugId)] init")
     }
 
     // MARK: - Playback Controls
 
     func load(url: URL, headers: [String: String]?, startTime: TimeInterval?) async throws {
+        print("🎬 [MPVWrapper \(debugId)] load url=\(url.absoluteString), hasController=\(playerController != nil), startTime=\(startTime ?? 0)")
         playbackStateSubject.send(.loading)
 
         // Store for when controller is ready
@@ -117,6 +120,7 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
 
     /// Called when the view creates the player controller
     func setPlayerController(_ controller: MPVMetalViewController) {
+        print("🎬 [MPVWrapper \(debugId)] setPlayerController controller=\(ObjectIdentifier(controller)) pendingURL=\(pendingURL?.absoluteString ?? "nil")")
         self.playerController = controller
         controller.delegate = self
 
@@ -141,6 +145,7 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
     }
 
     func stop() {
+        print("🎬 [MPVWrapper \(debugId)] stop hasController=\(playerController != nil), loadedURL=\(loadedURL?.absoluteString ?? "nil")")
         // Clear delegate first to prevent callbacks during shutdown
         playerController?.delegate = nil
         playerController?.stop()
@@ -196,6 +201,10 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
         loadedURL = nil
         playbackStateSubject.send(.idle)
         timeSubject.send(0)
+    }
+
+    deinit {
+        print("🎬 [MPVWrapper \(debugId)] deinit")
     }
 
     // MARK: - MPVPlayerDelegate
@@ -271,11 +280,88 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
         let urlScheme = loadedURL?.scheme ?? "unknown"
         let port = loadedURL?.port
         let streamType = classifyStreamType(url: loadedURL)
+        let errorCategory = categorizeMPVError(message)
 
-        // Capture playback error to Sentry with context
+        // For "unrecognized format" errors, probe the URL to get more info (Fixes RIVULET-13)
+        if errorCategory == "unrecognized-format", let url = loadedURL {
+            Task {
+                let probeResult = await probeStreamURL(url)
+                logMPVErrorToSentry(
+                    message: message,
+                    fileExtension: fileExtension,
+                    urlScheme: urlScheme,
+                    port: port,
+                    streamType: streamType,
+                    errorCategory: errorCategory,
+                    probeResult: probeResult
+                )
+            }
+        } else {
+            logMPVErrorToSentry(
+                message: message,
+                fileExtension: fileExtension,
+                urlScheme: urlScheme,
+                port: port,
+                streamType: streamType,
+                errorCategory: errorCategory,
+                probeResult: nil
+            )
+        }
+    }
+
+    /// Probe a stream URL to diagnose why it might not be recognized as media
+    private func probeStreamURL(_ url: URL) async -> [String: Any] {
+        var result: [String: Any] = [:]
+
+        // Use HEAD request to check server response without downloading content
+        var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 5
+
+        // Add headers if we have them stored
+        if let headers = pendingHeaders {
+            for (key, value) in headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+        }
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse {
+                result["http_status"] = httpResponse.statusCode
+                result["content_type"] = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
+                result["content_length"] = httpResponse.value(forHTTPHeaderField: "Content-Length") ?? "unknown"
+
+                // Check if server returned an error page
+                let contentType = (httpResponse.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+                if contentType.contains("text/html") || contentType.contains("text/plain") {
+                    result["likely_error_page"] = true
+                }
+                if httpResponse.statusCode >= 400 {
+                    result["http_error"] = true
+                }
+            }
+        } catch {
+            result["probe_error"] = error.localizedDescription
+        }
+
+        return result
+    }
+
+    /// Log MPV error to Sentry with optional probe results
+    private func logMPVErrorToSentry(
+        message: String,
+        fileExtension: String,
+        urlScheme: String,
+        port: Int?,
+        streamType: String,
+        errorCategory: String,
+        probeResult: [String: Any]?
+    ) {
         let event = Event(level: .error)
         event.message = SentryMessage(formatted: "MPV Playback Error: \(message)")
-        event.extra = [
+
+        var extras: [String: Any] = [
             "error_message": message,
             "stream_url": loadedURL?.absoluteString ?? "none",
             "stream_host": loadedURL?.host ?? "unknown",
@@ -288,15 +374,44 @@ final class MPVPlayerWrapper: NSObject, PlayerProtocol, MPVPlayerDelegate {
             "duration": _duration,
             "current_time": playerController?.currentTime ?? 0
         ]
-        event.tags = [
+
+        // Add probe results if available (for format errors)
+        if let probe = probeResult {
+            for (key, value) in probe {
+                extras["probe_\(key)"] = value
+            }
+        }
+
+        event.extra = extras
+
+        var tags: [String: String] = [
             "component": "mpv_player",
             "stream_host": loadedURL?.host ?? "unknown",
             "file_extension": fileExtension,
             "stream_type": streamType
         ]
 
-        // Fingerprint by error type so different MPV errors create separate issues
-        let errorCategory = categorizeMPVError(message)
+        // Add probe-derived tags for filtering
+        if let probe = probeResult {
+            if let status = probe["http_status"] as? Int {
+                tags["http_status"] = String(status)
+            }
+            if let isErrorPage = probe["likely_error_page"] as? Bool, isErrorPage {
+                tags["likely_error_page"] = "true"
+            }
+            if let contentType = probe["content_type"] as? String {
+                // Simplify content type for tag
+                if contentType.contains("html") {
+                    tags["content_type"] = "text/html"
+                } else if contentType.contains("video") {
+                    tags["content_type"] = "video"
+                } else if contentType.contains("audio") {
+                    tags["content_type"] = "audio"
+                }
+            }
+        }
+
+        event.tags = tags
         event.fingerprint = ["mpv", errorCategory]
 
         SentrySDK.capture(event: event)

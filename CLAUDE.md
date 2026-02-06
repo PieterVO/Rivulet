@@ -215,3 +215,73 @@ From `Docs/DESIGN_GUIDE.md`:
 - Check if `hasTriggeredPostVideo` flag needs resetting
 - Verify credits marker detection in `checkMarkers(at:)`
 - Ensure `duration > 60` for time-based trigger (45s before end)
+
+### Live TV Black Screen (Video Decodes But Doesn't Render)
+- **tvOS has NO OpenGL** - only Metal (and Vulkan via MoltenVK)
+- MPV must use `gpu-api=vulkan`, never `gpu-api=opengl`
+- If you see "error setting option" followed by MoltenVK logs, check gpu-api setting
+- Video decoding (VideoToolbox) can succeed while rendering fails due to misconfigured gpu-api
+
+### Plex Live TV Not Starting (DVB Tuners)
+- DVB tuners (TBS cards, etc.) don't have HDHomeRun stream URLs
+- They require Plex server transcode via `/video/:/transcode/universal/start.m3u8`
+- The transcode URL must include comprehensive client profile parameters
+- Minimal URLs will cause "loading failed" - Plex needs to know client capabilities
+- See `PlexLiveTVModels.buildPlexLiveTVStreamURL()` for required parameters
+
+## MPV on tvOS
+
+### Rendering Backends
+
+| Mode | Video Output | GPU API | Use Case |
+|------|-------------|---------|----------|
+| VOD (HDR) | `gpu-next` | `vulkan` | Movies/TV with HDR passthrough |
+| Live TV | `gpu` | `vulkan` | Live streams, lower resource usage |
+| Simulator | `gpu` | `vulkan` | Testing (software decode) |
+
+**Critical**: Never use `gpu-api=opengl` on tvOS - it doesn't exist and will fail silently.
+
+### Live Stream Optimizations
+```swift
+// Minimal buffering for live TV
+demuxer-max-bytes = 32MiB
+demuxer-max-back-bytes = 0  // Can't seek anyway
+cache-secs = 10
+
+// Fast scaling (no HDR processing needed)
+scale = bilinear
+dscale = bilinear
+dither = no
+deband = no
+```
+
+## Plex Live TV
+
+### Stream URL Types
+
+| Tuner Type | URL Source | Notes |
+|------------|-----------|-------|
+| HDHomeRun | `PlexLiveTVChannel.streamURL` | Direct stream, works out of box |
+| DVB (TBS, etc.) | Built via `buildPlexLiveTVStreamURL()` | Requires full transcode params |
+
+### Required Transcode Parameters for DVB
+```
+X-Plex-Client-Profile-Name, X-Plex-Client-Profile-Extra
+mediaIndex, partIndex, offset
+container, segmentFormat, segmentContainer
+videoCodec, videoResolution, maxVideoBitrate, videoQuality
+audioCodec, audioBitrate, audioChannels
+session (unique UUID per session)
+```
+
+Without these, Plex returns errors or empty responses → MPV reports "loading failed".
+
+## Sentry Error Patterns
+
+| Error | Likely Cause |
+|-------|-------------|
+| `MPV error: loading failed` | Bad stream URL, network issue, or missing transcode params |
+| `MPV error: unrecognized file format` | Plex returned error page instead of stream |
+| `HLS transcode session failed` | Incomplete transcode URL parameters |
+| `HTTP 500 on /hubs` | Plex server issue (not client-side) |
+| `NSURLErrorDomain -999 cancelled` | User navigated away, request timeout |

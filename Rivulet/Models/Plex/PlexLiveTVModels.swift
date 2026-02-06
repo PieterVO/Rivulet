@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Sentry
 
 // MARK: - Live TV Capabilities
 
@@ -224,18 +225,102 @@ extension PlexLiveTVChannel {
     /// Build a Plex HLS transcode URL for Live TV channels without an HDHomeRun stream URL.
     /// This is how official Plex clients stream from DVB tuners (e.g. TBS cards) — through
     /// the Plex server's universal transcode endpoint.
+    ///
+    /// The URL includes comprehensive client profile information that Plex requires to
+    /// properly start a transcode session. Without these parameters, DVB tuners will fail
+    /// to start playback (Fixes GitHub #64, RIVULET-15).
     private func buildPlexLiveTVStreamURL(serverURL: String, authToken: String) -> URL? {
+        // Generate a unique session ID for this transcode session
+        let sessionId = UUID().uuidString.uppercased()
+
         var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8")
+
+        // Build the client profile extras - these define codec support and limitations
+        // This matches what official Plex clients send for Apple TV
+        let profileExtras = buildClientProfileExtras()
+
         components?.queryItems = [
+            // Core transcode parameters
+            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
             URLQueryItem(name: "path", value: key),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "offset", value: "0"),
             URLQueryItem(name: "protocol", value: "hls"),
+
+            // Container format
+            URLQueryItem(name: "container", value: "mpegts"),
+            URLQueryItem(name: "segmentFormat", value: "mpegts"),
+            URLQueryItem(name: "segmentContainer", value: "mpegts"),
+
+            // Playback mode - for Live TV we need transcode, not direct play
             URLQueryItem(name: "directPlay", value: "0"),
             URLQueryItem(name: "directStream", value: "1"),
             URLQueryItem(name: "directStreamAudio", value: "1"),
+
+            // Video settings - Apple TV 4K supports up to 4K HEVC/H.264
+            URLQueryItem(name: "videoCodec", value: "h264,hevc"),
+            URLQueryItem(name: "videoResolution", value: "1920x1080"),
+            URLQueryItem(name: "maxVideoBitrate", value: "20000"),
+            URLQueryItem(name: "videoQuality", value: "100"),
+
+            // HLS segment settings
+            URLQueryItem(name: "segmentDuration", value: "6"),
+
+            // Audio settings - support common formats
+            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3"),
+            URLQueryItem(name: "audioBitrate", value: "384"),
+            URLQueryItem(name: "audioChannels", value: "6"),
+
+            // Subtitles
+            URLQueryItem(name: "subtitles", value: "auto"),
+            URLQueryItem(name: "subtitleSize", value: "100"),
+
+            // Context and location
             URLQueryItem(name: "context", value: "streaming"),
+            URLQueryItem(name: "location", value: "lan"),
+
+            // Session management
+            URLQueryItem(name: "session", value: sessionId),
+            URLQueryItem(name: "autoAdjustQuality", value: "0"),
+            URLQueryItem(name: "hasMDE", value: "1"),
+
+            // Fast seeking support
+            URLQueryItem(name: "fastSeek", value: "1"),
+
+            // Client profile extras - critical for Plex to understand client capabilities
+            URLQueryItem(name: "X-Plex-Client-Profile-Extra", value: profileExtras),
+
+            // Authentication
             URLQueryItem(name: "X-Plex-Token", value: authToken),
         ]
+
         return components?.url
+    }
+
+    /// Build the X-Plex-Client-Profile-Extra parameter value.
+    /// This tells Plex what codecs and formats the client supports.
+    private func buildClientProfileExtras() -> String {
+        // Each profile directive is separated by "+"
+        // These are URL-encoded when added to the query string
+        let profiles = [
+            // Direct play profiles - what we can play without transcoding
+            "add-direct-play-profile(type=videoProfile&protocol=http&container=mpegts&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3)",
+            "add-direct-play-profile(type=videoProfile&protocol=hls&container=mpegts&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3)",
+
+            // Transcode target - how to transcode if needed
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&replace=true)",
+
+            // Subtitle transcode target
+            "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
+
+            // Limitations - match Apple TV 4K capabilities
+            "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=1920&replace=true)",
+            "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=1080&replace=true)",
+            "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=6&replace=true)",
+        ]
+
+        return profiles.joined(separator: "+")
     }
 
     /// Convert to UnifiedChannel
@@ -250,9 +335,59 @@ extension PlexLiveTVChannel {
         // Plex server transcode URL (needed for DVB tuners without HDHomeRun)
         let streamURLValue: URL? = {
             if let hdhrURL = streamURL {
+                // HDHomeRun direct stream URL available
+                let breadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
+                breadcrumb.message = "Using HDHomeRun direct stream URL"
+                breadcrumb.data = [
+                    "channel_name": title,
+                    "channel_number": channelNumber ?? "unknown",
+                    "rating_key": ratingKey,
+                    "stream_type": "hdhr_direct",
+                    "has_stream_url": true
+                ]
+                SentrySDK.addBreadcrumb(breadcrumb)
                 return URL(string: hdhrURL)
             }
-            return buildPlexLiveTVStreamURL(serverURL: serverURL, authToken: authToken)
+
+            // No HDHomeRun URL - build Plex transcode URL (DVB tuner path)
+            let transcodeURL = buildPlexLiveTVStreamURL(serverURL: serverURL, authToken: authToken)
+
+            // Log detailed info for DVB tuner debugging (GitHub #64)
+            let breadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
+            breadcrumb.message = transcodeURL != nil
+                ? "Built Plex transcode URL for DVB tuner"
+                : "Failed to build Plex transcode URL"
+            breadcrumb.data = [
+                "channel_name": title,
+                "channel_number": channelNumber ?? "unknown",
+                "rating_key": ratingKey,
+                "stream_type": "plex_transcode",
+                "channel_key": key,
+                "server_url": serverURL,
+                "transcode_url_built": transcodeURL != nil
+            ]
+            SentrySDK.addBreadcrumb(breadcrumb)
+
+            // If transcode URL failed, capture as an error
+            if transcodeURL == nil {
+                let event = Event(level: .error)
+                event.message = SentryMessage(formatted: "Failed to build Plex Live TV transcode URL")
+                event.extra = [
+                    "channel_name": title,
+                    "channel_number": channelNumber ?? "unknown",
+                    "rating_key": ratingKey,
+                    "channel_key": key,
+                    "server_url": serverURL
+                ]
+                event.tags = [
+                    "component": "plex_livetv",
+                    "operation": "build_transcode_url"
+                ]
+                event.fingerprint = ["plex_livetv", "transcode_url_build_failed"]
+                SentrySDK.capture(event: event)
+            }
+
+            return transcodeURL
         }()
 
         // Build logo URL - handle both external URLs and Plex paths

@@ -304,6 +304,28 @@ actor CacheManager {
         removeTimestamp(for: onDeckCacheFile)
     }
 
+    func clearHubsCache() {
+        guard let cacheDir = cacheDirectory else { return }
+        let fileURL = cacheDir.appendingPathComponent(hubsCacheFile)
+        try? FileManager.default.removeItem(at: fileURL)
+        memoryCache.removeObject(forKey: hubsCacheFile as NSString)
+        removeTimestamp(for: hubsCacheFile)
+    }
+
+    func clearLibraryHubsCache() {
+        guard let cacheDir = cacheDirectory else { return }
+        if let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) {
+            for file in files {
+                let fileName = file.lastPathComponent
+                if fileName.hasPrefix(libraryHubsCachePrefix) {
+                    try? FileManager.default.removeItem(at: file)
+                    memoryCache.removeObject(forKey: fileName as NSString)
+                    removeTimestamp(for: fileName)
+                }
+            }
+        }
+    }
+
     // MARK: - Cache Size
 
     func getCacheSize() -> Int64 {

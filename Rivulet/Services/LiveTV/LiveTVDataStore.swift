@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import Sentry
 
 @MainActor
 class LiveTVDataStore: ObservableObject {
@@ -628,10 +629,37 @@ class LiveTVDataStore: ObservableObject {
     /// Build the stream URL for a channel
     func buildStreamURL(for channel: UnifiedChannel) -> URL? {
         guard let provider = providers[channel.sourceId] else {
-            // Fallback to channel's stream URL
+            // No provider found - fallback to channel's embedded stream URL
+            let breadcrumb = Breadcrumb(level: .info, category: "livetv_stream")
+            breadcrumb.message = "Using channel's embedded stream URL (no provider)"
+            breadcrumb.data = [
+                "channel_name": channel.name,
+                "channel_id": channel.id,
+                "source_id": channel.sourceId,
+                "source_type": String(describing: channel.sourceType),
+                "has_stream_url": channel.streamURL != nil
+            ]
+            SentrySDK.addBreadcrumb(breadcrumb)
             return channel.streamURL
         }
-        return provider.buildStreamURL(for: channel)
+
+        let url = provider.buildStreamURL(for: channel)
+
+        // Log if provider returned nil URL
+        if url == nil {
+            let breadcrumb = Breadcrumb(level: .warning, category: "livetv_stream")
+            breadcrumb.message = "Provider returned nil stream URL"
+            breadcrumb.data = [
+                "channel_name": channel.name,
+                "channel_id": channel.id,
+                "source_id": channel.sourceId,
+                "source_type": String(describing: channel.sourceType),
+                "embedded_stream_url": channel.streamURL?.absoluteString ?? "none"
+            ]
+            SentrySDK.addBreadcrumb(breadcrumb)
+        }
+
+        return url
     }
 
     // MARK: - Reset

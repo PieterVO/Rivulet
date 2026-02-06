@@ -648,9 +648,14 @@ extension PlexMetadata {
         Marker?.first { $0.isIntro }
     }
 
-    /// Credits/outro marker if available
-    var creditsMarker: PlexMarker? {
-        Marker?.first { $0.isCredits }
+    /// Credits/outro markers if available (can have multiple, e.g., mid-credits and post-credits)
+    var creditsMarkers: [PlexMarker] {
+        Marker?.filter { $0.isCredits } ?? []
+    }
+
+    /// First credits marker (for post-video trigger timing)
+    var firstCreditsMarker: PlexMarker? {
+        creditsMarkers.first
     }
 
     /// Commercial markers if available

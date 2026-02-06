@@ -103,6 +103,16 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.0 (37)", [
+            "You can now save your PIN for Plex Home profiles",
+            "Live TV is more reliable with automatic stream recovery",
+            "Support for more controller types",
+            "PIP now works in Live TV",
+            "Better multiview handling in Live TV",
+            "Live TV scrubbing controls",
+            "Continuuing efforts to stop audio buffer on HomePods",
+            "Only show Post Video screen on tv shows with a next up episode",
+        ]),
         ("1.0.0 (36)", [
             "Trying an experimental Dolby Vision player; If DV does not work, or works well, let me know",
             "Added Plex Home Account support. Enable it in settings",

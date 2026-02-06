@@ -68,4 +68,37 @@ enum KeychainHelper {
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
+
+    // MARK: - PIN Storage for Plex Home Users
+
+    private static let pinKeyPrefix = "plexPin_"
+
+    /// Store a PIN for a Plex Home user
+    @discardableResult
+    static func setPin(_ pin: String, forUserUUID uuid: String) -> Bool {
+        set(pin, forKey: pinKeyPrefix + uuid)
+    }
+
+    /// Retrieve a stored PIN for a Plex Home user
+    static func getPin(forUserUUID uuid: String) -> String? {
+        get(pinKeyPrefix + uuid)
+    }
+
+    /// Delete a stored PIN for a Plex Home user
+    @discardableResult
+    static func deletePin(forUserUUID uuid: String) -> Bool {
+        delete(pinKeyPrefix + uuid)
+    }
+
+    /// Check if a PIN is stored for a Plex Home user
+    static func hasSavedPin(forUserUUID uuid: String) -> Bool {
+        getPin(forUserUUID: uuid) != nil
+    }
+
+    /// Delete all stored PINs (for sign out)
+    static func deleteAllPins(forUserUUIDs uuids: [String]) {
+        for uuid in uuids {
+            deletePin(forUserUUID: uuid)
+        }
+    }
 }

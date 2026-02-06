@@ -13,6 +13,8 @@ struct UserProfileSettingsView: View {
     @State private var selectedUserForPin: PlexHomeUser?
     @State private var pinEntryError: String?
     @State private var isLoading = false
+    @State private var showForgetPinConfirmation = false
+    @State private var userToForgetPin: PlexHomeUser?
     @FocusState private var focusedUserId: Int?
 
     var body: some View {
@@ -70,9 +72,13 @@ struct UserProfileSettingsView: View {
                                     user: user,
                                     isSelected: user.id == profileManager.selectedUser?.id,
                                     isLoading: isLoading && selectedUserForPin?.id == user.id,
-                                    isFocused: focusedUserId == user.id
+                                    isFocused: focusedUserId == user.id,
+                                    hasRememberedPin: profileManager.usersWithRememberedPins.contains(user.uuid)
                                 ) {
                                     selectProfile(user)
+                                } onForgetPin: {
+                                    userToForgetPin = user
+                                    showForgetPinConfirmation = true
                                 }
                                 .focused($focusedUserId, equals: user.id)
                             }
@@ -100,9 +106,9 @@ struct UserProfileSettingsView: View {
                 PinEntrySheet(
                     user: user,
                     error: $pinEntryError,
-                    onSubmit: { pin in
+                    onSubmit: { pin, rememberPin in
                         Task {
-                            await verifyAndSwitch(user: user, pin: pin)
+                            await verifyAndSwitch(user: user, pin: pin, rememberPin: rememberPin)
                         }
                     },
                     onCancel: {
@@ -112,6 +118,21 @@ struct UserProfileSettingsView: View {
                     }
                 )
             }
+        }
+        .confirmationDialog(
+            "Forget Saved PIN?",
+            isPresented: $showForgetPinConfirmation,
+            presenting: userToForgetPin
+        ) { user in
+            Button("Forget PIN", role: .destructive) {
+                profileManager.forgetPin(for: user)
+                userToForgetPin = nil
+            }
+            Button("Cancel", role: .cancel) {
+                userToForgetPin = nil
+            }
+        } message: { user in
+            Text("You'll need to enter the PIN manually next time you switch to \(user.displayName).")
         }
         .onAppear {
             // Focus first profile if none focused
@@ -123,9 +144,27 @@ struct UserProfileSettingsView: View {
 
     private func selectProfile(_ user: PlexHomeUser) {
         if user.requiresPin {
-            selectedUserForPin = user
-            pinEntryError = nil
-            showPinEntry = true
+            // Try remembered PIN first
+            if profileManager.hasRememberedPin(for: user) {
+                Task {
+                    isLoading = true
+                    selectedUserForPin = user
+                    let (success, pinWasInvalid) = await profileManager.selectUserWithRememberedPin(user)
+                    if success {
+                        isLoading = false
+                        selectedUserForPin = nil
+                    } else {
+                        isLoading = false
+                        // Show PIN entry with error if PIN was invalid
+                        pinEntryError = pinWasInvalid ? "Saved PIN is no longer valid. Please enter your PIN." : nil
+                        showPinEntry = true
+                    }
+                }
+            } else {
+                selectedUserForPin = user
+                pinEntryError = nil
+                showPinEntry = true
+            }
         } else {
             Task {
                 isLoading = true
@@ -137,13 +176,16 @@ struct UserProfileSettingsView: View {
         }
     }
 
-    private func verifyAndSwitch(user: PlexHomeUser, pin: String) async {
+    private func verifyAndSwitch(user: PlexHomeUser, pin: String, rememberPin: Bool) async {
         isLoading = true
         pinEntryError = nil
 
         let success = await profileManager.selectUser(user, pin: pin)
 
         if success {
+            if rememberPin {
+                profileManager.rememberPin(pin, for: user)
+            }
             showPinEntry = false
             selectedUserForPin = nil
         } else {
@@ -208,7 +250,9 @@ private struct ProfileRow: View {
     let isSelected: Bool
     let isLoading: Bool
     let isFocused: Bool
+    let hasRememberedPin: Bool
     let onSelect: () -> Void
+    let onForgetPin: () -> Void
 
     var body: some View {
         Button(action: onSelect) {
@@ -234,9 +278,15 @@ private struct ProfileRow: View {
                         }
 
                         if user.protected {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 18))
-                                .foregroundStyle(.white.opacity(0.5))
+                            if hasRememberedPin {
+                                Image(systemName: "lock.open.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(.green)
+                            } else {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
                         }
                     }
                 }
@@ -270,6 +320,15 @@ private struct ProfileRow: View {
         .buttonStyle(SettingsButtonStyle())
         .scaleEffect(isFocused ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+        .contextMenu {
+            if user.protected && hasRememberedPin {
+                Button(role: .destructive) {
+                    onForgetPin()
+                } label: {
+                    Label("Forget Saved PIN", systemImage: "lock.slash")
+                }
+            }
+        }
     }
 }
 
@@ -350,10 +409,11 @@ private struct ProfileBadge: View {
 struct PinEntrySheet: View {
     let user: PlexHomeUser
     @Binding var error: String?
-    let onSubmit: (String) -> Void
+    let onSubmit: (String, Bool) -> Void
     let onCancel: () -> Void
 
     @State private var pin: String = ""
+    @State private var rememberPin: Bool = false
     @FocusState private var focusedButton: String?
 
     private let numberPadLayout: [[String]] = [
@@ -364,7 +424,7 @@ struct PinEntrySheet: View {
     ]
 
     var body: some View {
-        VStack(spacing: 50) {
+        VStack(spacing: 40) {
             // Header
             VStack(spacing: 16) {
                 ProfileAvatar(user: user, size: 100)
@@ -393,6 +453,7 @@ struct PinEntrySheet: View {
                     Text(error)
                         .font(.system(size: 22))
                         .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
                 }
             }
 
@@ -407,7 +468,7 @@ struct PinEntrySheet: View {
                                 isFocused: focusedButton == key,
                                 onSubmit: {
                                     if pin.count == 4 {
-                                        onSubmit(pin)
+                                        onSubmit(pin, rememberPin)
                                     }
                                 }
                             )
@@ -417,6 +478,10 @@ struct PinEntrySheet: View {
                 }
             }
 
+            // Remember PIN toggle
+            RememberPinToggle(isOn: $rememberPin, isFocused: focusedButton == "remember")
+                .focused($focusedButton, equals: "remember")
+
             // Cancel button
             Button("Cancel") {
                 onCancel()
@@ -424,7 +489,6 @@ struct PinEntrySheet: View {
             .buttonStyle(.plain)
             .font(.system(size: 24, weight: .medium))
             .foregroundStyle(.white.opacity(0.6))
-            .padding(.top, 20)
             .focused($focusedButton, equals: "cancel")
         }
         .padding(60)
@@ -438,9 +502,50 @@ struct PinEntrySheet: View {
         }
         .onChange(of: pin) { _, newValue in
             if newValue.count == 4 {
-                onSubmit(newValue)
+                onSubmit(newValue, rememberPin)
             }
         }
+    }
+}
+
+// MARK: - Remember PIN Toggle
+
+private struct RememberPinToggle: View {
+    @Binding var isOn: Bool
+    let isFocused: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: 16) {
+                Text("Remember PIN")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white)
+
+                Spacer()
+
+                Text(isOn ? "On" : "Off")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(isOn ? .green : .white.opacity(0.5))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(SettingsButtonStyle())
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
 }
 

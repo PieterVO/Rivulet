@@ -62,11 +62,19 @@ struct VideoPlayerView: View {
                 // Only show error if we don't have a player or if all strategies failed
                 if playbackManager.player == nil {
                     hasError = true
-                    errorMessage = error.userFacingDescription
+                    if let playerError = error as? PlayerError {
+                        errorMessage = playerError.userFacingDescription
+                    } else {
+                        errorMessage = error.localizedDescription
+                    }
                 } else {
                     // Player exists - log error but don't show error screen
                     // This handles cases where audio works but video has issues
-                    print("⚠️ Playback error (player still active): \(error.technicalDescription)")
+                    if let playerError = error as? PlayerError {
+                        print("⚠️ Playback error (player still active): \(playerError.technicalDescription)")
+                    } else {
+                        print("⚠️ Playback error (player still active): \(error.localizedDescription)")
+                    }
                 }
             }
         }

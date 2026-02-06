@@ -32,7 +32,9 @@ struct GuideLayoutView: View {
 
     // PIP state management
     @State private var activeChannel: UnifiedChannel?
+    @State private var playerSessionId = UUID()
     @State private var displayMode: LiveTVDisplayMode = .hidden
+    @State private var debugId = String(UUID().uuidString.prefix(8))
 
     @State private var guideStartTime = Date()
     @State private var focusedRow = 0
@@ -72,20 +74,31 @@ struct GuideLayoutView: View {
             if dataStore.channels.isEmpty { await dataStore.loadChannels() }
             if dataStore.epg.isEmpty { await dataStore.loadEPG(startDate: Date(), hours: 6) }
         }
-        .animation(.spring(response: 0.5, dampingFraction: 0.85), value: displayMode)
+        // Animation disabled for instant PIP transitions
         .onChange(of: displayMode) { oldMode, newMode in
+            print("📺 [GuideLayout \(debugId)] displayMode \(oldMode) -> \(newMode), activeChannel=\(activeChannel?.id ?? "nil"), session=\(playerSessionId.uuidString)")
             if oldMode == .fullscreen && newMode == .pip {
-                // Transitioning to PIP - focus guide after animation
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                // Transitioning to PIP - focus guide immediately (no animation delay)
+                DispatchQueue.main.async {
                     hasFocus = true
+                    print("📺 [GuideLayout \(debugId)] focus restored after entering PIP")
                 }
             } else if oldMode == .pip && newMode == .fullscreen {
                 // Returning to fullscreen - clear guide focus
                 hasFocus = false
+                print("📺 [GuideLayout \(debugId)] focus cleared for fullscreen")
             } else if newMode == .hidden {
                 // Player dismissed - focus guide
+                focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: false)
+                hasFocus = true
+                print("📺 [GuideLayout \(debugId)] player hidden, focus restored immediately")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    hasFocus = true
+                    focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: false)
+                    hasFocus = false
+                    DispatchQueue.main.async {
+                        hasFocus = true
+                        print("📺 [GuideLayout \(debugId)] player hidden, focus restored after delay")
+                    }
                 }
             }
         }
@@ -100,36 +113,54 @@ struct GuideLayoutView: View {
     @ViewBuilder
     private func liveTVPlayerLayer(channel: UnifiedChannel, screenSize: CGSize) -> some View {
         let isPIP = displayMode == .pip
-
-        // Calculate where the PIP's top-right corner should be
-        // (screen width - margin from right edge)
-        let pipAnchorX = screenSize.width - pipMargin
-        let pipAnchorY = pipMargin
+        // Keep PiP at exact 16:9 with integral 16px width steps to avoid
+        // fractional scaling artifacts (can appear as a bottom strip).
+        let rawPipWidth = screenSize.width * pipScale
+        let pipWidth = max(16, floor(rawPipWidth / 16.0) * 16.0)
+        let pipHeight = pipWidth * 9.0 / 16.0
+        let pipSize = CGSize(width: pipWidth, height: pipHeight)
+        let targetSize = isPIP ? pipSize : screenSize
+        let targetCenter = CGPoint(
+            x: isPIP ? (screenSize.width - pipMargin - targetSize.width / 2) : (screenSize.width / 2),
+            y: isPIP ? (pipMargin + targetSize.height / 2) : (screenSize.height / 2)
+        )
 
         LiveTVPlayerView(
             channel: channel,
             onDismiss: {
+                print("📺 [GuideLayout \(debugId)] onDismiss from player, clearing activeChannel=\(activeChannel?.id ?? "nil"), session=\(playerSessionId.uuidString)")
                 displayMode = .hidden
                 activeChannel = nil
+                playerSessionId = UUID()
+                focusScopeManager.activate(.guide, savingCurrent: true, pushToStack: false)
+                hasFocus = false
+                DispatchQueue.main.async {
+                    hasFocus = true
+                }
+                print("📺 [GuideLayout \(debugId)] new session after dismiss=\(playerSessionId.uuidString)")
             },
             onEnterPIP: {
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                print("📺 [GuideLayout \(debugId)] onEnterPIP for channel=\(channel.id)")
+                // Instant transition to PIP - no animation
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
                     displayMode = .pip
                 }
-            }
+            },
+            isInteractive: displayMode == .fullscreen  // Disable focus capture in PIP mode
         )
-        // Always use full screen frame - scaleEffect handles the visual scaling
-        .frame(width: screenSize.width, height: screenSize.height)
-        // Scale from top-right corner area
-        .scaleEffect(
-            isPIP ? pipScale : 1.0,
-            anchor: UnitPoint(
-                x: pipAnchorX / screenSize.width,
-                y: pipAnchorY / screenSize.height
-            )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: isPIP ? 12 / pipScale : 0))
+        // Force a fresh player session when changing channels or after exit/reopen.
+        .id("\(playerSessionId.uuidString)-\(channel.id)")
+        .frame(width: targetSize.width, height: targetSize.height)
+        // Keep player frame changes immediate to avoid transient scale/zoom artifacts.
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+        .animation(nil, value: displayMode)
+        .clipShape(RoundedRectangle(cornerRadius: isPIP ? 14 : 0, style: .continuous))
         .shadow(color: isPIP ? .black.opacity(0.5) : .clear, radius: 20, x: 0, y: 10)
+        .position(x: targetCenter.x, y: targetCenter.y)
         .allowsHitTesting(displayMode == .fullscreen)
     }
 
@@ -153,32 +184,24 @@ struct GuideLayoutView: View {
         let visibleEnd = visibleStart.addingTimeInterval(180 * 60)
 
         return Button {
-            if focusedRow < channels.count {
-                let channel = channels[focusedRow]
-                selectChannel(channel)
-            }
+            selectFocusedChannel(trigger: "button")
         } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                // Title
-                Text("Guide")
-                    .font(.system(size: 52, weight: .bold))
-                    .foregroundColor(.white)
-                    .padding(.top, 40)
-                    .padding(.bottom, 20)
-                    .padding(.leading, 40)
+            VStack(spacing: 0) {
+                // Header row with time slots
+                HStack(spacing: 0) {
+                    Color(white: 0.08)
+                        .frame(width: channelWidth, height: headerHeight)
+                    TimeHeaderView(startTime: visibleStart, width: gridWidth,
+                                  height: headerHeight, pxPerMin: pxPerMin)
+                }
 
-                // Grid
-                VStack(spacing: 0) {
-                    // Header row
-                    HStack(spacing: 0) {
-                        Color(white: 0.08)
-                            .frame(width: channelWidth, height: headerHeight)
-                        TimeHeaderView(startTime: visibleStart, width: gridWidth,
-                                      height: headerHeight, pxPerMin: pxPerMin)
-                    }
+                // Divider between header and channel list
+                Rectangle()
+                    .fill(Color.white.opacity(0.15))
+                    .frame(height: 1)
 
-                    // Scrollable content
-                    ScrollViewReader { proxy in
+                // Scrollable channel list
+                ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: false) {
                             ZStack(alignment: .topLeading) {
                                 // Use LazyVStack to avoid rendering all channels at once
@@ -217,14 +240,26 @@ struct GuideLayoutView: View {
                         }
                     }
                     .frame(maxHeight: .infinity)
-                }
             }
         }
         .buttonStyle(GuideButtonStyle())
+        // Fallback for cases where tvOS focus remains visible but primary Button action
+        // is not delivered after overlay dismissal.
+        .simultaneousGesture(TapGesture().onEnded {
+            selectFocusedChannel(trigger: "tap_fallback")
+        })
         .focused($hasFocus)
         .focusSection()  // Prevent focus from escaping to sidebar trigger
         .focusable(displayMode != .fullscreen)  // Disable focus when player is fullscreen
         .onAppear { hasFocus = true }
+        .onChange(of: channels.count) { _, count in
+            if count > 0, focusedRow >= count {
+                focusedRow = max(0, count - 1)
+                print("📺 [GuideLayout \(debugId)] clamped focusedRow to \(focusedRow) for channelCount=\(count)")
+            } else {
+                print("📺 [GuideLayout \(debugId)] channels.count changed to \(count), focusedRow=\(focusedRow)")
+            }
+        }
         .onMoveCommand { dir in
             guard displayMode != .fullscreen else { return }  // Don't handle when player is fullscreen
             handleNav(dir)
@@ -241,17 +276,41 @@ struct GuideLayoutView: View {
 
     // MARK: - Channel Selection
 
+    private func selectFocusedChannel(trigger: String) {
+        print("📺 [GuideLayout \(debugId)] guide select trigger=\(trigger) focusedRow=\(focusedRow), focusedColumn=\(focusedColumn), channels=\(channels.count), hasFocus=\(hasFocus), mode=\(displayMode)")
+        if displayMode == .fullscreen {
+            print("📺 [GuideLayout \(debugId)] guide select ignored: already fullscreen")
+            return
+        }
+
+        guard focusedRow < channels.count else {
+            print("📺 [GuideLayout \(debugId)] guide select ignored: focusedRow out of bounds")
+            return
+        }
+
+        let channel = channels[focusedRow]
+        selectChannel(channel)
+    }
+
     private func selectChannel(_ channel: UnifiedChannel) {
+        print("📺 [GuideLayout \(debugId)] selectChannel id=\(channel.id), name=\(channel.name), currentActive=\(activeChannel?.id ?? "nil"), mode=\(displayMode)")
         if displayMode == .pip {
             // Already playing - switch channel if different, then go fullscreen
             if activeChannel?.id != channel.id {
+                playerSessionId = UUID()
+                print("📺 [GuideLayout \(debugId)] switching channel in PIP, new session=\(playerSessionId.uuidString)")
                 activeChannel = channel
             }
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+            // Instant transition to fullscreen - no animation
+            var transaction = Transaction()
+            transaction.animation = nil
+            withTransaction(transaction) {
                 displayMode = .fullscreen
             }
         } else {
-            // Start fresh
+            // Start fresh - no animation needed
+            playerSessionId = UUID()
+            print("📺 [GuideLayout \(debugId)] starting fullscreen playback, new session=\(playerSessionId.uuidString)")
             activeChannel = channel
             displayMode = .fullscreen
         }
@@ -266,8 +325,10 @@ struct GuideLayoutView: View {
                 focusedRow -= 1
                 clampCol()
             } else if displayMode == .pip {
-                // At top of guide and PIP is showing - return to fullscreen
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
+                // At top of guide and PIP is showing - return to fullscreen (no animation)
+                var transaction = Transaction()
+                transaction.animation = nil
+                withTransaction(transaction) {
                     displayMode = .fullscreen
                 }
             }
@@ -374,6 +435,7 @@ private struct ChannelCell: View {
         .padding(.leading, 12)
         .frame(width: width, height: height)
         .background(Color(white: isSelected ? 0.2 : 0.1))
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isSelected)
     }
 }
 

@@ -80,13 +80,21 @@ final class AVPlayerUIView: UIView {
             // Reset tracking for new player
             lastReportedVideoRect = .zero
 
-            // Debug: Log video track info
+            // Debug: Log video track info (async to avoid blocking main thread on XPC)
             if let currentItem = newValue?.currentItem {
                 let asset = currentItem.asset
-                let videoTracks = asset.tracks(withMediaType: .video)
-                print("🎬 AVPlayerUIView: Player attached - video tracks: \(videoTracks.count)")
-                for (i, track) in videoTracks.enumerated() {
-                    print("🎬 AVPlayerUIView: Track \(i): naturalSize=\(track.naturalSize), enabled=\(track.isEnabled)")
+                Task {
+                    do {
+                        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                        print("🎬 AVPlayerUIView: Player attached - video tracks: \(videoTracks.count)")
+                        for (i, track) in videoTracks.enumerated() {
+                            let naturalSize = try await track.load(.naturalSize)
+                            let isEnabled = try await track.load(.isEnabled)
+                            print("🎬 AVPlayerUIView: Track \(i): naturalSize=\(naturalSize), enabled=\(isEnabled)")
+                        }
+                    } catch {
+                        print("🎬 AVPlayerUIView: Failed to load track info: \(error)")
+                    }
                 }
 
                 // Note: Display criteria (HDR/DV mode switching) is handled by

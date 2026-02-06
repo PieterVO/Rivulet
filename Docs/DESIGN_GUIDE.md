@@ -380,6 +380,57 @@ VStack(spacing: 24) {
 
 **IMPORTANT:** On tvOS, always use `SettingsButtonStyle()` (from `SettingsComponents.swift`) instead of `.buttonStyle(.plain)` for custom-styled buttons. The `.plain` style still shows tvOS's default focus effects (white glow), which conflicts with our glass styling. `SettingsButtonStyle()` completely removes the default focus ring, allowing our custom `isFocused` background styling to work correctly.
 
+### Inline Toggle Pattern
+
+For toggles within sheets or other views (not full settings rows), use this compact pattern:
+
+```swift
+private struct InlineToggle: View {
+    @Binding var isOn: Bool
+    let isFocused: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            HStack(spacing: 16) {
+                Text("Toggle Label")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(.white)
+
+                Spacer()
+
+                Text(isOn ? "On" : "Off")
+                    .font(.system(size: 26, weight: .medium))
+                    .foregroundStyle(isOn ? .green : .white.opacity(0.5))
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(
+                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                lineWidth: 1
+                            )
+                    )
+            )
+        }
+        .buttonStyle(SettingsButtonStyle())  // NOT .plain - removes tvOS focus ring
+        .scaleEffect(isFocused ? 1.02 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
+    }
+}
+```
+
+**Key rules:**
+- Use `SettingsButtonStyle()` - NEVER `.buttonStyle(.plain)` on tvOS
+- Use "On"/"Off" text indicator (green/gray) - matches `SettingsToggleRow`
+- Follow standard glass row opacities and corner radius (16pt)
+- Apply standard scale (1.02) and spring animation
+
 ### Image Loading
 
 Use `CachedAsyncImage` for all remote images:
