@@ -32,9 +32,9 @@ final class MusicNowPlayingBridge {
 
     /// Full update when track changes
     func update(
-        track: PlexMetadata,
-        queue: [PlexMetadata],
-        history: [PlexMetadata],
+        track: MusicTrack,
+        queue: [MusicTrack],
+        history: [MusicTrack],
         isPlaying: Bool,
         currentTime: TimeInterval,
         duration: TimeInterval
@@ -48,9 +48,9 @@ final class MusicNowPlayingBridge {
         var info = [String: Any]()
 
         // Track metadata
-        info[MPMediaItemPropertyTitle] = track.title ?? "Unknown Track"
-        info[MPMediaItemPropertyArtist] = track.grandparentTitle ?? track.parentTitle ?? "Unknown Artist"
-        info[MPMediaItemPropertyAlbumTitle] = track.parentTitle ?? ""
+        info[MPMediaItemPropertyTitle] = track.title
+        info[MPMediaItemPropertyArtist] = track.artistName ?? "Unknown Artist"
+        info[MPMediaItemPropertyAlbumTitle] = track.albumTitle ?? ""
         info[MPMediaItemPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
 
         // Timing
@@ -64,12 +64,13 @@ final class MusicNowPlayingBridge {
         info[MPNowPlayingInfoPropertyPlaybackQueueCount] = totalCount
 
         // Track number
-        if let index = track.index {
-            info[MPMediaItemPropertyAlbumTrackNumber] = index
+        if let trackNumber = track.trackNumber {
+            info[MPMediaItemPropertyAlbumTrackNumber] = trackNumber
         }
 
-        // Reuse cached artwork if same thumb URL
-        if let artwork = cachedArtwork, cachedArtworkThumb == track.thumb {
+        // Reuse cached artwork if same poster URL
+        let artworkKey = track.artwork.poster?.absoluteString ?? ""
+        if let artwork = cachedArtwork, cachedArtworkThumb == artworkKey {
             info[MPMediaItemPropertyArtwork] = artwork
         }
 
@@ -173,40 +174,27 @@ final class MusicNowPlayingBridge {
 
     // MARK: - Artwork Loading
 
-    private func loadArtwork(for track: PlexMetadata) {
-        let thumbPath = track.thumb ?? track.parentThumb
-        guard let thumbPath, thumbPath != cachedArtworkThumb else { return }
-
+    private func loadArtwork(for track: MusicTrack) {
         artworkTask?.cancel()
-        artworkTask = Task { [weak self] in
-            guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-                  let token = PlexAuthManager.shared.selectedServerToken else { return }
-
-            let urlString = "\(serverURL)\(thumbPath)?X-Plex-Token=\(token)"
-            guard let url = URL(string: urlString) else { return }
-
+        guard let url = track.artwork.poster else {
+            cachedArtwork = nil
+            cachedArtworkThumb = nil
+            return
+        }
+        let key = url.absoluteString
+        if cachedArtworkThumb == key, cachedArtwork != nil { return }
+        artworkTask = Task { @MainActor in
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled else { return }
-
-                if let image = UIImage(data: data) {
-                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
-
-                    guard !Task.isCancelled else { return }
-                    self?.cachedArtwork = artwork
-                    self?.cachedArtworkThumb = thumbPath
-
-                    // Update Now Playing with artwork
-                    if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
-                        info[MPMediaItemPropertyArtwork] = artwork
-                        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-                    }
+                guard let image = UIImage(data: data) else { return }
+                let mpArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                self.cachedArtwork = mpArtwork
+                self.cachedArtworkThumb = key
+                if var info = MPNowPlayingInfoCenter.default().nowPlayingInfo {
+                    info[MPMediaItemPropertyArtwork] = mpArtwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
                 }
-            } catch {
-                if !Task.isCancelled {
-                    print("🎵 MusicNowPlaying: Failed to load artwork: \(error)")
-                }
-            }
+            } catch {}
         }
     }
 }
