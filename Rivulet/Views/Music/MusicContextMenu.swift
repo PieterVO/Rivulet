@@ -13,9 +13,10 @@ enum MusicContextMenuStyle {
 }
 
 struct MusicItemContextMenuModifier: ViewModifier {
-    let item: PlexMetadata
+    let item: MusicItem
     let style: MusicContextMenuStyle
 
+    @Environment(MusicProviderRegistry.self) private var registry
     @ObservedObject private var musicQueue = MusicQueue.shared
 
     func body(content: Content) -> some View {
@@ -29,18 +30,24 @@ struct MusicItemContextMenuModifier: ViewModifier {
         }
     }
 
+    private var provider: (any MusicProvider)? {
+        registry.provider(for: item.ref.providerID)
+    }
+
     @ViewBuilder
     private var trackMenu: some View {
-        Button {
-            musicQueue.addNext(track: item)
-        } label: {
-            Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-        }
+        if case .track(let track) = item {
+            Button {
+                musicQueue.addNext(track: track)
+            } label: {
+                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
 
-        Button {
-            musicQueue.addToEnd(track: item)
-        } label: {
-            Label("Play After", systemImage: "text.line.last.and.arrowtriangle.forward")
+            Button {
+                musicQueue.addToEnd(track: track)
+            } label: {
+                Label("Play After", systemImage: "text.line.last.and.arrowtriangle.forward")
+            }
         }
     }
 
@@ -74,16 +81,9 @@ struct MusicItemContextMenuModifier: ViewModifier {
     }
 
     private func playAlbum(shuffled: Bool) async {
-        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-              let token = PlexAuthManager.shared.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
-
+        guard let provider = provider else { return }
         do {
-            var tracks = try await PlexNetworkManager.shared.getChildren(
-                serverURL: serverURL,
-                authToken: token,
-                ratingKey: ratingKey
-            )
+            var tracks = try await provider.tracks(for: item.ref)
             if shuffled { tracks.shuffle() }
             if !tracks.isEmpty {
                 musicQueue.playAlbum(tracks: tracks, startingAt: 0)
@@ -94,16 +94,9 @@ struct MusicItemContextMenuModifier: ViewModifier {
     }
 
     private func addAlbumToQueue(next: Bool) async {
-        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-              let token = PlexAuthManager.shared.selectedServerToken,
-              let ratingKey = item.ratingKey else { return }
-
+        guard let provider = provider else { return }
         do {
-            let tracks = try await PlexNetworkManager.shared.getChildren(
-                serverURL: serverURL,
-                authToken: token,
-                ratingKey: ratingKey
-            )
+            let tracks = try await provider.tracks(for: item.ref)
             if next {
                 for track in tracks.reversed() {
                     musicQueue.addNext(track: track)
@@ -118,7 +111,7 @@ struct MusicItemContextMenuModifier: ViewModifier {
 }
 
 extension View {
-    func musicItemContextMenu(item: PlexMetadata, style: MusicContextMenuStyle) -> some View {
+    func musicItemContextMenu(item: MusicItem, style: MusicContextMenuStyle) -> some View {
         modifier(MusicItemContextMenuModifier(item: item, style: style))
     }
 }

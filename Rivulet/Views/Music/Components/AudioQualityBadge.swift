@@ -11,8 +11,8 @@ import SwiftUI
 struct AudioQualityBadge: View {
     let quality: AudioQuality
 
-    /// Initialize from a PlexMetadata track
-    init(track: PlexMetadata) {
+    /// Initialize from a MusicTrack
+    init(track: MusicTrack) {
         self.quality = MusicAudioProcessor.audioQuality(for: track)
     }
 

@@ -13,7 +13,7 @@ enum MusicPosterCardStyle {
 }
 
 struct MusicPosterCard: View {
-    let item: PlexMetadata
+    let item: MusicItem
     var style: MusicPosterCardStyle = .square
     var onFocusChanged: ((Bool) -> Void)? = nil
     let action: () -> Void
@@ -22,20 +22,24 @@ struct MusicPosterCard: View {
 
     private let artworkSize: CGFloat = 198
 
-    private var artworkURL: URL? {
-        guard let thumb = item.thumb ?? item.parentThumb,
-              let serverURL = PlexAuthManager.shared.selectedServerURL,
-              let token = PlexAuthManager.shared.selectedServerToken else { return nil }
-        return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")
-    }
+    private var artworkURL: URL? { item.artwork.poster }
+
+    private var title: String { item.title }
 
     private var subtitle: String? {
         guard resolvedStyle == .square else { return nil }
-        return item.parentTitle ?? item.grandparentTitle
+        switch item {
+        case .album(let a): return a.artistName
+        case .track(let t): return t.artistName
+        case .artist: return nil
+        }
     }
 
     private var resolvedStyle: MusicPosterCardStyle {
-        item.type == "artist" ? .circular : style
+        switch item {
+        case .artist: return .circular
+        default: return style
+        }
     }
 
     var body: some View {
@@ -47,7 +51,7 @@ struct MusicPosterCard: View {
                     .brightness(isFocused ? 0.02 : 0)
                     .shadow(color: .black.opacity(isFocused ? 0.28 : 0.14), radius: isFocused ? 18 : 8, y: isFocused ? 12 : 5)
 
-                Text(item.title ?? "Unknown")
+                Text(title)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)

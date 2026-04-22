@@ -11,8 +11,8 @@ import SwiftUI
 /// Used throughout the music UI for album/artist browsing shelves.
 struct MusicShelfRow: View {
     let title: String
-    let items: [PlexMetadata]
-    let onSelect: (PlexMetadata) -> Void
+    let items: [MusicItem]
+    let onSelect: (MusicItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -35,7 +35,7 @@ struct MusicShelfRow: View {
             // Horizontal scroll of poster cards
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 20) {
-                    ForEach(items, id: \.ratingKey) { item in
+                    ForEach(items) { item in
                         MusicPosterCard(item: item) {
                             onSelect(item)
                         }
