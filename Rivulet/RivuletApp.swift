@@ -109,6 +109,8 @@ struct RivuletApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(MediaProviderRegistry.shared)
+                .environment(MusicProviderRegistry.shared)
         }
         .modelContainer(sharedModelContainer)
     }

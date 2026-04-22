@@ -62,6 +62,7 @@ struct ContentView: View {
             // observers below.
             _ = MetadataSourceRegistry.shared
             MediaProviderRegistry.shared.populateFromCurrentAuth()
+            MusicProviderRegistry.shared.populateFromCurrentAuth()
 
             splashLog.info("Splash task started — hasCredentials=\(self.authManager.hasCredentials)")
             if !authManager.hasCredentials {
@@ -78,9 +79,11 @@ struct ContentView: View {
         }
         .onChange(of: authManager.selectedServerURL) { _, _ in
             MediaProviderRegistry.shared.populateFromCurrentAuth()
+            MusicProviderRegistry.shared.populateFromCurrentAuth()
         }
         .onChange(of: authManager.selectedServerToken) { _, _ in
             MediaProviderRegistry.shared.populateFromCurrentAuth()
+            MusicProviderRegistry.shared.populateFromCurrentAuth()
         }
     }
 
