@@ -8,9 +8,9 @@ final class HeroBackdropSessionTests: XCTestCase {
         let logoURL = URL(string: "https://example.com/logo.png")
         let request = HeroBackdropRequest(
             cacheKey: "movie:1",
-            plexBackdropURL: plexURL,
-            plexThumbnailURL: thumbURL,
-            plexLogoURL: logoURL
+            backdropURL: plexURL,
+            thumbnailURL: thumbURL,
+            logoURL: logoURL
         )
 
         let session = HeroBackdropSession(seed: request)
@@ -24,9 +24,9 @@ final class HeroBackdropSessionTests: XCTestCase {
         let thumbURL = URL(string: "https://example.com/thumb.jpg")
         let request = HeroBackdropRequest(
             cacheKey: "show:1",
-            plexBackdropURL: nil,
-            plexThumbnailURL: thumbURL,
-            plexLogoURL: nil
+            backdropURL: nil,
+            thumbnailURL: thumbURL,
+            logoURL: nil
         )
 
         let session = HeroBackdropSession(seed: request)

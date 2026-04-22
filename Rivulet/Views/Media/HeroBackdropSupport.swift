@@ -3,8 +3,9 @@
 //  Rivulet
 //
 //  Shared hero/backdrop resolution and full-size crossfade rendering for
-//  preview/detail/loading surfaces. Artwork URLs come from Plex metadata —
-//  no external lookups.
+//  preview/detail/loading surfaces. Artwork URLs come from whatever type
+//  the caller adapts into a `HeroBackdropRequest` — see the extensions
+//  at the bottom of this file.
 //
 
 import SwiftUI
@@ -13,9 +14,9 @@ import Combine
 
 struct HeroBackdropRequest: Hashable {
     let cacheKey: String
-    let plexBackdropURL: URL?
-    let plexThumbnailURL: URL?
-    let plexLogoURL: URL?
+    let backdropURL: URL?
+    let thumbnailURL: URL?
+    let logoURL: URL?
 }
 
 struct HeroBackdropResolution: Equatable {
@@ -40,9 +41,9 @@ struct HeroBackdropSession: Equatable {
     init() {}
 
     init(seed request: HeroBackdropRequest) {
-        displayedBackdropURL = request.plexBackdropURL ?? request.plexThumbnailURL
-        thumbnailURL = request.plexThumbnailURL
-        logoURL = request.plexLogoURL
+        displayedBackdropURL = request.backdropURL ?? request.thumbnailURL
+        thumbnailURL = request.thumbnailURL
+        logoURL = request.logoURL
     }
 
     var canUpgradeAfterSettle: Bool {
@@ -105,10 +106,10 @@ actor HeroBackdropResolver {
 
     func resolveAssets(for request: HeroBackdropRequest) async -> HeroBackdropResolution {
         HeroBackdropResolution(
-            displayedBackdropURL: request.plexBackdropURL ?? request.plexThumbnailURL,
+            displayedBackdropURL: request.backdropURL ?? request.thumbnailURL,
             pendingUpgradeURL: nil,
-            logoURL: request.plexLogoURL,
-            thumbnailURL: request.plexThumbnailURL
+            logoURL: request.logoURL,
+            thumbnailURL: request.thumbnailURL
         )
     }
 
@@ -305,21 +306,40 @@ extension PlexMetadata {
         let thumbnailPath = thumb ?? bestThumb
         let logoPath = logoPathOverride ?? clearLogoPath
 
-        let plexBackdropURL = backdropPath.flatMap {
+        let backdropURL = backdropPath.flatMap {
             URL(string: "\(serverURL)\($0)?X-Plex-Token=\(authToken)")
         }
-        let plexThumbnailURL = thumbnailPath.flatMap {
+        let thumbnailURL = thumbnailPath.flatMap {
             URL(string: "\(serverURL)\($0)?X-Plex-Token=\(authToken)")
         }
-        let plexLogoURL = logoPath.flatMap {
+        let logoURL = logoPath.flatMap {
             URL(string: "\(serverURL)\($0)?X-Plex-Token=\(authToken)")
         }
 
         return HeroBackdropRequest(
             cacheKey: ratingKey ?? "\(type ?? "item"):\(title ?? "unknown")",
-            plexBackdropURL: plexBackdropURL,
-            plexThumbnailURL: plexThumbnailURL,
-            plexLogoURL: plexLogoURL
+            backdropURL: backdropURL,
+            thumbnailURL: thumbnailURL,
+            logoURL: logoURL
+        )
+    }
+}
+
+// MARK: - MediaItem adapter
+
+extension MediaItem {
+    /// Agnostic counterpart to `PlexMetadata.heroBackdropRequest(...)`. No
+    /// server/auth inputs needed — `MediaItem.artwork.*` URLs are already
+    /// fully qualified by the provider's mapper. Episodes/seasons fall
+    /// back to their grandparent's backdrop when their own isn't set.
+    func heroBackdropRequest() -> HeroBackdropRequest {
+        let backdrop = artwork.backdrop ?? grandparentArtwork?.backdrop
+        let thumbnail = artwork.thumbnail ?? artwork.poster
+        return HeroBackdropRequest(
+            cacheKey: ref.itemID,
+            backdropURL: backdrop,
+            thumbnailURL: thumbnail,
+            logoURL: artwork.logo
         )
     }
 }

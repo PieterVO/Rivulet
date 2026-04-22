@@ -1771,9 +1771,9 @@ struct MediaDetailView: View {
 
         return HeroBackdropRequest(
             cacheKey: currentItem.ref.itemID,
-            plexBackdropURL: effectiveBackdrop,
-            plexThumbnailURL: thumbURL,
-            plexLogoURL: effectiveLogoURL
+            backdropURL: effectiveBackdrop,
+            thumbnailURL: thumbURL,
+            logoURL: effectiveLogoURL
         )
     }
 
@@ -1793,9 +1793,9 @@ struct MediaDetailView: View {
             }
             return HeroBackdropRequest(
                 cacheKey: plexMeta.ref.itemID,
-                plexBackdropURL: backdropURL,
-                plexThumbnailURL: thumbURL,
-                plexLogoURL: effectiveLogoURL
+                backdropURL: backdropURL,
+                thumbnailURL: thumbURL,
+                logoURL: effectiveLogoURL
             )
         }
 
@@ -1804,9 +1804,9 @@ struct MediaDetailView: View {
         let backdropURL = metadata.bestArt.flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(token)") }
         return HeroBackdropRequest(
             cacheKey: metadata.ratingKey ?? currentItem.ref.itemID,
-            plexBackdropURL: backdropURL,
-            plexThumbnailURL: thumbURL,
-            plexLogoURL: nil
+            backdropURL: backdropURL,
+            thumbnailURL: thumbURL,
+            logoURL: nil
         )
     }
 

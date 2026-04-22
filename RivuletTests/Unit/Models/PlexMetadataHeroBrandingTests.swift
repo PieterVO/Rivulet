@@ -29,14 +29,14 @@ final class PlexMetadataHeroBrandingTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            request.plexBackdropURL?.absoluteString,
+            request.backdropURL?.absoluteString,
             "https://example.com/library/metadata/1/art/1?X-Plex-Token=token"
         )
         XCTAssertEqual(
-            request.plexThumbnailURL?.absoluteString,
+            request.thumbnailURL?.absoluteString,
             "https://example.com/library/metadata/1/thumb/1?X-Plex-Token=token"
         )
-        XCTAssertNil(request.plexLogoURL)
+        XCTAssertNil(request.logoURL)
     }
 
     func testClearLogoPathReturnsFirstClearLogoEntry() throws {
@@ -79,7 +79,7 @@ final class PlexMetadataHeroBrandingTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            request.plexLogoURL?.absoluteString,
+            request.logoURL?.absoluteString,
             "https://example.com/library/metadata/2/clearLogo/1?X-Plex-Token=token"
         )
     }
@@ -101,11 +101,11 @@ final class PlexMetadataHeroBrandingTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            request.plexBackdropURL?.absoluteString,
+            request.backdropURL?.absoluteString,
             "https://example.com/library/metadata/9/art/1?X-Plex-Token=token"
         )
         XCTAssertEqual(
-            request.plexLogoURL?.absoluteString,
+            request.logoURL?.absoluteString,
             "https://example.com/library/metadata/9/clearLogo/1?X-Plex-Token=token"
         )
     }
