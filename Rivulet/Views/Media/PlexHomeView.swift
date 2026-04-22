@@ -327,8 +327,6 @@ struct PlexHomeView: View {
         let previewContent = PreviewOverlayHost(
             request: request,
             sourceFrames: capturedSourceFrames,
-            serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.selectedServerToken ?? "",
             onDismiss: { [weak menuBridge] sourceTarget in
                 _ = menuBridge  // prevent retain cycle warning
                 previewRestoreTarget = sourceTarget
@@ -1204,9 +1202,21 @@ struct InfiniteContentRow: View {
                             if isContinueWatching {
                                 onPlayItem?(item)
                             } else if let onPreviewRequested {
+                                // Convert Plex row items to agnostic MediaItems at the
+                                // carousel boundary. InfiniteContentRow is the last
+                                // Plex-typed renderer in the chain; PreviewRequest and
+                                // everything below speaks MediaItem.
+                                let providerID = MediaProviderRegistry.shared.primaryProvider?.id
+                                    ?? "plex:\(serverURL)"
+                                let mediaItems = items.map {
+                                    PlexMediaMapper.item(
+                                        $0, providerID: providerID,
+                                        serverURL: serverURL, authToken: authToken
+                                    )
+                                }
                                 onPreviewRequested(
                                     PreviewRequest(
-                                        items: items,
+                                        items: mediaItems,
                                         selectedIndex: index,
                                         sourceRowID: rowID,
                                         sourceItemID: sourceItemID(for: item, index: index)

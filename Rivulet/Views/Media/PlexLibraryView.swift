@@ -282,8 +282,6 @@ struct PlexLibraryView: View {
         let previewContent = PreviewOverlayHost(
             request: request,
             sourceFrames: capturedSourceFrames,
-            serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.selectedServerToken ?? "",
             onDismiss: { sourceTarget in
                 previewRestoreTarget = sourceTarget
                 if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,

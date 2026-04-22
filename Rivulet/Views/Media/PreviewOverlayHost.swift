@@ -45,8 +45,6 @@ extension EnvironmentValues {
 struct PreviewOverlayHost: View {
     let request: PreviewRequest
     let sourceFrames: [PreviewSourceTarget: CGRect]
-    let serverURL: String
-    let authToken: String
     let onDismiss: (PreviewSourceTarget) -> Void
     @ObservedObject var menuBridge: PreviewMenuBridge
 
@@ -77,15 +75,11 @@ struct PreviewOverlayHost: View {
     init(
         request: PreviewRequest,
         sourceFrames: [PreviewSourceTarget: CGRect],
-        serverURL: String,
-        authToken: String,
         onDismiss: @escaping (PreviewSourceTarget) -> Void,
         menuBridge: PreviewMenuBridge
     ) {
         self.request = request
         self.sourceFrames = sourceFrames
-        self.serverURL = serverURL
-        self.authToken = authToken
         self.onDismiss = onDismiss
         self.menuBridge = menuBridge
         self._selectedIndex = State(initialValue: request.selectedIndex)
@@ -131,8 +125,6 @@ struct PreviewOverlayHost: View {
                     )
                     PreviewCarouselCard(
                         item: request.items[index],
-                        serverURL: serverURL,
-                        authToken: authToken,
                         frame: cardFrame,
                         stageSize: geo.size,
                         stageWindowFrame: cardFrame,
@@ -438,62 +430,48 @@ struct PreviewOverlayHost: View {
 
     @MainActor
     private func prefetchAssets(around index: Int) {
-        let serverURLValue = serverURL
-        let authTokenValue = authToken
-        let networkManager = PlexNetworkManager.shared
         let itemsToPrefetch = [index - 1, index, index + 1]
             .filter { request.items.indices.contains($0) }
             .map { request.items[$0] }
-        let requests = itemsToPrefetch.map {
-            $0.heroBackdropRequest(serverURL: serverURLValue, authToken: authTokenValue)
-        }
-        let ratingKeys = itemsToPrefetch.compactMap(\.ratingKey)
+        let requests = itemsToPrefetch.map { $0.heroBackdropRequest() }
 
-        Task.detached(priority: .utility) {
-            [requests, ratingKeys, itemsToPrefetch, serverURLValue, authTokenValue, networkManager] in
+        Task.detached(priority: .utility) { [requests, itemsToPrefetch] in
             for request in requests {
                 _ = await HeroBackdropResolver.shared.resolveAssets(for: request)
             }
 
-            guard !ratingKeys.isEmpty else { return }
+            guard !itemsToPrefetch.isEmpty else { return }
 
-            // Prefetch fullMetadata + children (episodes/leaves) in parallel
-            // for each neighbor so the data cascade is instant when paged to.
+            // Prefetch fullDetail + children for each neighbor so the data
+            // cascade is instant when paged to. Provider-mediated — works for
+            // any backend registered under the item's providerID.
             await withTaskGroup(of: Void.self) { group in
                 for item in itemsToPrefetch {
-                    guard let ratingKey = item.ratingKey else { continue }
+                    let ref = item.ref
+                    let kind = item.kind
 
-                    // fullMetadata
+                    // fullDetail warm-up: just invoke the provider and let its
+                    // internal cache (if any) absorb the result. We don't need
+                    // the return value here — the on-screen MediaDetailView will
+                    // call fullDetail again when the card becomes current.
                     group.addTask {
-                        let isFresh = await MainActor.run {
-                            PlexDataStore.shared.isFullMetadataFresh(for: ratingKey)
+                        let provider = await MainActor.run {
+                            MediaProviderRegistry.shared.provider(for: ref.providerID)
                         }
-                        guard !isFresh else { return }
-                        guard let metadata = try? await networkManager.getFullMetadata(
-                            serverURL: serverURLValue,
-                            authToken: authTokenValue,
-                            ratingKey: ratingKey
-                        ) else { return }
-                        await MainActor.run {
-                            PlexDataStore.shared.cacheFullMetadata(metadata, for: ratingKey)
-                        }
+                        guard let provider else { return }
+                        _ = try? await provider.fullDetail(for: ref)
                     }
 
-                    // For shows: prefetch all-episodes (getAllLeaves) so the
-                    // episode thumbnails + data are cached before the user
-                    // pages to this card.
-                    if item.type == "show" {
+                    // For shows: warm the episode-thumbnail image cache so
+                    // scrolling into the episode list is instant.
+                    if kind == .show {
                         group.addTask {
-                            guard let episodes = try? await networkManager.getAllLeaves(
-                                serverURL: serverURLValue,
-                                authToken: authTokenValue,
-                                ratingKey: ratingKey
-                            ) else { return }
-                            // Warm the first ~8 episode thumbnails
-                            let thumbURLs = episodes.prefix(8).compactMap { ep -> URL? in
-                                guard let thumb = ep.thumb else { return nil }
-                                return URL(string: "\(serverURLValue)\(thumb)?X-Plex-Token=\(authTokenValue)")
+                            let provider = await MainActor.run {
+                                MediaProviderRegistry.shared.provider(for: ref.providerID)
                             }
+                            guard let provider,
+                                  let episodes = try? await provider.allEpisodes(of: ref) else { return }
+                            let thumbURLs = episodes.prefix(8).compactMap { $0.artwork.thumbnail ?? $0.artwork.poster }
                             for url in thumbURLs {
                                 _ = await ImageCacheManager.shared.image(for: url)
                             }
@@ -622,9 +600,7 @@ struct PreviewOverlayHost: View {
 }
 
 private struct PreviewCarouselCard: View {
-    let item: PlexMetadata
-    let serverURL: String
-    let authToken: String
+    let item: MediaItem
     let frame: CGRect
     let stageSize: CGSize
     let stageWindowFrame: CGRect
@@ -664,8 +640,6 @@ private struct PreviewCarouselCard: View {
             if isCurrent || phase == .carouselStable {
                 PreviewHeroSurface(
                     item: item,
-                    serverURL: serverURL,
-                    authToken: authToken,
                     isExpanded: isCurrent ? isCardExpanded : false,
                     vignetteVisible: isCurrent ? vignetteVisible : false,
                     metadataVisible: isCurrent ? metadataVisible : false,
@@ -690,8 +664,6 @@ private struct PreviewCarouselCard: View {
             } else {
                 PreviewCarouselSideCard(
                     item: item,
-                    serverURL: serverURL,
-                    authToken: authToken,
                     motionLocked: motionLocked
                 )
             }
@@ -731,9 +703,7 @@ private struct PreviewCarouselStageWindow: View {
 }
 
 private struct PreviewHeroSurface: View {
-    let item: PlexMetadata
-    let serverURL: String
-    let authToken: String
+    let item: MediaItem
     let isExpanded: Bool
     let vignetteVisible: Bool
     let metadataVisible: Bool
@@ -750,14 +720,9 @@ private struct PreviewHeroSurface: View {
     let enableDetailDataLoading: Bool
     let previewAnimationSettled: Bool
 
-    private var mediaItem: MediaItem {
-        let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
-        return PlexMediaMapper.item(item, providerID: providerID, serverURL: serverURL, authToken: authToken)
-    }
-
     var body: some View {
         MediaDetailView(
-            item: mediaItem,
+            item: item,
             presentationMode: isExpanded ? .expandedDetail : .previewCarousel,
             backgroundParallaxOffset: backgroundParallaxOffset,
             showVignette: vignetteVisible,
@@ -787,13 +752,11 @@ private struct PreviewHeroSurface: View {
 /// over. Binding `HeroBackdropImage` directly to the resolved URL removes a
 /// `@Published` publisher and a `.task(id:)` from the entry window.
 private struct PreviewCarouselSideCard: View {
-    let item: PlexMetadata
-    let serverURL: String
-    let authToken: String
+    let item: MediaItem
     let motionLocked: Bool
 
     private var request: HeroBackdropRequest {
-        item.heroBackdropRequest(serverURL: serverURL, authToken: authToken)
+        item.heroBackdropRequest()
     }
 
     var body: some View {
