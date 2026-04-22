@@ -42,9 +42,9 @@ struct DiscoverView: View {
             if heroActive {
                 DiscoverHeroBackdrop(currentItem: currentHeroItem)
                     .ignoresSafeArea()
-                    // Matches the library view's hero parallax — pulls up further
-                    // than the home page so the first row seats higher on scroll.
-                    .offset(y: -heroScrollOffset * 1.3 - min(122, heroScrollOffset * 1.22))
+                    // Shared parallax with PlexHomeView / PlexLibraryView so
+                    // the hero surface feels identical across the three.
+                    .offset(y: -heroScrollOffset * 1.3 - min(72, heroScrollOffset * 0.72))
                     .allowsHitTesting(false)
             }
 
@@ -79,7 +79,7 @@ struct DiscoverView: View {
                             .id("discoverHero")
                         }
 
-                        VStack(alignment: .leading, spacing: 40) {
+                        VStack(alignment: .leading, spacing: 48) {
                             ForEach(TMDBDiscoverSection.allCases) { section in
                                 let items = viewModel.items(for: section)
                                 if !items.isEmpty {

@@ -452,7 +452,13 @@ struct PlexLibraryView: View {
                     authToken: authManager.selectedServerToken ?? ""
                 )
                 .ignoresSafeArea()
-                .offset(y: -heroScrollOffset * 1.3 - min(122, heroScrollOffset * 1.22))
+                // Parallax values mirror PlexHomeView so both hero surfaces
+                // feel identical. Library used to need more pull (122 / 1.22)
+                // because the sections below the hero had accumulated their
+                // own top-padding (discovery: +48, section header: +60);
+                // those were flattened into a single wrapper VStack so this
+                // can match Home's gentler 72 / 0.72.
+                .offset(y: -heroScrollOffset * 1.3 - min(72, heroScrollOffset * 0.72))
                 .allowsHitTesting(false)
             }
 
@@ -481,10 +487,17 @@ struct PlexLibraryView: View {
                         .id("libraryHero")
                     }
 
-                    essentialRowsView(scrollProxy: scrollProxy)
-                    discoveryRowsView(scrollProxy: scrollProxy)
-                    librarySectionHeader
-                    libraryGridView
+                    // Single wrapping VStack so everything below the hero scrolls
+                    // as one unit with consistent inter-section spacing. Mirrors
+                    // PlexHomeView's pattern; each child view has had its own
+                    // top-padding removed (see comments at each call site).
+                    VStack(alignment: .leading, spacing: 48) {
+                        essentialRowsView(scrollProxy: scrollProxy)
+                        discoveryRowsView(scrollProxy: scrollProxy)
+                        librarySectionHeader
+                        libraryGridView
+                    }
+                    .padding(.top, heroActive ? 0 : 100)
 
                     // Loading more indicator
                     if isLoadingMore {
@@ -666,10 +679,9 @@ struct PlexLibraryView: View {
                 }
             }
             .padding(.horizontal, ScaledDimensions.rowHorizontalPadding)
-            // When the hero is active it sits above these rows and already
-            // provides visual separation; only add the large top inset when
-            // the essential rows are the first thing on the page.
-            .padding(.top, (showLibraryHero && !heroItems.isEmpty) ? 0 : 100)
+            // Top padding is handled by the wrapping VStack in contentView,
+            // which applies the same `heroActive ? 0 : 100` conditional once
+            // for the whole block (essential + discovery + header + grid).
         }
     }
 
@@ -784,7 +796,7 @@ struct PlexLibraryView: View {
                 }
             }
             .padding(.horizontal, ScaledDimensions.rowHorizontalPadding)
-            .padding(.top, 48)
+            // Inter-section spacing handled by the wrapping VStack in contentView.
         }
     }
 
@@ -812,8 +824,9 @@ struct PlexLibraryView: View {
             sortButton
         }
         .padding(.horizontal, ScaledDimensions.rowHorizontalPadding)
-        .padding(.top, 60)
-        .padding(.bottom, 32)
+        // Inter-section spacing handled by the wrapping VStack in contentView
+        // (48pt to the grid below). Previously this had an explicit 32pt
+        // bottom padding on top of a 60pt top padding.
     }
 
     // MARK: - Sort Button
