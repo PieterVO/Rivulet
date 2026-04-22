@@ -149,8 +149,13 @@ final class DiscoverPlaybackRouter {
             topVC = presented
         }
 
+        // Presenting via UIKit bypasses the parent SwiftUI environment, so
+        // re-inject the registries that MediaDetailView reads via @Environment.
         let detail = MediaDetailView(item: mediaItem)
             .presentationBackground(.black)
+            .environment(MediaProviderRegistry.shared)
+            .environment(MusicProviderRegistry.shared)
+            .environment(MetadataSourceRegistry.shared)
         let host = UIHostingController(rootView: detail)
         host.modalPresentationStyle = .fullScreen
         topVC.present(host, animated: true)

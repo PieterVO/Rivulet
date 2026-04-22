@@ -300,8 +300,17 @@ struct PlexLibraryView: View {
             menuBridge: menuBridge
         )
 
+        // Preview is presented via UIKit `present(_:animated:)`, which creates
+        // a hosting controller whose SwiftUI environment is NOT inherited from
+        // this view's tree. Re-inject the registries so MediaDetailView (and
+        // anything else deeper) can resolve @Environment lookups.
+        let contentWithRegistries = previewContent
+            .environment(MediaProviderRegistry.shared)
+            .environment(MusicProviderRegistry.shared)
+            .environment(MetadataSourceRegistry.shared)
+
         let container = PreviewContainerViewController(
-            content: previewContent,
+            content: contentWithRegistries,
             menuHandler: {
                 menuBridge.triggerMenu()
             }
