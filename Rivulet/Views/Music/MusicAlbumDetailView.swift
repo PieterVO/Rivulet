@@ -8,12 +8,12 @@
 import SwiftUI
 
 struct MusicAlbumDetailView: View {
-    let album: PlexMetadata
+    let album: MusicAlbum
 
-    @ObservedObject private var authManager = PlexAuthManager.shared
+    @Environment(MusicProviderRegistry.self) private var registry
     @ObservedObject private var musicQueue = MusicQueue.shared
 
-    @State private var tracks: [PlexMetadata] = []
+    @State private var detail: MusicAlbumDetail?
     @State private var isLoading = true
 
     @FocusState private var initialFocus: AlbumDetailFocus?
@@ -22,27 +22,22 @@ struct MusicAlbumDetailView: View {
         case play
     }
 
-    private let networkManager = PlexNetworkManager.shared
-
-    private var artworkURL: URL? {
-        guard let thumb = album.thumb ?? album.parentThumb,
-              let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return nil }
-        return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(token)")
+    private var provider: (any MusicProvider)? {
+        registry.provider(for: album.ref.providerID)
     }
 
+    private var tracks: [MusicTrack] { detail?.tracks ?? [] }
+
+    private var artworkURL: URL? { album.artwork.poster }
+
     private var artistName: String {
-        album.parentTitle ?? album.grandparentTitle ?? "Unknown Artist"
+        album.artistName ?? "Unknown Artist"
     }
 
     private var metadataLine: String {
         var parts: [String] = []
-        if let genres = album.Genre, let first = genres.first?.tag {
-            parts.append(first)
-        }
-        if let year = album.year {
-            parts.append(String(year))
-        }
+        if let first = album.genres.first { parts.append(first) }
+        if let year = album.year { parts.append(String(year)) }
         return parts.joined(separator: " · ")
     }
 
@@ -119,7 +114,7 @@ struct MusicAlbumDetailView: View {
 
     private var rightColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(album.title ?? "Unknown Album")
+            Text(album.title)
                 .font(.system(size: 56, weight: .bold))
                 .foregroundStyle(.white)
                 .lineLimit(2)
@@ -239,10 +234,10 @@ struct MusicAlbumDetailView: View {
                 ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
                     MusicAlbumTrackRow(
                         track: track,
-                        displayNumber: track.index ?? (index + 1),
-                        isCurrent: musicQueue.currentTrack?.ratingKey == track.ratingKey,
-                        isFavorite: (track.userRating ?? 0) > 0,
-                        durationText: track.duration.map(formatDuration),
+                        displayNumber: track.trackNumber ?? (index + 1),
+                        isCurrent: musicQueue.currentTrack?.ref == track.ref,
+                        isFavorite: track.userState.isFavorite,
+                        durationText: track.duration > 0 ? formatDuration(track.duration) : nil,
                         onSelect: { musicQueue.playAlbum(tracks: tracks, startingAt: index) },
                         onPlayNext: { musicQueue.addNext(track: track) },
                         onPlayAfter: { musicQueue.addToEnd(track: track) }
@@ -254,29 +249,18 @@ struct MusicAlbumDetailView: View {
     }
 
     private func loadTracks() async {
-        guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken,
-              let ratingKey = album.ratingKey else {
-            isLoading = false
-            return
-        }
-
+        guard let provider = provider else { isLoading = false; return }
         do {
-            tracks = try await networkManager.getChildren(
-                serverURL: serverURL,
-                authToken: token,
-                ratingKey: ratingKey
-            )
+            detail = try await provider.albumDetail(for: album.ref)
         } catch {
-            print("MusicAlbumDetail: Failed to load tracks: \(error)")
+            print("MusicAlbumDetailView: failed to load album detail: \(error)")
         }
-
         isLoading = false
     }
 
-    private func formatDuration(_ ms: Int) -> String {
-        let totalSeconds = ms / 1000
-        return "\(totalSeconds / 60):\(String(format: "%02d", totalSeconds % 60))"
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds)
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 }
 
@@ -287,7 +271,7 @@ struct MusicAlbumDetailView: View {
 /// - Custom focus tint avoids the oversized native white focus highlight; we drive it from
 ///   `@FocusState` and apply a subtle white background only when the row is focused.
 private struct MusicAlbumTrackRow: View {
-    let track: PlexMetadata
+    let track: MusicTrack
     let displayNumber: Int
     let isCurrent: Bool
     let isFavorite: Bool
@@ -325,7 +309,7 @@ private struct MusicAlbumTrackRow: View {
                     }
                 }
 
-                Text(track.title ?? "Unknown")
+                Text(track.title)
                     .font(.system(size: 26, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
