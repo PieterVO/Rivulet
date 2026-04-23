@@ -50,8 +50,11 @@ struct PreviewOverlayHost: View {
 
     /// Carousel-local copy of the request's items. Mutable so the prefetch
     /// loop can enrich TMDB stubs with real backdrop/overview/etc. as their
-    /// detail payload resolves. The initial values come from `request.items`.
-    @State private var items: [MediaItem] = []
+    /// detail payload resolves. Seeded in init from `request.items` so the
+    /// very first body render (which happens BEFORE onAppear fires) sees
+    /// the populated array — otherwise `items[selectedIndex]` in the
+    /// entry-morph ForEach would index an empty array and trap.
+    @State private var items: [MediaItem]
 
     @State private var selectedIndex: Int
     @State private var stateMachine = PreviewStateMachine()
@@ -88,12 +91,13 @@ struct PreviewOverlayHost: View {
         self.onDismiss = onDismiss
         self.menuBridge = menuBridge
         self._selectedIndex = State(initialValue: request.selectedIndex)
+        self._items = State(initialValue: request.items)
     }
 
     private var visibleIndices: [Int] {
         switch stateMachine.phase {
         case .entryMorph:
-            return [selectedIndex]
+            return [selectedIndex].filter { items.indices.contains($0) }
         case .carouselStable, .expandingHero, .expandedHero, .detailsStable, .exiting:
             return [selectedIndex - 1, selectedIndex, selectedIndex + 1]
                 .filter { items.indices.contains($0) }
@@ -178,12 +182,11 @@ struct PreviewOverlayHost: View {
             .onAppear {
                 capturedSourceFrame = sourceFrames[request.sourceTarget]
                 focusedArea = .carousel
-                // Seed the carousel-local mutable items array from the request.
-                // `items` is @State so the prefetch loop can enrich TMDB stubs
-                // with real backdrops/overviews as they resolve.
-                if items.isEmpty {
-                    items = request.items
-                }
+                // `items` is seeded in init so the first body render sees
+                // a populated array. Don't re-seed here — re-entry into
+                // onAppear (e.g. parent re-mount) would clobber any
+                // prefetch enrichment that already landed.
+
                 // Skip the initial prefetch until the entry animation completes —
                 // the `onChange(of: previewAnimationSettled)` below picks it up
                 // once the flag flips true. Paging prefetches (in `onChange(of:
