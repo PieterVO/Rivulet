@@ -1532,8 +1532,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         partId: Int,
         audioStreamID: Int
     ) async {
-        let urlString = "\(serverURL)/library/parts/\(partId)?audioStreamID=\(audioStreamID)&X-Plex-Token=\(authToken)"
-        guard let url = URL(string: urlString) else {
+        guard var components = URLComponents(string: "\(serverURL)/library/parts/\(partId)") else {
+            print("[Plex] Failed to build audio stream selection URL")
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "audioStreamID", value: "\(audioStreamID)"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken)
+        ]
+        guard let url = components.url else {
             print("[Plex] Failed to build audio stream selection URL")
             return
         }
@@ -1542,11 +1549,45 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         request.httpMethod = "PUT"
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             print("[Plex] Set audio stream \(audioStreamID) on part \(partId): HTTP \(status)")
         } catch {
             print("[Plex] Failed to set audio stream: \(error.localizedDescription)")
+        }
+    }
+
+    /// Set the preferred subtitle stream on a media part. Pass `0` for
+    /// `subtitleStreamID` to disable subtitles. Plex persists this
+    /// per-user-per-part, so it survives across plays from any client.
+    func setSelectedSubtitleStream(
+        serverURL: String,
+        authToken: String,
+        partId: Int,
+        subtitleStreamID: Int
+    ) async {
+        guard var components = URLComponents(string: "\(serverURL)/library/parts/\(partId)") else {
+            print("[Plex] Failed to build subtitle stream selection URL")
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "subtitleStreamID", value: "\(subtitleStreamID)"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken)
+        ]
+        guard let url = components.url else {
+            print("[Plex] Failed to build subtitle stream selection URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[Plex] Set subtitle stream \(subtitleStreamID) on part \(partId): HTTP \(status)")
+        } catch {
+            print("[Plex] Failed to set subtitle stream: \(error.localizedDescription)")
         }
     }
 

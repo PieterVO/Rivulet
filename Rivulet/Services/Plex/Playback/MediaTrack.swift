@@ -71,9 +71,12 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.subtitleKey = stream.key
     }
 
-    /// Display name with additional info
+    /// Display name with additional info. Prefers Plex's long-form
+    /// `extendedDisplayTitle` when present so commentary / SDH / etc.
+    /// are distinguishable; otherwise falls back to the synthesized
+    /// `name`. Forced / SDH suffixes are appended in either case.
     var displayName: String {
-        var components: [String] = [name]
+        var components: [String] = [extendedDisplayTitle ?? name]
 
         if isForced {
             components.append("(Forced)")
