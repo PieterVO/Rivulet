@@ -1,10 +1,12 @@
 name: Claude Code Review
 
-# Runs on the base repo (not the fork) so OIDC token minting works for
-# fork PRs. Workflow source comes from the base branch — never from the
-# PR head — and an author allowlist limits who can trigger the run.
+# Uses `pull_request` rather than `pull_request_target` because Anthropic's
+# OIDC token-exchange endpoint currently rejects `pull_request_target` events
+# (anthropics/claude-code-action#713). Trade-off: fork PRs won't get
+# auto-reviewed — they can still be reviewed on demand by commenting `@claude`,
+# which is handled by claude.yml via `issue_comment`.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 
 jobs:
@@ -21,10 +23,9 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout PR head
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
 
       - name: Run Claude Code Review
