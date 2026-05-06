@@ -20,6 +20,7 @@ class PlayerContainerViewController: UIViewController {
     private var hostingController: UIHostingController<AnyView>?
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
+    private var touchSurfaceTapGesture: UITapGestureRecognizer?
 
     // Directional gesture recognizers for IR remote support
     private var dPadLeftTapGesture: UITapGestureRecognizer?
@@ -83,6 +84,10 @@ class PlayerContainerViewController: UIViewController {
 
         // Pan gesture for swipe-to-scrub on Siri Remote touchpad
         setupPanGesture()
+
+        // Bare-tap on the Siri Remote touch surface surfaces the timeline
+        // overlay briefly (matches Plex's tvOS client behavior).
+        setupTouchSurfaceTapGesture()
 
         // Directional gestures for IR remote support (learned remotes, universal remotes)
         // These fire UIPress events with leftArrow/rightArrow, NOT GameController events
@@ -296,6 +301,35 @@ class PlayerContainerViewController: UIViewController {
         panGestureRecognizer = panRecognizer
     }
 
+    // MARK: - Touch-Surface Tap (timeline overlay)
+
+    /// Bare-tap on the Siri Remote touch surface (no force/click). Fires
+    /// only on `.indirect` touches — the touchpad — and not on `.select`
+    /// presses (those are the click and are routed to play/pause via the
+    /// micro-gamepad buttonA handler). Coexists with the pan recognizer:
+    /// if the user starts moving, pan takes over and tap doesn't fire.
+    private func setupTouchSurfaceTapGesture() {
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTouchSurfaceTap))
+        tap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        // On tvOS, UITapGestureRecognizer defaults allowedPressTypes to
+        // [.select], so without this it would silently wait for a click
+        // rather than a bare finger tap.
+        tap.allowedPressTypes = []
+        view.addGestureRecognizer(tap)
+        touchSurfaceTapGesture = tap
+    }
+
+    @objc private func handleTouchSurfaceTap() {
+        guard let vm = viewModel else { return }
+        guard !vm.showInfoPanel,
+              !vm.isScrubbing,
+              vm.postVideoState == .hidden,
+              !vm.playbackState.isFailed
+        else { return }
+
+        vm.showControlsTemporarily()
+    }
+
     // MARK: - Directional Gestures (IR Remote Support)
 
     /// Sets up gesture recognizers for left/right arrow key presses.
@@ -389,11 +423,26 @@ class PlayerContainerViewController: UIViewController {
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
         guard let vm = viewModel else { return }
 
-        // Only allow swipe scrubbing when paused
-        guard vm.playbackState == .paused else { return }
+        // Bail in error / post-video states regardless of mode.
+        if vm.playbackState.isFailed || vm.postVideoState != .hidden {
+            return
+        }
 
-        // Don't handle pan when info panel or post-video is showing
-        if vm.showInfoPanel || vm.postVideoState != .hidden {
+        // The same touch-surface pan drives two distinct interactions
+        // depending on player state:
+        //   • paused, panel closed → continuous swipe-to-scrub (existing).
+        //   • panel open OR active playback → discrete swipe gesture
+        //     that opens the panel (downward, when closed) or navigates
+        //     the menu (any direction, when open).
+        // For the discrete-swipe case we wait for the gesture to end
+        // and decide direction from total translation + final velocity,
+        // which reads the user's intent more reliably than sampling the
+        // first directional crossing during motion.
+        let isSwipeMode = vm.showInfoPanel || vm.playbackState != .paused
+        if isSwipeMode {
+            if gesture.state == .ended {
+                handleEndOfSwipe(gesture, vm: vm)
+            }
             return
         }
 
@@ -422,6 +471,52 @@ class PlayerContainerViewController: UIViewController {
 
         default:
             break
+        }
+    }
+
+    /// Translate an end-of-pan gesture into a discrete swipe and dispatch
+    /// the corresponding action. Called only in the swipe-mode branch of
+    /// handlePanGesture (panel open, or active non-paused playback) — the
+    /// scrubbing path still owns paused-state pans.
+    private func handleEndOfSwipe(_ gesture: UIPanGestureRecognizer, vm: UniversalPlayerViewModel) {
+        let translation = gesture.translation(in: view)
+        let velocity = gesture.velocity(in: view)
+
+        let absX = abs(translation.x)
+        let absY = abs(translation.y)
+        let dominantHorizontal = absX > absY
+        let displacement = dominantHorizontal ? absX : absY
+        let speed = dominantHorizontal ? abs(velocity.x) : abs(velocity.y)
+
+        // Recognize a swipe if there's either meaningful displacement
+        // or a strong final velocity. Either alone is sufficient — a
+        // short fast flick reads as a swipe even if the displacement
+        // is small, and a slow long drag reads as a swipe even at
+        // low velocity.
+        let minDistance: CGFloat = 30
+        let minVelocity: CGFloat = 150
+        guard displacement >= minDistance || speed >= minVelocity else { return }
+
+        let direction: MoveCommandDirection
+        if dominantHorizontal {
+            direction = translation.x > 0 ? .right : .left
+        } else {
+            direction = translation.y > 0 ? .down : .up
+        }
+
+        if vm.showInfoPanel {
+            // Mirror UniversalPlayerView's onMoveCommand: swipe-up at
+            // the topmost row closes the panel.
+            if direction == .up && vm.focusedRowIndex == 0 {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                    vm.showInfoPanel = false
+                }
+            } else {
+                vm.navigateSettings(direction: direction)
+            }
+        } else if direction == .down {
+            // Active, non-paused playback: downward swipe opens the panel.
+            inputCoordinator.handle(action: .showInfo, source: .siriMicroGamepad)
         }
     }
 

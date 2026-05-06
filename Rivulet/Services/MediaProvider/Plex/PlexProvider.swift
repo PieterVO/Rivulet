@@ -208,6 +208,62 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
         )
     }
 
+    // MARK: - Per-item track selection
+
+    func setSelectedAudioTrack(_ trackID: String, source sourceID: String, of itemRef: MediaItemRef) async throws {
+        guard let streamID = Int(trackID) else {
+            throw MediaProviderError.backendSpecific(underlying: "audio trackID must be numeric for Plex (got \(trackID))")
+        }
+        let partID = try await resolvePartID(sourceID: sourceID, ratingKey: itemRef.itemID)
+        await networkManager.setSelectedAudioStream(
+            serverURL: serverURL,
+            authToken: authToken,
+            partId: partID,
+            audioStreamID: streamID
+        )
+    }
+
+    func setSelectedSubtitleTrack(_ trackID: String?, source sourceID: String, of itemRef: MediaItemRef) async throws {
+        // `nil` means "off"; Plex encodes that as 0.
+        let streamID: Int
+        if let trackID {
+            guard let parsed = Int(trackID) else {
+                throw MediaProviderError.backendSpecific(underlying: "subtitle trackID must be numeric for Plex (got \(trackID))")
+            }
+            streamID = parsed
+        } else {
+            streamID = 0
+        }
+        let partID = try await resolvePartID(sourceID: sourceID, ratingKey: itemRef.itemID)
+        await networkManager.setSelectedSubtitleStream(
+            serverURL: serverURL,
+            authToken: authToken,
+            partId: partID,
+            subtitleStreamID: streamID
+        )
+    }
+
+    /// Plex's per-user-per-part PUT endpoint takes the Plex `Part.id`, but our
+    /// agnostic `MediaSource.id` carries `Media.id`. Round-trip the ratingKey
+    /// to the network manager so we can pick the matching Media + first Part.
+    private func resolvePartID(sourceID: String, ratingKey: String) async throws -> Int {
+        let metadata = try await plexCall {
+            try await networkManager.getFullMetadata(
+                serverURL: serverURL, authToken: authToken, ratingKey: ratingKey
+            )
+        }
+        let media: PlexMedia? = {
+            if let id = Int(sourceID), let match = metadata.Media?.first(where: { $0.id == id }) {
+                return match
+            }
+            return metadata.Media?.first
+        }()
+        guard let media, let part = media.Part?.first else {
+            throw MediaProviderError.notFound
+        }
+        return part.id
+    }
+
     // MARK: - Watch state
 
     func markPlayed(_ itemRef: MediaItemRef) async throws {

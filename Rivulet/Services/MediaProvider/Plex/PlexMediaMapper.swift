@@ -105,10 +105,12 @@ enum PlexMediaMapper {
             channelLayout: stream.audioChannelLayout,
             language: stream.language,
             title: stream.displayTitle ?? stream.title,
+            extendedTitle: stream.extendedDisplayTitle,
             bitrate: stream.bitrate,
             samplingRate: stream.samplingRate,
             isDefault: stream.default ?? false,
-            isForced: stream.forced ?? false
+            isForced: stream.forced ?? false,
+            isSelected: stream.selected ?? false
         )
     }
 
@@ -126,11 +128,13 @@ enum PlexMediaMapper {
             codec: codec,
             language: stream.language,
             title: stream.title ?? stream.displayTitle,
+            extendedTitle: stream.extendedDisplayTitle,
             isDefault: stream.default ?? false,
             isForced: stream.forced ?? false,
             isHearingImpaired: stream.hearingImpaired ?? false,
             isEmbedded: isEmbedded,
-            externalURL: externalURL
+            externalURL: externalURL,
+            isSelected: stream.selected ?? false
         )
     }
 

@@ -18,6 +18,12 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
     let isForced: Bool
     let isHearingImpaired: Bool
 
+    /// Plex's long-form descriptive title when present (e.g.,
+    /// "English (AC3 5.1) - Director's Commentary"). Preferred over `name`
+    /// in user-facing pickers so commentary / audio-description / SDH
+    /// tracks are distinguishable from the main mix.
+    let extendedDisplayTitle: String?
+
     // Audio-specific
     let channels: Int?
 
@@ -33,6 +39,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         isDefault: Bool = false,
         isForced: Bool = false,
         isHearingImpaired: Bool = false,
+        extendedDisplayTitle: String? = nil,
         channels: Int? = nil,
         subtitleKey: String? = nil
     ) {
@@ -44,6 +51,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isDefault = isDefault
         self.isForced = isForced
         self.isHearingImpaired = isHearingImpaired
+        self.extendedDisplayTitle = extendedDisplayTitle
         self.channels = channels
         self.subtitleKey = subtitleKey
     }
@@ -58,13 +66,50 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isDefault = stream.default ?? false
         self.isForced = stream.forced ?? false
         self.isHearingImpaired = stream.hearingImpaired ?? false
+        self.extendedDisplayTitle = stream.extendedDisplayTitle
         self.channels = stream.channels
         self.subtitleKey = stream.key
     }
 
-    /// Display name with additional info
+    /// Bridge from agnostic `AudioTrack` for use in pickers like
+    /// `TrackSelectionSheet` that pre-date the agnostic models.
+    /// `id` round-trips through Int — provider IDs that aren't numeric
+    /// won't survive this bridge, but Plex/Jellyfin both use numeric IDs.
+    init(from track: AudioTrack) {
+        self.id = Int(track.id) ?? 0
+        self.name = track.title ?? track.language ?? "Track \(track.id)"
+        self.language = track.language
+        self.languageCode = track.language
+        self.codec = track.codec
+        self.isDefault = track.isDefault
+        self.isForced = track.isForced
+        self.isHearingImpaired = false
+        self.extendedDisplayTitle = track.extendedTitle
+        self.channels = track.channels
+        self.subtitleKey = nil
+    }
+
+    /// Bridge from agnostic `SubtitleTrack`.
+    init(from track: SubtitleTrack) {
+        self.id = Int(track.id) ?? 0
+        self.name = track.title ?? track.language ?? "Track \(track.id)"
+        self.language = track.language
+        self.languageCode = track.language
+        self.codec = track.codec
+        self.isDefault = track.isDefault
+        self.isForced = track.isForced
+        self.isHearingImpaired = track.isHearingImpaired
+        self.extendedDisplayTitle = track.extendedTitle
+        self.channels = nil
+        self.subtitleKey = track.externalURL?.path
+    }
+
+    /// Display name with additional info. Prefers Plex's long-form
+    /// `extendedDisplayTitle` when present so commentary / SDH / etc.
+    /// are distinguishable; otherwise falls back to the synthesized
+    /// `name`. Forced / SDH suffixes are appended in either case.
     var displayName: String {
-        var components: [String] = [name]
+        var components: [String] = [extendedDisplayTitle ?? name]
 
         if isForced {
             components.append("(Forced)")
@@ -100,7 +145,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         case "subrip", "srt": return "SRT"
         case "ass", "ssa": return "ASS"
         case "pgs", "hdmv_pgs_subtitle", "pgssub": return "PGS"
-        case "dvdsub", "dvd_subtitle": return "VOBSUB"
+        case "dvdsub", "dvd_subtitle", "vobsub": return "VOBSUB"
         case "mov_text": return "TX3G"
         case "webvtt", "vtt": return "WebVTT"
         case "cc_dec": return "CC"
@@ -117,7 +162,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         case "subrip", "srt": return "srt"
         case "ass", "ssa": return "ass"
         case "pgs", "hdmv_pgs_subtitle", "pgssub": return "pgs"
-        case "dvdsub", "dvd_subtitle": return "dvdsub"
+        case "dvdsub", "dvd_subtitle", "vobsub": return "dvdsub"
         case "mov_text", "tx3g": return "mov_text"
         case "webvtt", "vtt": return "webvtt"
         default: return codec

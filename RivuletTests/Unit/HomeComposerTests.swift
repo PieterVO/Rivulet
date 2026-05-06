@@ -71,6 +71,8 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
     func progressReporter(for itemRef: MediaItemRef, playSessionID: String?) -> any ProgressReporter {
         StubReporter()
     }
+    func setSelectedAudioTrack(_ trackID: String, source sourceID: String, of itemRef: MediaItemRef) async throws {}
+    func setSelectedSubtitleTrack(_ trackID: String?, source sourceID: String, of itemRef: MediaItemRef) async throws {}
     func markPlayed(_ itemRef: MediaItemRef) async throws {}
     func markUnplayed(_ itemRef: MediaItemRef) async throws {}
     func updateProgress(_ itemRef: MediaItemRef, position: TimeInterval) async throws {}

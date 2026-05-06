@@ -82,6 +82,20 @@ struct MediaDetailView: View {
     @State private var isLoadingShufflePlay = false
     @State private var shuffledEpisodeQueue: [MediaItem] = []
 
+    // Pre-play track picker state. Selections are per-detail-page-visit
+    // and are passed to the player on Play; we don't touch the saved
+    // language preference managers, so future plays still default to
+    // remembered language defaults until the user explicitly picks again.
+    // `preplayAudioTrackId` / `preplaySubtitleSelection` carry the user's
+    // local pick; `pendingPreplayWrite` chains the server-side PUT +
+    // detail refresh so presentPlayer() can await it before building the
+    // player VM.
+    @State private var preplayAudioTrackId: String? = nil
+    @State private var preplaySubtitleSelection: UniversalPlayerViewModel.InitialSubtitleSelection = .auto
+    @State private var showAudioTrackPicker = false
+    @State private var showSubtitleTrackPicker = false
+    @State private var pendingPreplayWrite: Task<Void, Never>? = nil
+
     /// Escape hatch: PlexMetadata required by UniversalPlayerView.
     /// Populated via `presentPlayer()` at play time, by resolving the agnostic
     /// MediaItem's ref back to a concrete PlexMetadata via PlexNetworkManager.
@@ -443,6 +457,48 @@ struct MediaDetailView: View {
             if shouldShow {
                 presentPlayer()
             }
+        }
+        // Pre-play audio / subtitle picker sheets. Tracks come from the
+        // first MediaSource in detail (movies/episodes have exactly one).
+        .sheet(isPresented: $showAudioTrackPicker) {
+            TrackSelectionSheet(
+                trackType: .audio,
+                tracks: preplayAudioTracks.map(MediaTrack.init(from:)),
+                selectedTrackId: Int(preplayAudioTrackId ?? "") ?? currentSelectedAudioTrackPlexID,
+                onSelect: { id in
+                    if let id {
+                        preplayAudioTrackId = "\(id)"
+                        persistAudioTrackSelection(trackID: "\(id)")
+                    }
+                }
+            )
+        }
+        .sheet(isPresented: $showSubtitleTrackPicker) {
+            TrackSelectionSheet(
+                trackType: .subtitles,
+                tracks: preplaySubtitleTracks.map(MediaTrack.init(from:)),
+                selectedTrackId: effectiveSubtitlePickerSelectionID,
+                onSelect: { id in
+                    if let id {
+                        preplaySubtitleSelection = .track(id: id)
+                        persistSubtitleTrackSelection(trackID: "\(id)")
+                    } else {
+                        preplaySubtitleSelection = .off
+                        persistSubtitleTrackSelection(trackID: nil)
+                    }
+                }
+            )
+        }
+        .onChange(of: currentItem.ref.itemID) { _, _ in
+            // Reset pre-play picker state when navigating to a different
+            // item within this detail view (e.g., via collection / recs).
+            // Cancel any in-flight write for the previous item so
+            // presentPlayer() doesn't await a task that refreshes
+            // detail for the now-defunct item.
+            preplayAudioTrackId = nil
+            preplaySubtitleSelection = .auto
+            pendingPreplayWrite?.cancel()
+            pendingPreplayWrite = nil
         }
         .fullScreenCover(isPresented: $showTrailerPlayer) {
             // Escape hatch: UniversalPlayerView requires PlexMetadata.
@@ -1048,6 +1104,146 @@ struct MediaDetailView: View {
             .buttonStyle(AppStoreActionButtonStyle(isFocused: focusedActionButton == "trailer", cornerRadius: circleButtonSize / 2, isPrimary: false))
             .focused($focusedActionButton, equals: "trailer")
         }
+
+        // Pre-play audio track picker — only for movies and episodes
+        // (single-video items where we know the streams ahead of play).
+        if showsPreplayTrackPickers, !preplayAudioTracks.isEmpty {
+            Button {
+                showAudioTrackPicker = true
+            } label: {
+                Image(systemName: "speaker.wave.3")
+                    .font(.system(size: 24, weight: .semibold))
+                    .frame(width: circleButtonSize, height: circleButtonSize)
+            }
+            .buttonStyle(AppStoreActionButtonStyle(isFocused: focusedActionButton == "audioTrack", cornerRadius: circleButtonSize / 2, isPrimary: false))
+            .focused($focusedActionButton, equals: "audioTrack")
+        }
+
+        // Pre-play subtitle track picker — hidden when there are no subtitle streams.
+        if showsPreplayTrackPickers, !preplaySubtitleTracks.isEmpty {
+            Button {
+                showSubtitleTrackPicker = true
+            } label: {
+                Image(systemName: "captions.bubble")
+                    .font(.system(size: 24, weight: .semibold))
+                    .frame(width: circleButtonSize, height: circleButtonSize)
+            }
+            .buttonStyle(AppStoreActionButtonStyle(isFocused: focusedActionButton == "subtitleTrack", cornerRadius: circleButtonSize / 2, isPrimary: false))
+            .focused($focusedActionButton, equals: "subtitleTrack")
+        }
+    }
+
+    // MARK: - Pre-play Track Picker Helpers
+
+    /// Whether the pre-play picker buttons make sense for the current
+    /// item type. Show / season / artist / album / track detail pages
+    /// don't have a single, known track list at this level.
+    private var showsPreplayTrackPickers: Bool {
+        switch currentItem.kind {
+        case .movie, .episode: return true
+        default: return false
+        }
+    }
+
+    /// First MediaSource on the detail (movies/episodes have exactly one).
+    /// Streams come from `detail` once it's loaded; before that, the
+    /// pickers stay hidden because their counts are zero.
+    private var preplayPrimarySource: MediaSource? {
+        detail?.mediaSources.first
+    }
+
+    private var preplayAudioTracks: [AudioTrack] {
+        preplayPrimarySource?.audioTracks ?? []
+    }
+
+    private var preplaySubtitleTracks: [SubtitleTrack] {
+        preplayPrimarySource?.subtitleTracks ?? []
+    }
+
+    /// Backend-flagged "currently selected" audio track for the user.
+    /// Reflects whatever the user previously chose (in any client) or the
+    /// provider's server-side default; what the player would pick today.
+    /// Returned as the bridged Plex-stream-int form the picker expects.
+    private var currentSelectedAudioTrackPlexID: Int? {
+        guard let track = preplayAudioTracks.first(where: { $0.isSelected }) else { return nil }
+        return Int(track.id)
+    }
+
+    /// Backend-flagged "currently selected" subtitle track. `nil` means
+    /// subtitles are off server-side.
+    private var currentSelectedSubtitleTrackPlexID: Int? {
+        guard let track = preplaySubtitleTracks.first(where: { $0.isSelected }) else { return nil }
+        return Int(track.id)
+    }
+
+    /// What to highlight in the subtitle picker on open. Honors the
+    /// user's local preplay choice first, then falls back to the
+    /// server-side selection so reopening the picker mid-visit shows
+    /// the current state rather than always defaulting to "Off".
+    private var effectiveSubtitlePickerSelectionID: Int? {
+        switch preplaySubtitleSelection {
+        case .track(let id): return id
+        case .off: return nil
+        case .auto: return currentSelectedSubtitleTrackPlexID
+        }
+    }
+
+    /// Persist the chosen audio track to the provider so it sticks
+    /// per-user-per-item across plays from any client. Refresh detail
+    /// afterward so the local view of `isSelected` reflects the new
+    /// state. Chained off any prior in-flight write so concurrent audio
+    /// + subtitle picks serialise rather than racing.
+    private func persistAudioTrackSelection(trackID: String) {
+        guard let provider = providerRegistry.provider(for: currentItem.ref.providerID),
+              let sourceID = preplayPrimarySource?.id else {
+            return
+        }
+        let ref = currentItem.ref
+        let previous = pendingPreplayWrite
+        pendingPreplayWrite = Task {
+            if let previous { _ = await previous.value }
+            do {
+                try await provider.setSelectedAudioTrack(trackID, source: sourceID, of: ref)
+                await reloadDetailForPreplayWrite()
+            } catch {
+                print("[MediaDetailView] persistAudioTrackSelection failed: \(error)")
+            }
+        }
+    }
+
+    /// Persist the chosen subtitle track (or `nil` for "off") and refresh
+    /// detail. Same chained-Task pattern as audio.
+    private func persistSubtitleTrackSelection(trackID: String?) {
+        guard let provider = providerRegistry.provider(for: currentItem.ref.providerID),
+              let sourceID = preplayPrimarySource?.id else {
+            return
+        }
+        let ref = currentItem.ref
+        let previous = pendingPreplayWrite
+        pendingPreplayWrite = Task {
+            if let previous { _ = await previous.value }
+            do {
+                try await provider.setSelectedSubtitleTrack(trackID, source: sourceID, of: ref)
+                await reloadDetailForPreplayWrite()
+            } catch {
+                print("[MediaDetailView] persistSubtitleTrackSelection failed: \(error)")
+            }
+        }
+    }
+
+    /// Refresh detail state so the picker shows the post-PUT `isSelected` flag.
+    /// Best-effort — failures here just leave the local state slightly stale.
+    private func reloadDetailForPreplayWrite() async {
+        guard let provider = providerRegistry.provider(for: currentItem.ref.providerID) else { return }
+        guard !Task.isCancelled else { return }
+        do {
+            let refreshed = try await provider.fullDetail(for: currentItem.ref)
+            await MainActor.run {
+                self.detail = refreshed
+            }
+        } catch {
+            print("[MediaDetailView] preplay detail refresh failed: \(error)")
+        }
     }
 
     /// Watchlist toggle — shown for items whose provider can't play them
@@ -1504,6 +1700,16 @@ struct MediaDetailView: View {
     /// this fetch can be removed.
     private func presentPlayer() {
         Task {
+            // Wait for any in-flight pre-play picker writes to land first,
+            // so the player is built against the provider's updated
+            // server-side stream selection (avoids a race where the HLS
+            // URL is built with stale audio / subtitle ids). Awaiting an
+            // already-finished Task returns immediately, so leaving
+            // pendingPreplayWrite set after it completes is harmless.
+            if let pending = pendingPreplayWrite {
+                _ = await pending.value
+            }
+
             guard let serverURL = authManager.selectedServerURL,
                   let token = authManager.selectedServerToken else { return }
 
@@ -1574,6 +1780,19 @@ struct MediaDetailView: View {
             await MainActor.run {
                 shuffledEpisodeQueue = []
 
+                // Forward pre-play picker selections only when the picker
+                // applies to the actual item being played. Show/season Play
+                // resolves to a child episode whose stream IDs differ; in
+                // that case the picker buttons aren't shown anyway, so
+                // preplayAudioTrackId/Selection will be at their defaults.
+                let useTrackOverrides = (selectedEpisodeItem == nil)
+                let initialAudioId: Int? = useTrackOverrides
+                    ? preplayAudioTrackId.flatMap { Int($0) }
+                    : nil
+                let initialSubtitleSelection: UniversalPlayerViewModel.InitialSubtitleSelection = useTrackOverrides
+                    ? preplaySubtitleSelection
+                    : .auto
+
                 let viewModel = UniversalPlayerViewModel(
                     metadata: playItem,
                     serverURL: serverURL,
@@ -1581,7 +1800,9 @@ struct MediaDetailView: View {
                     startOffset: resumeOffset,
                     shuffledQueue: plexQueue,
                     loadingArtImage: artImage,
-                    loadingThumbImage: thumbImage
+                    loadingThumbImage: thumbImage,
+                    initialAudioTrackId: initialAudioId,
+                    initialSubtitleSelection: initialSubtitleSelection
                 )
 
                 let useApplePlayer = UserDefaults.standard.bool(forKey: "useApplePlayer")

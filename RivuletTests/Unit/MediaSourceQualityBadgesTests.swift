@@ -19,9 +19,9 @@ final class MediaSourceQualityBadgesTests: XCTestCase {
         let audio = AudioTrack(
             id: "a1", index: 0, codec: "eac3",
             channels: 6, channelLayout: "5.1",
-            language: "en", title: nil,
+            language: "en", title: nil, extendedTitle: nil,
             bitrate: 640_000, samplingRate: 48_000,
-            isDefault: true, isForced: false
+            isDefault: true, isForced: false, isSelected: true
         )
         let source = MediaSource(
             id: "1", container: "mkv", duration: 7200,
@@ -44,9 +44,9 @@ final class MediaSourceQualityBadgesTests: XCTestCase {
         let audio = AudioTrack(
             id: "a1", index: 0, codec: "aac",
             channels: 2, channelLayout: "Stereo",
-            language: "en", title: nil,
+            language: "en", title: nil, extendedTitle: nil,
             bitrate: 192_000, samplingRate: 48_000,
-            isDefault: true, isForced: false
+            isDefault: true, isForced: false, isSelected: true
         )
         let source = MediaSource(
             id: "1", container: "mp4", duration: 7200,

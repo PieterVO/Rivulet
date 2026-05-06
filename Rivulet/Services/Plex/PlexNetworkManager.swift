@@ -1470,7 +1470,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
          // Match official Plex tvOS behavior for DV by using the "Plex Apple TV" profile name.
          // Stick with "Generic" for non-DV to keep our custom extra profile.
-         let clientProfileName = useDolbyVision ? "Plex Apple TV" : "Generic"
+         // forceVideoTranscode disables DV — transcoded output cannot preserve it,
+         // so the DV profile name would mislead the server.
+         let effectiveUseDolbyVision = forceVideoTranscode ? false : useDolbyVision
+         let clientProfileName = effectiveUseDolbyVision ? "Plex Apple TV" : "Generic"
 
         // Match the official Plex tvOS profile so the server returns Apple decoder-friendly streams.
         // Keep our explicit limitations (dvhe/hev1 remap) to ensure compatible codec tags.
@@ -1515,8 +1518,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "container", value: "mp4"),
             URLQueryItem(name: "segmentFormat", value: "mp4"),
             URLQueryItem(name: "segmentContainer", value: "mp4"),  // Force CMAF/fMP4 segments (required for DV on tvOS)
-            // directPlay=1 tells server we CAN direct play mp4/mov - without this, server may transcode instead of remux
-            URLQueryItem(name: "directPlay", value: "1"),
+            // directPlay=1 tells server we CAN direct play mp4/mov - without this, server may transcode instead of remux.
+            // forceVideoTranscode flips it to 0 so the server actually transcodes (e.g., MPEG-2 / VC-1 source where
+            // direct-play would hand back the raw file and the local decoder would fail).
+            URLQueryItem(name: "directPlay", value: forceVideoTranscode ? "0" : "1"),
             // For MKV+DV, we must force video transcoding (not just remux) to get Apple-compatible codec tags (dvh1/hvc1)
             // MKV files typically use dvhe/hev1 which the tvOS decoder path does not accept here
             URLQueryItem(name: "directStream", value: forceVideoTranscode ? "0" : "1"),
@@ -1526,7 +1531,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // Note: segmentContainer=mp4 ensures fMP4 segments regardless of this setting
             URLQueryItem(name: "directStreamAudio", value: allowAudioDirectStream ? "1" : "0"),
             URLQueryItem(name: "fastSeek", value: "1"),
-            URLQueryItem(name: "videoCodec", value: "h264,hevc"),
+            // forceVideoTranscode caps the target at h264 only — h264 is the most universally
+            // compatible codec and is what we want when transcoding from a non-Apple-decodable
+            // source. The default keeps both for direct-play / remux-only requests.
+            URLQueryItem(name: "videoCodec", value: forceVideoTranscode ? "h264" : "h264,hevc"),
             URLQueryItem(name: "videoResolution", value: "4096x2160"),
             URLQueryItem(name: "videoQuality", value: "100"),
             URLQueryItem(name: "segmentDuration", value: "6"),
@@ -1551,12 +1559,12 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         // Add HDR-related parameters for proper DV remuxing and codec signaling.
         // useDoviCodecs=1 ensures Plex preserves Dolby Vision metadata in the HLS output.
-        if hasHDR && useDolbyVision {
+        if hasHDR && effectiveUseDolbyVision {
             components.queryItems?.append(URLQueryItem(name: "useDoviCodecs", value: "1"))
             components.queryItems?.append(URLQueryItem(name: "includeCodecs", value: "1"))
         }
 
-        print("[Plex HLS] Using \(clientProfileName) profile for \(useDolbyVision ? "Dolby Vision" : "HDR/SDR") (session: \(sessionId))")
+        print("[Plex HLS] Using \(clientProfileName) profile for \(effectiveUseDolbyVision ? "Dolby Vision" : "HDR/SDR") (session: \(sessionId))")
 
         guard let url = components.url else { return nil }
         return (url, headers)
@@ -1571,8 +1579,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         partId: Int,
         audioStreamID: Int
     ) async {
-        let urlString = "\(serverURL)/library/parts/\(partId)?audioStreamID=\(audioStreamID)&X-Plex-Token=\(authToken)"
-        guard let url = URL(string: urlString) else {
+        guard var components = URLComponents(string: "\(serverURL)/library/parts/\(partId)") else {
+            print("[Plex] Failed to build audio stream selection URL")
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "audioStreamID", value: "\(audioStreamID)"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken)
+        ]
+        guard let url = components.url else {
             print("[Plex] Failed to build audio stream selection URL")
             return
         }
@@ -1581,11 +1596,45 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         request.httpMethod = "PUT"
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             print("[Plex] Set audio stream \(audioStreamID) on part \(partId): HTTP \(status)")
         } catch {
             print("[Plex] Failed to set audio stream: \(error.localizedDescription)")
+        }
+    }
+
+    /// Set the preferred subtitle stream on a media part. Pass `0` for
+    /// `subtitleStreamID` to disable subtitles. Plex persists this
+    /// per-user-per-part, so it survives across plays from any client.
+    func setSelectedSubtitleStream(
+        serverURL: String,
+        authToken: String,
+        partId: Int,
+        subtitleStreamID: Int
+    ) async {
+        guard var components = URLComponents(string: "\(serverURL)/library/parts/\(partId)") else {
+            print("[Plex] Failed to build subtitle stream selection URL")
+            return
+        }
+        components.queryItems = [
+            URLQueryItem(name: "subtitleStreamID", value: "\(subtitleStreamID)"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken)
+        ]
+        guard let url = components.url else {
+            print("[Plex] Failed to build subtitle stream selection URL")
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            print("[Plex] Set subtitle stream \(subtitleStreamID) on part \(partId): HTTP \(status)")
+        } catch {
+            print("[Plex] Failed to set subtitle stream: \(error.localizedDescription)")
         }
     }
 
@@ -2496,12 +2545,22 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 }
             }
 
-            // Fallback: return the authToken itself (works for server owners)
-            print("🌐 PlexNetwork: ⚠️ No server-specific token found, using plex.tv auth token")
-            return authToken
+            // No per-server token found. Returning the input plex.tv-level
+            // authToken here was the previous behavior, but for accounts
+            // that have multiple servers in their resources list (server
+            // owner of one + friend-share on another, or two friend-shares),
+            // the matching above can fall through. The plex.tv-level token
+            // doesn't authenticate against the target PMS the same way a
+            // per-server access token does — the server logs the request
+            // as "Signed-in Token ()" with no user attribution and treats
+            // the user as guest, returning 401 on per-section/streaming
+            // endpoints. Returning nil instead lets the caller (selectUser)
+            // keep the per-server token that selectServer set up at sign-in.
+            print("🌐 PlexNetwork: ⚠️ No per-server token found for serverURL=\(serverURL); returning nil to preserve existing selectedServerToken")
+            return nil
         } catch {
-            print("🌐 PlexNetwork: ❌ Failed to get server access token: \(error)")
-            return authToken
+            print("🌐 PlexNetwork: ❌ Failed to get server access token: \(error) — returning nil")
+            return nil
         }
     }
 

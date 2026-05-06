@@ -15,8 +15,14 @@ struct AudioTrack: Hashable, Sendable, Identifiable {
     let channelLayout: String?     // "5.1", "7.1", "Atmos" if present
     let language: String?          // "en", "ja"
     let title: String?             // displayable (e.g. "English Commentary")
+    let extendedTitle: String?     // long-form Plex `extendedDisplayTitle` etc.
     let bitrate: Int?
     let samplingRate: Int?
     let isDefault: Bool
     let isForced: Bool
+    /// Backend-side "this is the user's current pick" flag (Plex `selected: true`,
+    /// Jellyfin equivalent). Distinct from `isDefault` — `isDefault` is the
+    /// file's authoring default, while `isSelected` reflects a per-user-per-item
+    /// override that may have been set in any client.
+    let isSelected: Bool
 }

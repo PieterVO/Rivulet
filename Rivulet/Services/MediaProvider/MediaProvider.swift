@@ -55,6 +55,19 @@ protocol MediaProvider: Sendable, Identifiable {
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?) async throws -> StreamInfo
     func progressReporter(for itemRef: MediaItemRef, playSessionID: String?) -> any ProgressReporter
 
+    // MARK: - Per-item track selection (server-side persistent)
+
+    /// Set the user's preferred audio track for a specific media source on this
+    /// item. Plex persists this per-user-per-part so the choice carries across
+    /// clients; Jellyfin equivalent is `Items/{id}/UserData`. Implementations
+    /// should issue the call against the user's account, not the device.
+    /// `trackID` is the agnostic `AudioTrack.id` — provider-native string ID.
+    func setSelectedAudioTrack(_ trackID: String, source sourceID: String, of itemRef: MediaItemRef) async throws
+
+    /// Set (or clear, with `nil`) the user's preferred subtitle track for a
+    /// media source. Passing `nil` disables subtitles server-side.
+    func setSelectedSubtitleTrack(_ trackID: String?, source sourceID: String, of itemRef: MediaItemRef) async throws
+
     // MARK: - Watch state
     func markPlayed(_ itemRef: MediaItemRef) async throws
     func markUnplayed(_ itemRef: MediaItemRef) async throws
