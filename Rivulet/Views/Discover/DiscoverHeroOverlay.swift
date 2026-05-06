@@ -232,6 +232,8 @@ struct DiscoverHeroOverlay: View {
 private struct DiscoverHeroSlide: View {
     let item: TMDBListItem
 
+    @State private var logoURL: URL?
+
     private var meta: String {
         var parts: [String] = []
         parts.append(item.mediaType == .movie ? "Movie" : "TV Show")
@@ -243,12 +245,8 @@ private struct DiscoverHeroSlide: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(item.title)
-                .font(.system(size: 56, weight: .bold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 4)
-                .lineLimit(2)
-                .frame(maxWidth: 720, alignment: .leading)
+            titleOrLogo
+                .animation(.easeInOut(duration: 0.2), value: logoURL)
 
             Text(meta)
                 .font(.system(size: 18, weight: .medium))
@@ -264,5 +262,38 @@ private struct DiscoverHeroSlide: View {
                     .padding(.top, 4)
             }
         }
+        .task(id: item.id) {
+            logoURL = await TMDBLogoCache.shared.logoURL(tmdbId: item.id, type: item.mediaType)
+        }
+    }
+
+    @ViewBuilder
+    private var titleOrLogo: some View {
+        if let logoURL {
+            CachedAsyncImage(url: logoURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 520, maxHeight: 180, alignment: .leading)
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 4)
+                default:
+                    titleText
+                }
+            }
+        } else {
+            titleText
+        }
+    }
+
+    private var titleText: some View {
+        Text(item.title)
+            .font(.system(size: 56, weight: .bold))
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 4)
+            .lineLimit(2)
+            .frame(maxWidth: 720, alignment: .leading)
     }
 }

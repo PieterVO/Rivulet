@@ -183,9 +183,26 @@ enum PlexMediaMapper {
             return nil
         }()
 
+        let mediaKind = kind(meta.type)
+        // On Plex, `index` means different things per kind:
+        //   - episode: index = episode number, parentIndex = season number
+        //   - season:  index = season number, parentIndex = show (usually unused)
+        //   - show:    neither applies
+        // Mapping both fields unconditionally from (index, parentIndex) made
+        // every season look like "Season 1" because `parentIndex` on a season
+        // is the show's index, not the season number.
+        let episodeNumber: Int? = (mediaKind == .episode) ? meta.index : nil
+        let seasonNumber: Int? = {
+            switch mediaKind {
+            case .episode: return meta.parentIndex
+            case .season: return meta.index
+            default: return nil
+            }
+        }()
+
         return MediaItem(
             ref: ref,
-            kind: kind(meta.type),
+            kind: mediaKind,
             title: meta.title ?? "",
             sortTitle: nil,
             overview: meta.summary,
@@ -193,8 +210,8 @@ enum PlexMediaMapper {
             runtime: runtime,
             parentRef: parentRef,
             grandparentRef: grandparentRef,
-            episodeNumber: meta.index,           // Plex `index` is episode number on episodes
-            seasonNumber: meta.parentIndex,      // Plex `parentIndex` is season number
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
             childProgress: childProgress,
             userState: userState(meta),
             artwork: artwork(meta, serverURL: serverURL, authToken: authToken),

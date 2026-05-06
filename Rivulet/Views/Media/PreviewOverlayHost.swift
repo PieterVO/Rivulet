@@ -7,6 +7,9 @@
 
 import SwiftUI
 import Combine
+import os.log
+
+private let previewHostLog = Logger(subsystem: "com.rivulet.app", category: "PreviewHost")
 
 let previewEntryAnimation = Animation.spring(response: 0.45, dampingFraction: 0.88)
 let previewPagingDuration: Double = 0.78
@@ -187,6 +190,13 @@ struct PreviewOverlayHost: View {
                 // onAppear (e.g. parent re-mount) would clobber any
                 // prefetch enrichment that already landed.
 
+                // Kick off a logo-only fetch for the selected card immediately.
+                // Full prefetch is gated on `previewAnimationSettled` to avoid
+                // contending with the entry spring, but logos are a tiny side-
+                // channel call and missing them on first render causes a visible
+                // title → logo swap once the user navigates and returns.
+                prefetchLogoForSelectedItem()
+
                 // Skip the initial prefetch until the entry animation completes —
                 // the `onChange(of: previewAnimationSettled)` below picks it up
                 // once the flag flips true. Paging prefetches (in `onChange(of:
@@ -334,6 +344,9 @@ struct PreviewOverlayHost: View {
     private func expandCurrentCard() {
         guard !stateMachine.isExpanded else { return }
 
+        let itemRef = items.indices.contains(selectedIndex) ? items[selectedIndex].ref.itemID : "?"
+        previewHostLog.info("[Expand] BEGIN idx=\(self.selectedIndex) ref=\(itemRef, privacy: .public)")
+
         pagingMotionActive = false
         pagingFromIndex = nil
         pagingProgress = 0
@@ -352,6 +365,7 @@ struct PreviewOverlayHost: View {
             stateMachine.beginExpand()
             focusedArea = nil
         }
+        previewHostLog.info("[Expand] beginExpand phase=expandingHero focusedArea=nil")
 
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 160_000_000)
@@ -368,6 +382,7 @@ struct PreviewOverlayHost: View {
             try? await Task.sleep(nanoseconds: 60_000_000)
             guard metadataGate.isCurrent(token) else { return }
             stateMachine.finishExpand()
+            previewHostLog.info("[Expand] finishExpand phase=expandedHero")
 
             try? await Task.sleep(nanoseconds: 60_000_000)
             guard metadataGate.isCurrent(token) else { return }
@@ -375,6 +390,7 @@ struct PreviewOverlayHost: View {
                 expandedChromeVisible = true
             }
             verticalScrollEnabled = true
+            previewHostLog.info("[Expand] expandedChromeVisible=true verticalScrollEnabled=true")
 
             // Release the detail cascade AFTER the chrome is visible and
             // focus has been set on the play button. Firing it earlier
@@ -383,6 +399,7 @@ struct PreviewOverlayHost: View {
             try? await Task.sleep(nanoseconds: 60_000_000)
             guard metadataGate.isCurrent(token) else { return }
             previewAnimationSettled = true
+            previewHostLog.info("[Expand] previewAnimationSettled=true")
         }
     }
 
@@ -480,6 +497,11 @@ struct PreviewOverlayHost: View {
                     group.addTask {
                         // Prefer MediaProvider (library/music backends); fall
                         // back to MetadataSource (TMDB) for catalog-only items.
+                        // For TMDB refs we also kick off a parallel logo-cache
+                        // lookup so artwork.logo is populated by the time the
+                        // carousel reads it.
+                        async let logoURLTask: URL? = Self.fetchTMDBLogo(ref: ref)
+
                         let detail: MediaItemDetail? = await {
                             if let provider = await MainActor.run(body: {
                                 MediaProviderRegistry.shared.provider(for: ref.providerID)
@@ -493,7 +515,10 @@ struct PreviewOverlayHost: View {
                             }
                             return nil
                         }()
-                        return (i, detail?.item)
+
+                        let logoURL = await logoURLTask
+                        let enriched = detail?.item.withLogoIfMissing(logoURL)
+                        return (i, enriched)
                     }
                 }
                 for await (i, enriched) in group {
@@ -526,6 +551,35 @@ struct PreviewOverlayHost: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Resolves the TMDB clear-logo URL for a ref, or nil for non-TMDB refs.
+    /// Called from the prefetch group so logo resolution runs in parallel with
+    /// the detail fetch instead of serializing behind it.
+    private static func fetchTMDBLogo(ref: MediaItemRef) async -> URL? {
+        guard ref.providerID == TMDBMediaMapper.providerID,
+              let (tmdbId, type) = TMDBMediaMapper.decodeItemID(ref.itemID) else { return nil }
+        return await TMDBLogoCache.shared.logoURL(tmdbId: tmdbId, type: type)
+    }
+
+    /// Fetches the TMDB logo for the currently selected card and splices it in
+    /// as soon as it arrives, even if the full prefetch ring hasn't started
+    /// yet. Lets us show the logo on the first render of the carousel without
+    /// waiting for the entry animation to settle.
+    private func prefetchLogoForSelectedItem() {
+        guard items.indices.contains(selectedIndex) else { return }
+        let item = items[selectedIndex]
+        guard item.artwork.logo == nil else { return }
+        let ref = item.ref
+        let targetIndex = selectedIndex
+        Task.detached(priority: .userInitiated) {
+            guard let logoURL = await Self.fetchTMDBLogo(ref: ref) else { return }
+            await MainActor.run {
+                guard items.indices.contains(targetIndex),
+                      items[targetIndex].ref == ref else { return }
+                items[targetIndex] = items[targetIndex].withLogoIfMissing(logoURL)
             }
         }
     }

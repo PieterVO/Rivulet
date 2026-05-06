@@ -131,6 +131,23 @@ final class PlexMediaMapperTests: XCTestCase {
         XCTAssertEqual(item.seasonNumber, 1)
     }
 
+    func test_item_season_pullsSeasonNumberFromIndex() {
+        // Regression: seasonNumber was read from parentIndex for every kind,
+        // which made every season pill render "Season 1" because Plex stores
+        // the season number in `index` on season metadata.
+        var meta = PlexMetadata()
+        meta.ratingKey = "500"
+        meta.type = "season"
+        meta.title = "Season 3"
+        meta.index = 3
+        meta.parentIndex = 1  // would be the show's (unused) index
+        let item = PlexMediaMapper.item(meta, providerID: "plex:abc",
+                                        serverURL: "https://x", authToken: "T")
+        XCTAssertEqual(item.kind, .season)
+        XCTAssertEqual(item.seasonNumber, 3)
+        XCTAssertNil(item.episodeNumber)
+    }
+
     func test_item_show_carriesChildProgress() {
         var meta = PlexMetadata()
         meta.ratingKey = "100"

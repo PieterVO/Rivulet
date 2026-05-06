@@ -246,8 +246,8 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
         // resolve the item's tmdb GUID first — left for Phase 3 watchlist
         // wiring once it has the MediaItem in hand.
         await MainActor.run {
-            if ref.providerID == "tmdb",
-               let tmdbId = Int(ref.itemID) {
+            if ref.providerID == TMDBMediaMapper.providerID,
+               let (tmdbId, _) = TMDBMediaMapper.decodeItemID(ref.itemID) {
                 return PlexWatchlistService.shared.contains(tmdbId: tmdbId)
             }
             return false

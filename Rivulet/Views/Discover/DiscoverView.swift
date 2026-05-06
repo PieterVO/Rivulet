@@ -98,8 +98,9 @@ struct DiscoverView: View {
                             ForEach(TMDBDiscoverSection.allCases) { section in
                                 let items = viewModel.items(for: section)
                                 if !items.isEmpty {
+                                    let rowID = "discover.\(section.rawValue)"
                                     DiscoverRow(
-                                        rowID: "discover.\(section.rawValue)",
+                                        rowID: rowID,
                                         title: section.title,
                                         items: items,
                                         isInLibrary: { viewModel.inLibraryTMDBIds.contains($0.id) },
@@ -111,15 +112,22 @@ struct DiscoverView: View {
                                             rowPreviewRequest = request
                                             showPreviewCover = true
                                         },
-                                        libraryMatch: { await viewModel.libraryMatch(for: $0) }
+                                        libraryMatch: { await viewModel.libraryMatch(for: $0) },
+                                        onRowFocused: {
+                                            withAnimation(.smooth(duration: 0.8)) {
+                                                scrollProxy.scrollTo(rowID, anchor: UnitPoint(x: 0.5, y: 0.5))
+                                            }
+                                        }
                                     )
+                                    .id(rowID)
                                 }
                             }
 
                             // "For You" trails the curated sections.
                             if !viewModel.forYou.isEmpty {
+                                let forYouRowID = "discover.forYou"
                                 DiscoverRow(
-                                    rowID: "discover.forYou",
+                                    rowID: forYouRowID,
                                     title: "For You",
                                     items: viewModel.forYou,
                                     isInLibrary: { _ in false },
@@ -131,8 +139,14 @@ struct DiscoverView: View {
                                         rowPreviewRequest = request
                                         showPreviewCover = true
                                     },
-                                    libraryMatch: { _ in nil }
+                                    libraryMatch: { _ in nil },
+                                    onRowFocused: {
+                                        withAnimation(.smooth(duration: 0.8)) {
+                                            scrollProxy.scrollTo(forYouRowID, anchor: UnitPoint(x: 0.5, y: 0.5))
+                                        }
+                                    }
                                 )
+                                .id(forYouRowID)
                             }
                         }
                         .padding(.top, heroActive ? 0 : 48)

@@ -35,3 +35,36 @@ struct MediaItem: Identifiable, Hashable, Sendable {
     let parentArtwork: MediaArtwork?     // episode → season art; season → show art
     let grandparentArtwork: MediaArtwork? // episode → show art
 }
+
+extension MediaItem {
+    /// Returns a copy with `artwork.logo` filled in if it's currently nil.
+    /// Used by the prefetch ring to splice a TMDB-resolved logo URL into a
+    /// MediaItem whose provider mapper didn't have one at construction time.
+    /// A non-nil existing logo is never overwritten.
+    func withLogoIfMissing(_ logo: URL?) -> MediaItem {
+        guard let logo, artwork.logo == nil else { return self }
+        return MediaItem(
+            ref: ref,
+            kind: kind,
+            title: title,
+            sortTitle: sortTitle,
+            overview: overview,
+            year: year,
+            runtime: runtime,
+            parentRef: parentRef,
+            grandparentRef: grandparentRef,
+            episodeNumber: episodeNumber,
+            seasonNumber: seasonNumber,
+            childProgress: childProgress,
+            userState: userState,
+            artwork: MediaArtwork(
+                poster: artwork.poster,
+                backdrop: artwork.backdrop,
+                thumbnail: artwork.thumbnail,
+                logo: logo
+            ),
+            parentArtwork: parentArtwork,
+            grandparentArtwork: grandparentArtwork
+        )
+    }
+}

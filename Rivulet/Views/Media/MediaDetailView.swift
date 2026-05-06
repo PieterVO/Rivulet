@@ -6,6 +6,9 @@
 //
 
 import SwiftUI
+import os.log
+
+private let previewFocusLog = Logger(subsystem: "com.rivulet.app", category: "PreviewFocus")
 
 enum MediaDetailPresentationMode: Equatable {
     case previewCarousel
@@ -335,7 +338,9 @@ struct MediaDetailView: View {
                 kenBurnsOffset = 50
             }
         }
-        .onChange(of: presentationMode) { _, newMode in
+        .onChange(of: presentationMode) { oldMode, newMode in
+            let ref = currentItem.ref.itemID
+            previewFocusLog.info("[Mode] \(String(describing: oldMode), privacy: .public) -> \(String(describing: newMode), privacy: .public) ref=\(ref, privacy: .public)")
             if newMode == .previewCarousel {
                 displayedItem = nil
                 focusedActionButton = nil
@@ -358,10 +363,46 @@ struct MediaDetailView: View {
             parentShowLogoPath = nil
         }
         .onChange(of: showExpandedChrome) { _, isVisible in
+            let ref = currentItem.ref.itemID
+            let kind = String(describing: currentItem.kind)
+            let nextUp = nextUpEpisode != nil
+            let isShow = currentItem.kind == .show || currentItem.kind == .season
+            let playDisabled = isShow && !nextUp
+            previewFocusLog.info("[Chrome] showExpandedChrome=\(isVisible) isExpandedPreviewFlow=\(isExpandedPreviewFlow) kind=\(kind, privacy: .public) nextUpEpisode=\(nextUp) playButtonDisabled=\(playDisabled) currentFocus=\(String(describing: focusedActionButton), privacy: .public) ref=\(ref, privacy: .public)")
             guard isVisible, isExpandedPreviewFlow else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                previewFocusLog.info("[Chrome] setting focusedActionButton=play (was \(String(describing: focusedActionButton), privacy: .public))")
                 focusedActionButton = "play"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    previewFocusLog.info("[Chrome] 50ms later: focusedActionButton=\(String(describing: focusedActionButton), privacy: .public)")
+                }
             }
+        }
+        // Re-assert focus on the play button once `nextUpEpisode` resolves.
+        // For shows the Play button is `.disabled(nextUpEpisode == nil)`.
+        // The initial focus-set on chrome reveal writes `focusedActionButton
+        // = "play"`, but SwiftUI won't actually place focus on a disabled
+        // button — so the value is set but no view has focus. Once the
+        // detail loads and `nextUpEpisode` becomes non-nil, the button
+        // enables; we have to re-assert the focus binding (setting to nil
+        // first forces a re-evaluation) to make focus actually land.
+        .onChange(of: nextUpEpisode) { oldValue, newValue in
+            let ref = currentItem.ref.itemID
+            previewFocusLog.info("[NextUp] changed: \(oldValue?.ref.itemID ?? "nil", privacy: .public) -> \(newValue?.ref.itemID ?? "nil", privacy: .public) isExpandedPreviewFlow=\(isExpandedPreviewFlow) showExpandedChrome=\(showExpandedChrome) currentFocus=\(String(describing: focusedActionButton), privacy: .public) ref=\(ref, privacy: .public)")
+            guard newValue != nil,
+                  isExpandedPreviewFlow,
+                  showExpandedChrome else { return }
+            focusedActionButton = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                previewFocusLog.info("[NextUp] re-asserting focusedActionButton=play")
+                focusedActionButton = "play"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    previewFocusLog.info("[NextUp] 50ms later: focusedActionButton=\(String(describing: focusedActionButton), privacy: .public)")
+                }
+            }
+        }
+        .onChange(of: focusedActionButton) { oldValue, newValue in
+            previewFocusLog.info("[Focus] focusedActionButton: \(String(describing: oldValue), privacy: .public) -> \(String(describing: newValue), privacy: .public) isExpandedPreviewFlow=\(isExpandedPreviewFlow)")
         }
         .onChange(of: focusedEpisodeId) { _, newId in
             // Sync season pill when user navigates across season boundary
@@ -1013,7 +1054,7 @@ struct MediaDetailView: View {
     /// locally (TMDB-only items from Discover / watchlist with no Plex match).
     @ViewBuilder
     private var watchlistActionButton: some View {
-        let tmdbId = Int(currentItem.ref.itemID)
+        let tmdbId = TMDBMediaMapper.decodeItemID(currentItem.ref.itemID)?.tmdbId
         let onWatchlist = tmdbId.map { PlexWatchlistService.shared.contains(tmdbId: $0) } ?? false
         let label = onWatchlist ? "Remove from Watchlist" : "Add to Watchlist"
         let icon = onWatchlist ? "bookmark.fill" : "bookmark"
@@ -1037,7 +1078,7 @@ struct MediaDetailView: View {
     /// only from `watchlistActionButton` so `currentItem.ref.providerID` is
     /// always the TMDB id.
     private func toggleWatchlist() async {
-        guard let tmdbId = Int(currentItem.ref.itemID) else { return }
+        guard let tmdbId = TMDBMediaMapper.decodeItemID(currentItem.ref.itemID)?.tmdbId else { return }
         let guid = "tmdb://\(tmdbId)"
         if PlexWatchlistService.shared.contains(tmdbId: tmdbId) {
             await PlexWatchlistService.shared.remove(guid: guid)
@@ -1225,7 +1266,12 @@ struct MediaDetailView: View {
 
                             // Below-fold page: extracted to `belowFoldPage(geoHeight:)` for
                             // Swift type-checker relief on the deeply-nested body.
+                            // Gated on the same metadata flag as the hero overlay so
+                            // cast/episodes/recommended fade together during preview
+                            // paging instead of staying visible through the card mask.
                             belowFoldPage(geoHeight: geo.size.height)
+                                .opacity(effectiveMetadataVisible ? 1 : 0)
+                                .animation(.easeOut(duration: 0.35), value: effectiveMetadataVisible)
                         }
                     }
                     .onScrollGeometryChange(for: CGFloat.self) { geometry in

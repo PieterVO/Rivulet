@@ -25,6 +25,9 @@ struct DiscoverRow: View {
     /// Async-resolves a TMDB item to the matched `PlexMetadata` for
     /// context-menu playback. Returns nil for non-library items.
     let libraryMatch: (TMDBListItem) async -> PlexMetadata?
+    /// Called when focus first enters this row — lets the parent scroll the
+    /// row into center. Matches the behavior in PlexHome/PlexLibrary.
+    var onRowFocused: (() -> Void)? = nil
 
     @Environment(\.uiScale) private var scale
 
@@ -82,5 +85,10 @@ struct DiscoverRow: View {
         }
         .focusSection()
         .defaultFocus($focusedItemId, items.first.map { String($0.id) })
+        .onChange(of: focusedItemId) { oldValue, newValue in
+            if oldValue == nil && newValue != nil {
+                onRowFocused?()
+            }
+        }
     }
 }

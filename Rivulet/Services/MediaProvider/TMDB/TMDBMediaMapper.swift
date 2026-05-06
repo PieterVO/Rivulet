@@ -14,6 +14,23 @@ enum TMDBMediaMapper {
     private static let backdropBase = "https://image.tmdb.org/t/p/original"
     private static let posterBase = "https://image.tmdb.org/t/p/w500"
 
+    /// TMDB ids are not globally unique — id 100 can exist as a movie AND a TV
+    /// show. `MediaItemRef.itemID` encodes both so callers that only have a ref
+    /// can disambiguate without a second round-trip. Format: "{movie|tv}:{id}".
+    /// Decoding tolerates bare numeric itemIDs for backward compatibility with
+    /// anything persisted before this format landed.
+    static func encodeItemID(tmdbId: Int, type: TMDBMediaType) -> String {
+        "\(type.rawValue):\(tmdbId)"
+    }
+
+    static func decodeItemID(_ itemID: String) -> (tmdbId: Int, type: TMDBMediaType)? {
+        let parts = itemID.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2,
+              let type = TMDBMediaType(rawValue: parts[0]),
+              let id = Int(parts[1]) else { return nil }
+        return (id, type)
+    }
+
     static func item(_ tmdb: TMDBListItem) -> MediaItem {
         // TMDBMediaType currently only has .movie / .tv (TMDBClient.swift).
         // If TMDB person results are ever supported, extend both that enum
@@ -30,7 +47,7 @@ enum TMDBMediaMapper {
             logo: nil
         )
         return MediaItem(
-            ref: MediaItemRef(providerID: providerID, itemID: "\(tmdb.id)"),
+            ref: MediaItemRef(providerID: providerID, itemID: encodeItemID(tmdbId: tmdb.id, type: tmdb.mediaType)),
             kind: kind,
             title: tmdb.title,
             sortTitle: nil,

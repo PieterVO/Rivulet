@@ -25,17 +25,13 @@ final class TMDBMetadataSource: MetadataSource {
 
     func itemDetail(_ ref: MediaItemRef) async throws -> MediaItemDetail {
         guard ref.providerID == TMDBMediaMapper.providerID,
-              let tmdbId = Int(ref.itemID) else {
+              let (tmdbId, type) = TMDBMediaMapper.decodeItemID(ref.itemID) else {
             throw MediaProviderError.notFound
         }
-        // We don't know mediaType from the ref alone; try movie first, fall back to TV.
-        if let detail = await service.fetchDetail(tmdbId: tmdbId, type: .movie) {
-            return TMDBMediaMapper.detail(detail)
+        guard let detail = await service.fetchDetail(tmdbId: tmdbId, type: type) else {
+            throw MediaProviderError.notFound
         }
-        if let detail = await service.fetchDetail(tmdbId: tmdbId, type: .tv) {
-            return TMDBMediaMapper.detail(detail)
-        }
-        throw MediaProviderError.notFound
+        return TMDBMediaMapper.detail(detail)
     }
 
     func search(_ query: String) async throws -> [MediaItem] {

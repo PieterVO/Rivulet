@@ -113,6 +113,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
 
 final class TMDBMockURLProtocol: URLProtocol {
     nonisolated(unsafe) static var responses: [String: (Int, Data)] = [:]
+    nonisolated(unsafe) static var hitCounts: [String: Int] = [:]
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -120,6 +121,7 @@ final class TMDBMockURLProtocol: URLProtocol {
     override func startLoading() {
         let url = request.url!
         let key = "\(url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))?\(url.query ?? "")"
+        TMDBMockURLProtocol.hitCounts[key, default: 0] += 1
         let (status, data) = TMDBMockURLProtocol.responses[key] ?? (404, Data())
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
