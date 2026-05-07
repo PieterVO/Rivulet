@@ -103,6 +103,7 @@ struct MediaDetailView: View {
     // Long-press "Watch from Beginning" paths bypass the prompt because
     // they pass `fromBeginning: true` to the launch closure directly.
     @AppStorage("promptResumeOrRestart") private var promptResumeOrRestart = false
+    @AppStorage("hideSpoilersForUnwatched") private var hideSpoilersForUnwatched = false
     @State private var showResumeChoice = false
     @State private var resumeChoiceTimeMs: Int = 0
     @State private var resumeChoiceLaunch: ((_ playFromBeginning: Bool) -> Void)? = nil
@@ -744,10 +745,27 @@ struct MediaDetailView: View {
                                 let title = currentItem.title
                                 let header = epString + (title.isEmpty ? "" : " · \(title)")
                                 let desc = detail?.item.overview ?? currentItem.overview ?? ""
-                                (Text(header).bold() + Text(desc.isEmpty ? "" : ":  \(desc)"))
-                                    .font(.caption)
-                                    .foregroundStyle(.white)
-                                    .lineLimit(3)
+                                if shouldBlurHeroSummary {
+                                    // When blurring, split header (sharp) from description
+                                    // (blurred) so the title stays visible. Matches Infuse.
+                                    Text(header)
+                                        .font(.caption)
+                                        .bold()
+                                        .foregroundStyle(.white)
+                                        .lineLimit(2)
+                                    if !desc.isEmpty {
+                                        Text(desc)
+                                            .font(.caption)
+                                            .foregroundStyle(.white)
+                                            .lineLimit(3)
+                                            .blur(radius: 8)
+                                    }
+                                } else {
+                                    (Text(header).bold() + Text(desc.isEmpty ? "" : ":  \(desc)"))
+                                        .font(.caption)
+                                        .foregroundStyle(.white)
+                                        .lineLimit(3)
+                                }
                             }
                         } else if currentItem.kind == .show || currentItem.kind == .season {
                             if let tagline = detail?.tagline {
@@ -773,6 +791,7 @@ struct MediaDetailView: View {
                                     .font(.caption)
                                     .foregroundStyle(.white.opacity(0.85))
                                     .lineLimit(3)
+                                    .blur(radius: shouldBlurHeroSummary ? 8 : 0)
                             }
                         }
                     }
@@ -1022,6 +1041,18 @@ struct MediaDetailView: View {
     }
 
     // MARK: - Summary Section (Full, below fold)
+
+    /// Whether the hero overview should be blurred for the spoiler-hiding
+    /// feature. Movies and episodes are spoiler-prone; show/season summaries
+    /// are marketing-level and stay un-blurred. Matches Infuse: blur stays
+    /// until the item is fully watched (in-progress is still blurred).
+    private var shouldBlurHeroSummary: Bool {
+        guard hideSpoilersForUnwatched, !currentItem.isWatched else { return false }
+        switch currentItem.kind {
+        case .movie, .episode: return true
+        default: return false
+        }
+    }
 
     /// Whether the info-circle button should appear: only for kinds that
     /// have meaningful long descriptions, and only when one is present.
@@ -3064,6 +3095,7 @@ struct EpisodeCard: View {
     @FocusState private var thumbnailFocused: Bool
     @FocusState private var descriptionFocused: Bool
     @Namespace private var cardFocus
+    @AppStorage("hideSpoilersForUnwatched") private var hideSpoilersForUnwatched = false
 
     private let cardWidth: CGFloat = 340
     private let thumbHeight: CGFloat = 192
@@ -3072,6 +3104,13 @@ struct EpisodeCard: View {
     /// so the card grows as a unit when it gains focus, regardless of which
     /// sub-button the user lands on.
     private var isFocused: Bool { thumbnailFocused || descriptionFocused }
+
+    /// True when this episode should be blurred to avoid spoilers: setting
+    /// is on and the episode hasn't been watched to completion. Matches
+    /// Infuse — in-progress episodes stay blurred until fully watched.
+    private var blurForSpoilers: Bool {
+        hideSpoilersForUnwatched && !episode.isWatched
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -3093,6 +3132,7 @@ struct EpisodeCard: View {
                 }
                 .frame(width: cardWidth, height: thumbHeight)
                 .clipped()
+                .blur(radius: blurForSpoilers ? 18 : 0)
                 .overlay(alignment: .bottomLeading) {
                     if let duration = episode.durationFormatted {
                         HStack(spacing: 4) {
@@ -3157,6 +3197,7 @@ struct EpisodeCard: View {
                             .foregroundStyle(descriptionFocused ? .black.opacity(0.7) : .white.opacity(0.7))
                             .lineLimit(3)
                             .padding(.top, 1)
+                            .blur(radius: blurForSpoilers ? 6 : 0)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -3212,6 +3253,14 @@ struct EpisodeRow: View {
     var onShowInfo: MediaItemNavigationCallback? = nil
 
     @FocusState private var isFocused: Bool
+    @AppStorage("hideSpoilersForUnwatched") private var hideSpoilersForUnwatched = false
+
+    /// True when this episode should be blurred to avoid spoilers: setting
+    /// is on and the episode hasn't been watched to completion. Matches
+    /// Infuse — in-progress episodes stay blurred until fully watched.
+    private var blurForSpoilers: Bool {
+        hideSpoilersForUnwatched && !episode.isWatched
+    }
 
     var body: some View {
         Button(action: onPlay) {
@@ -3227,6 +3276,7 @@ struct EpisodeRow: View {
                 }
                 .frame(width: 240, height: 135)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .blur(radius: blurForSpoilers ? 18 : 0)
                 .overlay(alignment: .bottom) {
                     if let progress = episode.watchProgress, progress > 0 && progress < 1 {
                         ZStack(alignment: .leading) {
@@ -3248,6 +3298,7 @@ struct EpisodeRow: View {
                     }
                     if let summary = episode.overview, !summary.isEmpty {
                         Text(summary).font(.system(size: 26)).foregroundStyle(.secondary).lineLimit(2)
+                            .blur(radius: blurForSpoilers ? 6 : 0)
                     }
                 }
 
