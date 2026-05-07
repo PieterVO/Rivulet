@@ -11,13 +11,11 @@ This project has fairly *opinionated* designs and logic, with a few focal points
 
 ## Screenshots
 
-| Home | Detail |
-|------|--------|
-| ![Home](Screenshots/home.png) | ![Detail](Screenshots/detail.png) |
-
-| Seasons & Episodes | Sidebar |
-|--------------------|---------|
-| ![Seasons](Screenshots/seasons.png) | ![Sidebar](Screenshots/sidebar.png) |
+| | |
+|---|---|
+| ![](Screenshots/01-hero.png) | ![](Screenshots/02-home-rows.png) |
+| ![](Screenshots/03-sidebar.png) | ![](Screenshots/04-detail.png) |
+| ![](Screenshots/05-episodes.png) | ![](Screenshots/06-library.png) |
 
 <a href="https://testflight.apple.com/join/TcCsF5As">
   <img src="https://developer.apple.com/assets/elements/icons/testflight/testflight-64x64_2x.png" alt="TestFlight" height="50">
