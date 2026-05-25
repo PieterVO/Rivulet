@@ -64,6 +64,11 @@ class LibrarySettingsManager: ObservableObject {
     /// Current user ID for per-user settings (nil = default/no profile)
     private var currentUserId: Int?
 
+    /// UserDefaults key under which `PlexUserProfileManager` persists the
+    /// last-selected Plex Home profile id (`selectedUserIdKey` there).
+    /// Read-only mirror — keep in sync with that owner of the key.
+    private let persistedSelectedUserIdKey = "selectedPlexUserId"
+
     // MARK: - Initialization
 
     private init() {
@@ -73,6 +78,25 @@ class LibrarySettingsManager: ObservableObject {
         self.librariesShownOnHome = []
         self.homeVisibilityConfigured = false
         self.librarySortOptions = [:]
+
+        // PRIVACY: this singleton initializes before the Plex profile
+        // resolves. If we loaded the BASE keys here, a Plex Home /
+        // multi-profile account (whose real hidden set lives under
+        // `<key>_user_<id>`) would get an EMPTY hidden set at launch, so
+        // `isLibraryVisible` would report every library — including
+        // private ones the profile hid — as visible until the async
+        // per-user load lands. That race fails OPEN and leaks private
+        // libraries into the launch list.
+        //
+        // The last-selected profile id is, however, already persisted
+        // synchronously by PlexUserProfileManager (it restores from the
+        // same key). Seed `currentUserId` from it so the FIRST load below
+        // reads the correct per-user keys immediately — no race, no
+        // network wait. `nil` (never selected a profile ⇒ legit
+        // single-user / no Plex Home) keeps the base keys, which are
+        // authoritative there. `onProfileSwitched` still corrects this if
+        // the profile changes in-session.
+        currentUserId = userDefaults.object(forKey: persistedSelectedUserIdKey) as? Int
 
         // Load settings for current user (if any)
         loadSettingsForCurrentUser()
