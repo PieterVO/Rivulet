@@ -12,6 +12,8 @@ struct NextEpisodeCard: View {
     let serverURL: String
     let authToken: String
 
+    @AppStorage("hideSpoilersForUnwatched") private var hideSpoilersForUnwatched = false
+
     private var thumbURL: URL? {
         guard let thumb = episode.thumb else { return nil }
         return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(authToken)")
@@ -25,6 +27,14 @@ struct NextEpisodeCard: View {
 
     private var showTitle: String {
         episode.grandparentTitle ?? ""
+    }
+
+    /// Same idiom MediaDetailView's episode rows use: blur when the global
+    /// spoiler-hide setting is on AND the next episode isn't fully watched.
+    /// In-progress next episodes stay blurred so a partial-watch state
+    /// doesn't leak a spoiler before the user has committed to finishing.
+    private var blurForSpoilers: Bool {
+        hideSpoilersForUnwatched && !episode.isWatched
     }
 
     var body: some View {
@@ -54,6 +64,7 @@ struct NextEpisodeCard: View {
                 }
             }
             .frame(width: 280, height: 158)
+            .blur(radius: blurForSpoilers ? 18 : 0)
             .clipShape(RoundedRectangle(cornerRadius: 12))
 
             // Episode info
@@ -85,6 +96,7 @@ struct NextEpisodeCard: View {
                         .foregroundStyle(.white.opacity(0.7))
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
+                        .blur(radius: blurForSpoilers ? 6 : 0)
                 }
 
                 // Duration if available
