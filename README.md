@@ -6,7 +6,7 @@ This project has fairly *opinionated* designs and logic, with a few focal points
 - **Simplicity** - What is the best design to get me to the media I want to watch.
 - **Live TV** - Plex's live TV is, to put it nicely, sub-par. I've spent too long trying to get it to work well for me (kudos if you don't have this problem). I don't want live TV in a separate app, so this solves my problems. You might could use this just for live tv. Go for it.
 - **HomePod Integration** - The Plex app has never worked well when setting HomePod as the default audio output on my Apple TV. It hurts to have a HomePod sitting there collecting dust while my sub-par tv speakers play sound. This app helps the hurt.
-- **Custom Video Player** - Direct play by default, no server transcoding. The bar I'm chasing is Infuse. This was frustratingly built because Apple's frameworks can't handle DV profile 7 or P8.6 and can't direct play most video containers. MPV and VLC can't handle DV at all and can't use Apple's HomePod controls.
+- **Custom Video Player** - Direct play by default, no server transcoding. The bar I'm chasing is Infuse. This was frustratingly built because Apple's frameworks can't handle DV profile 7 or P8.6 and can't direct play most video containers, and the third-party players that handle the trickier formats can't use Apple's HomePod controls.
 - **Apple TV+ Inspired** - The UI takes heavy inspiration from Apple's own TV app. Clean, focused, and native-feeling.
 
 ## Screenshots
