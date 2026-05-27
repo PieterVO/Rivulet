@@ -30,6 +30,15 @@ struct MediaDetailView: View {
     var backdropWindowFrame: CGRect? = nil
     var onPreviewExitRequested: (() -> Void)? = nil
     var onDetailsBecameVisible: (() -> Void)? = nil
+    /// When set, sub-item navigation (e.g. clicking an episode's description
+    /// tile to open the episode detail page) routes through this closure
+    /// instead of the local `navigateToEpisode` binding. Required when the
+    /// view is hosted inside `PreviewOverlayHost`: the preview is presented
+    /// via UIKit `UIViewController.present(_:)`, so the SwiftUI view tree
+    /// inside has no `NavigationStack` ancestor and `.navigationDestination`
+    /// is a no-op. The host (typically `PlexHomeView`) dismisses the preview
+    /// and pushes the destination onto its own `NavigationStack`.
+    var onSubItemNavigation: ((MediaItem) -> Void)? = nil
     var enableDetailDataLoading: Bool = true
     /// When hosted inside `PreviewOverlayHost`, reflects whether the entry /
     /// paging animation has fully settled. The detail data cascade is deferred
@@ -347,6 +356,13 @@ struct MediaDetailView: View {
                 navigateToSeason: $navigateToSeason,
                 navigateToShow: $navigateToShow,
                 navigateToEpisode: $navigateToEpisode,
+                // Disabled inside `PreviewOverlayHost`-hosted views: the
+                // overlay is presented via UIKit modal, so the SwiftUI
+                // tree has no `NavigationStack` ancestor and these
+                // destinations would be no-ops. Sub-item navigation in
+                // that context routes through `onSubItemNavigation`
+                // instead — see the host (PlexLibraryView /
+                // PlexHomeView).
                 isEnabled: onPreviewExitRequested == nil
             ))
     }
@@ -1803,7 +1819,11 @@ struct MediaDetailView: View {
                                         await refreshEpisodeWatchStatus(itemID: episode.ref.itemID)
                                     },
                                     onShowInfo: {
-                                        navigateToEpisode = episode
+                                        if let nav = onSubItemNavigation {
+                                            nav(episode)
+                                        } else {
+                                            navigateToEpisode = episode
+                                        }
                                     }
                                 )
                                 .padding(.leading, leadingPad)
@@ -1874,7 +1894,11 @@ struct MediaDetailView: View {
                                     await refreshEpisodeWatchStatus(itemID: episode.ref.itemID)
                                 },
                                 onShowInfo: {
-                                    navigateToEpisode = episode
+                                    if let nav = onSubItemNavigation {
+                                        nav(episode)
+                                    } else {
+                                        navigateToEpisode = episode
+                                    }
                                 }
                             )
                         }
