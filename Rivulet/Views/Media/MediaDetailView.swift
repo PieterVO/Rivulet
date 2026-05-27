@@ -3631,33 +3631,25 @@ private struct MediaItemAgnosticPosterCard: View {
     private var cornerRadius: CGFloat { ScaledDimensions.posterCornerRadius }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CachedAsyncImage(url: item.artwork.poster ?? item.artwork.thumbnail) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: .fill)
-                case .empty:
-                    Rectangle().fill(Color(white: 0.15))
-                        .overlay { ProgressView().tint(.white.opacity(0.3)) }
-                case .failure:
-                    Rectangle()
-                        .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.12)], startPoint: .top, endPoint: .bottom))
-                        .overlay { Image(systemName: "photo").foregroundStyle(.white.opacity(0.3)) }
-                }
+        CachedAsyncImage(url: item.artwork.poster ?? item.artwork.thumbnail) { phase in
+            switch phase {
+            case .success(let image):
+                image.resizable().aspectRatio(contentMode: .fill)
+            case .empty:
+                Rectangle().fill(Color(white: 0.15))
+                    .overlay { ProgressView().tint(.white.opacity(0.3)) }
+            case .failure:
+                Rectangle()
+                    .fill(LinearGradient(colors: [Color(white: 0.18), Color(white: 0.12)], startPoint: .top, endPoint: .bottom))
+                    .overlay { Image(systemName: "photo").foregroundStyle(.white.opacity(0.3)) }
             }
-            .frame(width: posterWidth, height: posterHeight)
-            .overlay(alignment: .topTrailing) {
-                if item.userState.isPlayed { WatchedCornerTag() }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .hoverEffect(.highlight)
-
-            Text(item.title)
-                .font(.system(size: ScaledDimensions.posterTitleSize * scale, weight: .medium))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-                .frame(width: posterWidth, alignment: .leading)
         }
+        .frame(width: posterWidth, height: posterHeight)
+        .overlay(alignment: .topTrailing) {
+            if item.userState.isPlayed { WatchedCornerTag() }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .hoverEffect(.highlight)
     }
 }
 
