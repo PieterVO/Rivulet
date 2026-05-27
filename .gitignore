@@ -82,3 +82,6 @@ tasks/
 .superpowers/
 SENTRY_FIXES/
 SENTRY_PATCHES/
+
+# Personal test content map (rating keys are user-specific)
+Docs/TEST_CONTENT_RATING_KEYS.md
