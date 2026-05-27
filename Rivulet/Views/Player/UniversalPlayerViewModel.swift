@@ -1126,6 +1126,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             rp.play()
 
             playbackState = .playing
+            applyScreensaverInhibition(for: .playing)
             self.duration = rp.duration
 
             // Only subscribe to publishers on first creation — reuse keeps
@@ -1188,16 +1189,49 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Mirror ONLY the screensaver-inhibition rule from
+    /// `updatePlaybackState` for the rivuletPlayer path.
+    ///
+    /// rivuletPlayer assigns `playbackState` by direct assignment in
+    /// `handleRivuletStateChange` and the load branch (it does not route
+    /// through `updatePlaybackState`), so the custom FFmpeg /
+    /// AVSampleBuffer direct-play path (Dolby Vision, HDR10, and plain
+    /// SDR direct play) never asserted `isIdleTimerDisabled` the way the
+    /// AVPlayer KVO path does. Result: the tvOS screensaver overlaid live
+    /// video after the device's idle interval while audio kept playing.
+    /// It is not codec-specific — any remote input resets the idle timer,
+    /// so only a long PASSIVE watch (no input) crosses the interval and
+    /// surfaces it. This is the idle-timer rule ONLY; the other
+    /// `updatePlaybackState` side-effects (paused-poster / controls timer)
+    /// are intentionally NOT imported here, to keep this change scoped.
+    /// `.buffering` / `.loading` deliberately leave the flag unchanged
+    /// (a mid-playback stall must not let the screensaver in), exactly as
+    /// `updatePlaybackState` does.
+    private func applyScreensaverInhibition(for state: UniversalPlaybackState) {
+        switch state {
+        case .playing:
+            UIApplication.shared.isIdleTimerDisabled = true
+        case .paused, .ended, .idle:
+            UIApplication.shared.isIdleTimerDisabled = false
+        default:
+            break
+        }
+    }
+
     private func handleRivuletStateChange(_ state: UniversalPlaybackState) {
         switch state {
         case .playing:
             playbackState = .playing
+            applyScreensaverInhibition(for: .playing)
         case .paused:
             playbackState = .paused
+            applyScreensaverInhibition(for: .paused)
         case .buffering:
             playbackState = .buffering
+            applyScreensaverInhibition(for: .buffering)
         case .ended:
             playbackState = .ended
+            applyScreensaverInhibition(for: .ended)
         case .failed:
             // Error details come through errorPublisher
             break
