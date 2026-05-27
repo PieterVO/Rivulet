@@ -1,13 +1,13 @@
 # Rivulet - Claude Context
 
-Rivulet is a tvOS media client for Plex and IPTV. It uses SwiftUI with MPV for video playback with HDR passthrough.
+Rivulet is a tvOS media client for Plex and IPTV. SwiftUI throughout. The primary video player is **Rivulet Player** (RPlayer): a custom FFmpeg-to-Apple-TV pipeline (demux/decode in FFmpeg, render via `AVSampleBufferDisplayLayer` + `AVSampleBufferAudioRenderer`) with full HDR / Dolby Vision support. AVPlayer is also used (via `NativePlayerViewController`) for routes where it's the better fit: natively-playable MP4s, the local HLS-remux path, and HLS fallback. `ContentRouter.plan(...)` picks the route per item.
 
 ## Quick Reference
 
 - **Platform**: tvOS 26+ (Apple TV)
 - **Language**: Swift 6
 - **UI Framework**: SwiftUI
-- **Video Player**: MPV via libmpv (Metal rendering, HDR passthrough)
+- **Video Players**: Rivulet Player (RPlayer) for FFmpeg-routed playback; AVPlayer (`NativePlayerViewController`) for `avPlayerDirect` / `localRemux` / `hls` routes. See `Docs/RIVULET_PLAYER.md` for routing and `Docs/PLAYER_INTERNALS.md` for RPlayer internals.
 - **Design Guide**: See `Docs/DESIGN_GUIDE.md` for UI/UX patterns
 
 ## Project Structure
@@ -18,24 +18,43 @@ Rivulet/
 │   ├── Plex/           # Plex API models (PlexMetadata, PlexStream, etc.)
 │   └── SwiftData/      # Persistent models (Channel, EPGProgram, PlexServer)
 ├── Services/
-│   ├── Plex/           # PlexNetworkManager, PlexAuthManager, PlexDataStore
-│   ├── Playback/       # MPVPlayerWrapper, AVPlayerWrapper, MediaTrack
+│   ├── Plex/
+│   │   ├── (PlexNetworkManager, PlexAuthManager, PlexDataStore, …)
+│   │   └── Playback/   # RivuletPlayer + pipeline (see Docs/RIVULET_PLAYER.md)
+│   │       ├── Pipeline/     # DirectPlayPipeline, HLSPipeline, SampleBufferRenderer, ContentRouter, SegmentBuffer
+│   │       ├── FFmpeg/       # FFmpegDemuxer, URLSessionAVIOSource, FFmpegAudioDecoder, FFmpegSubtitleDecoder
+│   │       ├── Dovi/         # DoviProfileConverter, HEVCNALParser, LibdoviWrapper
+│   │       └── Subtitles/    # SubtitleManager, SubtitleParser, SubtitleOverlayView, SubtitleClockSyncController
 │   ├── LiveTV/         # PlexLiveTVProvider, IPTVProvider, LiveTVDataStore
 │   ├── IPTV/           # M3UParser, XMLTVParser, DispatcharrService
 │   ├── Cache/          # CacheManager, ImageCacheManager
 │   └── Focus/          # FocusMemory (tvOS section focus restoration)
 ├── Views/
-│   ├── Player/         # UniversalPlayerView, PlayerControlsOverlay
-│   │   ├── MPV/        # MPVPlayerView, MPVMetalViewController
+│   ├── Player/         # UniversalPlayerView, UniversalPlayerViewModel, PlayerContainerViewController,
+│   │                   #   NativePlayerViewController (AVPlayer host), SampleBufferDisplayView,
+│   │                   #   AVPlayerLayerView, PlayerControlsOverlay, PlayerProgressBar,
+│   │                   #   TrackSelectionSheet, VideoInfoOverlay
 │   │   └── PostVideo/  # Post-playback summary overlays
-│   ├── Plex/           # PlexHomeView, PlexLibraryView, PlexDetailView
-│   ├── LiveTV/         # ChannelListView, GuideLayoutView, LiveTVPlayerView
-│   ├── Settings/       # SettingsView, SettingsComponents
+│   ├── Media/          # MediaDetailView (canonical detail), PlexHomeView, PlexLibraryView,
+│   │                   #   PlexSearchView, MediaPosterCard, MediaItemRow, ContinueWatchingCard,
+│   │                   #   DetailCardCarousel, PreviewOverlayHost (carousel), PreviewContext,
+│   │                   #   PreviewContainerViewController, HeroBackdropSupport
+│   │   ├── Hero/       # HeroBackdropLayer + supporting hero composition
+│   │   └── Hubs/       # WatchlistHubRow and other home-screen hub rows
+│   ├── Music/          # MusicHomeView, MusicAlbumDetailView, MusicArtistDetailView,
+│   │                   #   MusicNowPlayingView, MusicQueueListView, MusicQueueCarousel,
+│   │                   #   MusicPlaylistView, MusicLyricsView, MusicVisualizerView
+│   │   └── Components/ # MusicProgressBar, MusicPosterCard, MusicShelfRow
+│   ├── Discover/       # DiscoverView, DiscoverRow, DiscoverTile, DiscoverHeroBackdrop, TMDBContextMenu
+│   ├── LiveTV/         # ChannelListView, GuideLayoutView, LiveTVPlayerView, MultiStreamViewModel
+│   ├── Settings/       # SettingsView, SettingsComponents, SettingsDescriptors, sub-pages
 │   ├── Components/     # CachedAsyncImage, GlassRowStyle
 │   ├── TVNavigation/   # TVSidebarView, NavigationEnvironment
 │   └── Root/           # SidebarView
 └── Docs/
-    └── DESIGN_GUIDE.md # Comprehensive UI/UX documentation
+    ├── RIVULET_PLAYER.md   # Canonical player reference (routing, AVPlayer + RPlayer)
+    ├── PLAYER_INTERNALS.md # RPlayer pipeline internals + critical flows
+    └── DESIGN_GUIDE.md     # UI/UX documentation
 ```
 
 ## Key Architectural Patterns
@@ -62,12 +81,54 @@ Uses standard SwiftUI focus primitives with `FocusMemory` for section-level rest
 
 ### Video Player Architecture
 
-- **UniversalPlayerView**: Main SwiftUI player container
-- **UniversalPlayerViewModel**: Manages playback state, markers, post-video logic
-- **MPVPlayerWrapper**: Bridges MPV to Swift (Combine publishers for state)
-- **MPVMetalViewController**: UIViewController hosting Metal layer for MPV rendering
+Two video players coexist: **RivuletPlayer** (RPlayer, FFmpeg-driven) and **AVPlayer** (hosted by `NativePlayerViewController`). `ContentRouter.plan(...)` returns a `PlaybackPlan { primary, fallbacks }`; the view model picks the player based on the route case. Live TV instantiates `RivuletPlayer()` directly per slot (`MultiStreamViewModel`/`StreamSlotView`). Canonical reference: `Docs/RIVULET_PLAYER.md`. Internals: `Docs/PLAYER_INTERNALS.md`.
 
-**Playback States**: `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
+```
+UniversalPlayerView (SwiftUI)
+        │
+UniversalPlayerViewModel  ← state, markers, post-video, NowPlaying, route changes
+        │
+   ContentRouter.plan(...) → PlaybackPlan { primary, fallbacks }
+        │
+        ├── .avPlayerDirect / .localRemux / .hls  → AVPlayer (NativePlayerViewController)
+        │      └── localRemux is served by LocalRemuxServer (FFmpegRemuxSession over HLS on localhost)
+        │
+        └── RPlayer DirectPlay (FFmpeg demux + AVSampleBuffer render)
+                │
+                ├── FFmpegDemuxer (libavformat, with URLSessionAVIOSource for http(s))
+                ├── DV P7/P8.6 → P8.1 RPU rewrite (HEVCNALParser + LibdoviWrapper)
+                ├── FFmpegAudioDecoder for TrueHD/DTS/PCM/FLAC; passthrough otherwise
+                └── SampleBufferRenderer (display layer + audio renderer + synchronizer)
+```
+
+Key components (RPlayer side):
+- **`UniversalPlayerView`** / **`UniversalPlayerViewModel`**: SwiftUI container + state. Handles markers, post-video, route changes, NowPlaying.
+- **`RivuletPlayer`**: `PlayerProtocol` conformance. Drives the pipeline, exposes Combine publishers for state, audio/subtitle tracks.
+- **`DirectPlayPipeline`**: read loop (demux → decode → enqueue), seeking with dedup, preroll buffering, audio track switching, dead-loop detection on resume.
+- **`SampleBufferRenderer`**: owns `AVSampleBufferDisplayLayer`, `AVSampleBufferAudioRenderer`, and `AVSampleBufferRenderSynchronizer` (the A/V clock).
+- **`FFmpegDemuxer`**: libavformat wrapper. Uses `URLSessionAVIOSource` for http(s) (parallel ranged GET, required for high-bitrate 4K on tvOS). Reuses one `AVPacket` across reads. Rebuilds dvh1 format description for DV.
+- **`FFmpegAudioDecoder`**: client-side decode for codecs Apple TV can't decode natively (TrueHD, DTS, PCM variants, FLAC) → 32-bit float PCM.
+- **`DoviProfileConverter`** + **`HEVCNALParser`** + **`LibdoviWrapper`**: on-the-fly RPU rewrite for incompatible DV profiles (P7 MEL, P8.6 → P8.1) before VideoToolbox decode.
+- **`SubtitleManager`** + **`FFmpegSubtitleDecoder`** + **`SubtitleOverlayView`**: text (SRT/ASS) and bitmap (PGS/DVB) subs. PGS uses `end_display_time = UInt32.max` as "until next cue" sentinel.
+
+**Playback States** (PlayerProtocol): `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
+
+#### Codec routing (RPlayer path)
+- **Video H.264 / H.265 / DV P5 / DV P8.1** → VideoToolbox HW decode → `AVSampleBufferDisplayLayer`.
+- **Video DV P7 / P8.6** → HEVCNALParser extracts RPU → DoviProfileConverter rewrites to P8.1 → VideoToolbox.
+- **Audio AAC / AC3 / EAC3** → wrap as `CMSampleBuffer` (passthrough) → `AVSampleBufferAudioRenderer`.
+- **Audio TrueHD / DTS / PCM / FLAC** → FFmpegAudioDecoder → 32-bit float PCM → `AVSampleBufferAudioRenderer`.
+- **Subs SRT / ASS** → `SubtitleParser` → text overlay.
+- **Subs PGS / DVB** → `FFmpegSubtitleDecoder` → bitmap overlay.
+
+#### Routing policy (VOD)
+1. `ContentRouter.plan(...)` returns `PlaybackPlan { primary, fallbacks }`. Route cases: `.avPlayerDirect`, `.localRemux`, `.hls`, plus the RPlayer DirectPlay path.
+2. AVPlayer routes: `.avPlayerDirect` (natively-playable MP4 + native audio, no DV P7) and `.localRemux` (MKV / DV P7 / DTS / TrueHD, served via `LocalRemuxServer` over HLS on localhost). The `useApplePlayer` UserDefault biases the router toward AVPlayer paths.
+3. RPlayer routes: DirectPlay when FFmpeg can demux locally and AVPlayer isn't preferred. HLS via `HLSPipeline` as fallback after a direct-play crash.
+4. Hard blockers that start on `.hls` immediately: FFmpeg unavailable, no direct-play source/part key, forced HLS.
+
+#### Live TV
+Routes through RivuletPlayer (`MultiStreamViewModel`/`StreamSlotView` instantiate `RivuletPlayer()` per slot). HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
 
 ### Plex Metadata Hierarchy
 
@@ -174,13 +235,28 @@ xcodebuild -scheme Rivulet -destination 'platform=tvOS,name=My Apple TV' build
 
 | Purpose | File |
 |---------|------|
-| Main player | `Views/Player/UniversalPlayerView.swift` |
-| Player state | `Views/Player/UniversalPlayerViewModel.swift` |
-| MPV integration | `Services/Playback/MPVPlayerWrapper.swift` |
+| Player container (SwiftUI) | `Views/Player/UniversalPlayerView.swift` |
+| Player view model | `Views/Player/UniversalPlayerViewModel.swift` |
+| Player container (UIKit) | `Views/Player/PlayerContainerViewController.swift` |
+| AVPlayer host | `Views/Player/NativePlayerViewController.swift` |
+| Render surface (RPlayer) | `Views/Player/SampleBufferDisplayView.swift` |
+| RPlayer entry point | `Services/Plex/Playback/RivuletPlayer.swift` |
+| Pipeline (direct play) | `Services/Plex/Playback/Pipeline/DirectPlayPipeline.swift` |
+| Pipeline (HLS fallback) | `Services/Plex/Playback/Pipeline/HLSPipeline.swift` |
+| Renderer (display layer + audio) | `Services/Plex/Playback/Pipeline/SampleBufferRenderer.swift` |
+| Routing decisions | `Services/Plex/Playback/Pipeline/ContentRouter.swift` |
+| Local HLS remux server | `Services/Plex/Playback/Remux/LocalRemuxServer.swift` |
+| FFmpeg remux session | `Services/Plex/Playback/Remux/FFmpegRemuxSession.swift` |
+| Demuxer | `Services/Plex/Playback/FFmpeg/FFmpegDemuxer.swift` |
+| HTTP source for FFmpeg | `Services/Plex/Playback/FFmpeg/URLSessionAVIOSource.swift` |
+| Audio decode (FFmpeg) | `Services/Plex/Playback/FFmpeg/FFmpegAudioDecoder.swift` |
+| DV profile conversion | `Services/Plex/Playback/Dovi/DoviProfileConverter.swift` |
+| Subtitle pipeline | `Services/Plex/Playback/Subtitles/SubtitleManager.swift` |
 | Focus memory | `Services/Focus/FocusMemory.swift` |
 | Plex API | `Services/Plex/PlexNetworkManager.swift` |
 | Glass row styling | `Views/Components/GlassRowStyle.swift` |
 | Settings components | `Views/Settings/SettingsComponents.swift` |
+| Player canon docs | `Docs/RIVULET_PLAYER.md`, `Docs/PLAYER_INTERNALS.md` |
 | Design patterns | `Docs/DESIGN_GUIDE.md` |
 
 ## Design Philosophy
@@ -216,44 +292,47 @@ From `Docs/DESIGN_GUIDE.md`:
 - Verify credits marker detection in `checkMarkers(at:)`
 - Ensure `duration > 60` for time-based trigger (45s before end)
 
-### Live TV Black Screen (Video Decodes But Doesn't Render)
-- **tvOS has NO OpenGL** - only Metal (and Vulkan via MoltenVK)
-- MPV must use `gpu-api=vulkan`, never `gpu-api=opengl`
-- If you see "error setting option" followed by MoltenVK logs, check gpu-api setting
-- Video decoding (VideoToolbox) can succeed while rendering fails due to misconfigured gpu-api
-
 ### Plex Live TV Not Starting (DVB Tuners)
 - DVB tuners (TBS cards, etc.) don't have HDHomeRun stream URLs
 - They require Plex server transcode via `/video/:/transcode/universal/start.m3u8`
 - The transcode URL must include comprehensive client profile parameters
-- Minimal URLs will cause "loading failed" - Plex needs to know client capabilities
+- Minimal URLs will cause stream-load failures; Plex needs to know client capabilities
 - See `PlexLiveTVModels.buildPlexLiveTVStreamURL()` for required parameters
 
-## MPV on tvOS
+### RPlayer Stalls on High-Bitrate 4K Over HTTP
+- FFmpeg's built-in HTTP protocol is throughput-limited on tvOS (~7 Mbps observed)
+- For http(s) URLs, RPlayer uses `URLSessionAVIOSource` (parallel ranged GETs) instead of libavformat's HTTP. This is the only path that sustains 4K HEVC/DV bitrates.
+- Read-loop throttle is tuned to `AVSampleBufferDisplayLayer`'s ~1 s forward acceptance window for 4K HEVC. Do not raise without re-measuring.
 
-### Rendering Backends
+### RPlayer Initial Stutter or Sync Drift
+- Preroll buffers ~450 ms for DV, ~200 ms otherwise before starting the synchronizer clock
+- Seeks within 0.5 s of current position are deduplicated
+- After seeking while paused, only one preview frame is decoded; on `resume()` a dead read loop is detected and restarted with fresh preroll
+- A/V clock comes from `AVSampleBufferRenderSynchronizer`; on AirPlay it auto-compensates latency via preroll. Do NOT add explicit video delay.
 
-| Mode | Video Output | GPU API | Use Case |
-|------|-------------|---------|----------|
-| VOD (HDR) | `gpu-next` | `vulkan` | Movies/TV with HDR passthrough |
-| Live TV | `gpu` | `vulkan` | Live streams, lower resource usage |
-| Simulator | `gpu` | `vulkan` | Testing (software decode) |
+## RivuletPlayer (RPlayer) on tvOS
 
-**Critical**: Never use `gpu-api=opengl` on tvOS - it doesn't exist and will fail silently.
+Demux/decode in FFmpeg, render in Apple sample-buffer APIs. VideoToolbox handles H.264/HEVC/DV (P5/P8.1 native, P7/P8.6 via on-the-fly RPU rewrite). Apple-native audio codecs pass through; everything else is decoded in `FFmpegAudioDecoder` to PCM.
 
-### Live Stream Optimizations
-```swift
-// Minimal buffering for live TV
-demuxer-max-bytes = 32MiB
-demuxer-max-back-bytes = 0  // Can't seek anyway
-cache-secs = 10
+### Rendering pipeline
 
-// Fast scaling (no HDR processing needed)
-scale = bilinear
-dscale = bilinear
-dither = no
-deband = no
-```
+| Stage | Component | Notes |
+|------|-----------|-------|
+| HTTP source | `URLSessionAVIOSource` | Parallel ranged GETs (up to 8 × 4 MB segments). Replaces libavformat's HTTP protocol for http(s) URLs (required for 4K throughput on tvOS). |
+| Demux | `FFmpegDemuxer` | libavformat. Single reused `AVPacket`. Rebuilds dvh1 format description for DV. |
+| Video decode | VideoToolbox via `CMSampleBuffer` | P7/P8.6 RPU rewrite happens upstream of decode. |
+| Audio decode | passthrough OR `FFmpegAudioDecoder` | AAC/AC3/EAC3 passthrough; TrueHD/DTS/PCM/FLAC decoded to 32-bit float PCM. |
+| Render | `SampleBufferRenderer` | Owns `AVSampleBufferDisplayLayer` + `AVSampleBufferAudioRenderer` + `AVSampleBufferRenderSynchronizer`. |
+
+### Throughput / timing constants worth knowing
+- `AVSampleBufferDisplayLayer` has an undocumented ~1 s forward acceptance window for 4K HEVC on tvOS. The read-loop throttle (currently ~0.8 s) matches that window.
+- Preroll: ~450 ms for DV, ~200 ms otherwise.
+- AirPlay startup buffer: 1.0 s (prevents silent starts in pull-mode).
+
+### HDR / DV
+- Display switching uses `DisplayCriteriaManager` → `AVDisplayManager` (tvOS Match Content for frame rate + dynamic range).
+- DV profiles natively supported: P5, P8.1.
+- DV profiles converted on the fly: P7 (MEL), P8.6. `HEVCNALParser` extracts RPU NAL (type 62), `LibdoviWrapper` rewrites profile, parser injects back. See `Services/Plex/Playback/Dovi/`.
 
 ## Plex Discover API
 
@@ -288,14 +367,16 @@ audioCodec, audioBitrate, audioChannels
 session (unique UUID per session)
 ```
 
-Without these, Plex returns errors or empty responses → MPV reports "loading failed".
+Without these, Plex returns errors or empty responses and the demuxer fails to open the stream.
 
 ## Sentry Error Patterns
 
 | Error | Likely Cause |
 |-------|-------------|
-| `MPV error: loading failed` | Bad stream URL, network issue, or missing transcode params |
-| `MPV error: unrecognized file format` | Plex returned error page instead of stream |
+| `FFmpeg avformat_open_input failed` | Bad stream URL, network issue, missing transcode params, or Plex returned an HTML error page instead of a stream |
+| `Demuxer: no streams found` / `unsupported codec` | Wrong container or codec we don't route (check `FFmpegDemuxer` stream discovery) |
 | `HLS transcode session failed` | Incomplete transcode URL parameters |
 | `HTTP 500 on /hubs` | Plex server issue (not client-side) |
 | `NSURLErrorDomain -999 cancelled` | User navigated away, request timeout |
+| Direct play stalls at 4K but works at 1080p | FFmpeg HTTP protocol bottleneck; verify `URLSessionAVIOSource` is in use for http(s) |
+| RPlayer init/runtime fatal → auto HLS fallback | Expected: ContentRouter falls back from DirectPlay to HLS once at current playback time |
