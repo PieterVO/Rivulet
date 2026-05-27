@@ -107,6 +107,11 @@ enum SettingsDescriptorStore {
             iconColor: .cyan,
             description: "Moves the Discover tab above your Media libraries in the sidebar for quicker access."
         ),
+        "hideSpoilersForUnwatched": SettingDescriptor(
+            icon: "eye.slash",
+            iconColor: .indigo,
+            description: "Blurs descriptions and thumbnails for unwatched movies and episodes. Press the info button on a detail page to read the full description."
+        ),
 
         // MARK: Playback
         "audioLanguage": SettingDescriptor(

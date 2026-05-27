@@ -274,6 +274,7 @@ struct SettingsView: View {
     // AppStorage
     @AppStorage("showHomeHero") private var showHomeHero = false
     @AppStorage("showLibraryHero") private var showLibraryHero = false
+    @AppStorage("hideSpoilersForUnwatched") private var hideSpoilersForUnwatched = false
     @AppStorage("showLibraryRecommendations") private var showLibraryRecommendations = true
     @AppStorage("showLibraryRecentRows") private var showLibraryRecentRows = true
     @AppStorage("enablePersonalizedRecommendations") private var enablePersonalizedRecommendations = false
@@ -678,6 +679,12 @@ struct SettingsView: View {
                     onFocusChange: { if $0 { focusState.focusedSettingId = "discoverAboveLibraries" } }
                 )
             }
+
+            SettingsToggleRow(
+                title: "Hide Spoilers",
+                isOn: $hideSpoilersForUnwatched,
+                onFocusChange: { if $0 { focusState.focusedSettingId = "hideSpoilersForUnwatched" } }
+            )
         }
     }
 
