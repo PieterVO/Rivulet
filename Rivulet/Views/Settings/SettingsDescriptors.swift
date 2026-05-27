@@ -149,6 +149,11 @@ enum SettingsDescriptorStore {
             iconColor: .purple,
             description: "How long to wait before automatically playing the next episode. Set to Off to disable autoplay."
         ),
+        "showPostVideoUpNext": SettingDescriptor(
+            icon: "rectangle.stack",
+            iconColor: .purple,
+            description: "When off, closing credits play uninterrupted and the player returns to Home at the end of the episode."
+        ),
         "useApplePlayer": SettingDescriptor(
             icon: "play.rectangle",
             iconColor: .blue,

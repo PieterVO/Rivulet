@@ -1232,8 +1232,18 @@ final class UniversalPlayerViewModel: ObservableObject {
             playbackState = .buffering
             applyScreensaverInhibition(for: .buffering)
         case .ended:
-            playbackState = .ended
-            applyScreensaverInhibition(for: .ended)
+            // Route through `updatePlaybackState` (not direct assignment) so
+            // the EOF to `handlePlaybackEnded` chain at line ~1000 fires for
+            // the rivuletPlayer pipeline too. Without this, only the
+            // marker-based triggers in `processMarkers` lead into
+            // `handlePlaybackEnded`; a true end-of-stream on rivuletPlayer
+            // is silently ignored. AVPlayer's path already routes through
+            // `updatePlaybackState(.ended)` via the
+            // `AVPlayerItemDidPlayToEndTime` notification.
+            // `updatePlaybackState(.ended)` also re-enables the idle timer,
+            // which covers the screensaver behavior the explicit
+            // `applyScreensaverInhibition` call here used to handle.
+            updatePlaybackState(.ended)
         case .failed:
             // Error details come through errorPublisher
             applyScreensaverInhibition(for: state)
@@ -3172,7 +3182,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                    credits.id == firstCredits.id,
                    time >= credits.startTimeSeconds && !hasTriggeredPostVideo {
                     hasTriggeredPostVideo = true
-                    Task { await handlePlaybackEnded() }
+                    triggerPostVideoTransition()
                 }
                 return
             }
@@ -3217,7 +3227,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Only trigger if we're both near the end AND have watched most of the content
             if time >= triggerTime && time >= minCompletionTime && !hasTriggeredPostVideo {
                 hasTriggeredPostVideo = true
-                Task { await handlePlaybackEnded() }
+                triggerPostVideoTransition()
                 return
             }
         }
@@ -3427,6 +3437,27 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Post-Video Handling
 
     /// Handle video end - transition to post-video summary
+    /// Called by `processMarkers` at the first-credits boundary (or at the
+    /// 45-seconds-from-end heuristic for content without markers). Decides
+    /// whether to enter the panel flow now or let playback continue to true
+    /// EOF, based on the user's `showPostVideoUpNext` preference. When the
+    /// panel is suppressed for episodes, we still mark the item as watched
+    /// at credits-start (so manual mid-credits dismissal doesn't leave the
+    /// episode in a "not yet finished" state); the actual panel entry —
+    /// when applicable — happens later from `handlePlaybackEnded` itself,
+    /// or doesn't happen at all when the user has opted out. The pref is
+    /// read via `object as? Bool` so a missing key reads as the default-
+    /// true preserve-existing-behavior path rather than `false`.
+    private func triggerPostVideoTransition() {
+        let showUpNext = UserDefaults.standard.object(forKey: "showPostVideoUpNext") as? Bool ?? true
+        let isEpisode = metadata.type == "episode"
+        if showUpNext || !isEpisode {
+            Task { await handlePlaybackEnded() }
+        } else {
+            Task { await markCurrentAsWatched() }
+        }
+    }
+
     func handlePlaybackEnded() async {
         // Don't re-enter if already showing post-video
         guard postVideoState == .hidden else { return }
@@ -3438,8 +3469,16 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         let isEpisode = metadata.type == "episode"
 
+        // Per-user opt-out of the post-video "Up Next" chooser for TV
+        // episodes. When disabled, episodes follow the same path movies
+        // already take — credits play uninterrupted at full size. Default
+        // is on so the chooser still appears for users who like it; key
+        // pulled via `object as? Bool` so a missing key reads as the
+        // default rather than `false`.
+        let showUpNext = UserDefaults.standard.object(forKey: "showPostVideoUpNext") as? Bool ?? true
+
         // Movies: No PostVideo - just let the video play through to the end
-        guard isEpisode else {
+        guard isEpisode && showUpNext else {
             postVideoState = .hidden
             return
         }

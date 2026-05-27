@@ -292,6 +292,7 @@ struct SettingsView: View {
     @AppStorage("promptResumeOrRestart") private var promptResumeOrRestart = false
     @AppStorage("useApplePlayer") private var useApplePlayer = true
     @AppStorage("autoplayCountdown") private var autoplayCountdownRaw = AutoplayCountdown.fiveSeconds.rawValue
+    @AppStorage("showPostVideoUpNext") private var showPostVideoUpNext = true
     @AppStorage("displaySize") private var displaySizeRaw = DisplaySize.normal.rawValue
     @AppStorage("musicLoudnessNormalization") private var musicLoudnessNormalization = false
     @AppStorage("musicCrossfadeDuration") private var musicCrossfadeDurationRaw = CrossfadeOption.off.rawValue
@@ -742,6 +743,12 @@ struct SettingsView: View {
                 value: autoplayCountdown.wrappedValue.description,
                 action: { navigate(to: .autoplayCountdownPicker) },
                 onFocusChange: { if $0 { focusState.focusedSettingId = "autoplayCountdown" } }
+            )
+
+            SettingsToggleRow(
+                title: "Show Up Next Panel",
+                isOn: $showPostVideoUpNext,
+                onFocusChange: { if $0 { focusState.focusedSettingId = "showPostVideoUpNext" } }
             )
 
 
