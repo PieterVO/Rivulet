@@ -65,6 +65,7 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
     func continueWatching(limit: Int) async throws -> [MediaItem] { continueWatchingItems }
     func recentlyAdded(limit: Int) async throws -> [MediaItem] { recentlyAddedItems }
     func hubs() async throws -> [MediaHub] { [] }
+    func hubs(in library: MediaLibrary) async throws -> [MediaHub] { [] }
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?) async throws -> StreamInfo {
         throw MediaProviderError.notFound
     }

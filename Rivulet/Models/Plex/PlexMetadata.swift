@@ -17,6 +17,15 @@ nonisolated struct PlexRole: Codable, Identifiable, Sendable {
     var tag: String?        // Actor name
     var role: String?       // Character name
     var thumb: String?      // Photo URL
+    var tagKey: String?     // Plex Discover person GUID fragment (e.g. "5d77...")
+    var filter: String?     // Origin-library filter, e.g. "actor=49"
+
+    /// Numeric origin-library actor id parsed from `filter` ("actor=49" -> "49").
+    var originActorId: String? {
+        guard let filter, let eq = filter.firstIndex(of: "=") else { return nil }
+        let v = String(filter[filter.index(after: eq)...])
+        return v.isEmpty ? nil : v
+    }
 }
 
 /// Director/Writer/Producer

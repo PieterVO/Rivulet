@@ -307,7 +307,10 @@ enum PlexMediaMapper {
                 id: role.id,
                 name: role.tag ?? "",
                 role: role.role,
-                imageURL: personURL(role.thumb)
+                imageURL: personURL(role.thumb),
+                tagKey: role.tagKey,
+                originActorId: role.originActorId,
+                originSectionKey: meta.librarySectionID.map(String.init)
             )
         }
         let directors = (meta.Director ?? []).map {
