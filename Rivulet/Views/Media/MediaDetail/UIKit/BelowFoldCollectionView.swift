@@ -77,6 +77,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     var onShowRelatedDetails: ((MediaItem) -> Void)?
     /// Episode description Select → open the episode detail page.
     var onShowEpisodeDetails: ((MediaItem) -> Void)?
+    /// Cast / crew cell Select → open the person detail page.
+    var onSelectPerson: ((MediaPerson) -> Void)?
     /// Selecting the About cards opens the matching popup (synopsis / advisory).
     var onSelectSynopsis: ((MediaItemDetail) -> Void)?
     var onSelectAdvisory: ((ContentAdvisory) -> Void)?
@@ -865,6 +867,11 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         if case let .related(id) = dataSource.itemIdentifier(for: indexPath),
            let item = relatedByID[id] {
             onShowRelatedDetails?(item)
+        }
+        // Cast / crew cell Select → open the person detail page.
+        if case let .cast(id) = dataSource.itemIdentifier(for: indexPath),
+           let entry = castEntriesByID[id] {
+            onSelectPerson?(entry.person)
         }
     }
 

@@ -307,6 +307,13 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.onShowRelatedDetails = { [weak self] item in
             self?.presentStandaloneDetail(item)
         }
+        // Cast / crew cell Select → person detail page (full-screen).
+        expandedDetail.onSelectPerson = { [weak self] person in
+            guard let self else { return }
+            let page = PersonDetailViewController(person: person)
+            page.onSelectItem = { [weak self] item in self?.presentPersonFilmographyItem(item) }
+            self.present(page, animated: true)
+        }
 
         expandedLayout.itemCount = items.count
         morphController = CarouselMorphController(
@@ -684,6 +691,14 @@ final class PreviewCarouselViewController: UIViewController {
         var top: UIViewController = self
         while let presented = top.presentedViewController { top = presented }
         top.present(detail, animated: true)
+    }
+
+    /// Person filmography poster Select → open the item's full expanded detail.
+    /// Server-backed and metadata-only items both go through `presentStandaloneDetail`:
+    /// the carousel handles `isMetadataOnly` items already (Watchlist-primary chrome),
+    /// so a single path covers both cases.
+    private func presentPersonFilmographyItem(_ item: MediaItem) {
+        presentStandaloneDetail(item)
     }
 
     /// Info button → structured info popup (scrollable), styled like our other

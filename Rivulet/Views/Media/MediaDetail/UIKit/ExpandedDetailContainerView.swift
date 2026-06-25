@@ -167,6 +167,10 @@ final class ExpandedDetailContainerView: UIView {
         get { belowFoldCollection.onShowEpisodeDetails }
         set { belowFoldCollection.onShowEpisodeDetails = newValue }
     }
+    var onSelectPerson: ((MediaPerson) -> Void)? {
+        get { belowFoldCollection.onSelectPerson }
+        set { belowFoldCollection.onSelectPerson = newValue }
+    }
 
     /// True briefly after focus first lands on the episodes row (same-press guard
     /// for the episodes→pills jump).
