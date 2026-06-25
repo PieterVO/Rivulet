@@ -100,6 +100,11 @@ export default {
         url.searchParams.set("_external_source", externalSource);
         break;
       }
+      case "person":
+        // Person details: biography + profile_path (+ name, birthday, etc).
+        // NOT type-prefixed — TMDB people live at /person/{id}, not /movie|tv.
+        upstreamPath = `person/${tmdbId}`;
+        break;
       default:
         return addCors(new Response("Not Found", { status: 404 }));
     }
