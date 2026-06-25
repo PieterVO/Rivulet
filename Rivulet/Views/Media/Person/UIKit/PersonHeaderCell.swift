@@ -213,4 +213,9 @@ final class PersonHeaderCell: UICollectionViewCell {
         moreButton.isHidden = true
         onMore = nil
     }
+
+    // Plain content cell: never a focus target itself. The MORE button is
+    // independently focusable when visible; otherwise focus falls through to the
+    // poster rows. Matches AboutCollectionCell / ShelfRowCell.
+    override var canBecomeFocused: Bool { false }
 }
