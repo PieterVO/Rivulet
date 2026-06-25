@@ -286,36 +286,16 @@ class PlexAuthManager: ObservableObject {
             connectionScore(conn1) > connectionScore(conn2)
         }
 
-        let httpsRequired = server.httpsRequired == true
-
-        // Build the prioritized probe chains. Index order IS the priority
-        // order; each chain preserves the old ladder's internal cascade
-        // (direct -> plex.direct -> HTTPS/cert-extraction fallbacks).
+        // Build the prioritized probe chains. Index order IS the priority order.
+        // Each chain tries the connection's advertised URI (now an https
+        // plex.direct URL with a valid cert) and, for http-only connections,
+        // upgrades to HTTPS via certificate extraction.
         var chains: [() async -> String?] = []
-
-        // Highest priority: the httpsRequired plex.direct-first probe
-        // (gives playback a valid TLS certificate).
-        if httpsRequired, let machineId = server.machineIdentifier,
-           let localConnection = sortedConnections.first(where: { $0.local && !$0.relay }) {
-            let plexDirectURI = buildPlexDirectURL(
-                address: localConnection.address,
-                port: localConnection.port,
-                machineIdentifier: machineId
-            )
-            chains.append { [weak self] in
-                guard let self else { return nil }
-                if await self.testConnection(plexDirectURI, serverToken: tokenToUse) {
-                    return plexDirectURI
-                }
-                print("🔐 PlexAuthManager: ❌ plex.direct failed: \(plexDirectURI)")
-                return nil
-            }
-        }
 
         // One chain per candidate connection, in score order.
         for connection in sortedConnections {
             chains.append { [weak self] in
-                await self?.probeConnectionChain(connection, server: server, tokenToUse: tokenToUse)
+                await self?.probeConnectionChain(connection, tokenToUse: tokenToUse)
             }
         }
 
@@ -363,12 +343,11 @@ class PlexAuthManager: ObservableObject {
         }
     }
 
-    /// The old serial ladder's per-connection cascade, verbatim: direct URI,
-    /// then (for http) plex.direct, then raw HTTPS with certificate
-    /// extraction, then plex.direct built from the extracted cert hash.
+    /// Per-connection cascade: try the advertised URI directly, then (for an
+    /// http connection) raw HTTPS with certificate extraction, then a
+    /// plex.direct URL built from the extracted cert hash.
     private func probeConnectionChain(
         _ connection: PlexConnection,
-        server: PlexDevice,
         tokenToUse: String?
     ) async -> String? {
         if await testConnection(connection.uri, serverToken: tokenToUse) {
@@ -379,20 +358,6 @@ class PlexAuthManager: ObservableObject {
         // If HTTP failed, try HTTPS fallback
         // This handles "Require Secure Connections" setting on Plex servers
         guard connection.protocolType == "http" else { return nil }
-
-        // For local connections with httpsRequired, prefer plex.direct over raw HTTPS
-        // because plex.direct gives playback a valid TLS certificate
-        if connection.local, let machineId = server.machineIdentifier {
-            let plexDirectURI = buildPlexDirectURL(
-                address: connection.address,
-                port: connection.port,
-                machineIdentifier: machineId
-            )
-            if await testConnection(plexDirectURI, serverToken: tokenToUse) {
-                return plexDirectURI
-            }
-            print("🔐 PlexAuthManager: ❌ plex.direct failed: \(plexDirectURI)")
-        }
 
         // Try raw HTTPS as last resort for this connection.
         // API calls can trust self-signed certs, but media playback should prefer a valid TLS endpoint.
@@ -405,7 +370,7 @@ class PlexAuthManager: ObservableObject {
                 let plexDirectURI = buildPlexDirectURL(
                     address: connection.address,
                     port: connection.port,
-                    machineIdentifier: hash
+                    subdomainHash: hash
                 )
                 if await testConnection(plexDirectURI, serverToken: tokenToUse) {
                     return plexDirectURI
@@ -422,7 +387,7 @@ class PlexAuthManager: ObservableObject {
             let plexDirectURI = buildPlexDirectURL(
                 address: connection.address,
                 port: connection.port,
-                machineIdentifier: hash
+                subdomainHash: hash
             )
             if await testConnection(plexDirectURI, serverToken: tokenToUse) {
                 return plexDirectURI
@@ -477,12 +442,15 @@ class PlexAuthManager: ObservableObject {
         return score
     }
 
-    /// Build a plex.direct URL for secure remote access
-    /// Plex issues SSL certificates for *.plex.direct domains
-    /// Format: https://<ip-with-dashes>.<machineIdentifier>.plex.direct:<port>
-    private func buildPlexDirectURL(address: String, port: Int, machineIdentifier: String) -> String {
+    /// Build a plex.direct URL for a valid-TLS endpoint.
+    /// Format: https://<ip-with-dashes>.<subdomainHash>.plex.direct:<port>
+    /// `subdomainHash` MUST be the server's plex.direct certificate hash (the
+    /// label in the wildcard cert CN), NOT the machineIdentifier — those differ
+    /// (e.g. cert hash is 32 hex chars, machineIdentifier is a 40-char SHA-1).
+    /// Callers obtain it by extracting it from the server's TLS certificate.
+    private func buildPlexDirectURL(address: String, port: Int, subdomainHash: String) -> String {
         let ipWithDashes = address.replacingOccurrences(of: ".", with: "-")
-        return "https://\(ipWithDashes).\(machineIdentifier).plex.direct:\(port)"
+        return "https://\(ipWithDashes).\(subdomainHash).plex.direct:\(port)"
     }
 
     /// Check if address is a Docker/internal bridge network

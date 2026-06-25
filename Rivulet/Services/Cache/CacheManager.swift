@@ -256,14 +256,20 @@ actor CacheManager {
     // this yet (see `perf-spike/MEDIAITEM_HOME_PLAN.md`). Reuses the same
     // `cacheData` / `decodedCache` helpers as every other cache here.
 
-    // NB: bump the `_v2` suffix whenever the `MediaItem` schema changes so a
-    // stale projection (written by an older build) is discarded on update
-    // rather than decoded with missing fields. v2 added `MediaItem.isMusic`
-    // (music tiles render 1:1 square) — old caches lacked it, so music rows
-    // stayed 2:3 on the first post-update launch. The raw `PlexMetadata`
-    // caches don't need versioning; they re-project fresh through the mapper.
-    private let homeItemsCacheFile = "home_items_cache_v2.json"
-    private let libraryItemsCachePrefix = "library_items_v2_"
+    // NB: bump the `_vN` suffix whenever the `MediaItem` schema OR the identity
+    // baked into the projection changes, so a stale projection (written by an
+    // older build) is discarded on update rather than shown as-is.
+    // v2 added `MediaItem.isMusic` (music tiles render 1:1 square); old caches
+    // lacked it, so music rows stayed 2:3 on the first post-update launch.
+    // v3: the Plex connection rework sources `PlexDevice.machineIdentifier` from
+    // `clientIdentifier` at decode time, which flips the `providerID` baked into
+    // every cached `MediaItemRef` (see MediaProviderRegistry.populateFromCurrentAuth).
+    // A v2 projection written under the previous provider identity no longer
+    // matched the active provider, so the home dropped those items and showed
+    // blank rows until the cache was cleared. Raw `PlexMetadata` caches do not
+    // need versioning; they re-project fresh through the mapper under the current id.
+    private let homeItemsCacheFile = "home_items_cache_v3.json"
+    private let libraryItemsCachePrefix = "library_items_v3_"
 
     func cacheHomeItems(_ rail: CachedHomeRail) {
         cacheData(rail, fileName: homeItemsCacheFile)

@@ -61,8 +61,9 @@ nonisolated struct PlexDevice: Codable, Sendable {
     let natLoopbackSupported: Bool?
     let connections: [PlexConnection]?
 
-    /// The 32-char server identifier used for plex.direct URLs
-    /// This is fetched separately from pms/servers.xml
+    /// Stable Plex server identity (machineIdentifier). Mirrors `clientIdentifier`
+    /// from /api/v2/resources; used for provider IDs and last-known-good matching.
+    /// NOT the plex.direct subdomain hash — that lives in each connection's `uri`.
     var machineIdentifier: String?
 
     enum CodingKeys: String, CodingKey {
@@ -108,6 +109,10 @@ nonisolated struct PlexDevice: Codable, Sendable {
         dnsRebindingProtection = try container.decodeIfPresent(Bool.self, forKey: .dnsRebindingProtection)
         natLoopbackSupported = try container.decodeIfPresent(Bool.self, forKey: .natLoopbackSupported)
         connections = try container.decodeIfPresent([PlexConnection].self, forKey: .connections)
+
+        // machineIdentifier mirrors clientIdentifier (the same value Plex returns
+        // from /identity and pms/servers.xml), so no separate fetch is needed.
+        machineIdentifier = clientIdentifier
     }
 }
 

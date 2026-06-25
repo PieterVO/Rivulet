@@ -256,82 +256,22 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
     /// Get list of available Plex servers for the authenticated user
     func getServers(authToken: String) async throws -> [PlexDevice] {
-        let url = URL(string: "\(PlexAPI.baseUrl)/api/v2/resources")!
+        // includeHttps=1 surfaces the https `plex.direct` connection URIs (valid
+        // TLS cert, correct per-server subdomain hash); includeRelay=1 adds the
+        // Plex Relay connection. WITHOUT these params the API only returns bare-IP
+        // http URIs, so off-LAN clients get `http://<publicIP>:32400` (blocked by
+        // ATS) with no working remote candidate and no relay fallback.
+        let url = URL(string: "\(PlexAPI.baseUrl)/api/v2/resources?includeHttps=1&includeRelay=1")!
 
-        var devices: [PlexDevice] = try await request(
+        let devices: [PlexDevice] = try await request(
             url,
             headers: plexHeaders(authToken: authToken)
         )
 
-        // Filter to only Plex Media Servers
-        devices = devices.filter { $0.provides == "server" }
-
-        // Fetch machineIdentifiers for each server (needed for plex.direct URLs)
-        let machineIds = await getServerMachineIdentifiers(authToken: authToken)
-
-        // Attach machineIdentifier to matching devices (match by name)
-        return devices.map { device in
-            var mutableDevice = device
-            if let machineId = machineIds[device.name] {
-                mutableDevice.machineIdentifier = machineId
-            }
-            return mutableDevice
-        }
-    }
-
-    /// Fetch machine identifiers from pms/servers.xml endpoint
-    /// This provides the 32-char hash needed for plex.direct URLs
-    private func getServerMachineIdentifiers(authToken: String) async -> [String: String] {
-        guard let url = URL(string: "\(PlexAPI.baseUrl)/pms/servers.xml") else {
-            return [:]
-        }
-
-        do {
-            let data = try await requestData(url, headers: plexHeaders(authToken: authToken))
-            return parseServerMachineIdentifiers(from: data)
-        } catch {
-            print("🌐 PlexNetwork: Failed to fetch server machineIdentifiers: \(error)")
-            return [:]
-        }
-    }
-
-    /// Parse machineIdentifier from servers.xml response
-    /// Returns dictionary mapping clientIdentifier/name to machineIdentifier
-    private func parseServerMachineIdentifiers(from data: Data) -> [String: String] {
-        var result: [String: String] = [:]
-
-        // Parse XML to extract Server elements with machineIdentifier
-        guard let xmlString = String(data: data, encoding: .utf8) else { return result }
-
-        // Simple regex-based parsing for Server elements
-        // Format: <Server ... machineIdentifier="xxx" ... />
-        let pattern = #"<Server[^>]+machineIdentifier="([^"]+)"[^>]*>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return result }
-
-        let matches = regex.matches(in: xmlString, range: NSRange(xmlString.startIndex..., in: xmlString))
-        for match in matches {
-            if let machineIdRange = Range(match.range(at: 1), in: xmlString) {
-                let machineId = String(xmlString[machineIdRange])
-
-                // Also try to extract name or accessToken to map back to resources
-                let serverStart = match.range.location
-                let serverEnd = min(serverStart + 500, xmlString.count)
-                let serverSubstring = String(xmlString.prefix(serverEnd).suffix(serverEnd - serverStart))
-
-                // Try to match by name
-                if let nameMatch = serverSubstring.range(of: #"name="([^"]+)""#, options: .regularExpression) {
-                    let nameStart = serverSubstring.index(nameMatch.lowerBound, offsetBy: 6)
-                    let nameEnd = serverSubstring.index(nameMatch.upperBound, offsetBy: -1)
-                    let name = String(serverSubstring[nameStart..<nameEnd])
-                    result[name] = machineId
-                }
-
-                // Store by machineId as well for backup matching
-                result[machineId] = machineId
-            }
-        }
-
-        return result
+        // Only Plex Media Servers. Each device's `machineIdentifier` is populated
+        // at decode time from its `clientIdentifier` (the same value the old
+        // pms/servers.xml fetch returned), so no separate round-trip is needed.
+        return devices.filter { $0.provides == "server" }
     }
 
     // MARK: - Library Browsing
