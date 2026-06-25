@@ -302,6 +302,12 @@ enum PlexMediaMapper {
             return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(authToken)")
         }
 
+        let titleTmdbId: Int? = (meta.Guid ?? []).compactMap { g -> Int? in
+            guard let gid = g.id, gid.hasPrefix("tmdb://") else { return nil }
+            return Int(gid.dropFirst("tmdb://".count))
+        }.first
+        let titleIsMovie = (meta.type == "movie")
+
         let cast = (meta.Role ?? []).map { role in
             MediaPerson(
                 id: role.id,
@@ -310,7 +316,9 @@ enum PlexMediaMapper {
                 imageURL: personURL(role.thumb),
                 tagKey: role.tagKey,
                 originActorId: role.originActorId,
-                originSectionKey: meta.librarySectionID.map(String.init)
+                originSectionKey: meta.librarySectionID.map(String.init),
+                titleTmdbId: titleTmdbId,
+                titleIsMovie: titleIsMovie
             )
         }
         let directors = (meta.Director ?? []).map {

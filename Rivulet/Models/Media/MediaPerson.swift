@@ -15,4 +15,6 @@ struct MediaPerson: Hashable, Identifiable, Sendable {
     var tagKey: String? = nil           // Discover person key (cast only)
     var originActorId: String? = nil    // origin-library actor id (fallback path)
     var originSectionKey: String? = nil // origin library section key (fallback path)
+    var titleTmdbId: Int? = nil       // originating title's TMDB id (for actor->TMDB resolution)
+    var titleIsMovie: Bool = true     // originating title type (movie vs show)
 }

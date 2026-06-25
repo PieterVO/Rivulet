@@ -43,6 +43,20 @@ struct TMDBCredit: Codable, Sendable {
     let job: String?
     let department: String?
     let character: String?
+    let profilePath: String?
+    enum CodingKeys: String, CodingKey {
+        case id, name, job, department, character
+        case profilePath = "profile_path"
+    }
+}
+
+struct TMDBPersonDetails: Codable, Sendable {
+    let biography: String?
+    let profilePath: String?
+    enum CodingKeys: String, CodingKey {
+        case biography
+        case profilePath = "profile_path"
+    }
 }
 
 private struct TMDBKeywordsResponse: Codable {
@@ -189,5 +203,26 @@ final class TMDBClient: @unchecked Sendable {
         guard let data = try? JSONEncoder().encode(cached) else { return }
         let url = cacheURL(tmdbId: tmdbId, type: type)
         try? data.write(to: url, options: [.atomic])
+    }
+
+    // MARK: - Actor info (bio + portrait)
+
+    /// Resolves an actor (by the originating title's TMDB credits + a name match)
+    /// to their TMDB person bio + portrait. Plex exposes no actor-bio API, so this
+    /// is the bio/portrait source for the person page. Returns nil if unresolved.
+    func actorInfo(titleTmdbId: Int, type: TMDBMediaType, actorName: String) async -> (biography: String?, portraitURL: URL?)? {
+        guard let credits: TMDBCreditsResponse = try? await request(endpoint: "tmdb/credits/\(titleTmdbId)", type: type) else {
+            return nil
+        }
+        func norm(_ s: String) -> String { s.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
+        let target = norm(actorName)
+        let match = (credits.cast ?? []).first { ($0.name.map(norm)) == target }
+        guard let match, let personId = match.id else { return nil }
+        let person: TMDBPersonDetails? = try? await request(endpoint: "tmdb/person/\(personId)", queryItems: [])
+        let bio = person?.biography.flatMap { $0.isEmpty ? nil : $0 }
+        let path = person?.profilePath ?? match.profilePath
+        let portrait = path.flatMap { URL(string: "https://image.tmdb.org/t/p/w780\($0)") }
+        guard bio != nil || portrait != nil else { return nil }
+        return (bio, portrait)
     }
 }
