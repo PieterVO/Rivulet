@@ -20,12 +20,13 @@ import Foundation
 private let _defaultServerMatch: @Sendable ([String]) async -> MediaItem? = { guids in
     for g in guids {
         guard let meta = await LibraryGUIDIndex.shared.lookup(guid: g) else { continue }
-        let serverURL = await MainActor.run { PlexAuthManager.shared.selectedServerURL }
-        let token    = await MainActor.run { PlexAuthManager.shared.selectedServerToken }
-        guard let serverURL, let token else { continue }
-        let providerID = await MainActor.run {
-            MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
+        let (serverURL, token, providerID): (String?, String?, String) = await MainActor.run {
+            let url = PlexAuthManager.shared.selectedServerURL
+            let tok = PlexAuthManager.shared.selectedServerToken
+            let pid = MediaProviderRegistry.shared.primaryProvider?.id ?? url.map { "plex:\($0)" } ?? "plex:unknown"
+            return (url, tok, pid)
         }
+        guard let serverURL, let token else { continue }
         return PlexMediaMapper.item(meta, providerID: providerID, serverURL: serverURL, authToken: token)
     }
     return nil

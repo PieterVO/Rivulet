@@ -23,7 +23,7 @@ private struct ThrowingFetcher: DiscoverPersonFetching {
 
 // MARK: - Fixtures
 
-enum TestFixtures {
+enum PersonFilmographyTestFixtures {
     static func playableItem(title: String, isMovie: Bool) -> MediaItem {
         MediaItem(
             ref: MediaItemRef(providerID: "plex:test", itemID: "rk-\(title)"),
@@ -65,7 +65,7 @@ final class PersonFilmographyProviderTests: XCTestCase {
             fetcher: FakeFetcher(dto: dto),
             serverItemForGuids: { guids in
                 for g in guids where onServer.contains(g) {
-                    return TestFixtures.playableItem(
+                    return PersonFilmographyTestFixtures.playableItem(
                         title: g == "tmdb://1" ? "OnServerMovie" : "OnServerShow",
                         isMovie: g == "tmdb://1")
                 }
