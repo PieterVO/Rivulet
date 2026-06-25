@@ -135,4 +135,58 @@ final class PersonFilmographyProviderTests: XCTestCase {
         let detail = try await provider.load(person: person)
         XCTAssertEqual(detail.name, "Jon Hamm")
     }
+
+    func test_fallbackPopulatesFromOriginLibrary() async throws {
+        // Task 5b: when person has no tagKey but has originSectionKey + originActorId,
+        // loadFallback queries the injected origin library closure and buckets results
+        // by kind as isOnServer: true entries.
+        let movieItem = PersonFilmographyTestFixtures.playableItem(title: "Inception", isMovie: true)
+        let showItem  = PersonFilmographyTestFixtures.playableItem(title: "Peaky Blinders", isMovie: false)
+
+        let provider = PersonFilmographyProvider(
+            fetcher: ThrowingFetcher(), // Discover unavailable; drives the fallback path.
+            serverItemForGuids: { _ in nil },
+            originLibraryItems: { _, _ in [movieItem, showItem] })
+
+        var person = MediaPerson(id: "p", name: "Cillian Murphy", role: nil, imageURL: nil, tagKey: nil)
+        person.originSectionKey = "1"
+        person.originActorId    = "49"
+
+        let detail = try await provider.load(person: person)
+
+        // Name is taken from the MediaPerson (no Discover data).
+        XCTAssertEqual(detail.name, "Cillian Murphy")
+        XCTAssertNil(detail.biography)
+
+        // One movie, one show — both on-server.
+        XCTAssertEqual(detail.movies.count, 1)
+        XCTAssertEqual(detail.movies[0].item.title, "Inception")
+        XCTAssertTrue(detail.movies[0].isOnServer)
+
+        XCTAssertEqual(detail.shows.count, 1)
+        XCTAssertEqual(detail.shows[0].item.title, "Peaky Blinders")
+        XCTAssertTrue(detail.shows[0].isOnServer)
+    }
+
+    func test_fallbackOriginLibraryReturnsEmptyWhenNilIds() async throws {
+        // If originSectionKey or originActorId is absent, no origin query is made
+        // and rows stay empty.
+        var queryCalled = false
+        let provider = PersonFilmographyProvider(
+            fetcher: ThrowingFetcher(),
+            serverItemForGuids: { _ in nil },
+            originLibraryItems: { _, _ in
+                queryCalled = true
+                return []
+            })
+
+        // No originSectionKey / originActorId set.
+        let person = MediaPerson(id: "p", name: "Cillian Murphy", role: nil, imageURL: nil, tagKey: nil)
+        let detail = try await provider.load(person: person)
+
+        XCTAssertFalse(queryCalled, "origin query must not be called when ids are absent")
+        XCTAssertEqual(detail.name, "Cillian Murphy")
+        XCTAssertTrue(detail.movies.isEmpty)
+        XCTAssertTrue(detail.shows.isEmpty)
+    }
 }
