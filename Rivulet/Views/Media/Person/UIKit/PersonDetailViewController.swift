@@ -76,6 +76,12 @@ final class PersonDetailViewController: UIViewController {
     // MARK: - Views
 
     private let gradientLayer = CAGradientLayer()
+    /// Full-bleed backdrop image from the originating title. Hidden when no URL.
+    private let backdropImageView = UIImageView()
+    /// Dark blur over the backdrop to keep text readable.
+    private let backdropBlurView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+    /// Subtle dark scrim (0.35 alpha black) on top of the blur for legibility.
+    private let backdropScrimView = UIView()
     private var collectionView: FocusScrollControlledCollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, ItemID>!
 
@@ -100,6 +106,7 @@ final class PersonDetailViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        configureBackdrop()
         configureGradient()
         configureCollectionView()
         configureDataSource()
@@ -137,6 +144,58 @@ final class PersonDetailViewController: UIViewController {
     }
 
     // MARK: - Setup
+
+    /// Blurred backdrop layer — the originating title's art behind everything.
+    /// Falls back to the existing gradient when `person.backdropURL` is nil.
+    private func configureBackdrop() {
+        guard let url = person.backdropURL else { return }
+
+        // All three views are pinned full-bleed (ignore safe area — backdrops
+        // should reach screen edges, matching the tvOS HIG backdrop convention).
+        backdropImageView.translatesAutoresizingMaskIntoConstraints = false
+        backdropImageView.contentMode = .scaleAspectFill
+        backdropImageView.clipsToBounds = true
+        backdropImageView.alpha = 0  // Fade in once the image loads
+
+        backdropBlurView.translatesAutoresizingMaskIntoConstraints = false
+
+        backdropScrimView.translatesAutoresizingMaskIntoConstraints = false
+        backdropScrimView.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+
+        // Insert below the gradient and collection view so focus/interaction is
+        // unaffected. Insertion order: imageView → blurView → scrimView, then the
+        // existing gradientLayer (a sublayer) sits on top for color-grading.
+        view.insertSubview(backdropImageView, at: 0)
+        view.insertSubview(backdropBlurView, aboveSubview: backdropImageView)
+        view.insertSubview(backdropScrimView, aboveSubview: backdropBlurView)
+
+        let edgeConstraints: (UIView) -> [NSLayoutConstraint] = { v in
+            [
+                v.topAnchor.constraint(equalTo: self.view.topAnchor),
+                v.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+                v.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+                v.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
+            ]
+        }
+        NSLayoutConstraint.activate(
+            edgeConstraints(backdropImageView) +
+            edgeConstraints(backdropBlurView) +
+            edgeConstraints(backdropScrimView)
+        )
+
+        // Load the image off-main using the same ImageCacheManager pattern as
+        // CastCell / PersonHeaderCell — no new dependency.
+        Task { [weak self] in
+            let image = await ImageCacheManager.shared.image(for: url)
+            await MainActor.run {
+                guard let self, let image else { return }
+                self.backdropImageView.image = image
+                UIView.animate(withDuration: 0.4) {
+                    self.backdropImageView.alpha = 1
+                }
+            }
+        }
+    }
 
     /// Dark blue → black vertical gradient, less artwork-specific than the show
     /// detail pages (ref: "dark blue/black gradient").
@@ -206,7 +265,7 @@ final class PersonDetailViewController: UIViewController {
         section.contentInsets = NSDirectionalEdgeInsets(
             top: 80,
             leading: MediaRowMetrics.rowLeading,
-            bottom: 24,
+            bottom: 14,
             trailing: MediaRowMetrics.rowTrailing)
         return section
     }

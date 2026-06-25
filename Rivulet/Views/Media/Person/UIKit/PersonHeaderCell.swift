@@ -23,10 +23,14 @@ final class PersonHeaderCell: UICollectionViewCell {
 
     /// Portrait diameter — sized like a header avatar (ref: ~175–215 px), not a
     /// cast-row thumbnail.
-    private static let portraitSize: CGFloat = 200
+    private static let portraitSize: CGFloat = 192
     /// Bio is truncated to this many lines; MORE appears only when it overflows.
-    private static let bioLineLimit = 4
+    private static let bioLineLimit = 3
+    /// The name + bio sit in a narrow column (the reference bio spans ~45% of the
+    /// screen, not edge-to-edge); cap the column so it reads like the reference.
+    private static let textColumnMaxWidth: CGFloat = 900
 
+    private let headerContent = UIView()
     private let portraitContainer = UIView()
     private let portraitImageView = UIImageView()
     private let fallbackIcon = UIImageView()
@@ -53,6 +57,13 @@ final class PersonHeaderCell: UICollectionViewCell {
         clipsToBounds = false
         backgroundColor = .clear   // VC paints the gradient behind the cell
 
+        // Fixed-width centered container — portrait + text block is one GROUP
+        // horizontally centered on screen. The shelf rows below stay left-aligned
+        // (they live in separate section cells; this cell owns only the header).
+        headerContent.translatesAutoresizingMaskIntoConstraints = false
+        headerContent.clipsToBounds = false
+        contentView.addSubview(headerContent)
+
         // True circle: cornerRadius = side/2, clip the image to it.
         portraitContainer.translatesAutoresizingMaskIntoConstraints = false
         portraitContainer.clipsToBounds = true
@@ -60,7 +71,7 @@ final class PersonHeaderCell: UICollectionViewCell {
         portraitContainer.layer.cornerRadius = Self.portraitSize / 2
         portraitContainer.layer.borderWidth = 1
         portraitContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.15).cgColor
-        contentView.addSubview(portraitContainer)
+        headerContent.addSubview(portraitContainer)
 
         portraitImageView.translatesAutoresizingMaskIntoConstraints = false
         portraitImageView.contentMode = .scaleAspectFill
@@ -78,14 +89,14 @@ final class PersonHeaderCell: UICollectionViewCell {
         nameLabel.font = .systemFont(ofSize: 48, weight: .semibold)
         nameLabel.textColor = .white
         nameLabel.numberOfLines = 1
-        contentView.addSubview(nameLabel)
+        headerContent.addSubview(nameLabel)
 
         bioLabel.translatesAutoresizingMaskIntoConstraints = false
-        bioLabel.font = .systemFont(ofSize: 24, weight: .regular)
-        bioLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+        bioLabel.font = .systemFont(ofSize: 24, weight: .medium)
+        bioLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         bioLabel.numberOfLines = Self.bioLineLimit
         bioLabel.lineBreakMode = .byTruncatingTail
-        contentView.addSubview(bioLabel)
+        headerContent.addSubview(bioLabel)
 
         // MORE: a reused FocusableActionButton (proven, debounced Select +
         // focus appearance) wrapping a small uppercase label that inverts on focus.
@@ -95,18 +106,30 @@ final class PersonHeaderCell: UICollectionViewCell {
         moreButton.onPrimaryAction = { [weak self] in self?.onMore?() }
         moreLabel.translatesAutoresizingMaskIntoConstraints = false
         moreLabel.text = "MORE"
-        moreLabel.font = .systemFont(ofSize: 19, weight: .semibold)
+        moreLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         moreLabel.textColor = .white
         moreButton.addSubview(moreLabel)
         moreButton.invertOnFocus = [moreLabel]
-        contentView.addSubview(moreButton)
+        headerContent.addSubview(moreButton)
 
+        // headerContent: fixed width = portrait + gap + text column, centered in
+        // contentView. Self-sizes vertically by hugging the taller of portrait /
+        // text column (>= constraints). The bottom pin is what lets the
+        // compositional layout engine measure the estimated-height section.
+        let containerWidth = Self.portraitSize + 36 + Self.textColumnMaxWidth
         NSLayoutConstraint.activate([
-            portraitContainer.topAnchor.constraint(equalTo: contentView.topAnchor),
-            portraitContainer.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            // Container anchors
+            headerContent.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            headerContent.topAnchor.constraint(equalTo: contentView.topAnchor),
+            headerContent.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            headerContent.widthAnchor.constraint(equalToConstant: containerWidth),
+
+            // Portrait — top-left of headerContent
+            portraitContainer.topAnchor.constraint(equalTo: headerContent.topAnchor),
+            portraitContainer.leadingAnchor.constraint(equalTo: headerContent.leadingAnchor),
             portraitContainer.widthAnchor.constraint(equalToConstant: Self.portraitSize),
             portraitContainer.heightAnchor.constraint(equalToConstant: Self.portraitSize),
-            portraitContainer.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor),
+            portraitContainer.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
 
             portraitImageView.topAnchor.constraint(equalTo: portraitContainer.topAnchor),
             portraitImageView.leadingAnchor.constraint(equalTo: portraitContainer.leadingAnchor),
@@ -119,22 +142,27 @@ final class PersonHeaderCell: UICollectionViewCell {
             // Name + bio block to the RIGHT of the portrait.
             nameLabel.topAnchor.constraint(equalTo: portraitContainer.topAnchor, constant: 8),
             nameLabel.leadingAnchor.constraint(equalTo: portraitContainer.trailingAnchor, constant: 36),
-            nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerContent.trailingAnchor),
 
-            bioLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 16),
+            bioLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 14),
             bioLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            bioLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            bioLabel.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor),
+            bioLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerContent.trailingAnchor),
+            bioLabel.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
 
             // MORE just under the truncated bio, leading-aligned with it.
             moreButton.topAnchor.constraint(equalTo: bioLabel.bottomAnchor, constant: 12),
             moreButton.leadingAnchor.constraint(equalTo: bioLabel.leadingAnchor),
-            moreButton.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor),
+            moreButton.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
 
-            moreLabel.topAnchor.constraint(equalTo: moreButton.topAnchor, constant: 8),
-            moreLabel.bottomAnchor.constraint(equalTo: moreButton.bottomAnchor, constant: -8),
-            moreLabel.leadingAnchor.constraint(equalTo: moreButton.leadingAnchor, constant: 16),
-            moreLabel.trailingAnchor.constraint(equalTo: moreButton.trailingAnchor, constant: -16),
+            moreLabel.topAnchor.constraint(equalTo: moreButton.topAnchor, constant: 6),
+            moreLabel.bottomAnchor.constraint(equalTo: moreButton.bottomAnchor, constant: -6),
+            moreLabel.leadingAnchor.constraint(equalTo: moreButton.leadingAnchor, constant: 11),
+            moreLabel.trailingAnchor.constraint(equalTo: moreButton.trailingAnchor, constant: -11),
+
+            // Container bottom hugs tallest column (portrait vs text+MORE)
+            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: portraitContainer.bottomAnchor),
+            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: bioLabel.bottomAnchor),
+            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: moreButton.bottomAnchor),
         ])
     }
 
@@ -142,11 +170,15 @@ final class PersonHeaderCell: UICollectionViewCell {
 
     func configure(name: String, biography: String?, portraitURL: URL?, onMore: @escaping () -> Void) {
         self.onMore = onMore
-        self.fullBiography = biography
-
         nameLabel.text = name
 
-        let bio = biography ?? ""
+        // Preview is a single flowing paragraph: TMDB bios carry "\n\n" paragraph
+        // breaks, but the reference shows one continuous truncated block. The full
+        // multi-paragraph bio is shown in the MORE popup (driven by the VC).
+        let bio = (biography ?? "")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.fullBiography = bio
         bioLabel.text = bio
         bioLabel.isHidden = bio.isEmpty
         // Truncation (and thus MORE visibility) can only be measured after the

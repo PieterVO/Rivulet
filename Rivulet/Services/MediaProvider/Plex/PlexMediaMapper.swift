@@ -308,6 +308,12 @@ enum PlexMediaMapper {
         }.first
         let titleIsMovie = (meta.type == "movie")
 
+        // Backdrop of the originating title — passed to each cast member so the
+        // person detail page can render it as a blurred background. Uses the same
+        // artworkURL helper as MediaArtwork.backdrop (meta.bestArt → server-relative
+        // path + token, or absolute CDN URL passed through unchanged).
+        let titleBackdropURL = artworkURL(meta.bestArt, serverURL: serverURL, authToken: authToken)
+
         let cast = (meta.Role ?? []).map { role in
             MediaPerson(
                 id: role.id,
@@ -318,7 +324,8 @@ enum PlexMediaMapper {
                 originActorId: role.originActorId,
                 originSectionKey: meta.librarySectionID.map(String.init),
                 titleTmdbId: titleTmdbId,
-                titleIsMovie: titleIsMovie
+                titleIsMovie: titleIsMovie,
+                backdropURL: titleBackdropURL
             )
         }
         let directors = (meta.Director ?? []).map {
