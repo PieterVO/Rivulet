@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0 (Build 52)
+
+- Actor detail pages now work. Tap any cast member to see their bio and the movies and shows they're in.
+- Skip Intro and Skip Credits markers now work in the Aether player.
+- The Aether player now plays the next episode and updates Continue Watching when a show finishes.
+- Fixed connecting to your Plex server when you're away from home.
+- Updated AetherEngine to the latest version.
+- Bug fixes.
+
 ## 1.0.0 (Build 50)
 
 - Refactored most views to UIKit. Performance should be much better.

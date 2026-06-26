@@ -137,6 +137,14 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.0 (52)", [
+            "Actor detail pages now work. Tap any cast member to see their bio and the movies and shows they're in",
+            "Skip Intro and Skip Credits markers now work in the Aether player",
+            "The Aether player now plays the next episode and updates Continue Watching when a show finishes",
+            "Fixed connecting to your Plex server when you're away from home",
+            "Updated AetherEngine to the latest version",
+            "Bug fixes",
+        ]),
         ("1.0.0 (51)", [
             "Subtitles now work in the Aether player, both text and image-based, styled to your system caption settings",
             "More reliable sidebar, including a fix for it getting stuck after sign-in or changing libraries",
