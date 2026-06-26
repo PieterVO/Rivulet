@@ -32,7 +32,16 @@ final class FocusableActionButton: UIControl {
     /// Invoked on Select (`.primaryActionTriggered`).
     var onPrimaryAction: (() -> Void)?
 
+    /// Focus appearance. `.pill` (default) inverts to a white fill with black
+    /// content — the action-row look. `.glass` keeps the content white and uses
+    /// the app's glass convention (subtle white fill + 1px border + gentle
+    /// scale) — used for large soft targets like the bio panel, where a white
+    /// pill would be jarring. See PersonHeaderCell.
+    enum FocusStyle { case pill, glass }
+    var focusStyle: FocusStyle = .pill
+
     private let restingFill = UIColor.white.withAlphaComponent(0.15)
+    private let glassRestingFill = UIColor.white.withAlphaComponent(0.06)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -71,6 +80,22 @@ final class FocusableActionButton: UIControl {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         let focused = context.nextFocusedView === self
+        if focusStyle == .glass {
+            // Glass: content stays white; soften the fill, add a hairline border,
+            // gentle 1.02 scale (the app's glass-row convention). No invert.
+            coordinator.addCoordinatedAnimations { [weak self] in
+                guard let self else { return }
+                self.transform = focused ? CGAffineTransform(scaleX: 1.02, y: 1.02) : .identity
+                self.backgroundColor = focused
+                    ? UIColor.white.withAlphaComponent(0.18)
+                    : self.glassRestingFill
+                self.layer.borderWidth = 1
+                self.layer.borderColor = (focused
+                    ? UIColor.white.withAlphaComponent(0.25)
+                    : UIColor.white.withAlphaComponent(0.08)).cgColor
+            }
+            return
+        }
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }
             self.transform = focused ? CGAffineTransform(scaleX: 1.06, y: 1.06) : .identity

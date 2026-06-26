@@ -63,6 +63,9 @@ final class PersonDetailViewController: UIViewController {
     private var detail: PersonDetail?
     private var movies: [FilmographyEntry] = []
     private var shows: [FilmographyEntry] = []
+    /// True from first paint until the provider returns — drives the header's
+    /// loading dots so the page reads as "working".
+    private var isLoading = true
 
     /// The current section layout, in display order. Recomputed on every
     /// reload so empty shelves drop out.
@@ -85,13 +88,22 @@ final class PersonDetailViewController: UIViewController {
     private var collectionView: FocusScrollControlledCollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, ItemID>!
 
+    /// Blur-fade dissolve in/out (same transition as navigating to a related
+    /// item from the expanded detail). Retained for the lifetime of the VC —
+    /// the transitioning delegate is held weakly by UIKit.
+    private let blurFade = BlurFadeTransitioningDelegate()
+
     // MARK: - Init
 
     init(person: MediaPerson, provider: PersonFilmographyProviding = PersonFilmographyProvider()) {
         self.person = person
         self.provider = provider
         super.init(nibName: nil, bundle: nil)
-        modalPresentationStyle = .fullScreen
+        // Blur-fade dissolve over whatever's behind (the previous detail), kept
+        // visible because it's presented over another modal — same as the
+        // standalone related-item detail. .overFullScreen so the blur reads.
+        modalPresentationStyle = .overFullScreen
+        transitioningDelegate = blurFade
     }
 
     @available(*, unavailable)
@@ -136,11 +148,16 @@ final class PersonDetailViewController: UIViewController {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // The collection picks its first focusable descendant (a poster tile, or
-        // the header MORE button). It is a normal full-screen modal WITH
-        // focusable content, so the system Menu press dismisses it — no
-        // focusless-modal handling needed.
-        [collectionView]
+        // Prefer the header's bio panel so focus starts on the DESCRIPTION, not
+        // a poster row. The panel is focusable from first paint (it shows the
+        // loading dots until the bio arrives), so this resolves even pre-load.
+        // Fall back to the collection if the header cell isn't realized yet.
+        let headerPath = IndexPath(item: 0, section: 0)
+        if sections.first == .header,
+           let header = collectionView.cellForItem(at: headerPath) {
+            return [header]
+        }
+        return [collectionView]
     }
 
     // MARK: - Setup
@@ -307,7 +324,10 @@ final class PersonDetailViewController: UIViewController {
             cell.configure(
                 name: detail?.name ?? person.name,
                 biography: detail?.biography,
-                portraitURL: detail?.portraitURL ?? person.imageURL,
+                // Always the Plex thumb — identical before/after load so the
+                // portrait never visibly swaps when the bio arrives.
+                portraitURL: person.imageURL,
+                isLoading: isLoading,
                 onMore: { [weak self] in self?.presentBiography() })
             return cell
         case .movies:
@@ -388,6 +408,7 @@ final class PersonDetailViewController: UIViewController {
         detail = loaded
         movies = loaded.movies
         shows = loaded.shows
+        isLoading = false
         applySnapshot(animated: false)
     }
 
@@ -425,7 +446,8 @@ final class PersonDetailViewController: UIViewController {
                 (cell as? PersonHeaderCell)?.configure(
                     name: detail?.name ?? person.name,
                     biography: detail?.biography,
-                    portraitURL: detail?.portraitURL ?? person.imageURL,
+                    portraitURL: person.imageURL,
+                    isLoading: isLoading,
                     onMore: { [weak self] in self?.presentBiography() })
             case .movies:
                 if let row = cell as? ShelfRowCell {

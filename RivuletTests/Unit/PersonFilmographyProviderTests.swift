@@ -34,28 +34,35 @@ enum PersonFilmographyTestFixtures {
 // MARK: - Tests
 
 final class PersonFilmographyProviderTests: XCTestCase {
-    func test_filmographyFromOriginLibraryAndTmdbBio() async throws {
+    /// Cross-section filmography: movies AND shows both surface and bucket by
+    /// kind. This is the regression guard for "only the Movies row loaded" —
+    /// the server lookup returns titles from every library, not just origin.
+    /// The portrait is the Plex thumb (never TMDB), so it never swaps after load.
+    func test_filmographyBucketsMoviesAndShowsAndTmdbBio() async throws {
         let provider = PersonFilmographyProvider(
-            originLibraryItems: { _, _ in
+            serverFilmographyItems: { _ in
                 [PersonFilmographyTestFixtures.playableItem(title: "OnServerMovie", isMovie: true),
                  PersonFilmographyTestFixtures.playableItem(title: "OnServerShow", isMovie: false)]
             },
-            personInfo: { _ in ("A bio.", URL(string: "https://image.tmdb.org/t/p/w780/p.jpg")) })
-        let person = MediaPerson(id: "p", name: "Keanu Reeves", role: nil, imageURL: nil,
+            biography: { _ in "A bio." })
+        let plexThumb = URL(string: "https://plex/role.jpg")
+        let person = MediaPerson(id: "p", name: "Keanu Reeves", role: nil, imageURL: plexThumb,
                                  originActorId: "49", originSectionKey: "1",
                                  titleTmdbId: 123, titleIsMovie: true)
         let detail = try await provider.load(person: person)
         XCTAssertEqual(detail.movies.map(\.item.title), ["OnServerMovie"])
         XCTAssertEqual(detail.shows.map(\.item.title), ["OnServerShow"])
         XCTAssertTrue(detail.movies.allSatisfy(\.isOnServer))
+        XCTAssertTrue(detail.shows.allSatisfy(\.isOnServer))
         XCTAssertEqual(detail.biography, "A bio.")
-        XCTAssertEqual(detail.portraitURL?.absoluteString, "https://image.tmdb.org/t/p/w780/p.jpg")
+        // Portrait is always the Plex thumb — never a TMDB image.
+        XCTAssertEqual(detail.portraitURL, plexThumb)
     }
 
-    func test_emptyFilmographyWhenNoOriginIds() async throws {
+    func test_emptyFilmographyWhenServerReturnsNone() async throws {
         let provider = PersonFilmographyProvider(
-            originLibraryItems: { _, _ in XCTFail("should not query"); return [] },
-            personInfo: { _ in (nil, nil) })
+            serverFilmographyItems: { _ in [] },
+            biography: { _ in nil })
         let person = MediaPerson(id: "p", name: "Nobody", role: nil, imageURL: URL(string: "https://x/p.jpg"))
         let detail = try await provider.load(person: person)
         XCTAssertTrue(detail.movies.isEmpty)
@@ -63,10 +70,10 @@ final class PersonFilmographyProviderTests: XCTestCase {
         XCTAssertNil(detail.biography)
     }
 
-    func test_portraitFallsBackToRoleThumbWhenTmdbNil() async throws {
+    func test_portraitIsAlwaysPlexThumb() async throws {
         let provider = PersonFilmographyProvider(
-            originLibraryItems: { _, _ in [] },
-            personInfo: { _ in nil })
+            serverFilmographyItems: { _ in [] },
+            biography: { _ in nil })
         let thumb = URL(string: "https://plex/role.jpg")
         let person = MediaPerson(id: "p", name: "X", role: nil, imageURL: thumb,
                                  originActorId: "1", originSectionKey: "1")

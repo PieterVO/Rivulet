@@ -7,12 +7,14 @@
 //  name (large semibold white) + a muted, truncated biography on the RIGHT,
 //  with an uppercase MORE affordance under the bio when it overflows.
 //
-//  The cell itself is non-focusable; only the MORE button (a reused
-//  FocusableActionButton, so Select handling matches the rest of the detail
-//  chrome) is a focus target — matching the reference, where MORE is the
-//  header's only affordance. The portrait loads via ImageCacheManager the same
-//  way CastCell does. Background is clear so the controller's blue→black
-//  gradient shows through.
+//  The cell itself is non-focusable; the BIO is wrapped in a focusable glass
+//  panel (a reused FocusableActionButton, so Select handling matches the rest
+//  of the detail chrome). The whole description block is the affordance — the
+//  focus engine can land on it from an Up press off the poster rows, and Select
+//  opens the full-bio popup. A "MORE" hint shows inside the panel only when the
+//  bio overflows. The portrait loads via ImageCacheManager the same way
+//  CastCell does. Background is clear so the controller's blue→black gradient
+//  (or blurred title backdrop) shows through.
 //
 
 import UIKit
@@ -21,11 +23,15 @@ final class PersonHeaderCell: UICollectionViewCell {
 
     static let reuseID = "PersonHeaderCell"
 
-    /// Portrait diameter — sized like a header avatar (ref: ~175–215 px), not a
-    /// cast-row thumbnail.
-    private static let portraitSize: CGFloat = 192
     /// Bio is truncated to this many lines; MORE appears only when it overflows.
     private static let bioLineLimit = 3
+
+    private static let nameFont = UIFont.systemFont(ofSize: 48, weight: .semibold)
+    private static let bioFont = UIFont.systemFont(ofSize: 24, weight: .medium)
+    private static let moreFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
+
+    /// Portrait diameter — a header avatar, slightly larger than a cast thumb.
+    private static let portraitSize: CGFloat = 215
     /// The name + bio sit in a narrow column (the reference bio spans ~45% of the
     /// screen, not edge-to-edge); cap the column so it reads like the reference.
     private static let textColumnMaxWidth: CGFloat = 900
@@ -35,11 +41,22 @@ final class PersonHeaderCell: UICollectionViewCell {
     private let portraitImageView = UIImageView()
     private let fallbackIcon = UIImageView()
     private let nameLabel = UILabel()
+    /// The whole bio is one focusable glass panel (the affordance the focus
+    /// engine lands on from an Up press off the rows). Reuses FocusableActionButton
+    /// for proven Select handling, but we override its focus appearance to glass
+    /// (subtle fill + scale + border) instead of the white-pill invert.
+    private let bioPanel = FocusableActionButton()
     private let bioLabel = UILabel()
-    private let moreButton = FocusableActionButton()
     private let moreLabel = UILabel()
+    /// Circular spinner shown inside the panel while the biography loads, so the
+    /// page reads as "working" and the panel is a focus target from first paint.
+    private let loadingSpinner = UIActivityIndicatorView(style: .medium)
 
     private var imageToken: UInt64 = 0
+    /// The portrait URL currently loaded/loading. A reconfigure with the same
+    /// URL (e.g. when the bio arrives and the header re-renders) is a no-op, so
+    /// the portrait never blanks or refetches — no flicker.
+    private var currentPortraitURL: URL?
     private var onMore: (() -> Void)?
     /// Full (untruncated) biography, used to decide whether MORE is needed.
     private var fullBiography: String?
@@ -86,31 +103,49 @@ final class PersonHeaderCell: UICollectionViewCell {
         portraitContainer.addSubview(fallbackIcon)
 
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = .systemFont(ofSize: 48, weight: .semibold)
+        nameLabel.font = Self.nameFont
         nameLabel.textColor = .white
         nameLabel.numberOfLines = 1
         headerContent.addSubview(nameLabel)
 
+        // The bio panel: a focusable glass surface holding the bio text + an
+        // optional MORE hint. Always focusable when a bio exists (the focus
+        // engine lands on it from an Up press off the poster rows); Select opens
+        // the full-bio popup. Glass focus style — content stays white.
+        bioPanel.translatesAutoresizingMaskIntoConstraints = false
+        bioPanel.focusStyle = .glass
+        bioPanel.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        bioPanel.layer.cornerRadius = 14
+        bioPanel.layer.borderWidth = 1
+        bioPanel.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
+        bioPanel.isHidden = true
+        bioPanel.onPrimaryAction = { [weak self] in self?.onMore?() }
+        headerContent.addSubview(bioPanel)
+
         bioLabel.translatesAutoresizingMaskIntoConstraints = false
-        bioLabel.font = .systemFont(ofSize: 24, weight: .medium)
+        bioLabel.font = Self.bioFont
         bioLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         bioLabel.numberOfLines = Self.bioLineLimit
         bioLabel.lineBreakMode = .byTruncatingTail
-        headerContent.addSubview(bioLabel)
+        bioLabel.isUserInteractionEnabled = false
+        bioPanel.addSubview(bioLabel)
 
-        // MORE: a reused FocusableActionButton (proven, debounced Select +
-        // focus appearance) wrapping a small uppercase label that inverts on focus.
-        moreButton.translatesAutoresizingMaskIntoConstraints = false
-        moreButton.layer.cornerRadius = 8
-        moreButton.isHidden = true
-        moreButton.onPrimaryAction = { [weak self] in self?.onMore?() }
+        // MORE: an uppercase hint shown inside the panel only when the bio
+        // overflows — signals there's more behind Select. Not itself focusable.
         moreLabel.translatesAutoresizingMaskIntoConstraints = false
         moreLabel.text = "MORE"
-        moreLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        moreLabel.textColor = .white
-        moreButton.addSubview(moreLabel)
-        moreButton.invertOnFocus = [moreLabel]
-        headerContent.addSubview(moreButton)
+        moreLabel.font = Self.moreFont
+        moreLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        moreLabel.isHidden = true
+        bioPanel.addSubview(moreLabel)
+
+        // Loading spinner: centered in the panel (the panel is already at its
+        // final 3-line height, so the spinner sits in that reserved space).
+        // Shown only while the biography is loading.
+        loadingSpinner.translatesAutoresizingMaskIntoConstraints = false
+        loadingSpinner.color = UIColor.white.withAlphaComponent(0.85)
+        loadingSpinner.hidesWhenStopped = true
+        bioPanel.addSubview(loadingSpinner)
 
         // headerContent: fixed width = portrait + gap + text column, centered in
         // contentView. Self-sizes vertically by hugging the taller of portrait /
@@ -124,8 +159,10 @@ final class PersonHeaderCell: UICollectionViewCell {
             headerContent.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             headerContent.widthAnchor.constraint(equalToConstant: containerWidth),
 
-            // Portrait — top-left of headerContent
-            portraitContainer.topAnchor.constraint(equalTo: headerContent.topAnchor),
+            // Portrait — fixed-size circle, TOP aligned with the name top so it
+            // lines up with the name + bio block (its bottom lands ≈ the bio
+            // panel bottom since the size ≈ the column span).
+            portraitContainer.topAnchor.constraint(equalTo: nameLabel.topAnchor),
             portraitContainer.leadingAnchor.constraint(equalTo: headerContent.leadingAnchor),
             portraitContainer.widthAnchor.constraint(equalToConstant: Self.portraitSize),
             portraitContainer.heightAnchor.constraint(equalToConstant: Self.portraitSize),
@@ -139,36 +176,53 @@ final class PersonHeaderCell: UICollectionViewCell {
             fallbackIcon.centerXAnchor.constraint(equalTo: portraitContainer.centerXAnchor),
             fallbackIcon.centerYAnchor.constraint(equalTo: portraitContainer.centerYAnchor),
 
-            // Name + bio block to the RIGHT of the portrait.
-            nameLabel.topAnchor.constraint(equalTo: portraitContainer.topAnchor, constant: 8),
+            // Name + bio block to the RIGHT of the portrait. Name defines the
+            // column top.
+            nameLabel.topAnchor.constraint(equalTo: headerContent.topAnchor),
             nameLabel.leadingAnchor.constraint(equalTo: portraitContainer.trailingAnchor, constant: 36),
             nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerContent.trailingAnchor),
 
-            bioLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 14),
-            bioLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            bioLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerContent.trailingAnchor),
-            bioLabel.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
+            // Bio panel: under the name, spanning the text column. Glass padding
+            // (18 h / 14 v) insets the bio + MORE from the panel edge.
+            bioPanel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 14),
+            bioPanel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+            bioPanel.trailingAnchor.constraint(equalTo: headerContent.trailingAnchor),
+            bioPanel.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
 
-            // MORE just under the truncated bio, leading-aligned with it.
-            moreButton.topAnchor.constraint(equalTo: bioLabel.bottomAnchor, constant: 12),
-            moreButton.leadingAnchor.constraint(equalTo: bioLabel.leadingAnchor),
-            moreButton.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
+            bioLabel.topAnchor.constraint(equalTo: bioPanel.topAnchor, constant: 14),
+            bioLabel.leadingAnchor.constraint(equalTo: bioPanel.leadingAnchor, constant: 18),
+            bioLabel.trailingAnchor.constraint(equalTo: bioPanel.trailingAnchor, constant: -18),
+            // Fixed 3-line height so the panel is its FINAL size from first paint
+            // (loading or short bio won't shrink it → no expand when the bio
+            // arrives). lineHeight × bioLineLimit.
+            bioLabel.heightAnchor.constraint(equalToConstant: Self.bioBlockHeight),
 
-            moreLabel.topAnchor.constraint(equalTo: moreButton.topAnchor, constant: 6),
-            moreLabel.bottomAnchor.constraint(equalTo: moreButton.bottomAnchor, constant: -6),
-            moreLabel.leadingAnchor.constraint(equalTo: moreButton.leadingAnchor, constant: 11),
-            moreLabel.trailingAnchor.constraint(equalTo: moreButton.trailingAnchor, constant: -11),
+            // MORE hint under the bio, leading-aligned; pins the panel bottom.
+            moreLabel.topAnchor.constraint(equalTo: bioLabel.bottomAnchor, constant: 10),
+            moreLabel.leadingAnchor.constraint(equalTo: bioLabel.leadingAnchor),
+            moreLabel.bottomAnchor.constraint(equalTo: bioPanel.bottomAnchor, constant: -14),
 
-            // Container bottom hugs tallest column (portrait vs text+MORE)
+            // Spinner centered in the panel's reserved (final-size) area.
+            loadingSpinner.centerXAnchor.constraint(equalTo: bioPanel.centerXAnchor),
+            loadingSpinner.centerYAnchor.constraint(equalTo: bioLabel.centerYAnchor),
+
+            // Container bottom hugs tallest column (portrait vs text+panel)
             headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: portraitContainer.bottomAnchor),
-            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: bioLabel.bottomAnchor),
-            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: moreButton.bottomAnchor),
+            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: bioPanel.bottomAnchor),
         ])
     }
 
+    /// Fixed height of the 3-line bio block — keeps the panel a constant size
+    /// whether loading, empty, or showing a bio.
+    private static let bioBlockHeight: CGFloat =
+        ceil(bioFont.lineHeight * CGFloat(bioLineLimit))
+
     // MARK: - Configure
 
-    func configure(name: String, biography: String?, portraitURL: URL?, onMore: @escaping () -> Void) {
+    /// `isLoading` true while the biography is still being fetched: the panel
+    /// shows the pulse dots and stays a focus target (so focus lands on the
+    /// description from first paint), with no bio text or MORE yet.
+    func configure(name: String, biography: String?, portraitURL: URL?, isLoading: Bool, onMore: @escaping () -> Void) {
         self.onMore = onMore
         nameLabel.text = name
 
@@ -180,10 +234,24 @@ final class PersonHeaderCell: UICollectionViewCell {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         self.fullBiography = bio
         bioLabel.text = bio
-        bioLabel.isHidden = bio.isEmpty
+
+        // Three states:
+        //   loading            → panel visible, dots, no bio/MORE (focusable)
+        //   loaded, has bio     → panel visible, bio (+ MORE if it overflows)
+        //   loaded, no bio      → panel hidden (focus falls to the rows)
+        if isLoading {
+            bioPanel.isHidden = false
+            loadingSpinner.startAnimating()
+            bioLabel.isHidden = true
+            moreLabel.isHidden = true
+        } else {
+            loadingSpinner.stopAnimating()
+            bioLabel.isHidden = bio.isEmpty
+            bioPanel.isHidden = bio.isEmpty
+            moreLabel.isHidden = true   // re-measured in layoutSubviews
+        }
         // Truncation (and thus MORE visibility) can only be measured after the
         // bio label has a real width — defer to layoutSubviews.
-        moreButton.isHidden = true
         setNeedsLayout()
 
         loadPortrait(url: portraitURL)
@@ -199,7 +267,7 @@ final class PersonHeaderCell: UICollectionViewCell {
     /// height the capped label actually occupies.
     private func updateMoreVisibility() {
         guard let bio = fullBiography, !bio.isEmpty, bioLabel.bounds.width > 1 else {
-            if !moreButton.isHidden { moreButton.isHidden = true }
+            if !moreLabel.isHidden { moreLabel.isHidden = true }
             return
         }
         let width = bioLabel.bounds.width
@@ -213,12 +281,16 @@ final class PersonHeaderCell: UICollectionViewCell {
         let lineHeight = bioLabel.font.lineHeight
         let cappedHeight = lineHeight * CGFloat(Self.bioLineLimit)
         let truncated = fullHeight > cappedHeight + 1
-        if moreButton.isHidden == truncated {
-            moreButton.isHidden = !truncated
+        if moreLabel.isHidden == truncated {
+            moreLabel.isHidden = !truncated
         }
     }
 
     private func loadPortrait(url: URL?) {
+        // Same URL already shown/loading → leave it; avoids a blank+refetch
+        // flicker when the header re-renders after the bio loads.
+        if url == currentPortraitURL, portraitImageView.image != nil { return }
+        currentPortraitURL = url
         imageToken &+= 1
         let token = imageToken
         portraitImageView.image = nil
@@ -237,17 +309,21 @@ final class PersonHeaderCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         imageToken &+= 1
+        currentPortraitURL = nil
         portraitImageView.image = nil
         fallbackIcon.isHidden = false
         nameLabel.text = nil
         bioLabel.text = nil
+        bioLabel.isHidden = false
         fullBiography = nil
-        moreButton.isHidden = true
+        bioPanel.isHidden = true
+        loadingSpinner.stopAnimating()
+        moreLabel.isHidden = true
         onMore = nil
     }
 
-    // Plain content cell: never a focus target itself. The MORE button is
-    // independently focusable when visible; otherwise focus falls through to the
-    // poster rows. Matches AboutCollectionCell / ShelfRowCell.
+    // Plain content cell: never a focus target itself. The bio PANEL is the
+    // focus target (focusable whenever a bio exists); otherwise focus falls
+    // through to the poster rows. Matches AboutCollectionCell / ShelfRowCell.
     override var canBecomeFocused: Bool { false }
 }
