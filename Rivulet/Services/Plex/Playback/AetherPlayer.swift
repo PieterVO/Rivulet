@@ -170,6 +170,7 @@ final class AetherPlayer: PlayerProtocol {
         case .playing: return .playing
         case .paused: return .paused
         case .seeking: return .buffering
+        case .ended: return .ended
         case .error(let message): return .failed(.unknown(message))
         }
     }

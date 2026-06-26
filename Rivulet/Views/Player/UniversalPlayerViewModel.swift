@@ -1631,7 +1631,21 @@ final class UniversalPlayerViewModel: ObservableObject {
         player.playbackStatePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
-                self?.playbackState = state
+                guard let self else { return }
+                // End-of-stream must route through `updatePlaybackState(.ended)`
+                // (not direct assignment) so the EOF -> `handlePlaybackEnded`
+                // chain fires for Aether: mark-watched + Plex scrobble + next-up
+                // post-video. Aether surfaces this via `PlaybackState.ended`
+                // (AetherEngine 4.0.0, #63); before that the engine collapsed
+                // end-of-media to `.idle` and this never fired. Every other
+                // state keeps the existing direct assignment so Aether's
+                // loading/seeking behavior is unchanged. Mirrors the
+                // rivuletPlayer path's `handleRivuletStateChange(.ended)`.
+                if state == .ended {
+                    self.updatePlaybackState(.ended)
+                } else {
+                    self.playbackState = state
+                }
             }
             .store(in: &cancellables)
 
