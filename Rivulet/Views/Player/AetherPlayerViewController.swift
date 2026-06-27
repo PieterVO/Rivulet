@@ -39,9 +39,10 @@
 
 import AVKit
 import Combine
+import CoreMedia
 import SwiftUI
 
-class AetherPlayerViewController: BaseAVPlayerViewController {
+class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewControllerDelegate {
 
     // MARK: - Subtitle state
 
@@ -74,10 +75,23 @@ class AetherPlayerViewController: BaseAVPlayerViewController {
     /// Timer that polls currentMediaSelection at 0.3 s intervals.
     private var pickerPollTimer: Timer?
 
+    // MARK: - Native Up Next (AVContentProposal)
+
+    /// The next-episode value the current proposal was built for. Identity
+    /// guard so we build/set the proposal once per next-episode resolution
+    /// and do not re-present on checkMarkers re-entry or duplicate emissions.
+    private var proposedNextEpisodeRatingKey: String?
+
+    /// True while re-attaching the existing proposal to a freshly-swapped
+    /// currentItem (Aether internal AVPlayer reload). Suppresses the
+    /// one-per-episode timing log so it is not re-emitted on every swap.
+    private var isReapplyingProposalOnSwap = false
+
     // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        delegate = self
         mountSubtitleOverlay()
         observeControlsVisibility()
         observeCaptionAppearance()
@@ -159,6 +173,140 @@ class AetherPlayerViewController: BaseAVPlayerViewController {
         )
     }
 
+    // MARK: - Native Up Next (AVContentProposal)
+
+    /// Called when viewModel.nextEpisode changes. Builds and attaches a
+    /// proposal on a non-nil transition (native route + real currentItem),
+    /// or clears it on nil.
+    private func handleNextEpisodeChange(_ next: PlexMetadata?) {
+        // Note: auto-skip-credits no longer suppresses the card. On the native
+        // route the card wins over the credits skip — the view model suppresses
+        // the auto-skip jump (nativeUpNextCardWillPresent) so the card can
+        // present at the credits marker and auto-accept.
+        guard let next, let ratingKey = next.ratingKey else {
+            clearNextContentProposal()
+            return
+        }
+
+        // Native route only: a real AVPlayer/currentItem must exist to carry a
+        // proposal. On the software/DV route currentAVPlayer is nil (no card).
+        // Target THIS view controller's own player item (self.player) — that is
+        // the item AVKit actually presents the card from. It is normally the
+        // same object as the engine's currentAVPlayer item, but binding to
+        // self.player avoids any window where they differ across a swap.
+        guard viewModel.isAetherNativeRouteActive,
+              let item = player?.currentItem else {
+            return
+        }
+
+        // Build once per next-episode resolution. The per-ratingKey identity
+        // guard ignores duplicate emissions and checkMarkers re-entry (seek-back)
+        // for the same episode while this VC instance lives. (The view model
+        // owns the separate "episode-end handled" flag that guards
+        // mark-watched / next-episode resolution exactly once; see
+        // handlePlaybackEnded().)
+        guard proposedNextEpisodeRatingKey != ratingKey else { return }
+        proposedNextEpisodeRatingKey = ratingKey
+
+        // Compute the transition time: the point in the CURRENT item's timeline
+        // where AVKit begins presenting the card. tvOS's AVContentProposal takes
+        // this directly (contentTimeForTransition), so we can request the Plex
+        // credits marker rather than relying on AVKit's default near-end window.
+        // kCMTimeIndefinite => AVKit's default (present at the very end).
+        let transition = transitionTime(for: viewModel.metadata)
+        // Log once per episode when first attached, not on item-swap re-applies.
+        if !isReapplyingProposalOnSwap {
+            logUpNextTiming(transition: transition)
+        }
+
+        // Set proposal immediately with a title-only card, then refine with the
+        // preview image once it loads (previewImage is optional).
+        setProposal(for: next, on: item, transition: transition, previewImage: nil)
+        loadPreviewImageAndRefresh(for: next, item: item, transition: transition)
+    }
+
+    /// Transition time for the card on the current item. The first Plex credits
+    /// marker start if present (where end credits begin, the natural Up Next
+    /// moment); otherwise kCMTimeIndefinite, which tells AVKit to present at the
+    /// very end of the item (its default near-end window).
+    private func transitionTime(for currentMetadata: PlexMetadata) -> CMTime {
+        if let credits = currentMetadata.firstCreditsMarker {
+            return CMTime(seconds: credits.startTimeSeconds, preferredTimescale: 600)
+        }
+        return CMTime.indefinite
+    }
+
+    /// Build the AVContentProposal and attach it to the item.
+    private func setProposal(for next: PlexMetadata, on item: AVPlayerItem, transition: CMTime, previewImage: UIImage?) {
+        let title = nextEpisodeProposalTitle(for: next)
+        let proposal = AVContentProposal(
+            contentTimeForTransition: transition,
+            title: title,
+            previewImage: previewImage
+        )
+
+        // Auto-acceptance interval mirrors the custom overlay's autoplay
+        // countdown. autoplayCountdown default is 5s; 0 means "disabled", which
+        // maps to NAN so AVKit performs no automatic accept (AVKit's default).
+        let countdown: Int
+        if UserDefaults.standard.object(forKey: "autoplayCountdown") == nil {
+            countdown = 5
+        } else {
+            countdown = UserDefaults.standard.integer(forKey: "autoplayCountdown")
+        }
+        proposal.automaticAcceptanceInterval = countdown > 0 ? TimeInterval(countdown) : .nan
+
+        item.nextContentProposal = proposal
+    }
+
+    /// Asynchronously load the next episode thumbnail and rebuild the proposal
+    /// with it. Reuses the same thumb URL shape as the post-video cards. No-op
+    /// if the next episode resolution changed before the image arrived.
+    private func loadPreviewImageAndRefresh(for next: PlexMetadata, item: AVPlayerItem, transition: CMTime) {
+        guard let thumb = next.thumb,
+              let url = URL(string: "\(viewModel.serverURL)\(thumb)?X-Plex-Token=\(viewModel.authToken)") else {
+            return
+        }
+        let ratingKey = next.ratingKey
+        Task { [weak self] in
+            let image = await ImageCacheManager.shared.image(for: url, quality: .thumb)
+            await MainActor.run {
+                guard let self,
+                      let image,
+                      self.proposedNextEpisodeRatingKey == ratingKey,
+                      self.player?.currentItem === item else {
+                    return
+                }
+                self.setProposal(for: next, on: item, transition: transition, previewImage: image)
+            }
+        }
+    }
+
+    /// "Up Next" card title. Prefer "S{season}E{ep} - Title"; fall back to
+    /// the episode title, then a generic label.
+    private func nextEpisodeProposalTitle(for next: PlexMetadata) -> String {
+        let epTitle = next.title ?? "Next Episode"
+        if let season = next.parentIndex, let number = next.index {
+            return "S\(season)E\(number) - \(epTitle)"
+        }
+        return epTitle
+    }
+
+    /// Clear any attached proposal (episode change / no next episode).
+    private func clearNextContentProposal() {
+        proposedNextEpisodeRatingKey = nil
+        player?.currentItem?.nextContentProposal = nil
+    }
+
+    /// Emit the mandatory timing log line (spec requirement). credits-marker
+    /// when we set an explicit transition time at the Plex credits marker;
+    /// avkit-default when there is no marker (kCMTimeIndefinite -> AVKit's own
+    /// near-end window).
+    private func logUpNextTiming(transition: CMTime) {
+        let path = transition.isIndefinite ? "avkit-default" : "credits-marker"
+        print("[UpNext] native card presented via \(path) timing")
+    }
+
     // MARK: - Player binding
 
     override func bindPlayerSpecific() {
@@ -169,8 +317,20 @@ class AetherPlayerViewController: BaseAVPlayerViewController {
             .flatMap { $0.$currentAVPlayer }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avPlayer in
-                self?.player = avPlayer
-                self?.rebindPickerObservation(for: avPlayer)
+                guard let self else { return }
+                self.player = avPlayer
+                self.rebindPickerObservation(for: avPlayer)
+                // Aether swapped its internal AVPlayer/currentItem; the new item
+                // carries no proposal. Re-apply the cached next episode so the
+                // native Up Next card survives the swap. Clear the per-ratingKey
+                // guard so handleNextEpisodeChange rebuilds onto the new item;
+                // flag the re-apply so it does not re-emit the timing log.
+                if avPlayer != nil, self.viewModel.nextEpisode != nil {
+                    self.isReapplyingProposalOnSwap = true
+                    self.proposedNextEpisodeRatingKey = nil
+                    self.handleNextEpisodeChange(self.viewModel.nextEpisode)
+                    self.isReapplyingProposalOnSwap = false
+                }
             }
             .store(in: &cancellables)
 
@@ -191,6 +351,18 @@ class AetherPlayerViewController: BaseAVPlayerViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] time in
                 self?.subtitleModel.sourceTime = time
+            }
+            .store(in: &cancellables)
+
+        // Native Up Next card: when the host resolves a next episode on the
+        // Aether native route, build an AVContentProposal and attach it to the
+        // current item so AVKit renders its native card. UI + signal only: we
+        // do NOT queue a real next item; accept routes through the host's
+        // playNextEpisode() (see delegate callbacks).
+        viewModel.$nextEpisode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] next in
+                self?.handleNextEpisodeChange(next)
             }
             .store(in: &cancellables)
     }
@@ -299,6 +471,47 @@ class AetherPlayerViewController: BaseAVPlayerViewController {
         // text pick onto a bitmap track. (Language tags are also unreliable:
         // the master emits ISO 639-2 "eng" but AVKit reports BCP-47 "en".)
         return renditions.first(where: { $0.name == option.displayName })?.trackIndex
+    }
+
+    // MARK: - AVPlayerViewControllerDelegate (Up Next)
+
+    func playerViewController(_ playerViewController: AVPlayerViewController,
+                             shouldPresent proposal: AVContentProposal) -> Bool {
+        // Returning true is necessary but NOT sufficient on tvOS: AVKit ships no
+        // built-in proposal UI, so without a concrete contentProposalViewController
+        // the card never renders even though this delegate fires. Assign the host
+        // VC here, built from the resolved next episode.
+        guard let next = viewModel.nextEpisode else { return false }
+        playerViewController.contentProposalViewController = UpNextContentProposalViewController(
+            next: next,
+            serverURL: viewModel.serverURL,
+            authToken: viewModel.authToken
+        )
+        return true
+    }
+
+    func playerViewController(_ playerViewController: AVPlayerViewController,
+                             didAccept proposal: AVContentProposal) {
+        // UI + signal only: do NOT let AVKit advance its own queue. Route
+        // through the host so Continue-Watching / scrobble / mark-watched stay
+        // intact and Aether owns the item lifecycle.
+        print("[UpNext] native card accepted -> playNextEpisode()")
+        Task { @MainActor [weak self] in
+            await self?.viewModel.playNextEpisode()
+        }
+    }
+
+    func playerViewController(_ playerViewController: AVPlayerViewController,
+                             didReject proposal: AVContentProposal) {
+        // User declined. Clear the proposal and let the episode end normally;
+        // handlePlaybackEnded() runs (guarded on the native route so it does
+        // not pop the custom overlay or double-advance).
+        print("[UpNext] native card rejected")
+        // Re-enable the manual Skip Credits button for the rest of the credits.
+        viewModel.handleNativeUpNextRejected()
+        Task { @MainActor [weak self] in
+            self?.clearNextContentProposal()
+        }
     }
 
     // No deinit needed: pickerPollTimer uses [weak self] so it won't

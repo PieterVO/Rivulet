@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.0 (Build 53)
+
+- Fixed the Aether player not playing any content (black screen, no audio) for some users. Updated AetherEngine to pick up upstream playback fixes.
+
 ## 1.0.0 (Build 52)
 
 - Actor detail pages now work. Tap any cast member to see their bio and the movies and shows they're in.

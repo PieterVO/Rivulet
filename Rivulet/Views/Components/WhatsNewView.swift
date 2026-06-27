@@ -137,6 +137,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.0 (53)", [
+            "Fixed the Aether player not playing any content (black screen, no audio) for some users",
+        ]),
         ("1.0.0 (52)", [
             "Actor detail pages now work. Tap any cast member to see their bio and the movies and shows they're in",
             "Skip Intro and Skip Credits markers now work in the Aether player",
