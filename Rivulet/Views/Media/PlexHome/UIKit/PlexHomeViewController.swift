@@ -3275,13 +3275,31 @@ final class PlexHomeViewController: UIViewController {
         let token = authManager.selectedServerToken ?? ""
         let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
 
+        // Resolve ownership against the library GUID index by matching on ANY of the entry's
+        // external GUIDs (tmdb/imdb/tvdb), not just tmdb. Library items are frequently keyed by
+        // imdb only, so a tmdb-only lookup misses owned titles and the detail falls back to a
+        // non-playable TMDB stub with TMDB art (issue #188). lookup(guid:) covers every scheme
+        // the index holds. A match yields a Plex-provider item, so the detail shows Play and the
+        // provider re-fetches full metadata (Media) by ratingKey on expand/play.
         let lookups = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
             for (index, entry) in entries.enumerated() {
-                guard let tmdbId = entry.tmdbId else { continue }
-                let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
+                let guids = entry.guids
+                let tmdbId = entry.tmdbId
+                let tmdbType: TMDBMediaType = entry.type == .movie ? .movie : .tv
                 group.addTask {
-                    let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: mediaType)
-                    return (index, match)
+                    // Type-safe tmdb match first (a movie and a show can share the same
+                    // numeric tmdb id, so the typed key disambiguates), then fall back to
+                    // imdb/tvdb guids, which are globally unique.
+                    if let tmdbId,
+                       let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: tmdbType) {
+                        return (index, match)
+                    }
+                    for guid in guids where !guid.hasPrefix("tmdb://") {
+                        if let match = await LibraryGUIDIndex.shared.lookup(guid: guid) {
+                            return (index, match)
+                        }
+                    }
+                    return (index, nil)
                 }
             }
             var out: [Int: PlexMetadata] = [:]
@@ -3294,9 +3312,7 @@ final class PlexHomeViewController: UIViewController {
         var result: [(sourceID: String, item: MediaItem)] = []
         result.reserveCapacity(entries.count)
         for (index, entry) in entries.enumerated() {
-            guard let tmdbId = entry.tmdbId else { continue }
-            let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
-
+            // Owned: present the real Plex item (Play button + server art).
             if let match = lookups[index], !serverURL.isEmpty {
                 result.append((
                     sourceID: entry.id,
@@ -3308,6 +3324,11 @@ final class PlexHomeViewController: UIViewController {
                 continue
             }
 
+            // Not owned: fall back to a TMDB-only stub, which needs a tmdb id to address TMDB.
+            // Owned imdb/tvdb-only titles were already resolved above, so this only skips
+            // genuinely un-owned entries that have no TMDB id to show.
+            guard let tmdbId = entry.tmdbId else { continue }
+            let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
             let stub = TMDBListItem(
                 id: tmdbId,
                 title: entry.title,
