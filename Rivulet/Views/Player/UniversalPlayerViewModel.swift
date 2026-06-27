@@ -273,7 +273,15 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Published State
 
-    @Published private(set) var playbackState: UniversalPlaybackState = .idle
+    @Published private(set) var playbackState: UniversalPlaybackState = .idle {
+        didSet {
+            // Mirror playback lifecycle onto the Sentry App Hang scope so a
+            // main-thread hang during e.g. loading/buffering is attributable.
+            // See RIVULET-41 and AppHangContext.
+            guard playbackState != oldValue else { return }
+            AppHangContext.setPlaybackState(playbackState.appHangLabel)
+        }
+    }
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var isBuffering = false
@@ -697,6 +705,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         playbackPlan = plan
         rivuletFallbackURL = nil
         rivuletFallbackHeaders = [:]
+        // Tag the chosen route for App Hang triage (RIVULET-41).
+        AppHangContext.setPlaybackRoute(plan.primary.description)
 
         switch plan.primary {
         case .avPlayerDirect(let url, let headers):
@@ -1156,6 +1166,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             )
             let plan = ContentRouter.plan(for: routingContext)
             playbackPlan = plan
+            AppHangContext.setPlaybackRoute(plan.primary.description)
 
             // Reuse existing RivuletPlayer when transitioning episodes so the
             // AVSampleBufferDisplayLayer stays in the view hierarchy. Creating a
@@ -2339,6 +2350,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         streamPreparationTask?.cancel()
         streamPreparationTask = nil
         subtitleClockSync.stop()
+
+        // Clear the active playback route from the App Hang scope (RIVULET-41).
+        AppHangContext.setPlaybackRoute(nil)
 
         // Stop AetherPlayer if active
         aetherPlayer?.stop()

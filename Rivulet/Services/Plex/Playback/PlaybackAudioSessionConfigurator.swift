@@ -7,6 +7,7 @@
 
 import Foundation
 import AVFoundation
+import Sentry
 
 struct RouteAudioSnapshot: Sendable {
     let isAirPlay: Bool
@@ -90,6 +91,14 @@ enum PlaybackAudioSessionConfigurator {
         var usingLongFormPolicy = false
         let preferredPolicy: AVAudioSession.RouteSharingPolicy = .longFormAudio
         let preferredPolicyName = "longFormAudio"
+
+        // App Hang triage (RIVULET-41): setCategory/setActive call into the
+        // media services daemon and can block the calling thread (often the
+        // main thread, during HDMI/AirPlay route renegotiation). Bracket the
+        // region so a watchdog kill here is attributable. Sentry's scope/
+        // breadcrumb APIs are thread-safe, so this is safe from any isolation.
+        appHangSectionEnter("audio_session_activate", owner: owner)
+        defer { appHangSectionExit("audio_session_activate") }
 
         do {
             try session.setCategory(.playback, mode: mode, policy: preferredPolicy, options: [])
@@ -264,5 +273,27 @@ enum PlaybackAudioSessionConfigurator {
             "names=\(snapshot.outputPortNames.joined(separator: ","))"
         )
         return snapshot
+    }
+}
+
+// MARK: - App Hang section bracketing (RIVULET-41)
+
+private extension PlaybackAudioSessionConfigurator {
+
+    /// Mark entry into a main-thread-blockable audio-session section on the
+    /// Sentry scope + breadcrumb trail. Thread-safe; callable from any actor.
+    static func appHangSectionEnter(_ name: String, owner: String) {
+        SentrySDK.configureScope { $0.setTag(value: name, key: "main_thread_section") }
+        let crumb = Breadcrumb(level: .info, category: "main_thread_section")
+        crumb.message = "enter:\(name)"
+        crumb.data = ["owner": owner]
+        SentrySDK.addBreadcrumb(crumb)
+    }
+
+    static func appHangSectionExit(_ name: String) {
+        SentrySDK.configureScope { $0.setTag(value: "none", key: "main_thread_section") }
+        let crumb = Breadcrumb(level: .info, category: "main_thread_section")
+        crumb.message = "exit:\(name)"
+        SentrySDK.addBreadcrumb(crumb)
     }
 }

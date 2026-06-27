@@ -33,6 +33,21 @@ enum UniversalPlaybackState: Equatable, Sendable {
         if case .failed = self { return true }
         return false
     }
+
+    /// Stable short label for the Sentry App Hang `playback_state` tag
+    /// (RIVULET-41). No associated values so it stays low-cardinality.
+    var appHangLabel: String {
+        switch self {
+        case .idle: return "idle"
+        case .loading: return "loading"
+        case .ready: return "ready"
+        case .playing: return "playing"
+        case .paused: return "paused"
+        case .buffering: return "buffering"
+        case .ended: return "ended"
+        case .failed: return "failed"
+        }
+    }
 }
 
 // MARK: - Player Error

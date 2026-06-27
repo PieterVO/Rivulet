@@ -78,8 +78,20 @@ struct RivuletApp: App {
                 options.enableAutoSessionTracking = true
                 options.enableCaptureFailedRequests = true
                 options.enableSwizzling = true
+                // App Hang tracking. On tvOS the SDK uses ANR Tracker V2
+                // unconditionally (no `enableAppHangTrackingV2` toggle exists
+                // in 9.x — it was made GA and removed), which snapshots ALL
+                // threads with stack traces at the moment the watchdog fires.
+                // This is what backs RIVULET-41. The reason that issue's
+                // in-app frames show as <unknown> is missing/mismatched dSYMs
+                // for the release, NOT a tracker-version problem — ensure
+                // dSYMs upload for each App Store build so the frames resolve.
                 options.enableAppHangTracking = true
                 options.appHangTimeoutInterval = 2
+                // Also report non-fully-blocking hangs (partial main-thread
+                // stalls), not just fully-blocked ones. Defaults true in 9.x;
+                // set explicitly so a future SDK default flip can't silence them.
+                options.enableReportNonFullyBlockingAppHangs = true
 
                 options.beforeSend = { event in
                     // Drop cancelled URL request errors — these are normal when navigating away
@@ -93,6 +105,13 @@ struct RivuletApp: App {
                     }
                     return event
                 }
+            }
+
+            // Seed the App Hang triage scope so the very first hang event after
+            // launch already carries a screen tag. Updated thereafter via
+            // AppHangContext as the user navigates and plays. See RIVULET-41.
+            await MainActor.run {
+                AppHangContext.setScreen("launch")
             }
         }
         #endif

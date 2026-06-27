@@ -769,6 +769,8 @@ struct UniversalPlayerView: View {
         // Do NOT add onExitCommand here - it would fire after PlayerContainerViewController
         // has already processed the event, causing double-handling.
         .onAppear {
+            // App Hang triage: mark the player screen as foreground (RIVULET-41).
+            AppHangContext.setScreen("player")
             // Wire up remote input callbacks
             let target = UniversalPlaybackInputTarget(viewModel: viewModel)
             target.onResetRemoteInput = { [remoteInput] in
@@ -809,6 +811,9 @@ struct UniversalPlayerView: View {
             await viewModel.startPlayback()
         }
         .onDisappear {
+            // App Hang triage: left the player; coarse "browse" until the
+            // next screen tags itself (RIVULET-41).
+            AppHangContext.setScreen("browse")
             // Notify that playback is stopping (resumes hub polling)
             NotificationCenter.default.post(name: .plexPlaybackStopped, object: nil)
             // Stop playback first, then detach from Now Playing
