@@ -96,6 +96,7 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
             let year: Int?
             let type: String?
             let thumb: String?
+            let guid: String?       // primary plex:// guid
             let Guid: [GuidRef]?
         }
         struct GuidRef: Decodable { let id: String }
@@ -128,7 +129,8 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
                 year: raw.year,
                 type: watchType,
                 posterURL: posterURL,
-                guids: guids
+                guids: guids,
+                plexGUID: raw.guid
             )
         }
     }

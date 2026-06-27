@@ -3275,21 +3275,25 @@ final class PlexHomeViewController: UIViewController {
         let token = authManager.selectedServerToken ?? ""
         let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
 
-        // Resolve ownership against the library GUID index by matching on ANY of the entry's
-        // external GUIDs (tmdb/imdb/tvdb), not just tmdb. Library items are frequently keyed by
-        // imdb only, so a tmdb-only lookup misses owned titles and the detail falls back to a
-        // non-playable TMDB stub with TMDB art (issue #188). lookup(guid:) covers every scheme
-        // the index holds. A match yields a Plex-provider item, so the detail shows Play and the
-        // provider re-fetches full metadata (Media) by ratingKey on expand/play.
+        // Resolve each watchlist (Discover) item to the owned local library item so the detail shows
+        // Play + server art instead of a non-playable TMDB stub (issue #188). Two layers:
+        //
+        //   1. Warm path — the in-memory LibraryGUIDIndex, matching on ANY external guid the index
+        //      holds (type-safe tmdb first, then imdb/tvdb). No network when the bulk index is loaded.
+        //   2. Cold path — the bulk index loads ~20s after launch (and not at all on the very first
+        //      launch before that fetch finishes), so until then every index lookup misses. The
+        //      server does NOT index external guids for /library/all?guid=, but it DOES match the
+        //      primary plex:// guid, which Plex shares between Discover and the local server for
+        //      agent-matched titles. Resolve that directly so ownership works on cold/first launch.
         let lookups = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
             for (index, entry) in entries.enumerated() {
                 let guids = entry.guids
                 let tmdbId = entry.tmdbId
                 let tmdbType: TMDBMediaType = entry.type == .movie ? .movie : .tv
+                let plexGUID = entry.plexGUID
                 group.addTask {
-                    // Type-safe tmdb match first (a movie and a show can share the same
-                    // numeric tmdb id, so the typed key disambiguates), then fall back to
-                    // imdb/tvdb guids, which are globally unique.
+                    // Warm path: in-memory index. Type-safe tmdb first (a movie and a show can share
+                    // the same numeric tmdb id), then imdb/tvdb guids, which are globally unique.
                     if let tmdbId,
                        let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: tmdbType) {
                         return (index, match)
@@ -3298,6 +3302,12 @@ final class PlexHomeViewController: UIViewController {
                         if let match = await LibraryGUIDIndex.shared.lookup(guid: guid) {
                             return (index, match)
                         }
+                    }
+                    // Cold path: resolve the primary plex:// guid against the server directly.
+                    if let plexGUID, !serverURL.isEmpty,
+                       let match = try? await PlexNetworkManager.shared.findByGuid(
+                        serverURL: serverURL, authToken: token, guid: plexGUID) {
+                        return (index, match)
                     }
                     return (index, nil)
                 }

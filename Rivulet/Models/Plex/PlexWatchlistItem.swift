@@ -19,6 +19,29 @@ nonisolated struct PlexWatchlistItem: Identifiable, Hashable, Codable, Sendable 
     let type: WatchlistType
     let posterURL: URL?
     let guids: [String]     // tmdb://, imdb://, tvdb://
+    /// Primary plex:// guid (the global Plex metadata id). Plex assigns the same plex:// guid to a
+    /// title across Discover and the local server for agent-matched items, so this resolves directly
+    /// to the owned library item via /library/all?guid=. The external guids above are NOT indexed by
+    /// the server for that query, so plexGUID is the reliable ownership key.
+    let plexGUID: String?
+
+    init(
+        id: String,
+        title: String,
+        year: Int?,
+        type: WatchlistType,
+        posterURL: URL?,
+        guids: [String],
+        plexGUID: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.year = year
+        self.type = type
+        self.posterURL = posterURL
+        self.guids = guids
+        self.plexGUID = plexGUID
+    }
 
     var primaryGUID: String? { guids.first }
 

@@ -449,6 +449,29 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return item
     }
 
+    /// Find a library item the user owns by an external GUID (e.g. "imdb://tt123", "tmdb://456").
+    /// Hits /library/all?guid= which matches across all library sections. Returns the first match,
+    /// or nil if the user does not own it. Used to resolve watchlist items on cold launch without
+    /// waiting on the bulk LibraryGUIDIndex.
+    func findByGuid(
+        serverURL: String,
+        authToken: String,
+        guid: String
+    ) async throws -> PlexMetadata? {
+        guard var components = URLComponents(string: "\(serverURL)/library/all") else {
+            throw PlexAPIError.invalidURL
+        }
+        components.queryItems = [URLQueryItem(name: "guid", value: guid)]
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+        let container: PlexMediaContainerWrapper = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+        return container.MediaContainer.Metadata?.first
+    }
+
     /// Get related items (similar content)
     func getRelatedItems(
         serverURL: String,
