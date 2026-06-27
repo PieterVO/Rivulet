@@ -642,6 +642,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
+            // The Aether engine self-manages background: it tears the video pipeline down on background
+            // and reloads + restores play state on foreground. Pausing it here would run before the
+            // engine captures its pre-background play state, clobbering it so it always returned paused.
+            // Let Aether own its lifecycle; this host pause covers the RPlayer/AVPlayer routes only.
+            if self.aetherPlayer != nil { return }
             if self.playbackState == .playing {
                 self.pausedDueToAppInactive = true
                 print("[Remux] App entering background — pausing")
