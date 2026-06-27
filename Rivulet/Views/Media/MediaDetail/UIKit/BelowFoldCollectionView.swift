@@ -551,13 +551,21 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
         var entries: [String: CastEntry] = [:]
         cachedCastOrder = []
+        // Dedup by id: two credits can collapse to the same identifier (e.g. the
+        // same name in the same role, "cast:Mike Desilets-(voice)-"). Appending
+        // both would feed duplicate identifiers into the diffable snapshot and
+        // trip NSDiffableDataSourceSnapshot's uniqueness assertion (RIVULET-4R).
+        // First occurrence wins, keeping order and entry data consistent.
+        var seenCastIDs = Set<String>()
         for d in content.directors {
             let id = "dir:\(d.id)"
+            guard seenCastIDs.insert(id).inserted else { continue }
             entries[id] = CastEntry(person: d, subtitle: "Director")
             cachedCastOrder.append((id, .cast(id)))
         }
         for c in content.cast {
             let id = "cast:\(c.id)"
+            guard seenCastIDs.insert(id).inserted else { continue }
             entries[id] = CastEntry(person: c, subtitle: c.role)
             cachedCastOrder.append((id, .cast(id)))
         }
