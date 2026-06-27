@@ -65,6 +65,16 @@ echo "sentry: uploading dSYMs (config=${CONFIGURATION:-?}, platform=${PLATFORM_N
 # and the embedded frameworks/extension.
 export SENTRY_PROPERTIES="${RC}"
 
+# Upload the dSYMs Xcode produced for OUR code (Rivulet.app + TopShelfExtension).
+#
+# The embedded third-party frameworks (FFmpeg Libav*/Libsw*/Libzimg, Libdav1d,
+# Sentry) ship as STRIPPED prebuilt binaries from their SPM packages — they have
+# no DWARF debug_info, so no dSYM exists to upload for them. That's expected and
+# harmless here: RIVULET-41 and our crashes are in Swift on the main thread,
+# which Rivulet.app's dSYM covers. Apple's "Upload Symbols Failed" warnings in
+# Organizer are about those same stripped frameworks for APPLE's crash reporting
+# (which we don't use) — uncheck "Upload your app's symbols" at archive time to
+# silence them. There is nothing to fix on our side.
 "${SENTRY_CLI}" debug-files upload \
   --include-sources \
   "${DWARF_DSYM_FOLDER_PATH:-${BUILT_PRODUCTS_DIR}}" \
