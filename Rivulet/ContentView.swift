@@ -26,6 +26,12 @@ struct ContentView: View {
     @State private var showSplash = true
     #endif
 
+    /// Caps how long the splash waits for the hero backdrop once the content is
+    /// ready, so a slow image/network can't hold the splash up. Cancelled if the
+    /// hero reports ready first. The 15s safety timeout below is the backstop.
+    @State private var heroCapTask: Task<Void, Never>?
+    private let heroWaitCap: Duration = .milliseconds(3500)
+
     var body: some View {
         TVSidebarView()
             // Soft restart: bumping the token recreates the whole sidebar shell
@@ -58,8 +64,13 @@ struct ContentView: View {
         .onChange(of: dataStore.isHomeContentReady) { _, isReady in
             splashLog.info("isHomeContentReady changed to \(isReady), showSplash=\(self.showSplash)")
             if isReady {
-                splashLog.info("Dismissing splash — home content ready")
-                showSplash = false
+                evaluateSplashDismissal(trigger: "content ready")
+            }
+        }
+        .onChange(of: dataStore.isHomeHeroReady) { _, isReady in
+            splashLog.info("isHomeHeroReady changed to \(isReady), showSplash=\(self.showSplash)")
+            if isReady {
+                evaluateSplashDismissal(trigger: "hero ready")
             }
         }
         .task {
@@ -106,6 +117,43 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await dataStore.refreshLibraries() }
+            }
+        }
+    }
+
+    /// The splash covers the home until it's *fully* settled: content ready AND
+    /// the hero backdrop on screen (when the hero is enabled). Gating on the
+    /// hero too is what stops it popping in a beat after the rows paint. If the
+    /// hero is disabled there's nothing to wait for, so content-ready alone
+    /// dismisses. When content is ready but the hero is still loading, arm a
+    /// short cap so a slow image can't hold the splash up.
+    private func evaluateSplashDismissal(trigger: String) {
+        guard showSplash else { return }
+
+        let heroEnabled = UserDefaults.standard.bool(forKey: "showHomeHero")
+        let contentReady = dataStore.isHomeContentReady
+        let heroReady = dataStore.isHomeHeroReady
+
+        guard contentReady else { return }
+
+        if !heroEnabled || heroReady {
+            splashLog.info("Dismissing splash — \(trigger) (heroEnabled=\(heroEnabled), heroReady=\(heroReady))")
+            heroCapTask?.cancel()
+            heroCapTask = nil
+            showSplash = false
+            return
+        }
+
+        // Content is ready, hero is enabled but not yet on screen — wait for it,
+        // but only up to the cap. Arm the cap once.
+        if heroCapTask == nil {
+            splashLog.info("Content ready, waiting for hero (cap \(self.heroWaitCap))")
+            heroCapTask = Task { @MainActor in
+                try? await Task.sleep(for: heroWaitCap)
+                guard !Task.isCancelled, showSplash else { return }
+                splashLog.info("Hero wait cap reached — dismissing splash without hero")
+                showSplash = false
+                heroCapTask = nil
             }
         }
     }

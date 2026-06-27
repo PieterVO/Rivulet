@@ -74,6 +74,12 @@ class PlexDataStore: ObservableObject {
     /// Set by PlexHomeView when processed hubs are ready to display
     @Published var isHomeContentReady = false
 
+    /// Set by the UIKit home VC when the hero backdrop image is on screen (or
+    /// immediately when no hero will load — disabled, empty, or no URL). The
+    /// startup splash waits on this in addition to `isHomeContentReady` so the
+    /// hero doesn't pop in after the rows have already painted.
+    @Published var isHomeHeroReady = false
+
     // MARK: - Freshness Tracking
 
     /// Timestamps of last successful network fetch, keyed by resource identifier
@@ -381,6 +387,7 @@ class PlexDataStore: ObservableObject {
         libraryHubsVersion = UUID()
         homeItemsVersion = UUID()
         isHomeContentReady = false
+        isHomeHeroReady = false
         // Stop any in-flight cold-launch recovery and re-arm the cold path for
         // the next account/profile (see startInitialHomeContentRetry).
         initialHomeRetryTask?.cancel()
@@ -1586,6 +1593,7 @@ class PlexDataStore: ObservableObject {
         libraryHubsVersion = UUID()
         homeItemsVersion = UUID()
         isHomeContentReady = false
+        isHomeHeroReady = false
         // Stop any in-flight cold-launch recovery and re-arm the cold path
         // (see startInitialHomeContentRetry).
         initialHomeRetryTask?.cancel()

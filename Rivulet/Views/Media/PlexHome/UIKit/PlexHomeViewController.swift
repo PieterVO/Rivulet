@@ -1262,6 +1262,11 @@ final class PlexHomeViewController: UIViewController {
         backgroundBlurView.isUserInteractionEnabled = false
         backdropView = HeroBackdropView()
         backdropView.translatesAutoresizingMaskIntoConstraints = false
+        // Gate the startup splash on the hero image: it reports when the first
+        // backdrop is on screen so the splash holds until then (no late pop-in).
+        backdropView.onFirstImageLoaded = { [weak self] in
+            self?.markHeroReady()
+        }
 
         // Search has NO ambient wash, frosted base, or hero — it renders on a
         // flat opaque surface inside the system `.searchable` container. Keep
@@ -1359,6 +1364,28 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
+    /// Single chokepoint for driving the hero backdrop. Forwards to the view,
+    /// and when the URL is nil — no image will ever load — marks the hero ready
+    /// immediately so the startup splash doesn't wait for an image that isn't
+    /// coming. The non-nil case is reported by `onFirstImageLoaded` once the
+    /// image is on screen.
+    private func setHeroBackdrop(url: URL?) {
+        backdropView.setBackdrop(url: url)
+        if url == nil {
+            markHeroReady()
+        }
+    }
+
+    /// Mark the hero ready for the startup-splash gate. Idempotent (the splash
+    /// only acts on the false→true edge) and deferred for the same reason as
+    /// `isHomeContentReady`: this can run inside a SwiftUI view update.
+    private func markHeroReady() {
+        guard !dataStore.isHomeHeroReady else { return }
+        Task { @MainActor in
+            dataStore.isHomeHeroReady = true
+        }
+    }
+
     private func updateBackdropForCurrentHeroItem() {
         // Discover: hero items are MediaItem-backed (TMDB), not the Plex
         // heroItems array — without this branch the guard below NILs the
@@ -1367,7 +1394,7 @@ final class PlexHomeViewController: UIViewController {
             guard showHomeHero,
                   let section = sectionsSnapshot.first(where: { $0.kind == .hero }),
                   !section.heroMediaItems.isEmpty else {
-                backdropView.setBackdrop(url: nil)
+                setHeroBackdrop(url: nil)
                 return
             }
             let clamped = max(0, min(heroCurrentIndex, section.heroMediaItems.count - 1))
@@ -1375,7 +1402,7 @@ final class PlexHomeViewController: UIViewController {
             return
         }
         guard showHomeHero, !heroItems.isEmpty else {
-            backdropView.setBackdrop(url: nil)
+            setHeroBackdrop(url: nil)
             return
         }
         let clamped = max(0, min(heroCurrentIndex, heroItems.count - 1))
@@ -1390,22 +1417,22 @@ final class PlexHomeViewController: UIViewController {
         guard showHomeHero,
               let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
-            backdropView.setBackdrop(url: nil)
+            setHeroBackdrop(url: nil)
             return
         }
         let request = item.heroBackdropRequest(serverURL: serverURL, authToken: token)
         let url = request.backdropURL ?? request.thumbnailURL
-        backdropView.setBackdrop(url: url)
+        setHeroBackdrop(url: url)
     }
 
     /// MediaItem-backed backdrop (Discover hero — TMDB CDN URLs are absolute,
     /// no server/token needed).
     private func updateBackdrop(forMediaItem item: MediaItem) {
         guard showHomeHero else {
-            backdropView.setBackdrop(url: nil)
+            setHeroBackdrop(url: nil)
             return
         }
-        backdropView.setBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster)
+        setHeroBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster)
     }
 
     /// Discover hero Play (pill in `.play` mode — library-matched items only):
@@ -1676,6 +1703,15 @@ final class PlexHomeViewController: UIViewController {
             Task { @MainActor in
                 dataStore.isHomeContentReady = true
             }
+        }
+
+        // Hero half of the splash gate: only the content path with the hero
+        // enabled has a backdrop image to wait for. In every other settled
+        // state (notConnected / error / empty, or hero disabled) the backdrop
+        // is hidden and no image will load — mark the hero ready now so the
+        // splash dismisses on content alone instead of riding the cap/timeout.
+        if hasCredentials, !(isLoadingHubs && hubsEmpty), backdropView.isHidden {
+            markHeroReady()
         }
     }
 
@@ -2263,7 +2299,7 @@ final class PlexHomeViewController: UIViewController {
                 guard let self else { return }
                 self.backdropView.isHidden = !self.showHomeHero
                 if !self.showHomeHero {
-                    self.backdropView.setBackdrop(url: nil)
+                    self.setHeroBackdrop(url: nil)
                 }
                 self.updateContentTopInset()
                 self.selectHeroItemsIfNeeded()
