@@ -3319,27 +3319,69 @@ final class PlexHomeViewController: UIViewController {
             return out
         }
 
+        // Enrich every item with its TMDB title logo (the same source Discover uses), and for un-owned
+        // items also fetch the TMDB landscape backdrop. The UIKit preview carousel renders artwork
+        // as-is (it does not enrich items the way Discover's PreviewOverlayHost does), so the logo —
+        // and, for un-owned items, the backdrop — must be present on the MediaItem before it is shown.
+        // Owned items already carry server art; their list-level metadata lacks a clearLogo, so the
+        // TMDB logo fills that gap (withLogoIfMissing never overwrites a real Plex logo). Network runs
+        // off the main actor; MediaItems are built on it.
+        let tmdbSource = MetadataSourceRegistry.shared.source(for: TMDBMediaMapper.providerID)
+        let enriched: [Int: (item: MediaItem?, logo: URL?)] = await withTaskGroup(
+            of: (Int, MediaItem?, URL?).self
+        ) { group in
+            for (index, entry) in entries.enumerated() {
+                guard let tmdbId = entry.tmdbId else { continue }
+                let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
+                let isOwned = lookups[index] != nil && !serverURL.isEmpty
+                // Build the ref on the main actor (TMDBMediaMapper is main-actor-isolated); the task
+                // only does the off-actor network work.
+                let ref = MediaItemRef(
+                    providerID: TMDBMediaMapper.providerID,
+                    itemID: TMDBMediaMapper.encodeItemID(tmdbId: tmdbId, type: mediaType))
+                group.addTask {
+                    async let logoTask = TMDBLogoCache.shared.logoURL(tmdbId: tmdbId, type: mediaType)
+                    // Owned items already have a server backdrop; only un-owned need the TMDB detail.
+                    let detail = isOwned ? nil : (try? await tmdbSource?.itemDetail(ref))
+                    let logo = await logoTask
+                    return (index, detail?.item, logo)
+                }
+            }
+            var out: [Int: (item: MediaItem?, logo: URL?)] = [:]
+            for await (index, item, logo) in group {
+                out[index] = (item, logo)
+            }
+            return out
+        }
+
         var result: [(sourceID: String, item: MediaItem)] = []
         result.reserveCapacity(entries.count)
         for (index, entry) in entries.enumerated() {
-            // Owned: present the real Plex item (Play button + server art).
+            // Owned: real Plex item, with the TMDB logo filled in if the server metadata had none.
             if let match = lookups[index], !serverURL.isEmpty {
-                result.append((
-                    sourceID: entry.id,
-                    item: PlexMediaMapper.item(match,
-                                               providerID: providerID,
-                                               serverURL: serverURL,
-                                               authToken: token)
-                ))
+                let plexItem = PlexMediaMapper.item(match,
+                                                    providerID: providerID,
+                                                    serverURL: serverURL,
+                                                    authToken: token)
+                result.append((sourceID: entry.id,
+                               item: plexItem.withLogoIfMissing(enriched[index]?.logo)))
                 continue
             }
 
-            // Not owned: fall back to a TMDB-only stub, which needs a tmdb id to address TMDB.
-            // Owned imdb/tvdb-only titles were already resolved above, so this only skips
-            // genuinely un-owned entries that have no TMDB id to show.
+            // Un-owned: needs a tmdb id to address TMDB.
             guard let tmdbId = entry.tmdbId else { continue }
+            let logo = enriched[index]?.logo
+
+            // Prefer the TMDB-enriched item (real landscape backdrop + poster), matching Discover.
+            if let pair = enriched[index], let enrichedItem = pair.item {
+                result.append((sourceID: entry.id, item: enrichedItem.withLogoIfMissing(pair.logo)))
+                continue
+            }
+
+            // Enrichment failed (e.g. offline): keep the Plex watchlist poster so the tile still has
+            // art, and splice the logo if we got one.
             let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
-            let stub = TMDBListItem(
+            let base = TMDBMediaMapper.item(TMDBListItem(
                 id: tmdbId,
                 title: entry.title,
                 overview: nil,
@@ -3348,36 +3390,38 @@ final class PlexHomeViewController: UIViewController {
                 releaseDate: entry.year.map { "\($0)" },
                 voteAverage: nil,
                 mediaType: mediaType
-            )
-            var built = TMDBMediaMapper.item(stub)
+            ))
+            let stub: MediaItem
             if let poster = entry.posterURL {
-                built = MediaItem(
-                    ref: built.ref,
-                    kind: built.kind,
-                    title: built.title,
-                    sortTitle: built.sortTitle,
-                    overview: built.overview,
-                    year: built.year,
-                    releaseDate: built.releaseDate,
-                    contentRating: built.contentRating,
-                    runtime: built.runtime,
-                    parentRef: built.parentRef,
-                    grandparentRef: built.grandparentRef,
-                    episodeNumber: built.episodeNumber,
-                    seasonNumber: built.seasonNumber,
-                    childProgress: built.childProgress,
-                    userState: built.userState,
+                stub = MediaItem(
+                    ref: base.ref,
+                    kind: base.kind,
+                    title: base.title,
+                    sortTitle: base.sortTitle,
+                    overview: base.overview,
+                    year: base.year,
+                    releaseDate: base.releaseDate,
+                    contentRating: base.contentRating,
+                    runtime: base.runtime,
+                    parentRef: base.parentRef,
+                    grandparentRef: base.grandparentRef,
+                    episodeNumber: base.episodeNumber,
+                    seasonNumber: base.seasonNumber,
+                    childProgress: base.childProgress,
+                    userState: base.userState,
                     artwork: MediaArtwork(
                         poster: poster,
-                        backdrop: built.artwork.backdrop,
+                        backdrop: base.artwork.backdrop,
                         thumbnail: poster,
-                        logo: built.artwork.logo
+                        logo: base.artwork.logo
                     ),
-                    parentArtwork: built.parentArtwork,
-                    grandparentArtwork: built.grandparentArtwork
+                    parentArtwork: base.parentArtwork,
+                    grandparentArtwork: base.grandparentArtwork
                 )
+            } else {
+                stub = base
             }
-            result.append((sourceID: entry.id, item: built))
+            result.append((sourceID: entry.id, item: stub.withLogoIfMissing(logo)))
         }
         return result
     }
