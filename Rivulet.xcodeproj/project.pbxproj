@@ -765,7 +765,7 @@
 			repositoryURL = "https://github.com/l984-451/AetherEngine";
 			requirement = {
 				kind = revision;
-				revision = dcd0d05366b9bb6f40e9eb9a79cf255e0656c3bb;
+				revision = 5533b6e8e30acbacd99507a76086e1386a26280c;
 			};
 		};
 		B3000020AAAA000000000001 /* XCRemoteSwiftPackageReference "LibDovi" */ = {
