@@ -198,6 +198,7 @@
 				A72E03D72EDA297D003A73DA /* Frameworks */,
 				A72E03D82EDA297D003A73DA /* Resources */,
 				A70B44472F05AF3200DEF5ED /* Embed Foundation Extensions */,
+				F14974A8D7DB440F9A22ACBF /* Upload dSYMs to Sentry */,
 			);
 			buildRules = (
 			);
@@ -308,6 +309,21 @@
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F14974A8D7DB440F9A22ACBF /* Upload dSYMs to Sentry */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Upload dSYMs to Sentry";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/sentry-upload-dsyms.sh\"\n";
 		};
 		A78483082F062C2000F9E6D0 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
@@ -638,7 +654,9 @@
 				DEVELOPMENT_TEAM = ZHB786H6YN;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				// Disabled so the "Upload dSYMs to Sentry" Release build phase can
+				// read .sentryclirc, run sentry-cli, and reach the network (RIVULET-41).
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;

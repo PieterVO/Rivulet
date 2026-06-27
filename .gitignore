@@ -93,3 +93,6 @@ perf_results_device.csv
 # Instruments traces + exported XML (multi-hundred-MB to multi-GB; do not commit)
 perf-spike/traces/
 *.trace
+
+# Sentry CLI auth (do not commit)
+.sentryclirc
