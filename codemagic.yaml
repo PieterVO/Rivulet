@@ -22,9 +22,6 @@ workflows:
         BUNDLE_ID: "com.gstudios.rivulet"
         APP_STORE_APPLE_ID: 6756892857   # Rivulet's App Store Connect Apple ID
       xcode: latest
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.gstudios.rivulet
 
     triggering:
       events:
@@ -35,6 +32,34 @@ workflows:
       cancel_previous_builds: true
 
     scripts:
+      - name: Initialize keychain
+        script: keychain initialize
+
+      - name: Generate a private key for the distribution certificate
+        script: |
+          # fetch-signing-files --create needs a private key to back the new
+          # distribution certificate. Generate a fresh RSA key for this build.
+          openssl genrsa -out "$CM_BUILD_DIR/cert_key.pem" 2048
+
+      - name: Fetch or create signing files (tvOS App Store)
+        script: |
+          # --create generates the distribution certificate (backed by the
+          # key above) AND any missing provisioning profiles for the app and
+          # its TopShelf extension (com.gstudios.rivulet.*).
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform IOS \
+            --type TVOS_APP_STORE \
+            --certificate-key @file:"$CM_BUILD_DIR/cert_key.pem" \
+            --create
+          app-store-connect fetch-signing-files "${BUNDLE_ID}.TopShelfExtension" \
+            --platform IOS \
+            --type TVOS_APP_STORE \
+            --certificate-key @file:"$CM_BUILD_DIR/cert_key.pem" \
+            --create
+
+      - name: Add certificates to keychain
+        script: keychain add-certificates
+
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
 
