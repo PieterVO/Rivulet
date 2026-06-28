@@ -1,0 +1,114 @@
+# Codemagic CI/CD configuration for Rivulet (tvOS)
+# Docs: https://docs.codemagic.io/yaml-quick-start/building-a-native-ios-app/
+#
+# This workflow archives a signed Release build of the Rivulet scheme and
+# uploads it to TestFlight. Signing files are fetched automatically from
+# App Store Connect via the integration named below.
+#
+# One-time setup in the Codemagic UI before this runs (see chat notes):
+#   1. App Store Connect integration must be registered under the reference
+#      name  codemagic  (the personal-account default; matches `app_store_connect:`).
+#   2. Environment variables → group `sentry` (mark Secure):
+#        SENTRY_AUTH_TOKEN, SENTRY_ORG=g-studios-xc, SENTRY_PROJECT=rivulet
+#      Only needed if you keep the dSYM upload step at the end.
+
+workflows:
+  rivulet-tvos-testflight:
+    name: Rivulet tvOS → TestFlight
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+
+    integrations:
+      app_store_connect: codemagic
+
+    environment:
+      groups:
+        - sentry            # SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT
+      vars:
+        XCODE_SCHEME: "Rivulet"
+        XCODE_PROJECT: "Rivulet.xcodeproj"
+        BUNDLE_ID: "com.gstudios.rivulet"
+        APP_STORE_APPLE_ID: 6756892857   # Rivulet's App Store Connect Apple ID
+      xcode: latest
+
+    triggering:
+      events:
+        - tag
+      tag_patterns:
+        - pattern: 'v*'
+          include: true
+      cancel_previous_builds: true
+
+    scripts:
+      - name: Set up keychain for signing
+        script: keychain initialize
+
+      - name: Fetch signing files (tvOS App Store)
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform TV_OS \
+            --type IOS_APP_STORE \
+            --create
+          # The TopShelf extension has its own bundle id; fetch its profile too.
+          app-store-connect fetch-signing-files "${BUNDLE_ID}.TopShelfExtension" \
+            --platform TV_OS \
+            --type IOS_APP_STORE \
+            --create
+
+      - name: Add certs to keychain
+        script: keychain add-certificates
+
+      - name: Apply automatic signing settings to Xcode project
+        script: xcode-project use-profiles
+
+      - name: Set build number from Codemagic counter
+        script: |
+          # Use App Store Connect's latest TestFlight build number + 1 so we
+          # never collide with an existing build. Falls back to PROJECT_BUILD_NUMBER.
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" --platform TV_OS 2>/dev/null || echo "")
+          if [ -n "$LATEST" ]; then
+            NEXT=$(($LATEST + 1))
+          else
+            NEXT=$PROJECT_BUILD_NUMBER
+          fi
+          echo "Setting CURRENT_PROJECT_VERSION=$NEXT"
+          agvtool new-version -all "$NEXT"
+
+      - name: Build & archive (tvOS Release)
+        script: |
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --config Release \
+            --archive-flags="-destination 'generic/platform=tvOS'"
+
+      - name: Upload dSYMs to Sentry
+        # The in-Xcode build phase script no-ops on CI (no .sentryclirc),
+        # so we run sentry-cli here using the env-var token instead.
+        ignore_failure: true
+        script: |
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "No SENTRY_AUTH_TOKEN — skipping dSYM upload."
+            exit 0
+          fi
+          which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
+          sentry-cli debug-files upload \
+            --auth-token "$SENTRY_AUTH_TOKEN" \
+            --org "${SENTRY_ORG:-g-studios-xc}" \
+            --project "${SENTRY_PROJECT:-rivulet}" \
+            --include-sources \
+            "$CM_BUILD_DIR/build/ios/xcarchive"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - $CM_BUILD_DIR/build/ios/xcarchive/*.dSYMs/**/*
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        # Leave beta groups empty for now; add internal/external group names
+        # here once you want auto-distribution to testers.
+        # beta_groups:
+        #   - Internal Testers
