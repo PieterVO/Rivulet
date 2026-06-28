@@ -11,7 +11,7 @@ workflows:
     max_build_duration: 90
 
     integrations:
-      app_store_connect: CodeMagic
+      app_store_connect: codemagic
 
     environment:
       groups:
