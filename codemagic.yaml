@@ -1,16 +1,8 @@
 # Codemagic CI/CD configuration for Rivulet (tvOS)
 # Docs: https://docs.codemagic.io/yaml-quick-start/building-a-native-ios-app/
 #
-# This workflow archives a signed Release build of the Rivulet scheme and
-# uploads it to TestFlight. Signing files are fetched automatically from
-# App Store Connect via the integration named below.
-#
-# One-time setup in the Codemagic UI before this runs (see chat notes):
-#   1. App Store Connect integration must be registered under the reference
-#      name  codemagic  (the personal-account default; matches `app_store_connect:`).
-#   2. Environment variables → group `sentry` (mark Secure):
-#        SENTRY_AUTH_TOKEN, SENTRY_ORG=g-studios-xc, SENTRY_PROJECT=rivulet
-#      Only needed if you keep the dSYM upload step at the end.
+# Archives a signed Release build of the Rivulet scheme and uploads to
+# TestFlight. Signing files are fetched automatically from App Store Connect.
 
 workflows:
   rivulet-tvos-testflight:
@@ -23,7 +15,7 @@ workflows:
 
     environment:
       groups:
-        - sentry            # SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT
+        - sentry
       vars:
         XCODE_SCHEME: "Rivulet"
         XCODE_PROJECT: "Rivulet.xcodeproj"
@@ -83,19 +75,17 @@ workflows:
             --archive-flags="-destination 'generic/platform=tvOS'"
 
       - name: Upload dSYMs to Sentry
-        # The in-Xcode build phase script no-ops on CI (no .sentryclirc),
-        # so we run sentry-cli here using the env-var token instead.
         ignore_failure: true
         script: |
           if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
-            echo "No SENTRY_AUTH_TOKEN — skipping dSYM upload."
+            echo "No SENTRY_AUTH_TOKEN set, skipping dSYM upload."
             exit 0
           fi
           which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
           sentry-cli debug-files upload \
             --auth-token "$SENTRY_AUTH_TOKEN" \
-            --org "${SENTRY_ORG:-g-studios-xc}" \
-            --project "${SENTRY_PROJECT:-rivulet}" \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT" \
             --include-sources \
             "$CM_BUILD_DIR/build/ios/xcarchive"
 
