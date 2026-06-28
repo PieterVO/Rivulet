@@ -22,6 +22,9 @@ workflows:
         BUNDLE_ID: "com.gstudios.rivulet"
         APP_STORE_APPLE_ID: 6756892857   # Rivulet's App Store Connect Apple ID
       xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.gstudios.rivulet
 
     triggering:
       events:
@@ -32,25 +35,7 @@ workflows:
       cancel_previous_builds: true
 
     scripts:
-      - name: Set up keychain for signing
-        script: keychain initialize
-
-      - name: Fetch signing files (tvOS App Store)
-        script: |
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --platform IOS \
-            --type TVOS_APP_STORE \
-            --create
-          # The TopShelf extension has its own bundle id; fetch its profile too.
-          app-store-connect fetch-signing-files "${BUNDLE_ID}.TopShelfExtension" \
-            --platform IOS \
-            --type TVOS_APP_STORE \
-            --create
-
-      - name: Add certs to keychain
-        script: keychain add-certificates
-
-      - name: Apply automatic signing settings to Xcode project
+      - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
 
       - name: Set build number from Codemagic counter
