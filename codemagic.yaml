@@ -63,6 +63,20 @@ workflows:
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
 
+      - name: Generate Secrets.swift from env
+        script: |
+          # Secrets.swift is gitignored (holds the Sentry DSN); recreate it on
+          # CI from the SENTRY_DSN env var (group `rivulet`). Falls back to the
+          # template's placeholder if unset so the build still compiles.
+          cat > Rivulet/Config/Secrets.swift <<EOF
+          import Foundation
+
+          enum Secrets {
+              static let sentryDSN = "${SENTRY_DSN:-}"
+          }
+          EOF
+          echo "Wrote Rivulet/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
+
       - name: Set build number from Codemagic counter
         script: |
           # Use App Store Connect's latest TestFlight build number + 1 so we
