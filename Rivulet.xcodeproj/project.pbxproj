@@ -310,6 +310,16 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A78483082F062C2000F9E6D0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
 		F14974A8D7DB440F9A22ACBF /* Upload dSYMs to Sentry */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -325,14 +335,7 @@
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/Scripts/sentry-upload-dsyms.sh\"\n";
 		};
-		A78483082F062C2000F9E6D0 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A70B44352F05AF3200DEF5ED /* Sources */ = {
@@ -467,7 +470,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.1;
 				OTHER_LDFLAGS = (
 					"-lbz2",
 					"-liconv",
@@ -525,7 +528,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks";
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 1.0.0;
+				MARKETING_VERSION = 1.0.1;
 				OTHER_LDFLAGS = (
 					"-lbz2",
 					"-liconv",
@@ -654,8 +657,6 @@
 				DEVELOPMENT_TEAM = ZHB786H6YN;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				// Disabled so the "Upload dSYMs to Sentry" Release build phase can
-				// read .sentryclirc, run sentry-cli, and reach the network (RIVULET-41).
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
