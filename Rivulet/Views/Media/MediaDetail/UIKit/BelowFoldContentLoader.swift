@@ -53,6 +53,7 @@ struct BelowFoldTrailer: Hashable, Sendable {
     let title: String
     let artworkURL: URL?
     let durationFormatted: String?
+    var subtype: ExtraSubtype = .unknown
 }
 
 @MainActor
@@ -88,7 +89,8 @@ final class BelowFoldContentLoader {
                 id: extra.id,
                 title: extra.title,
                 artworkURL: extra.thumbnailURL ?? fallbackArt,
-                durationFormatted: extra.duration.map(Self.formatTrailerDuration)
+                durationFormatted: extra.duration.map(Self.formatTrailerDuration),
+                subtype: extra.subtype
             )
         }
         let allExtras = resolvedDetail?.extras ?? []

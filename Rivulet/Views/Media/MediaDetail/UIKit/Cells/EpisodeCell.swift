@@ -123,6 +123,9 @@ final class EpisodeCell: UIView {
     private let durationIcon = UIImageView()
     private let durationLabel = UILabel()
 
+    /// Subtype icon shown top-trailing on trailer/extra tiles (film, camera, etc.).
+    private let subtypeIcon = UIImageView()
+
     private let progressTrack = UIView()
     private let progressFill = UIView()
     private var progressFillWidth: NSLayoutConstraint!
@@ -222,6 +225,13 @@ final class EpisodeCell: UIView {
         // Watched tag (top-trailing)
         watchedGlyph.isHidden = true
         thumbnailCard.contentView.addSubview(watchedGlyph)
+
+        // Subtype icon (top-leading) — shown on trailer/extra tiles only.
+        subtypeIcon.translatesAutoresizingMaskIntoConstraints = false
+        subtypeIcon.contentMode = .scaleAspectFit
+        subtypeIcon.tintColor = .white
+        subtypeIcon.isHidden = true
+        thumbnailCard.contentView.addSubview(subtypeIcon)
 
         // Description block — gets a subtle rounded box only when focused (ATV+).
         descriptionBlock.translatesAutoresizingMaskIntoConstraints = false
@@ -337,6 +347,12 @@ final class EpisodeCell: UIView {
             watchedGlyph.leadingAnchor.constraint(equalTo: thumbnailCard.contentView.leadingAnchor, constant: 12),
             watchedGlyph.bottomAnchor.constraint(equalTo: thumbnailCard.contentView.bottomAnchor, constant: -10),
 
+            // Subtype icon: top-leading corner of the thumbnail.
+            subtypeIcon.leadingAnchor.constraint(equalTo: thumbnailCard.contentView.leadingAnchor, constant: 10),
+            subtypeIcon.topAnchor.constraint(equalTo: thumbnailCard.contentView.topAnchor, constant: 10),
+            subtypeIcon.widthAnchor.constraint(equalToConstant: 22),
+            subtypeIcon.heightAnchor.constraint(equalToConstant: 22),
+
             // Description block: its LEFT edge (and the focus glass that fills it)
             // sits on the shared content edge = the thumbnail's leading. The text
             // is indented inside by the block's inner padding, like the pill
@@ -372,6 +388,7 @@ final class EpisodeCell: UIView {
         // The description starts gated OFF; it becomes focusable only once the
         // thumb takes focus (see applyReachability), so the first focus into the
         // row lands on the thumb and Up-from-below skips the description.
+        subtypeIcon.isHidden = true
         splitFocus = true
         descriptionBlock.isFocusEligible = false
         episodeLabel.text = Self.episodeLabel(for: episode, showSeasonPrefix: showSeasonPrefix).uppercased()
@@ -454,6 +471,10 @@ final class EpisodeCell: UIView {
 
         progressTrack.isHidden = true
         watchedGlyph.isHidden = true
+
+        let config = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        subtypeIcon.image = UIImage(systemName: trailer.subtype.glyphName, withConfiguration: config)
+        subtypeIcon.isHidden = false
 
         imageToken &+= 1
         let token = imageToken

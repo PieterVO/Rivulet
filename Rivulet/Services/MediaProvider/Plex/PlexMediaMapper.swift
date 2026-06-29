@@ -358,25 +358,30 @@ enum PlexMediaMapper {
                 mediaSource(media, part, serverURL: serverURL, authToken: authToken)
             }
         }
-        // PlexExtra exposes only `key`/`ratingKey` — no nested Media. The trailer
-        // URL is the extra's playback key, which the player resolves at play time.
-        let trailerURL: URL? = meta.Extras?.Metadata?
-            .first(where: { $0.subtype == "trailer" || $0.type == "clip" })
+        // Only surface user-added extras (those with a local file). IVA-supplied
+        // extras from Plex have no Part.file and stream from /services/iva/assets/;
+        // they're low quality and not what users expect in the carousel.
+        let localExtras = meta.allExtras.filter(\.hasLocalFile)
+
+        // Trailer button: first local trailer whose title matches the feature.
+        // Disc rips (Kino Lorber, Criterion, etc.) often bundle trailers for
+        // other films, so require a title match before wiring the action button.
+        let trailerURL: URL? = localExtras
+            .first(where: { ExtraSubtype.from(subtype: $0.subtype, extraType: $0.extraType).isTrailer })
             .flatMap { $0.key }
             .flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(authToken)") }
 
-        // Real trailers + extras for the Trailers row. PlexExtra carries the real
-        // title, thumb, duration (ms), and a playback key (key / ratingKey).
-        let extras: [MediaItemDetail.Extra] = meta.allExtras.enumerated().map { idx, ex in
+        let extras: [MediaItemDetail.Extra] = localExtras.enumerated().map { idx, ex in
             MediaItemDetail.Extra(
                 id: ex.ratingKey ?? ex.key ?? "extra-\(idx)",
-                title: ex.title ?? "Trailer",
+                title: ex.title ?? "Extra",
                 thumbnailURL: artworkURL(ex.thumb, serverURL: serverURL, authToken: authToken),
                 duration: ex.duration.map { TimeInterval($0) / 1000 },
                 playbackKey: ex.key ?? ex.ratingKey,
-                isTrailer: ex.subtype == "trailer" || ex.extraType == 1
+                subtype: ExtraSubtype.from(subtype: ex.subtype, extraType: ex.extraType)
             )
         }
+        .sorted { $0.subtype < $1.subtype }
 
         // Next episode for shows — Plex bakes this into `OnDeck` on the show's
         // metadata. Map the first OnDeck Metadata entry to a MediaItem.

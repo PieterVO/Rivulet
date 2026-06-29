@@ -66,6 +66,66 @@ nonisolated struct PlexGuid: Codable, Sendable {
     var id: String?
 }
 
+/// Canonical categories for Plex extras. Declaration order is render order.
+enum ExtraSubtype: Int, CaseIterable, Sendable, Comparable {
+    case trailer
+    case featurette
+    case behindTheScenes
+    case deletedScene
+    case interview
+    case scene
+    case short
+    case unknown
+
+    static func from(subtype: String?, extraType: Int?) -> ExtraSubtype {
+        switch subtype {
+        case "trailer":          return .trailer
+        case "featurette":       return .featurette
+        case "behindTheScenes":  return .behindTheScenes
+        case "deletedScene", "sceneOrSample": return .deletedScene
+        case "interview":        return .interview
+        case "scene":            return .scene
+        case "short":            return .short
+        default:
+            if extraType == 1 { return .trailer }
+            return .unknown
+        }
+    }
+
+    var isTrailer: Bool { self == .trailer }
+
+    var displayName: String {
+        switch self {
+        case .trailer:          return "Trailer"
+        case .featurette:       return "Featurette"
+        case .behindTheScenes:  return "Behind the Scenes"
+        case .deletedScene:     return "Deleted Scene"
+        case .interview:        return "Interview"
+        case .scene:            return "Scene"
+        case .short:            return "Short"
+        case .unknown:          return "Extra"
+        }
+    }
+
+    /// SF Symbol for the tile icon overlay.
+    var glyphName: String {
+        switch self {
+        case .trailer:          return "film"
+        case .featurette:       return "sparkles"
+        case .behindTheScenes:  return "camera"
+        case .deletedScene:     return "scissors"
+        case .interview:        return "quote.bubble"
+        case .scene:            return "play.rectangle"
+        case .short:            return "tv"
+        case .unknown:          return "play.rectangle"
+        }
+    }
+
+    static func < (lhs: ExtraSubtype, rhs: ExtraSubtype) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+}
+
 /// Trailer/Extra content
 nonisolated struct PlexExtra: Codable, Identifiable, Sendable {
     var id: String { ratingKey ?? UUID().uuidString }
@@ -77,6 +137,14 @@ nonisolated struct PlexExtra: Codable, Identifiable, Sendable {
     var thumb: String?
     var duration: Int?
     var extraType: Int?     // 1=trailer
+    var Media: [PlexMedia]?
+
+    /// User-added extras carry a local file path; Plex IVA-supplied extras
+    /// stream from /services/iva/assets/... and have no file. Only surface
+    /// user-added extras — IVA streams are low quality.
+    var hasLocalFile: Bool {
+        Media?.first?.Part?.first?.file?.isEmpty == false
+    }
 }
 
 // MARK: - Common Sense Media
