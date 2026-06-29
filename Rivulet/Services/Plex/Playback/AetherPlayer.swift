@@ -233,6 +233,20 @@ final class AetherPlayer: PlayerProtocol {
     // MARK: - Controls
 
     func load(url: URL, headers: [String: String]?, startTime: TimeInterval?) async throws {
+        try await load(
+            url: url,
+            headers: headers,
+            startTime: startTime,
+            subtitleLanguageHintsByStreamIndex: [:]
+        )
+    }
+
+    func load(
+        url: URL,
+        headers: [String: String]?,
+        startTime: TimeInterval?,
+        subtitleLanguageHintsByStreamIndex: [Int: String]
+    ) async throws {
         // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
         // DTS-HD MA, MP3, Opus). FLAC encode is ~3x realtime on A15 vs
         // EAC3's ~0.5x realtime, so segment production keeps up with
@@ -248,14 +262,15 @@ final class AetherPlayer: PlayerProtocol {
             matchContentEnabled: true,
             panelIsInHDRMode: Self.panelIsInHDRMode(),
             audioBridgeMode: .lossless,
-            // Combined native-picker subtitles: upstream's mov_text path (#55)
-            // exposes TEXT subs as native AVMediaSelection tracks (survive
-            // PiP/AirPlay/external display), while advertiseSubtitleRenditions
-            // narrows to BITMAP decoys (PGS/DVB/DVD) that the host overlay
-            // paints. Both land in the same native AVKit picker -- no custom
-            // subtitle UI.
+            // Combined native-picker subtitles: advertiseSubtitleRenditions
+            // creates AVKit picker entries for text and bitmap tracks; the
+            // host maps selections back to Aether and paints the overlay.
+            // prepareNativeSubtitles keeps the mov_text mux path available,
+            // but AVPlayer does not expose those in-segment tracks as picker
+            // options on this loopback HLS path.
             advertiseSubtitleRenditions: true,
-            prepareNativeSubtitles: true
+            prepareNativeSubtitles: true,
+            subtitleLanguageHintsByStreamIndex: subtitleLanguageHintsByStreamIndex
         )
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
