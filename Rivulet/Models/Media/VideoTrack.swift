@@ -18,6 +18,9 @@ struct VideoTrack: Hashable, Sendable, Identifiable {
     let bitrate: Int?
     let videoRange: VideoRange
     let isDefault: Bool
+    let scanType: String?           // Plex "progressive" / "interlaced"; nil if unknown
+
+    var isInterlaced: Bool { scanType?.lowercased() == "interlaced" }
 
     enum VideoRange: Hashable, Sendable {
         case sdr

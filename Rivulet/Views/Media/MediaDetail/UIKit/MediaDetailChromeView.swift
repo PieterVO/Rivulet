@@ -801,7 +801,13 @@ final class MediaDetailChromeView: UIView {
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
         var parts: [String] = []
-        if let year = item.year { parts.append(String(year)) }
+        if item.kind == .episode,
+           let raw = item.releaseDate,
+           let formatted = Self.formattedAirDate(raw) {
+            parts.append(formatted)
+        } else if let year = item.year {
+            parts.append(String(year))
+        }
         if let runtime = item.runtime, runtime > 0 { parts.append(Self.formatRuntime(runtime)) }
 
         for (i, part) in parts.enumerated() {
@@ -934,6 +940,24 @@ final class MediaDetailChromeView: UIView {
     }
 
     // MARK: - Statics
+
+    private static func formattedAirDate(_ raw: String) -> String? {
+        guard let date = plexDateParser.date(from: String(raw.prefix(10))) else { return nil }
+        return airDateDisplay.string(from: date)
+    }
+    private static let plexDateParser: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+    private static let airDateDisplay: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
 
     private static func formatRuntime(_ runtime: TimeInterval) -> String {
         let minutes = Int(runtime / 60)
