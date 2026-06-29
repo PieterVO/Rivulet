@@ -427,13 +427,12 @@ class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewContro
 
         if let option = selected {
             if let idx = aetherTrackIndex(for: option, in: group) {
-                // A bitmap decoy rendition (PGS / DVB / DVD): the host decodes
-                // the track and paints the overlay.
+                // A decoy rendition advertised by Aether: the host decodes the
+                // selected text or bitmap track and paints the overlay.
                 viewModel.aetherPlayer?.selectSubtitleTrack(id: idx)
             } else {
-                // A native mov_text (text) track that AVPlayer renders itself,
-                // or an option we don't own. Disable the host's own subtitle
-                // decode so we never double-render on top of the native track.
+                // A native option surfaced by AVPlayer itself, or an option we
+                // don't own. Disable the host overlay so we never double-render.
                 viewModel.aetherPlayer?.selectSubtitleTrack(id: nil)
             }
         } else {
@@ -455,21 +454,13 @@ class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewContro
         let renditions = viewModel.aetherPlayer?.subtitleRenditions ?? []
         guard !renditions.isEmpty else { return nil }
 
-        // Name match ONLY. subtitleRenditions is bitmap-only when the native
-        // mov_text path is active (#55): text subs are native AVMediaSelection
-        // options the engine does not decoy. A name match therefore means
-        // "this option is one of our bitmap decoys"; any non-match is a native
-        // text track (or an option we don't own) and must NOT resolve to an
-        // engine track -- the caller disables the host overlay in that case.
-        //
-        // Rendition names are unique per track (disambiguated in
-        // AetherEngine.makeSubtitleRenditions) and we control both the master
-        // NAME and the bridged list, so the name is the reliable key. The old
-        // ordinal fallback is intentionally removed: with the legible group now
-        // mixing native text options and bitmap decoys, ordinals no longer line
-        // up with the (bitmap-only) rendition list and could mis-map a native
-        // text pick onto a bitmap track. (Language tags are also unreliable:
-        // the master emits ISO 639-2 "eng" but AVKit reports BCP-47 "en".)
+        // Name match ONLY. Rendition names are unique per track
+        // (disambiguated in AetherEngine.makeSubtitleRenditions), and we
+        // control both the master NAME and the bridged list, so the name is the
+        // reliable key. Ordinal fallback is intentionally absent because AVKit
+        // may mix options it discovers itself with Aether's advertised
+        // renditions. Language tags are also unreliable: the master may emit
+        // ISO 639-2 "eng" while AVKit reports BCP-47 "en".
         return renditions.first(where: { $0.name == option.displayName })?.trackIndex
     }
 

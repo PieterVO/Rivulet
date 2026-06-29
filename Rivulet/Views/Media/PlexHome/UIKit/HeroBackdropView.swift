@@ -29,12 +29,11 @@ final class HeroBackdropView: UIView {
     private var loadTask: Task<Void, Never>?
     private var clearPreviousTask: Task<Void, Never>?
 
-    /// Fired exactly once, when the first real backdrop image is on screen.
-    /// Used by the home VC to gate the startup splash on the hero so it doesn't
-    /// pop in after the rows have already painted. Never fires for `nil` URLs
-    /// (no image will load) — the caller marks readiness directly in that case.
+    /// Fired when a real backdrop image is on screen. Used by the home VC to
+    /// gate startup/profile-switch loading on the hero so it doesn't pop in
+    /// after the rows have already painted. Never fires for `nil` URLs (no
+    /// image will load) — the caller marks readiness directly in that case.
     var onFirstImageLoaded: (() -> Void)?
-    private var didFireFirstImage = false
 
     private let crossfadeDuration: TimeInterval = 0.22
 
@@ -155,9 +154,8 @@ final class HeroBackdropView: UIView {
         currentImageView.image = image
         currentImageView.alpha = oldImage == nil ? 1 : 0
 
-        fireFirstImageLoadedIfNeeded()
-
         if oldImage == nil {
+            fireFirstImageLoadedIfNeeded()
             return  // No previous image — current is shown immediately.
         }
 
@@ -165,6 +163,7 @@ final class HeroBackdropView: UIView {
             self.currentImageView.alpha = 1
             self.previousImageView.alpha = 0
         } completion: { _ in
+            self.fireFirstImageLoadedIfNeeded()
             // Defer clearing the previous image slightly so the layer composition
             // settles before we release the reference.
         }
@@ -180,8 +179,6 @@ final class HeroBackdropView: UIView {
     }
 
     private func fireFirstImageLoadedIfNeeded() {
-        guard !didFireFirstImage else { return }
-        didFireFirstImage = true
         onFirstImageLoaded?()
     }
 

@@ -269,6 +269,7 @@ actor CacheManager {
     // blank rows until the cache was cleared. Raw `PlexMetadata` caches do not
     // need versioning; they re-project fresh through the mapper under the current id.
     private let homeItemsCacheFile = "home_items_cache_v3.json"
+    private let homeHeroItemsCacheFile = "home_hero_items_cache_v1.json"
     private let libraryItemsCachePrefix = "library_items_v3_"
 
     func cacheHomeItems(_ rail: CachedHomeRail) {
@@ -277,6 +278,14 @@ actor CacheManager {
 
     func getCachedHomeItems() -> CachedHomeRail? {
         return decodedCache(for: homeItemsCacheFile, as: CachedHomeRail.self)
+    }
+
+    func cacheHomeHeroItems(_ items: [PlexMetadata]) {
+        cacheData(items, fileName: homeHeroItemsCacheFile)
+    }
+
+    func getCachedHomeHeroItems() -> [PlexMetadata]? {
+        return decodedCache(for: homeHeroItemsCacheFile, as: [PlexMetadata].self)
     }
 
     func cacheLibraryItems(_ rail: CachedHomeRail, forLibrary key: String) {
@@ -309,6 +318,7 @@ actor CacheManager {
             onDeckCacheFile,
             hubsCacheFile,
             homeItemsCacheFile,
+            homeHeroItemsCacheFile,
             cacheInfoFile
         ]
 
@@ -379,6 +389,14 @@ actor CacheManager {
         try? FileManager.default.removeItem(at: fileURL)
         memoryCache.removeObject(forKey: homeItemsCacheFile as NSString)
         removeTimestamp(for: homeItemsCacheFile)
+    }
+
+    func clearHomeHeroItemsCache() {
+        guard let cacheDir = cacheDirectory else { return }
+        let fileURL = cacheDir.appendingPathComponent(homeHeroItemsCacheFile)
+        try? FileManager.default.removeItem(at: fileURL)
+        memoryCache.removeObject(forKey: homeHeroItemsCacheFile as NSString)
+        removeTimestamp(for: homeHeroItemsCacheFile)
     }
 
     func clearLibraryItemsCache() {

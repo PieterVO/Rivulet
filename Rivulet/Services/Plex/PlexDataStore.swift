@@ -407,6 +407,7 @@ class PlexDataStore: ObservableObject {
         await cacheManager.clearHubsCache()
         await cacheManager.clearLibraryHubsCache()
         await cacheManager.clearHomeItemsCache()
+        await cacheManager.clearHomeHeroItemsCache()
         await cacheManager.clearLibraryItemsCache()
 
         // Reset connection recovery flag (new profile may have different access)
@@ -454,12 +455,17 @@ class PlexDataStore: ObservableObject {
             // NOT decode getCachedHubs() on the launch-critical path anymore —
             // the deferred network refresh re-fetches hubs and re-projects.
             StartupTimer.mark("getCachedHomeItems start")
-            let cachedItems = await cacheManager.getCachedHomeItems()
+            async let cachedItemsTask = cacheManager.getCachedHomeItems()
+            async let cachedHeroItemsTask = cacheManager.getCachedHomeHeroItems()
+            let (cachedItems, cachedHeroItems) = await (cachedItemsTask, cachedHeroItemsTask)
             StartupTimer.mark("getCachedHomeItems returned (\(cachedItems?.count ?? -1) rows)")
 
             var painted = false
             if let cachedItems, !cachedItems.isEmpty {
                 await MainActor.run {
+                    if let cachedHeroItems, !cachedHeroItems.isEmpty {
+                        self.cacheHeroItems(cachedHeroItems, forLibrary: "home")
+                    }
                     self.setHomeItemsFromCache(cachedItems)
                     self.isLoadingHubs = false
                 }
@@ -478,6 +484,11 @@ class PlexDataStore: ObservableObject {
                     await MainActor.run {
                         self.hubs = cachedHubs
                         self.hubsVersion = UUID()
+                        let heroItems = self.selectHomeHeroItems(from: cachedHubs)
+                        if !heroItems.isEmpty {
+                            self.cacheHeroItems(heroItems, forLibrary: "home")
+                            Task { await self.cacheManager.cacheHomeHeroItems(heroItems) }
+                        }
                         // projectHomeItems() also needs the Continue Watching
                         // hub + per-library hubs; those land on the deferred
                         // refresh. This first projection covers whatever the
@@ -576,6 +587,13 @@ class PlexDataStore: ObservableObject {
 
             // Always update Top Shelf cache after fetching (lightweight, idempotent)
             updateTopShelfCache()
+            let heroItems = selectHomeHeroItems(from: fetchedHubs)
+            if !heroItems.isEmpty {
+                cacheHeroItems(heroItems, forLibrary: "home")
+                await cacheManager.cacheHomeHeroItems(heroItems)
+            } else {
+                await cacheManager.clearHomeHeroItemsCache()
+            }
             self.hubsError = nil
             if updateLoading {
                 self.isLoadingHubs = false
@@ -667,6 +685,7 @@ class PlexDataStore: ObservableObject {
         await StartupTimer.measure("clear caches (onDeck/hubs/nextEp)") {
             await cacheManager.clearOnDeckCache()
             await cacheManager.clearHubsCache()
+            await cacheManager.clearHomeHeroItemsCache()
             clearNextEpisodeCache()
         }
         await StartupTimer.measure("fetchHubsFromServer") {
@@ -1006,6 +1025,33 @@ class PlexDataStore: ObservableObject {
         for key in libraryHubs.keys {
             projectLibraryItems(forKey: key)
         }
+    }
+
+    /// Keep the disk-backed launch hero projection in lockstep with
+    /// `PlexHomeViewController.computeHubBackedHero(from:)` so warm launches
+    /// can start the hero image load without decoding the full `[PlexHub]`
+    /// cache first.
+    private func selectHomeHeroItems(from hubs: [PlexHub], cap: Int = 9) -> [PlexMetadata] {
+        let curatedKeywords = ["recommended", "promoted", "featured", "spotlight"]
+        let curated = hubs.first { hub in
+            guard let id = hub.hubIdentifier?.lowercased(),
+                  hub.Metadata?.isEmpty == false else { return false }
+            return curatedKeywords.contains(where: id.contains)
+        }
+        if let items = curated?.Metadata, !items.isEmpty {
+            return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
+        }
+
+        let recentlyAdded = hubs.first { isRecentlyAddedHub($0) && ($0.Metadata?.isEmpty == false) }
+        if let items = recentlyAdded?.Metadata, !items.isEmpty {
+            return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
+        }
+
+        if let firstHub = hubs.first(where: { $0.Metadata?.isEmpty == false }),
+           let items = firstHub.Metadata, !items.isEmpty {
+            return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
+        }
+        return []
     }
 
     /// Replica of `PlexHomeViewController.isRecentlyAdded(_:)` — the home

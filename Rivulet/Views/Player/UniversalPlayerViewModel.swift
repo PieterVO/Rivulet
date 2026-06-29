@@ -1642,7 +1642,12 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // (it makes its own item, so our native-path externalMetadata never
                 // reaches it). Set before load so Aether stashes + replays it.
                 ap.setExternalMetadata(buildExternalMetadata())
-                try await ap.load(url: aetherURL, headers: aetherHeaders, startTime: startTime)
+                try await ap.load(
+                    url: aetherURL,
+                    headers: aetherHeaders,
+                    startTime: startTime,
+                    subtitleLanguageHintsByStreamIndex: aetherSubtitleLanguageHintsByStreamIndex()
+                )
             } catch {
                 guard planHasHLSFallback(plan) else { throw error }
                 let kind = classifyDirectPlayFailure(error)
@@ -1654,6 +1659,22 @@ final class UniversalPlayerViewModel: ObservableObject {
                 return
             }
         }
+    }
+
+    private func aetherSubtitleLanguageHintsByStreamIndex() -> [Int: String] {
+        guard let streams = metadata.Media?.first?.Part?.first?.Stream else { return [:] }
+
+        var hints: [Int: String] = [:]
+        for stream in streams where stream.isSubtitle {
+            guard let index = stream.index else { continue }
+            let language = [stream.languageTag, stream.languageCode, stream.language]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first(where: { !$0.isEmpty })
+            if let language {
+                hints[index] = language
+            }
+        }
+        return hints
     }
 
     /// Subscribe to Aether's player surface so the view model's
