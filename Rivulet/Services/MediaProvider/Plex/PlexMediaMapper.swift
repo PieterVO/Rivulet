@@ -358,20 +358,19 @@ enum PlexMediaMapper {
                 mediaSource(media, part, serverURL: serverURL, authToken: authToken)
             }
         }
-        // Only surface user-added extras (those with a local file). IVA-supplied
-        // extras from Plex have no Part.file and stream from /services/iva/assets/;
-        // they're low quality and not what users expect in the carousel.
-        let localExtras = meta.allExtras.filter(\.hasLocalFile)
+        let allExtras = meta.allExtras
 
-        // Trailer button: first local trailer whose title matches the feature.
-        // Disc rips (Kino Lorber, Criterion, etc.) often bundle trailers for
-        // other films, so require a title match before wiring the action button.
-        let trailerURL: URL? = localExtras
+        // Trailer button: first trailer. Disc rips (Kino Lorber, Criterion, etc.)
+        // often bundle trailers for other films, so ideally we'd title-match, but
+        // Plex doesn't include Media[].Part[] on extras in the metadata response
+        // (hasLocalFile is always false), so we can't distinguish IVA streams from
+        // local files at this layer. Use first trailer as-is for now.
+        let trailerURL: URL? = allExtras
             .first(where: { ExtraSubtype.from(subtype: $0.subtype, extraType: $0.extraType).isTrailer })
             .flatMap { $0.key }
             .flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(authToken)") }
 
-        let extras: [MediaItemDetail.Extra] = localExtras.enumerated().map { idx, ex in
+        let extras: [MediaItemDetail.Extra] = allExtras.enumerated().map { idx, ex in
             MediaItemDetail.Extra(
                 id: ex.ratingKey ?? ex.key ?? "extra-\(idx)",
                 title: ex.title ?? "Extra",

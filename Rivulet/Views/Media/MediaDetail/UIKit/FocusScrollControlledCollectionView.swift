@@ -86,9 +86,19 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         let frame = cell.convert(cell.bounds, to: self)   // content coordinates
         let minY = -adjustedContentInset.top
         let maxY = max(minY, contentSize.height - bounds.height + adjustedContentInset.bottom)
-        // Top section = the EPISODES section, by index. (Not `cell is
-        // EpisodeCollectionCell` — trailers reuse that same cell class.)
-        let cellIndexPath = indexPath(for: cell)
+        // Top section = section 0 by index. (Not `cell is EpisodeCollectionCell`
+        // — trailers reuse that same cell class.) For shelf-host cells (Related
+        // rendered as a single full-width ShelfRowCell), the focused view is a
+        // nested subview and indexPath(for:) returns nil — walk up to the direct
+        // UICollectionViewCell child of self to resolve the section.
+        var cellIndexPath = indexPath(for: cell)
+        if cellIndexPath == nil {
+            var view: UIView = cell
+            while let parent = view.superview, !(parent is UICollectionView) { view = parent }
+            if let hostCell = view as? UICollectionViewCell {
+                cellIndexPath = indexPath(for: hostCell)
+            }
+        }
         let isTop = topSectionIndex != nil && cellIndexPath?.section == topSectionIndex
         focusedCellIsTopSection = isTop
         focusedEpisodeIndexPath = isTop ? cellIndexPath : nil
