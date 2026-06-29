@@ -275,6 +275,19 @@ From `Docs/DESIGN_GUIDE.md`:
 - No redundant icons/labels
 - No "just in case" features
 
+## PR Review Standard
+
+Every PR review — contributor or AI-generated — requires two assessments, not one:
+
+1. **Technical**: Will it work? Bugs, Swift 6 correctness, edge cases, regressions.
+2. **Fit**: Does it belong in Rivulet? Apply these filters:
+   - Does it match the design philosophy above (Simplicity First, no "just in case" features)?
+   - Is this better owned by the OS/platform? (If AVPlayer gets it for free, RPlayer should defer to the system rather than replicate.)
+   - Does it add ongoing maintenance surface the project has to own?
+   - Does it pull Rivulet toward a focused, calm product or away from it?
+
+Good code that adds the wrong thing is still a no. A verdict of MERGE requires both assessments to pass.
+
 ## Troubleshooting
 
 ### Focus Not Working in Overlay
