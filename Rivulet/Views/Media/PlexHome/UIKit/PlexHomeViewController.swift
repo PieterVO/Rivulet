@@ -472,6 +472,7 @@ final class PlexHomeViewController: UIViewController {
 
     private var hasMarkedFirstFrame = false
     private var hasLoadedRecommendations = false
+    private var isInitialHomeLoadPending = false
 
     /// Pending focus restoration after preview dismiss.
     private var pendingPreviewRestore: PreviewSourceTarget?
@@ -616,6 +617,7 @@ final class PlexHomeViewController: UIViewController {
         // frame already contains it on warm launches. Data-store refresh
         // below + the TMDB upgrade task will update the carousel later.
         selectHeroItemsIfNeeded()
+        primeInitialHomeLoadingStateIfNeeded()
 
         applySnapshot(animated: false)
         updateHomeState()
@@ -631,7 +633,9 @@ final class PlexHomeViewController: UIViewController {
                 await Perf.interval(.homeDataFetch) {
                     await dataStore.loadHubsIfNeeded()   // cache paint, fast
                 }
+                isInitialHomeLoadPending = false
                 selectHeroItemsIfNeeded()
+                updateHomeState()
             }
             // Deferred secondary content — fills in a beat after the home is up.
             Task { @MainActor in
@@ -701,6 +705,16 @@ final class PlexHomeViewController: UIViewController {
                 await dataStore.loadLibrariesIfNeeded()
             }
         }
+    }
+
+    private func primeInitialHomeLoadingStateIfNeeded() {
+        guard case .home = mode,
+              authManager.hasCredentials,
+              dataStore.homeItems.isEmpty,
+              dataStore.hubs.isEmpty,
+              dataStore.hubsError == nil,
+              !dataStore.isHomeContentReady else { return }
+        isInitialHomeLoadPending = true
     }
 
     // MARK: - Discover mode
@@ -1613,7 +1627,7 @@ final class PlexHomeViewController: UIViewController {
         let hubsEmpty: Bool
         switch mode {
         case .home:
-            isLoadingHubs = dataStore.isLoadingHubs
+            isLoadingHubs = dataStore.isLoadingHubs || isInitialHomeLoadPending
             hubsError = dataStore.hubsError
             // The home renders from the MediaItem projection (Stage 3), so
             // "empty" must key STRICTLY off `homeItems`. Do NOT fall back to
@@ -1650,6 +1664,7 @@ final class PlexHomeViewController: UIViewController {
         // Only the error/empty states carry a focusable button; track that so
         // preferredFocusEnvironments can steer the engine onto it (otherwise a
         // contentless Home can trap focus — see Docs/bugs/fresh-signin-blank-home.md).
+        let isWaitingForHero = shouldWaitForHeroBeforeContent(hubsEmpty: hubsEmpty)
         stateViewHasFocusableAction = false
         if !hasCredentials {
             stateView.configure(kind: .notConnected)
@@ -1657,7 +1672,7 @@ final class PlexHomeViewController: UIViewController {
             collectionView.isHidden = true
             backdropView.isHidden = true
             connectionBanner.isHidden = true
-        } else if isLoadingHubs && hubsEmpty {
+        } else if (isLoadingHubs && hubsEmpty) || isWaitingForHero {
             stateView.configure(kind: .loading)
             stateView.isHidden = false
             collectionView.isHidden = true
@@ -1695,7 +1710,7 @@ final class PlexHomeViewController: UIViewController {
         // launch since the UIKit cutover rode the splash's full 15s safety
         // timeout. Ready = any SETTLED state (content, empty, error): the
         // splash exists to cover the initial load, not to mask outcomes.
-        if hasCredentials, !(isLoadingHubs && hubsEmpty), !dataStore.isHomeContentReady {
+        if hasCredentials, !(isLoadingHubs && hubsEmpty), !isWaitingForHero, !dataStore.isHomeContentReady {
             // Deferred: updateHomeState can run inside viewDidLoad during a
             // SwiftUI view update (the bridge's makeUIViewController), and
             // publishing @Published state there logs "Publishing changes from
@@ -1710,9 +1725,17 @@ final class PlexHomeViewController: UIViewController {
         // state (notConnected / error / empty, or hero disabled) the backdrop
         // is hidden and no image will load — mark the hero ready now so the
         // splash dismisses on content alone instead of riding the cap/timeout.
-        if hasCredentials, !(isLoadingHubs && hubsEmpty), backdropView.isHidden {
+        if hasCredentials, !(isLoadingHubs && hubsEmpty), !isWaitingForHero, backdropView.isHidden {
             markHeroReady()
         }
+    }
+
+    private func shouldWaitForHeroBeforeContent(hubsEmpty: Bool) -> Bool {
+        guard case .home = mode,
+              showHomeHero,
+              !hubsEmpty,
+              !dataStore.isHomeHeroReady else { return false }
+        return true
     }
 
     private func updateConnectionBanner(_ shouldShow: Bool) {
@@ -2200,6 +2223,13 @@ final class PlexHomeViewController: UIViewController {
 
         dataStore.$isLoadingHubs
             .merge(with: dataStore.$hubsError.map { _ in false })
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateHomeState()
+            }
+            .store(in: &dataStoreObservers)
+
+        dataStore.$isHomeHeroReady
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateHomeState()
@@ -2939,6 +2969,11 @@ final class PlexHomeViewController: UIViewController {
                 dataStore.cacheHeroItems(candidates, forLibrary: cacheKey)
                 updateBackdropForCurrentHeroItem()
                 applySnapshot(animated: false)
+            } else if !sourceHubs.isEmpty {
+                // Hubs are loaded but none can drive a hero. Release the
+                // launch/loading gate instead of waiting for an image that will
+                // never be requested.
+                setHeroBackdrop(url: nil)
             }
         }
 

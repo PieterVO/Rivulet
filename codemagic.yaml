@@ -15,7 +15,7 @@ workflows:
 
     environment:
       groups:
-        - sentry
+        - rivulet
       vars:
         XCODE_SCHEME: "Rivulet"
         XCODE_PROJECT: "Rivulet.xcodeproj"
@@ -32,32 +32,56 @@ workflows:
       cancel_previous_builds: true
 
     scripts:
-      - name: Set up keychain for signing
+      - name: Initialize keychain
         script: keychain initialize
 
-      - name: Fetch signing files (tvOS App Store)
+      - name: Generate a private key for the distribution certificate
         script: |
+          # fetch-signing-files --create needs a private key to back the new
+          # distribution certificate. Generate a fresh RSA key for this build.
+          openssl genrsa -out "$CM_BUILD_DIR/cert_key.pem" 2048
+
+      - name: Fetch or create signing files (tvOS App Store)
+        script: |
+          # --create generates the distribution certificate (backed by the
+          # key above) AND any missing provisioning profiles for the app and
+          # its TopShelf extension (com.gstudios.rivulet.*).
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --platform TV_OS \
-            --type IOS_APP_STORE \
+            --platform IOS \
+            --type TVOS_APP_STORE \
+            --certificate-key @file:"$CM_BUILD_DIR/cert_key.pem" \
             --create
-          # The TopShelf extension has its own bundle id; fetch its profile too.
           app-store-connect fetch-signing-files "${BUNDLE_ID}.TopShelfExtension" \
-            --platform TV_OS \
-            --type IOS_APP_STORE \
+            --platform IOS \
+            --type TVOS_APP_STORE \
+            --certificate-key @file:"$CM_BUILD_DIR/cert_key.pem" \
             --create
 
-      - name: Add certs to keychain
+      - name: Add certificates to keychain
         script: keychain add-certificates
 
-      - name: Apply automatic signing settings to Xcode project
+      - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
+
+      - name: Generate Secrets.swift from env
+        script: |
+          # Secrets.swift is gitignored (holds the Sentry DSN); recreate it on
+          # CI from the SENTRY_DSN env var (group `rivulet`). Falls back to the
+          # template's placeholder if unset so the build still compiles.
+          cat > Rivulet/Config/Secrets.swift <<EOF
+          import Foundation
+
+          enum Secrets {
+              static let sentryDSN = "${SENTRY_DSN:-}"
+          }
+          EOF
+          echo "Wrote Rivulet/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
 
       - name: Set build number from Codemagic counter
         script: |
           # Use App Store Connect's latest TestFlight build number + 1 so we
           # never collide with an existing build. Falls back to PROJECT_BUILD_NUMBER.
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" --platform TV_OS 2>/dev/null || echo "")
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "")
           if [ -n "$LATEST" ]; then
             NEXT=$(($LATEST + 1))
           else

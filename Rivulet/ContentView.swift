@@ -130,7 +130,7 @@ struct ContentView: View {
     private func evaluateSplashDismissal(trigger: String) {
         guard showSplash else { return }
 
-        let heroEnabled = UserDefaults.standard.bool(forKey: "showHomeHero")
+        let heroEnabled = (UserDefaults.standard.object(forKey: "showHomeHero") as? Bool) ?? true
         let contentReady = dataStore.isHomeContentReady
         let heroReady = dataStore.isHomeHeroReady
 
