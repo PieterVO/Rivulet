@@ -380,7 +380,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = TopShelfExtension/TopShelfExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 55;
+				CURRENT_PROJECT_VERSION = 56;
 				DEVELOPMENT_TEAM = ZHB786H6YN;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TopShelfExtension/Info.plist;
@@ -411,7 +411,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = TopShelfExtension/TopShelfExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 55;
+				CURRENT_PROJECT_VERSION = 56;
 				DEVELOPMENT_TEAM = ZHB786H6YN;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TopShelfExtension/Info.plist;
