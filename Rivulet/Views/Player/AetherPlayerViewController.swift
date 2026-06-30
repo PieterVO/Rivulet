@@ -42,7 +42,24 @@ import Combine
 import CoreMedia
 import SwiftUI
 
-class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewControllerDelegate {
+class AetherPlayerViewController: AVPlayerViewController, AVPlayerViewControllerDelegate {
+
+    // MARK: - Inherited (inlined from BaseAVPlayerViewController)
+
+    let viewModel: UniversalPlayerViewModel
+    var cancellables = Set<AnyCancellable>()
+    private var progressTimer: Timer?
+    private var lastReportedTime: TimeInterval = -1
+    var onDismiss: (() -> Void)?
+
+    init(viewModel: UniversalPlayerViewModel) {
+        self.viewModel = viewModel
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     // MARK: - Subtitle state
 
@@ -91,10 +108,115 @@ class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewContro
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        allowsPictureInPicturePlayback = false
+        bindContextualActions()
         delegate = self
         mountSubtitleOverlay()
         observeControlsVisibility()
         observeCaptionAppearance()
+        bindPlayerSpecific()
+    }
+
+    // MARK: - Contextual actions (inlined from BaseAVPlayerViewController)
+
+    private func bindContextualActions() {
+        viewModel.$activeMarker
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] marker in
+                guard let self else { return }
+                if marker != nil {
+                    let label = self.viewModel.skipButtonLabel
+                    self.contextualActions = [
+                        UIAction(title: label, image: UIImage(systemName: "forward.fill")) { [weak self] _ in
+                            guard let self else { return }
+                            Task { await self.viewModel.skipActiveMarker() }
+                        }
+                    ]
+                } else {
+                    self.contextualActions = []
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Lifecycle (inlined from BaseAVPlayerViewController)
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        NotificationCenter.default.post(name: .plexPlaybackStarted, object: nil)
+        Task { @MainActor in
+            await viewModel.startPlayback()
+        }
+        startProgressReporting()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if isBeingDismissed || isMovingFromParent {
+            stopProgressReporting()
+            reportFinalProgress()
+            NotificationCenter.default.post(name: .plexPlaybackStopped, object: nil)
+            viewModel.stopPlayback()
+            onDismiss?()
+        }
+    }
+
+    // MARK: - Plex Progress Reporting (inlined from BaseAVPlayerViewController)
+
+    private func startProgressReporting() {
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            self?.reportCurrentProgress()
+        }
+    }
+
+    private func stopProgressReporting() {
+        progressTimer?.invalidate()
+        progressTimer = nil
+    }
+
+    private func reportCurrentProgress() {
+        let time = viewModel.currentTime
+        guard abs(time - lastReportedTime) >= 5 else { return }
+        lastReportedTime = time
+
+        let ratingKey = viewModel.metadata.ratingKey ?? ""
+        let duration = viewModel.duration
+        let state = viewModel.isPlaying ? "playing" : "paused"
+
+        Task {
+            await PlexProgressReporter.shared.reportProgress(
+                ratingKey: ratingKey,
+                time: time,
+                duration: duration,
+                state: state
+            )
+        }
+    }
+
+    private func reportFinalProgress() {
+        let ratingKey = viewModel.metadata.ratingKey ?? ""
+        let time = viewModel.currentTime
+        let duration = viewModel.duration
+
+        Task {
+            await PlexProgressReporter.shared.reportProgress(
+                ratingKey: ratingKey,
+                time: time,
+                duration: duration,
+                state: "stopped",
+                forceReport: true
+            )
+
+            if duration > 0 && time / duration > 0.9 {
+                await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey)
+            }
+
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+            await MainActor.run {
+                NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+            }
+        }
     }
 
     // MARK: - Overlay mounting
@@ -309,7 +431,7 @@ class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewContro
 
     // MARK: - Player binding
 
-    override func bindPlayerSpecific() {
+    private func bindPlayerSpecific() {
         // Bind AVPlayer instance (existing behavior). Re-arm the picker
         // poll timer on every AVPlayer swap so we track the fresh item.
         viewModel.$aetherPlayer
@@ -429,15 +551,15 @@ class AetherPlayerViewController: BaseAVPlayerViewController, AVPlayerViewContro
             if let idx = aetherTrackIndex(for: option, in: group) {
                 // A decoy rendition advertised by Aether: the host decodes the
                 // selected text or bitmap track and paints the overlay.
-                viewModel.aetherPlayer?.selectSubtitleTrack(id: idx)
+                viewModel.selectAetherSubtitleTrackFromNativePicker(aetherTrackId: idx)
             } else {
                 // A native option surfaced by AVPlayer itself, or an option we
                 // don't own. Disable the host overlay so we never double-render.
-                viewModel.aetherPlayer?.selectSubtitleTrack(id: nil)
+                viewModel.selectAetherSubtitleTrackFromNativePicker(aetherTrackId: nil)
             }
         } else {
             // User chose "Off".
-            viewModel.aetherPlayer?.selectSubtitleTrack(id: nil)
+            viewModel.selectAetherSubtitleTrackFromNativePicker(aetherTrackId: nil)
         }
     }
 
