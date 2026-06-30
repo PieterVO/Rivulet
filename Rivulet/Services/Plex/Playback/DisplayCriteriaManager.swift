@@ -23,6 +23,7 @@ final class DisplayCriteriaManager {
     static let shared = DisplayCriteriaManager()
 
     private var hasSetCriteria = false
+    private var lastCriteriaWasHDR = false
     private var assetForCriteria: AVURLAsset?
 
     private init() {}
@@ -54,6 +55,7 @@ final class DisplayCriteriaManager {
         do {
             // Load the display criteria from the asset (tvOS 16+ API)
             let criteria = try await asset.load(.preferredDisplayCriteria)
+            lastCriteriaWasHDR = false
             setDisplayCriteria(criteria)
         } catch {
             playerDebugLog("🖥️ DisplayCriteria: Failed to load display criteria: \(error.localizedDescription)")
@@ -66,6 +68,7 @@ final class DisplayCriteriaManager {
     func configureFromAsset(_ asset: AVAsset) async {
         do {
             let criteria = try await asset.load(.preferredDisplayCriteria)
+            lastCriteriaWasHDR = false
             setDisplayCriteria(criteria)
         } catch {
             playerDebugLog("🖥️ DisplayCriteria: Failed to load criteria from asset: \(error.localizedDescription)")
@@ -147,7 +150,65 @@ final class DisplayCriteriaManager {
 
         // Create display criteria from format description
         let criteria = AVDisplayCriteria(refreshRate: frameRate, formatDescription: formatDesc)
+        lastCriteriaWasHDR = isDolbyVision || isHDR10 || isHLG
         setDisplayCriteria(criteria)
+    }
+
+    /// Wait briefly for tvOS to settle the HDMI/display-mode switch after
+    /// preferredDisplayCriteria is written. AVPlayerViewController gets this
+    /// internally; RPlayer must avoid presenting first samples during the
+    /// dynamic-range handshake.
+    func waitForDisplaySwitchIfNeeded() async {
+        guard hasSetCriteria, let window = getKeyWindow() else { return }
+
+        let displayManager = window.avDisplayManager
+        guard displayManager.isDisplayCriteriaMatchingEnabled else { return }
+
+        let screen = window.screen
+        if lastCriteriaWasHDR && screen.currentEDRHeadroom > 1.001 {
+            return
+        }
+
+        var sawSwitchStart = false
+        for _ in 0..<100 {
+            if displayManager.isDisplayModeSwitchInProgress {
+                sawSwitchStart = true
+                break
+            }
+            if lastCriteriaWasHDR && screen.currentEDRHeadroom > 1.001 {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        guard sawSwitchStart else {
+            if lastCriteriaWasHDR {
+                playerDebugLog(
+                    "🖥️ DisplayCriteria: HDR switch did not start within 1000ms " +
+                    "(EDR headroom \(String(format: "%.2f", screen.currentEDRHeadroom)))"
+                )
+            }
+            return
+        }
+
+        for tick in 0..<50 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if !displayManager.isDisplayModeSwitchInProgress {
+                if lastCriteriaWasHDR && screen.currentEDRHeadroom <= 1.001 {
+                    let totalMs = (tick + 1) * 100 + 1000
+                    playerDebugLog(
+                        "🖥️ DisplayCriteria: HDR switch settled after ~\(totalMs)ms " +
+                        "but EDR headroom is still \(String(format: "%.2f", screen.currentEDRHeadroom))"
+                    )
+                }
+                return
+            }
+        }
+
+        playerDebugLog(
+            "🖥️ DisplayCriteria: display-mode switch did not settle within 5s " +
+            "(EDR headroom \(String(format: "%.2f", screen.currentEDRHeadroom)))"
+        )
     }
 
     /// Reset display criteria to default (SDR, system frame rate)
@@ -162,6 +223,7 @@ final class DisplayCriteriaManager {
 
         displayManager.preferredDisplayCriteria = nil
         hasSetCriteria = false
+        lastCriteriaWasHDR = false
         assetForCriteria = nil  // Release the asset
     }
 
@@ -256,6 +318,10 @@ final class DisplayCriteriaManager {
 
     /// Get the display manager from the key window
     private func getDisplayManager() -> AVDisplayManager? {
+        getKeyWindow()?.avDisplayManager
+    }
+
+    private func getKeyWindow() -> UIWindow? {
         // On tvOS, get the key window's display manager
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let window = scene.windows.first else {
@@ -271,6 +337,6 @@ final class DisplayCriteriaManager {
         }
         #endif
 
-        return window.avDisplayManager
+        return window
     }
 }

@@ -134,6 +134,28 @@ enum FFmpegError: Error, Sendable {
     }
 }
 
+/// Open/probe budget for FFmpeg demuxer startup. Rivulet gets most track
+/// metadata from Plex before opening the file, so playback can use a bounded
+/// probe instead of letting sparse streams or cover art drag startup out.
+struct FFmpegOpenProfile: Sendable {
+    let probesize: Int64
+    let maxAnalyzeDuration: Int64
+
+    /// Balanced for RPlayer VOD: large enough for multi-track MKVs, bounded
+    /// enough to avoid long startup probes on slow remote sources.
+    static let rivuletPlayback = FFmpegOpenProfile(
+        probesize: 24 * 1024 * 1024,
+        maxAnalyzeDuration: 20 * 1_000_000
+    )
+
+    /// Full probe for diagnostic or future call sites that need FFmpeg's
+    /// richest stream discovery.
+    static let fullPlayback = FFmpegOpenProfile(
+        probesize: 50 * 1024 * 1024,
+        maxAnalyzeDuration: 60 * 1_000_000
+    )
+}
+
 // MARK: - Codec Type Constants
 
 private let kCMVideoCodecType_DolbyVisionHEVC: CMVideoCodecType = 0x64766831
@@ -193,20 +215,42 @@ final class FFmpegDemuxer: @unchecked Sendable {
     private var invalidAudioTimestampCount = 0
     private var nonMonotonicAudioTimestampCount = 0
     private var lastAudioPacketPTSSeconds: Double?
+    private nonisolated(unsafe) let interruptFlag: UnsafeMutablePointer<Int32> = {
+        let ptr = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        ptr.initialize(to: 0)
+        return ptr
+    }()
 
-    deinit { close() }
+    deinit {
+        close()
+        interruptFlag.deinitialize(count: 1)
+        interruptFlag.deallocate()
+    }
 
     // MARK: - Open
 
-    func open(url: URL, headers: [String: String]? = nil, forceDolbyVision: Bool = false) throws {
+    func open(
+        url: URL,
+        headers: [String: String]? = nil,
+        forceDolbyVision: Bool = false,
+        profile: FFmpegOpenProfile = .rivuletPlayback
+    ) throws {
         lock.lock()
         defer { lock.unlock() }
 
         guard !isOpen else { throw FFmpegError.alreadyOpen }
+        interruptFlag.pointee = 0
 
         guard let ctx = avformat_alloc_context() else {
             throw FFmpegError.allocationFailed
         }
+        ctx.pointee.interrupt_callback.callback = { opaquePtr -> Int32 in
+            guard let ptr = opaquePtr?.assumingMemoryBound(to: Int32.self) else { return 0 }
+            return ptr.pointee
+        }
+        ctx.pointee.interrupt_callback.opaque = UnsafeMutableRawPointer(interruptFlag)
+        ctx.pointee.probesize = profile.probesize
+        ctx.pointee.max_analyze_duration = profile.maxAnalyzeDuration
 
         // Disable stream limit — some MKVs have 90+ streams (video + 15 audio + 70 subtitle).
         // Throughput for high-stream-count files is handled by discarding unwanted packets
@@ -223,6 +267,8 @@ final class FFmpegDemuxer: @unchecked Sendable {
 
         var options: OpaquePointer? = nil
         var localAVIOContext: UnsafeMutablePointer<AVIOContext>? = nil
+        av_dict_set(&options, "probesize", "\(profile.probesize)", 0)
+        av_dict_set(&options, "analyzeduration", "\(profile.maxAnalyzeDuration)", 0)
 
         if useURLSessionIO {
             let source = URLSessionAVIOSource(url: url, headers: headers)
@@ -402,6 +448,19 @@ final class FFmpegDemuxer: @unchecked Sendable {
         }
     }
 
+    /// Ask blocking FFmpeg I/O/probe calls to abort as soon as libavformat
+    /// next consults its interrupt callback. Safe to call from another actor
+    /// while `open` or `readPacket` is active.
+    nonisolated func cancelIO() {
+        interruptFlag.pointee = 1
+    }
+
+    /// Clear a previous I/O interruption before reusing the same demuxer for
+    /// a seek, track switch, or fresh read loop.
+    nonisolated func resumeIO() {
+        interruptFlag.pointee = 0
+    }
+
     // MARK: - Seek
 
     func seek(to time: TimeInterval) throws {
@@ -471,6 +530,7 @@ final class FFmpegDemuxer: @unchecked Sendable {
     // MARK: - Close
 
     func close() {
+        cancelIO()
         lock.lock()
         defer { lock.unlock() }
 
@@ -1642,9 +1702,18 @@ final class FFmpegDemuxer: @unchecked Sendable {
     /// FFmpeg libraries are not linked
     static let isAvailable = false
 
-    func open(url: URL, headers: [String: String]? = nil, forceDolbyVision: Bool = false) throws {
+    func open(
+        url: URL,
+        headers: [String: String]? = nil,
+        forceDolbyVision: Bool = false,
+        profile: FFmpegOpenProfile = .rivuletPlayback
+    ) throws {
         throw FFmpegError.notAvailable
     }
+
+    nonisolated func cancelIO() {}
+
+    nonisolated func resumeIO() {}
 
     func readPacket() throws -> DemuxedPacket? {
         throw FFmpegError.notAvailable

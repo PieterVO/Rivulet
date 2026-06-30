@@ -54,12 +54,23 @@ final class AetherPlayer: PlayerProtocol {
     /// (embedded or sidecar) is selected and the engine has cue data.
     @Published private(set) var isSubtitleActive: Bool = false
 
+    /// Mirrors engine.$isBuffering. Aether keeps its playback state as
+    /// `.playing` during AVPlayer waits to avoid transport flicker, so Rivulet
+    /// observes this separately for spinner/stall handling.
+    @Published private(set) var isBuffering: Bool = false
+
+    /// Active Aether subtitle stream index, or nil when subtitles are off.
+    @Published private(set) var activeSubtitleTrackId: Int?
+
+    /// Active Aether audio stream index, or nil before the engine resolves one.
+    @Published private(set) var activeAudioTrackId: Int?
+
     /// Source-timeline position in seconds, mirroring clock.$currentTime.
     /// Equal to currentTime on all current Aether paths (PlaybackClock
     /// unifies source-PTS and wall-clock onto a single value).
     @Published private(set) var sourceTime: Double = 0
 
-    private var _audioTracks: [MediaTrack] = []
+    @Published private(set) var audioTracks: [MediaTrack] = []
     private var _subtitleTracks: [MediaTrack] = []
 
     init() {
@@ -141,6 +152,27 @@ final class AetherPlayer: PlayerProtocol {
             }
             .store(in: &cancellables)
 
+        engine.$isBuffering
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] buffering in
+                self?.isBuffering = buffering
+            }
+            .store(in: &cancellables)
+
+        engine.$activeSubtitleTrackIndex
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] id in
+                self?.activeSubtitleTrackId = id
+            }
+            .store(in: &cancellables)
+
+        engine.$activeAudioTrackIndex
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] id in
+                self?.activeAudioTrackId = id
+            }
+            .store(in: &cancellables)
+
         engine.$currentAVPlayer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avp in
@@ -151,7 +183,7 @@ final class AetherPlayer: PlayerProtocol {
         engine.$audioTracks
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tracks in
-                self?._audioTracks = tracks.map(Self.translateTrack)
+                self?.audioTracks = tracks.map(Self.translateTrack)
             }
             .store(in: &cancellables)
 
@@ -176,13 +208,26 @@ final class AetherPlayer: PlayerProtocol {
     }
 
     private static func translateTrack(_ t: TrackInfo) -> MediaTrack {
-        MediaTrack(
+        // Build a human-readable name from whatever Aether provides.
+        // FFmpeg stream names are often empty for audio; fall back through
+        // localized language name → raw language tag → codec so the picker
+        // always shows something meaningful.
+        let name: String
+        if !t.name.isEmpty {
+            name = t.name
+        } else if let lang = t.language, !lang.isEmpty {
+            name = Locale.current.localizedString(forLanguageCode: lang) ?? lang
+        } else {
+            name = t.codec.uppercased()
+        }
+        return MediaTrack(
             id: t.id,
-            name: t.name,
+            name: name,
             language: t.language,
             languageCode: t.language,
             codec: t.codec,
             isDefault: t.isDefault,
+            isHearingImpaired: t.isHearingImpaired,
             channels: t.channels > 0 ? t.channels : nil
         )
     }
@@ -245,7 +290,9 @@ final class AetherPlayer: PlayerProtocol {
         url: URL,
         headers: [String: String]?,
         startTime: TimeInterval?,
-        subtitleLanguageHintsByStreamIndex: [Int: String]
+        subtitleLanguageHintsByStreamIndex: [Int: String],
+        preferredAudioLanguages: [String] = [],
+        preferredSubtitleLanguages: [String] = []
     ) async throws {
         // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
         // DTS-HD MA, MP3, Opus). FLAC encode is ~3x realtime on A15 vs
@@ -265,12 +312,15 @@ final class AetherPlayer: PlayerProtocol {
             // Combined native-picker subtitles: advertiseSubtitleRenditions
             // creates AVKit picker entries for text and bitmap tracks; the
             // host maps selections back to Aether and paints the overlay.
-            // prepareNativeSubtitles keeps the mov_text mux path available,
-            // but AVPlayer does not expose those in-segment tracks as picker
-            // options on this loopback HLS path.
+            // Keep prepareNativeSubtitles off here: Rivulet wants bitmap/image
+            // subtitles in the native list, which requires the decoy rendition
+            // path and host overlay. Enabling native mov_text in parallel can
+            // double-render text subtitles.
             advertiseSubtitleRenditions: true,
-            prepareNativeSubtitles: true,
-            subtitleLanguageHintsByStreamIndex: subtitleLanguageHintsByStreamIndex
+            prepareNativeSubtitles: false,
+            subtitleLanguageHintsByStreamIndex: subtitleLanguageHintsByStreamIndex,
+            preferredAudioLanguages: preferredAudioLanguages,
+            preferredSubtitleLanguages: preferredSubtitleLanguages
         )
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
@@ -300,19 +350,11 @@ final class AetherPlayer: PlayerProtocol {
 
     // MARK: - Tracks
 
-    var audioTracks: [MediaTrack] { _audioTracks }
     var subtitleTracks: [MediaTrack] { _subtitleTracks }
-    var currentAudioTrackId: Int? { engine.activeAudioTrackIndex }
-    var currentSubtitleTrackId: Int? { nil }  // Aether exposes activeAudioTrackIndex but not a parallel subtitle index publisher in 2.0.0
+    var currentAudioTrackId: Int? { activeAudioTrackId }
+    var currentSubtitleTrackId: Int? { activeSubtitleTrackId }
 
     func selectAudioTrack(id: Int) {
-        // TODO: id is currently a Plex stream ID (e.g. 753882) when called
-        // from UniversalPlayerViewModel's selectAudioTrackWithoutSaving,
-        // because the VM's audioTracks publishes Plex-source tracks not
-        // Aether-source ones. Aether expects an AVStream index (e.g. 1).
-        // Mapping requires either routing the picker through Aether's
-        // own track list, or translating Plex stream order -> Aether
-        // index by codec/language match. For now, no-op gracefully.
         engine.selectAudioTrack(index: id)
     }
 

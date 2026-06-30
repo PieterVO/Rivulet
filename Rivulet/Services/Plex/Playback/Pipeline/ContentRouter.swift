@@ -4,8 +4,8 @@
 //
 //  Decides the playback path for content:
 //    1. AVPlayer direct — MP4/MOV with native audio, no DV P7
-//    2. Local remux — DV P7 only (Plex can't do P7→P8.1 conversion)
-//    3. Plex HLS — MKV remux, DTS/TrueHD transcode, live TV, or fallback
+//    2. Local remux — DV P7, HLG in non-native containers, and local remux-enabled content
+//    3. Plex HLS — unsupported video codecs, live TV, or fallback
 //
 
 import Foundation
@@ -15,10 +15,10 @@ enum PlaybackRoute: Sendable, CustomStringConvertible {
     /// AVPlayer opens Plex URL directly — MP4/MOV with native audio
     case avPlayerDirect(url: URL, headers: [String: String]?)
 
-    /// Local remux server — DV P7 remuxed to HLS fMP4 with P8.1 conversion
+    /// Local remux server — locally remuxed to HLS fMP4 for AVPlayer
     case localRemux(url: URL, headers: [String: String]?, analysis: RemuxAnalysis)
 
-    /// HLS via server-side remux/transcode — MKV remux, DTS transcode, live TV
+    /// HLS via server-side remux/transcode — unsupported video, live TV, or fallback
     case hls(url: URL, headers: [String: String]?)
 
     /// AetherEngine — FFmpeg demux + HLS-fMP4 remux + AVPlayer with
@@ -152,8 +152,8 @@ struct ContentRouter {
     ///
     /// Three paths:
     /// 1. **AVPlayer direct** — MP4/MOV with native audio, no DV P7
-    /// 2. **Local remux** — DV P7 only (Plex can't do P7→P8.1 conversion)
-    /// 3. **Plex HLS** — MKV remux, DTS/TrueHD transcode, live TV, or fallback
+    /// 2. **Local remux** — DV P7, HLG in non-native containers, or local remux-enabled content
+    /// 3. **Plex HLS** — unsupported video codecs, live TV, or fallback
     static func plan(for context: ContentRoutingContext) -> PlaybackPlan {
         let audioCodec = primaryAudioCodec(from: context.metadata) ?? "unknown"
         let container = context.metadata.Media?.first?.container ?? "unknown"
@@ -185,32 +185,15 @@ struct ContentRouter {
             )
         }
 
-        // Force a server-side transcode for content the rivuletPlayer
-        // pipeline can't render correctly. Two reasons:
-        //  • Apple TV has no native decoder for the source video codec
-        //    (MPEG-2, VC-1, VP9, AV1) — direct-play would produce
-        //    "Couldn't Load Video".
-        //  • Content uses HLG HDR — AVSampleBufferDisplayLayer on tvOS
-        //    accepts and decodes HLG frames without errors but renders
-        //    them black. tvOS's HLG→HDR10 internal conversion only fires
-        //    on the AVPlayer code path. Forcing a Plex transcode lands
-        //    H.264 SDR (or HDR10 if Plex's profile permits) on AVPlayer,
-        //    which the panel can actually display.
-        // The URL builder downstream picks up the same condition via
-        // `forceVideoTranscode` so the HLS request is shaped as a real
-        // transcode (directPlay=0, directStream=0, h264 target) rather
-        // than a direct-play remux.
+        // Force a server-side transcode only when Apple TV has no decoder for
+        // the source video codec. HLG is handled below by forcing an AVPlayer
+        // render path, preferably direct or local-remuxed so the server stays
+        // out of conversion.
         if Self.requiresVideoTranscode(metadata: context.metadata) {
             let videoCodec = Self.primaryVideoCodec(from: context.metadata)?.lowercased() ?? "unknown"
-            let isHLG = Self.isHLGContent(metadata: context.metadata)
-            if isHLG {
-                reasoning.append("video_is_hlg_hdr_not_renderable_via_avsbl")
-            } else {
-                reasoning.append("video_codec_requires_transcode_\(videoCodec)")
-            }
+            reasoning.append("video_codec_requires_transcode_\(videoCodec)")
             let hls = buildHLSRoute(context: context)
-            let why = isHLG ? "HLG HDR not renderable via AVSampleBufferDisplayLayer" : "codec requires transcode"
-            playerDebugLog("[ContentRouter] \(container) | video=\(videoCodec) audio=\(audioCodec) → HLS (\(why))")
+            playerDebugLog("[ContentRouter] \(container) | video=\(videoCodec) audio=\(audioCodec) → HLS (codec requires transcode)")
             return PlaybackPlan(
                 policy: context.playbackPolicy,
                 primary: hls,
@@ -222,6 +205,7 @@ struct ContentRouter {
         // Analyze content for remux requirements
         let analysis = RemuxContentAnalyzer.analyze(metadata: context.metadata)
         let hlsFallback = buildHLSRoute(context: context)
+        let isHLG = Self.isHLGContent(metadata: context.metadata)
 
         // Aether selected: route ALL VOD to Aether. Its FFmpeg backend
         // demuxes every container/codec (SW-decoding AV1/MPEG-2/VC-1; DV
@@ -262,9 +246,14 @@ struct ContentRouter {
             )
         }
 
-        // Path 1: AVPlayer direct — native container + native audio + no DV P7
+        // Path 1: AVPlayer direct — native container + native audio + no DV P7.
+        // HLG is intentionally allowed here because AVPlayer owns the render
+        // path and gets tvOS's HLG handling.
         if !analysis.needsRemux, let direct = buildAVPlayerDirectRoute(context: context) {
             reasoning.append(contentsOf: analysis.reasoning)
+            if isHLG {
+                reasoning.append("video_is_hlg_hdr_use_avplayer_direct")
+            }
             playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → AVPlayerDirect")
             return PlaybackPlan(
                 policy: context.playbackPolicy,
@@ -274,17 +263,20 @@ struct ContentRouter {
             )
         }
 
-        // Path 2: Local remux — FFmpeg demuxes locally, remuxes to fMP4 HLS for AVPlayer
-        // Used when: user enabled local remux AND content needs remux, OR DV P7 conversion needed
-        if analysis.needsRemux, context.useLocalRemux || analysis.needsDVConversion {
+        // Path 2: Local remux — FFmpeg demuxes locally, remuxes to fMP4 HLS for AVPlayer.
+        // Used when: user enabled local remux AND content needs remux, DV P7 conversion
+        // is needed, or HLG needs AVPlayer rendering while avoiding a server transcode.
+        if analysis.needsRemux, context.useLocalRemux || analysis.needsDVConversion || isHLG {
             if let remuxRoute = buildLocalRemuxRoute(context: context, analysis: analysis) {
                 reasoning.append(contentsOf: analysis.reasoning)
                 if analysis.needsDVConversion {
                     reasoning.append("local_remux_dv_conversion")
+                } else if isHLG {
+                    reasoning.append("local_remux_hlg_avplayer_render_path")
                 } else {
                     reasoning.append("local_remux_user_enabled")
                 }
-                let reason = analysis.needsDVConversion ? "DV P7 conversion" : "local remux enabled"
+                let reason = analysis.needsDVConversion ? "DV P7 conversion" : (isHLG ? "HLG AVPlayer render path" : "local remux enabled")
                 playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → LocalRemux (\(reason))")
                 return PlaybackPlan(
                     policy: context.playbackPolicy,
@@ -328,24 +320,22 @@ struct ContentRouter {
     }
 
     /// Convenience: does this metadata's video stream require a
-    /// server-side transcode? Returns true for both unsupported codecs
-    /// (MPEG-2 / VC-1 / VP9 / AV1) and HLG HDR — see `plan(for:)` for
-    /// rationale on the HLG path.
+    /// server-side transcode? Returns true only for unsupported codecs
+    /// (MPEG-2 / VC-1 / VP9 / AV1 / MPEG-4 Part 2). HLG is not a codec
+    /// transcode requirement; it is routed to AVPlayer direct/local remux
+    /// so tvOS owns HDR presentation without involving the server.
     static func requiresVideoTranscode(metadata: PlexMetadata) -> Bool {
         if let codec = primaryVideoCodec(from: metadata), !codec.isEmpty,
            requiresTranscode(videoCodec: codec) {
             return true
         }
-        if isHLGContent(metadata: metadata) {
-            return true
-        }
         return false
     }
 
-    /// Whether the primary video stream is HLG HDR. Used to force a
-    /// server-side transcode: AVSampleBufferDisplayLayer on tvOS doesn't
-    /// trigger the platform's HLG→HDR10 conversion that AVPlayer gets
-    /// for free, and renders HLG content black despite decoding frames.
+    /// Whether the primary video stream is HLG HDR. AVSampleBufferDisplayLayer
+    /// on tvOS can decode these frames but does not get the same platform HLG
+    /// presentation behavior as AVPlayer, so HLG is forced onto AVPlayer's
+    /// direct/local-remux render path.
     static func isHLGContent(metadata: PlexMetadata) -> Bool {
         guard let stream = primaryVideoStream(from: metadata),
               let trc = stream.colorTrc?.lowercased() else {

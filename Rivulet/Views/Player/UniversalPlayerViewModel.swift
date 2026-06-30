@@ -493,6 +493,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var seekIndicatorTimer: Timer?
     private var pausedPosterTimer: Timer?
     private let pausedPosterDelay: TimeInterval = 5.0
+    private var aetherStallWatchdogTask: Task<Void, Never>?
+    private let aetherStallRecoveryDelay: TimeInterval = 20
+    private let aetherStallFailureDelay: TimeInterval = 20
 
     // MARK: - Playback Context
 
@@ -1120,14 +1123,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Fetch season/show poster for Now Playing artwork (episodes)
         await fetchSeasonPosterIfNeeded()
 
-        // RivuletPlayer's pipeline is direct-play / progressive-file
-        // only — its loadHLS only works as a fallback against a
-        // pre-built transcode URL stored on `streamURL`, and the
-        // ContentRouter `.hls(url:)` route carries just the server
-        // base. When the source video codec has no Apple TV decoder
-        // (e.g. MPEG-2, VC-1) we must transcode, and only the
-        // AVPlayer path consumes the resulting HLS stream end-to-end.
+        // RivuletPlayer's direct pipeline is progressive-file/sample-buffer
+        // only. Unsupported video codecs must use AVPlayer's Plex HLS
+        // transcode path; HLG uses AVPlayer direct/local-remux so tvOS owns
+        // HDR presentation without asking the server to convert it.
         let mustUseAVPlayer = ContentRouter.requiresVideoTranscode(metadata: metadata)
+            || ContentRouter.isHLGContent(metadata: metadata)
 
         // Player dispatch: .rivulet uses RivuletPlayer (unless the source
         // codec has no Apple TV decoder and must transcode through AVPlayer's
@@ -1155,6 +1156,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             DisplayCriteriaManager.shared.configureForContent(
                 videoStream: metadata.primaryVideoStream
             )
+            await DisplayCriteriaManager.shared.waitForDisplaySwitchIfNeeded()
 
             let routingContext = ContentRoutingContext(
                 metadata: metadata,
@@ -1343,6 +1345,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 DisplayCriteriaManager.shared.configureForContent(
                     videoStream: metadata.primaryVideoStream
                 )
+                await DisplayCriteriaManager.shared.waitForDisplaySwitchIfNeeded()
             }
 
             let plan = playbackPlan ?? ContentRouter.plan(for: ContentRoutingContext(
@@ -1646,7 +1649,9 @@ final class UniversalPlayerViewModel: ObservableObject {
                     url: aetherURL,
                     headers: aetherHeaders,
                     startTime: startTime,
-                    subtitleLanguageHintsByStreamIndex: aetherSubtitleLanguageHintsByStreamIndex()
+                    subtitleLanguageHintsByStreamIndex: aetherSubtitleLanguageHintsByStreamIndex(),
+                    preferredAudioLanguages: aetherPreferredAudioLanguages(),
+                    preferredSubtitleLanguages: aetherPreferredSubtitleLanguages()
                 )
             } catch {
                 guard planHasHLSFallback(plan) else { throw error }
@@ -1677,6 +1682,68 @@ final class UniversalPlayerViewModel: ObservableObject {
         return hints
     }
 
+    private func aetherPreferredAudioLanguages() -> [String] {
+        var languages: [String] = []
+
+        if let id = initialAudioTrackId,
+           let track = plexAudioTracksFromMetadata().first(where: { $0.id == id }) {
+            languages.append(contentsOf: languageCandidates(for: track))
+        }
+
+        if let preferred = AudioPreferenceManager.current.languageCode {
+            languages.append(preferred)
+        }
+
+        if let selected = plexAudioTracksFromMetadata().first(where: { $0.isDefault }) {
+            languages.append(contentsOf: languageCandidates(for: selected))
+        }
+
+        return uniqueNonEmpty(languages)
+    }
+
+    private func aetherPreferredSubtitleLanguages() -> [String] {
+        var languages: [String] = []
+
+        switch initialSubtitleSelection {
+        case .track(let id):
+            if let track = plexSubtitleTracksFromMetadata().first(where: { $0.id == id }) {
+                languages.append(contentsOf: languageCandidates(for: track))
+            }
+        case .off:
+            return []
+        case .auto:
+            break
+        }
+
+        let preference = SubtitlePreferenceManager.current
+        if preference.enabled, let preferred = preference.languageCode {
+            languages.append(preferred)
+        } else if !SubtitlePreferenceManager.hasStoredPreference,
+                  let selected = plexSubtitleTracksFromMetadata().first(where: { $0.isForced || $0.isDefault }) {
+            languages.append(contentsOf: languageCandidates(for: selected))
+        }
+
+        return uniqueNonEmpty(languages)
+    }
+
+    private func languageCandidates(for track: MediaTrack) -> [String] {
+        [track.languageCode, track.language]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+
+    private func uniqueNonEmpty(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            result.append(trimmed)
+        }
+        return result
+    }
+
     /// Subscribe to Aether's player surface so the view model's
     /// universal state (playbackState, currentTime, errors) mirrors the
     /// engine. Called whenever a fresh AetherPlayer is created in
@@ -1697,8 +1764,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // rivuletPlayer path's `handleRivuletStateChange(.ended)`.
                 if state == .ended {
                     self.updatePlaybackState(.ended)
+                } else if state == .playing, player.isBuffering {
+                    self.updatePlaybackState(.buffering)
                 } else {
-                    self.playbackState = state
+                    self.updatePlaybackState(state)
                 }
             }
             .store(in: &cancellables)
@@ -1745,6 +1814,50 @@ final class UniversalPlayerViewModel: ObservableObject {
             .sink { [weak self] avp in
                 guard let self, avp != nil else { return }  // native route only
                 Task { await self.resolveNextEpisodeEarlyIfNeeded() }
+            }
+            .store(in: &cancellables)
+
+        // Use Aether's own track list (Aether engine indices as IDs) so the
+        // picker and selectAudioTrack both speak the same index space.
+        player.$audioTracks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] tracks in
+                guard let self, !tracks.isEmpty else { return }
+                let wasEmpty = self.audioTracks.isEmpty
+                self.audioTracks = tracks
+                if wasEmpty {
+                    self.currentAudioTrackId = player.currentAudioTrackId ??
+                        tracks.first(where: { $0.isDefault })?.id ??
+                        tracks.first?.id
+                    if !self.hasAppliedAudioPreference {
+                        self.hasAppliedAudioPreference = true
+                        self.applyAudioPreference()
+                    }
+                }
+            }
+            .store(in: &cancellables)
+
+        player.$activeAudioTrackId
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] id in
+                guard let self, let id else { return }
+                self.currentAudioTrackId = id
+            }
+            .store(in: &cancellables)
+
+        player.$activeSubtitleTrackId
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] id in
+                guard let self else { return }
+                self.currentSubtitleTrackId = id.flatMap { self.plexSubtitleId(forAetherTrackId: $0) }
+            }
+            .store(in: &cancellables)
+
+        player.$isBuffering
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak player] buffering in
+                guard let self, let player else { return }
+                self.handleAetherBufferingChanged(buffering, player: player)
             }
             .store(in: &cancellables)
     }
@@ -2370,6 +2483,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     func stopPlayback() {
         streamPreparationTask?.cancel()
         streamPreparationTask = nil
+        aetherStallWatchdogTask?.cancel()
+        aetherStallWatchdogTask = nil
         subtitleClockSync.stop()
 
         // Clear the active playback route from the App Hang scope (RIVULET-41).
@@ -2476,6 +2591,51 @@ final class UniversalPlayerViewModel: ObservableObject {
                 print("[Remux] activePlayer_pause() called")
             }
             player?.pause()
+        }
+    }
+
+    private func handleAetherBufferingChanged(_ buffering: Bool, player: AetherPlayer) {
+        guard aetherPlayer === player else { return }
+
+        if buffering {
+            updatePlaybackState(.buffering)
+            startAetherStallWatchdog(for: player)
+        } else {
+            aetherStallWatchdogTask?.cancel()
+            aetherStallWatchdogTask = nil
+            if playbackState == .buffering {
+                updatePlaybackState(player.isPlaying ? .playing : .paused)
+            }
+        }
+    }
+
+    private func startAetherStallWatchdog(for player: AetherPlayer) {
+        aetherStallWatchdogTask?.cancel()
+        let baselineTime = currentTime
+        aetherStallWatchdogTask = Task { @MainActor [weak self, weak player] in
+            guard let self, let player else { return }
+
+            try? await Task.sleep(nanoseconds: UInt64(self.aetherStallRecoveryDelay * 1_000_000_000))
+            guard !Task.isCancelled,
+                  self.aetherPlayer === player,
+                  player.isBuffering else { return }
+
+            let recoveryTime = self.currentTime
+            guard recoveryTime <= baselineTime + 0.5 else { return }
+
+            let kickTarget = min(max(0, recoveryTime + 0.1), max(player.duration, recoveryTime))
+            await player.seek(to: kickTarget)
+            player.play()
+
+            try? await Task.sleep(nanoseconds: UInt64(self.aetherStallFailureDelay * 1_000_000_000))
+            guard !Task.isCancelled,
+                  self.aetherPlayer === player,
+                  player.isBuffering,
+                  self.currentTime <= recoveryTime + 0.5 else { return }
+
+            let error = PlayerError.networkError("Aether playback stalled while waiting for buffered media")
+            self.errorMessage = error.userFacingDescription
+            self.updatePlaybackState(.failed(error))
         }
     }
 
@@ -2888,6 +3048,22 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    func selectAetherSubtitleTrackFromNativePicker(aetherTrackId: Int?) {
+        guard let ap = aetherPlayer else { return }
+        ap.selectSubtitleTrack(id: aetherTrackId)
+
+        if let aetherTrackId,
+           let plexId = plexSubtitleId(forAetherTrackId: aetherTrackId) {
+            currentSubtitleTrackId = plexId
+            if let track = subtitleTracks.first(where: { $0.id == plexId }) {
+                SubtitlePreferenceManager.current = SubtitlePreference(from: track)
+            }
+        } else {
+            currentSubtitleTrackId = nil
+            SubtitlePreferenceManager.current = .off
+        }
+    }
+
     /// Load subtitle content for the active Rivulet playback pipeline.
     private func loadSubtitleForRivuletPlayer(trackId: Int?) {
         guard rivuletPlayer != nil else { return }
@@ -3018,13 +3194,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         let previousSubtitleCount = subtitleTracks.count
         let previousAudioCount = audioTracks.count
 
+        // Aether manages its own audio track list via bindAetherPublishers.
+        // Don't overwrite those tracks with Plex metadata here — Aether uses
+        // engine indices as IDs, Plex uses stream IDs; they're incompatible.
+        let useAetherTracks = aetherPlayer != nil
+
         let newAudioTracks: [MediaTrack]
         let newSubtitleTracks: [MediaTrack]
         let newCurrentAudioTrackId: Int?
         let newCurrentSubtitleTrackId: Int?
 
         if let streams = metadata.Media?.first?.Part?.first?.Stream {
-            newAudioTracks = streams.filter { $0.isAudio }.map { MediaTrack(from: $0) }
+            let plexAudio = streams.filter { $0.isAudio }
+            newAudioTracks = useAetherTracks ? audioTracks : plexAudio.map { MediaTrack(from: $0) }
             newSubtitleTracks = streams.filter { $0.isSubtitle }.map { MediaTrack(from: $0) }
             let selectedAudioId = streams.first(where: { $0.isAudio && $0.selected == true })?.id
             let selectedSubtitleId = streams.first(where: { $0.isSubtitle && $0.selected == true })?.id
@@ -3035,22 +3217,27 @@ final class UniversalPlayerViewModel: ObservableObject {
                 newSubtitleTracks.first(where: { $0.isForced })?.id ??
                 newSubtitleTracks.first(where: { $0.isDefault })?.id
         } else {
-            // AVPlayer track enumeration would go here — for now use empty
-            newAudioTracks = []
+            newAudioTracks = useAetherTracks ? audioTracks : []
             newSubtitleTracks = []
             newCurrentAudioTrackId = nil
             newCurrentSubtitleTrackId = nil
         }
 
-        audioTracks = newAudioTracks
+        if !useAetherTracks {
+            audioTracks = newAudioTracks
+        }
         subtitleTracks = newSubtitleTracks
+
+        if useAetherTracks, let activeAetherSubtitle = aetherPlayer?.activeSubtitleTrackId {
+            currentSubtitleTrackId = plexSubtitleId(forAetherTrackId: activeAetherSubtitle)
+        }
 
         // Only update current track IDs on first population.
         // After tracks are populated, the user's explicit selections take precedence.
-        if previousAudioCount == 0 {
+        if previousAudioCount == 0 && !useAetherTracks {
             currentAudioTrackId = newCurrentAudioTrackId
         }
-        if previousSubtitleCount == 0 {
+        if previousSubtitleCount == 0 && !useAetherTracks {
             currentSubtitleTrackId = newCurrentSubtitleTrackId
         }
 
@@ -3137,6 +3324,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         // 1. Pre-play picker (this session).
         if let id = initialAudioTrackId {
             initialAudioTrackId = nil
+            if aetherPlayer != nil {
+                if let aetherID = aetherAudioIndex(forPlexTrackId: id) {
+                    selectAudioTrackWithoutSaving(id: aetherID)
+                }
+                return
+            }
             if audioTracks.contains(where: { $0.id == id }) {
                 selectAudioTrackWithoutSaving(id: id)
                 return
@@ -3144,10 +3337,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // 2. Plex per-item explicit selection.
-        if let plexSelectedId = currentAudioTrackId,
-           let plexDefaultId = audioTracks.first(where: { $0.isDefault })?.id,
-           plexSelectedId != plexDefaultId,
-           audioTracks.contains(where: { $0.id == plexSelectedId }) {
+        if aetherPlayer != nil {
+            let plexTracks = plexAudioTracksFromMetadata()
+            if let plexSelectedId = metadata.Media?.first?.Part?.first?.Stream?
+                .first(where: { $0.isAudio && $0.selected == true })?.id,
+               let plexDefaultId = plexTracks.first(where: { $0.isDefault })?.id,
+               plexSelectedId != plexDefaultId,
+               let aetherID = aetherAudioIndex(forPlexTrackId: plexSelectedId) {
+                selectAudioTrackWithoutSaving(id: aetherID)
+                return
+            }
+        } else if let plexSelectedId = currentAudioTrackId,
+                  let plexDefaultId = audioTracks.first(where: { $0.isDefault })?.id,
+                  plexSelectedId != plexDefaultId,
+                  audioTracks.contains(where: { $0.id == plexSelectedId }) {
             selectAudioTrackWithoutSaving(id: plexSelectedId)
             return
         }
@@ -3280,6 +3483,80 @@ final class UniversalPlayerViewModel: ObservableObject {
             return aetherTracks[plexIndex].id
         }
         return nil
+    }
+
+    private func plexSubtitleId(forAetherTrackId id: Int) -> Int? {
+        guard let ap = aetherPlayer else { return nil }
+        let aetherTracks = ap.subtitleTracks
+        guard !aetherTracks.isEmpty,
+              let aetherIndex = aetherTracks.firstIndex(where: { $0.id == id }) else { return nil }
+        let aetherTrack = aetherTracks[aetherIndex]
+        let lang = aetherTrack.languageCode?.lowercased()
+        let codec = MediaTrack.normalizedSubtitleCodec(aetherTrack.codec)
+
+        if let lang {
+            if let match = subtitleTracks.first(where: {
+                $0.languageCode?.lowercased() == lang &&
+                MediaTrack.normalizedSubtitleCodec($0.codec) == codec
+            }) {
+                return match.id
+            }
+            if let match = subtitleTracks.first(where: { $0.languageCode?.lowercased() == lang }) {
+                return match.id
+            }
+        }
+
+        if aetherIndex < subtitleTracks.count {
+            return subtitleTracks[aetherIndex].id
+        }
+        return nil
+    }
+
+    private func aetherAudioIndex(forPlexTrackId id: Int) -> Int? {
+        let aetherTracks = audioTracks
+        let plexTracks = plexAudioTracksFromMetadata()
+        guard !aetherTracks.isEmpty,
+              let plexIndex = plexTracks.firstIndex(where: { $0.id == id }) else { return nil }
+        let plexTrack = plexTracks[plexIndex]
+        let lang = plexTrack.languageCode?.lowercased()
+        let codec = plexTrack.codec?.lowercased()
+        let channels = plexTrack.channels
+
+        if let lang {
+            if let match = aetherTracks.first(where: {
+                $0.languageCode?.lowercased() == lang &&
+                $0.codec?.lowercased() == codec &&
+                (channels == nil || $0.channels == channels)
+            }) {
+                return match.id
+            }
+            if let match = aetherTracks.first(where: {
+                $0.languageCode?.lowercased() == lang &&
+                $0.codec?.lowercased() == codec
+            }) {
+                return match.id
+            }
+            if let match = aetherTracks.first(where: { $0.languageCode?.lowercased() == lang }) {
+                return match.id
+            }
+        }
+
+        if plexIndex < aetherTracks.count {
+            return aetherTracks[plexIndex].id
+        }
+        return nil
+    }
+
+    private func plexAudioTracksFromMetadata() -> [MediaTrack] {
+        metadata.Media?.first?.Part?.first?.Stream?
+            .filter { $0.isAudio }
+            .map { MediaTrack(from: $0) } ?? []
+    }
+
+    private func plexSubtitleTracksFromMetadata() -> [MediaTrack] {
+        metadata.Media?.first?.Part?.first?.Stream?
+            .filter { $0.isSubtitle }
+            .map { MediaTrack(from: $0) } ?? []
     }
 
     private func configureSubtitleClockSyncForCurrentPlayer() {
@@ -4326,6 +4603,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
         introSkipCountdownTimer?.invalidate()
+        aetherStallWatchdogTask?.cancel()
         if let observer = appBackgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }

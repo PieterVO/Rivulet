@@ -4,7 +4,7 @@
 //
 //  Third-party open-source license texts shown in Settings → About → Licenses & Legal.
 //
-//  AetherEngine (the default video player) is dynamically linked via Swift Package Manager
+//  AetherEngine (an optional video player) is dynamically linked via Swift Package Manager
 //  and used under the GNU Lesser General Public License v3, with an App Store / DRM exception.
 //  FFmpeg (demux/decode/remux) is dynamically linked via the FFmpegBuild package and used
 //  under the LGPL (v2.1 or later); that build bundles dav1d (BSD 2-Clause, AV1 decode).

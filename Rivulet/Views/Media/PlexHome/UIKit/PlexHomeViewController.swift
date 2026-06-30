@@ -3347,8 +3347,6 @@ final class PlexHomeViewController: UIViewController {
         let token = authManager.selectedServerToken ?? ""
         let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
 
-        homeUIKitLog.debug("[watchlist] buildMediaItems: \(entries.count) entries, serverURL=\(serverURL.isEmpty ? "(none)" : "(set)", privacy: .public)")
-
         // Resolve each watchlist (Discover) item to the owned local library item so the detail shows
         // Play + server art instead of a non-playable TMDB stub (issue #188). Two layers:
         //
@@ -3359,43 +3357,36 @@ final class PlexHomeViewController: UIViewController {
         //      server does NOT index external guids for /library/all?guid=, but it DOES match the
         //      primary plex:// guid, which Plex shares between Discover and the local server for
         //      agent-matched titles. Resolve that directly so ownership works on cold/first launch.
-        let lookups = await withTaskGroup(of: (Int, PlexMetadata?, String).self) { group in
+        let lookups = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
             for (index, entry) in entries.enumerated() {
                 let guids = entry.guids
                 let tmdbId = entry.tmdbId
                 let tmdbType: TMDBMediaType = entry.type == .movie ? .movie : .tv
                 let plexGUID = entry.plexGUID
-                let title = entry.title
                 group.addTask {
                     // Warm path: in-memory index. Type-safe tmdb first (a movie and a show can share
                     // the same numeric tmdb id), then imdb/tvdb guids, which are globally unique.
                     if let tmdbId,
                        let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: tmdbType) {
-                        return (index, match, "tmdb-index")
+                        return (index, match)
                     }
                     for guid in guids where !guid.hasPrefix("tmdb://") {
                         if let match = await LibraryGUIDIndex.shared.lookup(guid: guid) {
-                            return (index, match, "guid-index:\(guid)")
+                            return (index, match)
                         }
                     }
                     // Cold path: resolve the primary plex:// guid against the server directly.
                     if let plexGUID, !serverURL.isEmpty,
                        let match = try? await PlexNetworkManager.shared.findByGuid(
                         serverURL: serverURL, authToken: token, guid: plexGUID) {
-                        return (index, match, "plex-guid")
+                        return (index, match)
                     }
-                    return (index, nil, "miss")
+                    return (index, nil)
                 }
             }
             var out: [Int: PlexMetadata] = [:]
-            var paths: [Int: String] = [:]
-            for await (index, match, path) in group {
-                paths[index] = path
+            for await (index, match) in group {
                 if let match { out[index] = match }
-            }
-            for (index, entry) in entries.enumerated() {
-                let path = paths[index] ?? "miss"
-                homeUIKitLog.debug("[watchlist] library-lookup '\(entry.title, privacy: .public)': \(path, privacy: .public)")
             }
             return out
         }
@@ -3412,10 +3403,7 @@ final class PlexHomeViewController: UIViewController {
             of: (Int, MediaItem?, URL?).self
         ) { group in
             for (index, entry) in entries.enumerated() {
-                guard let tmdbId = entry.tmdbId else {
-                    homeUIKitLog.warning("[watchlist] enrich '\(entry.title, privacy: .public)': no tmdbId, skipping")
-                    continue
-                }
+                guard let tmdbId = entry.tmdbId else { continue }
                 let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
                 let isOwned = lookups[index] != nil && !serverURL.isEmpty
                 // Build the ref on the main actor (TMDBMediaMapper is main-actor-isolated); the task
@@ -3423,14 +3411,11 @@ final class PlexHomeViewController: UIViewController {
                 let ref = MediaItemRef(
                     providerID: TMDBMediaMapper.providerID,
                     itemID: TMDBMediaMapper.encodeItemID(tmdbId: tmdbId, type: mediaType))
-                let title = entry.title
                 group.addTask {
                     async let logoTask = TMDBLogoCache.shared.logoURL(tmdbId: tmdbId, type: mediaType)
                     // Owned items already have a server backdrop; only un-owned need the TMDB detail.
                     let detail = isOwned ? nil : (try? await tmdbSource?.itemDetail(ref))
                     let logo = await logoTask
-                    let backdrop = detail?.item.artwork.backdrop
-                    homeUIKitLog.debug("[watchlist] enrich '\(title, privacy: .public)': owned=\(isOwned) detail=\(detail != nil ? "ok" : "nil") backdrop=\(backdrop?.absoluteString ?? "nil", privacy: .public) logo=\(logo?.absoluteString ?? "nil", privacy: .public)")
                     return (index, detail?.item, logo)
                 }
             }
@@ -3450,30 +3435,22 @@ final class PlexHomeViewController: UIViewController {
                                                     providerID: providerID,
                                                     serverURL: serverURL,
                                                     authToken: token)
-                let final = plexItem.withLogoIfMissing(enriched[index]?.logo)
-                homeUIKitLog.debug("[watchlist] final '\(entry.title, privacy: .public)': owned backdrop=\(final.artwork.backdrop?.absoluteString ?? "nil", privacy: .public) logo=\(final.artwork.logo?.absoluteString ?? "nil", privacy: .public)")
-                result.append((sourceID: entry.id, item: final))
+                result.append((sourceID: entry.id, item: plexItem.withLogoIfMissing(enriched[index]?.logo)))
                 continue
             }
 
             // Un-owned: needs a tmdb id to address TMDB.
-            guard let tmdbId = entry.tmdbId else {
-                homeUIKitLog.warning("[watchlist] final '\(entry.title, privacy: .public)': un-owned and no tmdbId, skipping")
-                continue
-            }
+            guard let tmdbId = entry.tmdbId else { continue }
             let logo = enriched[index]?.logo
 
             // Prefer the TMDB-enriched item (real landscape backdrop + poster), matching Discover.
             if let pair = enriched[index], let enrichedItem = pair.item {
-                let final = enrichedItem.withLogoIfMissing(pair.logo)
-                homeUIKitLog.debug("[watchlist] final '\(entry.title, privacy: .public)': unowned-enriched backdrop=\(final.artwork.backdrop?.absoluteString ?? "nil", privacy: .public) logo=\(final.artwork.logo?.absoluteString ?? "nil", privacy: .public)")
-                result.append((sourceID: entry.id, item: final))
+                result.append((sourceID: entry.id, item: enrichedItem.withLogoIfMissing(pair.logo)))
                 continue
             }
 
             // Enrichment failed (e.g. offline): keep the Plex watchlist poster so the tile still has
             // art, and splice the logo if we got one.
-            homeUIKitLog.warning("[watchlist] final '\(entry.title, privacy: .public)': unowned enrichment failed — falling back to poster-only stub (logo=\(logo?.absoluteString ?? "nil", privacy: .public))")
             let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
             let base = TMDBMediaMapper.item(TMDBListItem(
                 id: tmdbId,
@@ -3517,7 +3494,6 @@ final class PlexHomeViewController: UIViewController {
             }
             result.append((sourceID: entry.id, item: stub.withLogoIfMissing(logo)))
         }
-        homeUIKitLog.debug("[watchlist] buildMediaItems done: \(result.count) items built")
         return result
     }
 
@@ -3527,24 +3503,18 @@ final class PlexHomeViewController: UIViewController {
     /// or user add/remove). Runs in the background; failures are silent (the tap
     /// handler will retry via its own enrichment fetch).
     private func prewarmWatchlistArtwork(_ entries: [PlexWatchlistItem]) {
-        let count = entries.filter { $0.tmdbId != nil }.count
-        homeUIKitLog.debug("[watchlist] prewarm: \(count) un-owned items to warm")
-        guard count > 0 else { return }
         Task.detached(priority: .background) {
             await withTaskGroup(of: Void.self) { group in
                 for entry in entries {
                     guard let tmdbId = entry.tmdbId else { continue }
                     let mediaType: TMDBMediaType = entry.type == .movie ? .movie : .tv
-                    let title = entry.title
                     group.addTask {
                         async let detail: TMDBItemDetail? = TMDBDiscoverService.shared.fetchDetail(tmdbId: tmdbId, type: mediaType)
                         async let logo: URL? = TMDBLogoCache.shared.logoURL(tmdbId: tmdbId, type: mediaType)
-                        let (d, l) = await (detail, logo)
-                        homeUIKitLog.debug("[watchlist] prewarm '\(title, privacy: .public)': detail=\(d != nil ? "ok(backdrop=\(d?.backdropPath ?? "nil"))" : "nil", privacy: .public) logo=\(l?.absoluteString ?? "nil", privacy: .public)")
+                        _ = await (detail, logo)
                     }
                 }
             }
-            homeUIKitLog.debug("[watchlist] prewarm complete")
         }
     }
 

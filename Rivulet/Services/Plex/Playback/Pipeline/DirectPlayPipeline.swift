@@ -349,7 +349,12 @@ final class DirectPlayPipeline {
         // multiple seconds (see RIVULET-1Y, RIVULET-M). Detach so the main actor
         // stays responsive while the demuxer does its network work.
         try await Task.detached(priority: .userInitiated) { [demuxer] in
-            try demuxer.open(url: url, headers: headers, forceDolbyVision: isDolbyVision)
+            try demuxer.open(
+                url: url,
+                headers: headers,
+                forceDolbyVision: isDolbyVision,
+                profile: .rivuletPlayback
+            )
         }.value
 
         self.duration = demuxer.duration
@@ -737,6 +742,7 @@ final class DirectPlayPipeline {
         audioEnqueueTask = nil
         videoEnqueueTask?.cancel()
         videoEnqueueTask = nil
+        demuxer.cancelIO()
         readTask?.cancel()
         // Wake a suspended read loop so it can observe cancellation and
         // exit — otherwise a paused-then-stopped task would leak forever.
@@ -764,6 +770,7 @@ final class DirectPlayPipeline {
 
         audioEnqueueTask?.cancel()
         videoEnqueueTask?.cancel()
+        demuxer.cancelIO()
         readTask?.cancel()
 
         // Wake a suspended read loop so it can observe cancellation. Must
@@ -878,6 +885,7 @@ final class DirectPlayPipeline {
         let oldVideoTask = videoEnqueueTask
         audioEnqueueTask = nil
         videoEnqueueTask = nil
+        demuxer.cancelIO()
         readTask?.cancel()
         // Wake the read loop if it's suspended at the pause gate so it
         // observes cancellation. Must happen before the await below or
@@ -897,6 +905,7 @@ final class DirectPlayPipeline {
         _ = audioEncoder?.flush()
 
         // Seek in demuxer
+        demuxer.resumeIO()
         try demuxer.seek(to: time)
 
         // Set synchronizer time, paused
@@ -970,6 +979,7 @@ final class DirectPlayPipeline {
         let oldVideoTask = videoEnqueueTask
         audioEnqueueTask = nil
         videoEnqueueTask = nil
+        demuxer.cancelIO()
         readTask?.cancel()
         // Wake the read loop if it's suspended at the pause gate so the
         // await below can observe its exit. If the user had paused before
@@ -982,6 +992,7 @@ final class DirectPlayPipeline {
         await oldTask?.value
         await oldAudioTask?.value
         await oldVideoTask?.value
+        demuxer.resumeIO()
 
         // Flush audio, decoder, and encoder
         renderer.flush()
@@ -1059,6 +1070,7 @@ final class DirectPlayPipeline {
         audioEnqueueTask = nil
         videoEnqueueTask?.cancel()
         videoEnqueueTask = nil
+        demuxer.resumeIO()
         readTask?.cancel()
         renderer.onAudioPrimedForPlayback = nil
 

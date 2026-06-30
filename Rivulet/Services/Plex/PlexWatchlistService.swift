@@ -54,9 +54,6 @@ final class PlexWatchlistService: ObservableObject {
         if let cached = cache.load() {
             watchlistItems = cached
             watchlistGUIDs = Set(cached.flatMap(\.guids))
-            watchlistLog.info("init: loaded \(cached.count) items from disk cache")
-        } else {
-            watchlistLog.info("init: no disk cache found")
         }
     }
 

@@ -137,7 +137,6 @@ struct RivuletApp: App {
             }
 
             Perf.event(.appLaunch, message: "init")
-            PlayerPreference.applyForcedAetherMigrationIfNeeded()
         }
     }
 

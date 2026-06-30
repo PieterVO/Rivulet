@@ -363,8 +363,8 @@ struct PlexHomeView: View {
                     Task { await dataStore.refreshHubs() }
                     selectItem(item)
                 }
-                if let base = playerVC as? BaseAVPlayerViewController {
-                    base.onDismiss = onPlayerDismiss
+                if let aether = playerVC as? AetherPlayerViewController {
+                    aether.onDismiss = onPlayerDismiss
                 } else if let container = playerVC as? PlayerContainerViewController {
                     container.onDismiss = onPlayerDismiss
                 }

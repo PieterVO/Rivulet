@@ -2076,8 +2076,8 @@ struct MediaDetailView: View {
                     }
                     showPlayer = false
                 }
-                if let base = playerVC as? BaseAVPlayerViewController {
-                    base.onDismiss = onDismiss
+                if let aether = playerVC as? AetherPlayerViewController {
+                    aether.onDismiss = onDismiss
                 } else if let container = playerVC as? PlayerContainerViewController {
                     container.onDismiss = onDismiss
                 }

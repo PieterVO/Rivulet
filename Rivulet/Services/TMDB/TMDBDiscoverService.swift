@@ -6,9 +6,6 @@
 //
 
 import Foundation
-import os.log
-
-private let tmdbLog = Logger(subsystem: "com.rivulet.app", category: "TMDBDiscover")
 
 actor TMDBDiscoverService {
     static let shared = TMDBDiscoverService()
@@ -109,16 +106,8 @@ actor TMDBDiscoverService {
         let endpoint = "tmdb/details/\(tmdbId)"
         let queryItems = [URLQueryItem(name: "type", value: type.rawValue)]
 
-        let data: Data
-        do {
-            data = try await fetchData(endpoint: endpoint, queryItems: queryItems)
-        } catch {
-            tmdbLog.warning("fetchDetail tmdbId=\(tmdbId) type=\(type.rawValue, privacy: .public) network error: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-        guard let decoded = try? JSONDecoder().decode(TMDBItemDetail.self, from: data) else {
-            let snippet = String(data: data.prefix(256), encoding: .utf8) ?? "(non-utf8)"
-            tmdbLog.warning("fetchDetail tmdbId=\(tmdbId) type=\(type.rawValue, privacy: .public) decode failed, response: \(snippet, privacy: .public)")
+        guard let data = try? await fetchData(endpoint: endpoint, queryItems: queryItems),
+              let decoded = try? JSONDecoder().decode(TMDBItemDetail.self, from: data) else {
             return nil
         }
         let detail = TMDBItemDetail(
