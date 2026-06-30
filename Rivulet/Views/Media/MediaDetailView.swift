@@ -2059,8 +2059,6 @@ struct MediaDetailView: View {
                     initialSubtitleSelection: initialSubtitleSelection
                 )
 
-                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
-
                 // Wire onDismiss on whichever subclass we got. All three
                 // hosts (Native, Aether, PlayerContainerViewController) expose
                 // `onDismiss: (() -> Void)?`.
@@ -2076,11 +2074,7 @@ struct MediaDetailView: View {
                     }
                     showPlayer = false
                 }
-                if let aether = playerVC as? AetherPlayerViewController {
-                    aether.onDismiss = onDismiss
-                } else if let container = playerVC as? PlayerContainerViewController {
-                    container.onDismiss = onDismiss
-                }
+                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel, onDismiss: onDismiss)
 
                 if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                    let rootVC = windowScene.windows.first?.rootViewController {

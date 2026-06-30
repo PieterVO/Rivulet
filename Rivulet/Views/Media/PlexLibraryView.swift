@@ -1282,15 +1282,9 @@ struct PlexLibraryView: View {
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
                 )
-                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
-                let onDismiss: () -> Void = {
+                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel, onDismiss: {
                     Task { await dataStore.refreshHubs() }
-                }
-                if let aether = playerVC as? AetherPlayerViewController {
-                    aether.onDismiss = onDismiss
-                } else if let container = playerVC as? PlayerContainerViewController {
-                    container.onDismiss = onDismiss
-                }
+                })
 
                 if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                    let rootVC = scene.windows.first?.rootViewController {

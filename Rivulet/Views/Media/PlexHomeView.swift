@@ -353,7 +353,6 @@ struct PlexHomeView: View {
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
                 )
-                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
                 // Push the item's detail page after the player dismisses, so
                 // the user lands somewhere they can act on (next episode,
                 // related items, watched toggle) rather than back on the
@@ -363,11 +362,7 @@ struct PlexHomeView: View {
                     Task { await dataStore.refreshHubs() }
                     selectItem(item)
                 }
-                if let aether = playerVC as? AetherPlayerViewController {
-                    aether.onDismiss = onPlayerDismiss
-                } else if let container = playerVC as? PlayerContainerViewController {
-                    container.onDismiss = onPlayerDismiss
-                }
+                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel, onDismiss: onPlayerDismiss)
 
                 if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                    let rootVC = scene.windows.first?.rootViewController {
