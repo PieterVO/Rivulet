@@ -166,6 +166,10 @@ class PlayerContainerViewController: UIViewController {
                 vm.cancelScrub()
                 return
             }
+            if transportBar?.hasActivePopup == true {
+                transportBar?.dismissActivePopup()
+                return
+            }
             if vm.showInfoPanel {
                 withAnimation(.easeOut(duration: 0.3)) {
                     vm.showInfoPanel = false
@@ -287,6 +291,8 @@ class PlayerContainerViewController: UIViewController {
                 dismissPlayer()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
+            } else if transportBar?.hasActivePopup == true {
+                transportBar?.dismissActivePopup()
             } else if vm.showInfoPanel {
                 withAnimation(.easeOut(duration: 0.3)) {
                     vm.showInfoPanel = false

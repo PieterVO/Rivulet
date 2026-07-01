@@ -27,7 +27,15 @@ final class PlayerTransportBarView: UIView {
     let infoPill = PlayerPillButton(icon: UIImage(systemName: "info.circle"), title: "Info")
     private let pillStack = UIStackView()
 
+    private var activePopup: PlayerTrackPopupView?
+
     var onSkipTapped: (() -> Void)?
+
+    var hasActivePopup: Bool { activePopup != nil }
+
+    func dismissActivePopup() {
+        activePopup?.dismiss()
+    }
 
     init(viewModel: UniversalPlayerViewModel) {
         self.viewModel = viewModel
@@ -153,6 +161,39 @@ final class PlayerTransportBarView: UIView {
         titleLabel.text = viewModel.title
         subtitleLabel.text = viewModel.subtitle
         subtitleLabel.isHidden = viewModel.subtitle == nil
+
+        subtitlesPill.onPress = { [weak self] in
+            guard let self, let viewModel = self.viewModel else { return }
+            let popup = PlayerTrackPopupView(
+                tracks: viewModel.subtitleTracks,
+                selectedTrackId: viewModel.currentSubtitleTrackId,
+                showsOffRow: true,
+                onSelect: { id in viewModel.selectSubtitleTrack(id: id) }
+            )
+            self.presentPopup(popup, anchoredTo: self.subtitlesPill)
+        }
+
+        audioPill.onPress = { [weak self] in
+            guard let self, let viewModel = self.viewModel else { return }
+            let popup = PlayerTrackPopupView(
+                tracks: viewModel.audioTracks,
+                selectedTrackId: viewModel.currentAudioTrackId,
+                showsOffRow: false,
+                onSelect: { id in
+                    guard let id else { return }
+                    viewModel.selectAudioTrack(id: id)
+                }
+            )
+            self.presentPopup(popup, anchoredTo: self.audioPill)
+        }
+    }
+
+    private func presentPopup(_ popup: PlayerTrackPopupView, anchoredTo pill: PlayerPillButton) {
+        guard let container = superview else { return }
+        activePopup?.dismiss()
+        popup.onDismiss = { [weak self] in self?.activePopup = nil }
+        activePopup = popup
+        popup.present(in: container, anchoredTo: pill)
     }
 
     @objc private func skipTapped() {
