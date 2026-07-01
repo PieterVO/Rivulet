@@ -2,7 +2,7 @@
 //  UniversalPlayerViewModel.swift
 //  Rivulet
 //
-//  ViewModel managing playback state with RivuletPlayer
+//  ViewModel managing VOD playback state
 //
 
 import SwiftUI
@@ -451,15 +451,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Whether DV profile conversion (P7/P8.6 → P8.1) is needed
     private var requiresProfileConversion = false
 
-    /// Custom player using FFmpeg demux + AVSampleBufferDisplayLayer.
-    /// Created when "Use Apple's Player" is off; nil when using AVPlayerViewController.
-    private(set) var rivuletPlayer: RivuletPlayer?
-
-    /// Third selectable player: AetherEngine, surfaced through a
-    /// PlayerProtocol adapter. Created when ContentRouter chooses the
-    /// .aether route. @Published so AetherPlayerViewController can
-    /// subscribe and rebind the underlying AVPlayer on every Aether
-    /// internal reload (audio-track switch, background reopen).
+    /// The VOD player: AetherEngine, surfaced through a PlayerProtocol
+    /// adapter. @Published so AetherPlayerViewController can subscribe and
+    /// rebind the underlying AVPlayer on every Aether internal reload
+    /// (audio-track switch, background reopen).
     @Published private(set) var aetherPlayer: AetherPlayer?
 
     /// Subtitle manager for custom subtitle rendering.
@@ -1066,9 +1061,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         if let ap = aetherPlayer {
             return ap.isPlaying
         }
-        if let rp = rivuletPlayer {
-            return rp.isPlaying
-        }
         return (player?.rate ?? 0) > 0
     }
 
@@ -1126,194 +1118,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         // .aether route (or an AVPlayer fallback route) and
         // startAVPlayerPlayback() drives both.
         await startAVPlayerPlayback()
-    }
-
-    // MARK: - RivuletPlayer Startup
-
-    private func startRivuletPlayback() async {
-        // Fetch full metadata if Media array is missing
-        if metadata.Media == nil || metadata.Media?.isEmpty == true {
-            await fetchFullMetadataIfNeeded()
-        }
-
-        addPlaybackSelectionBreadcrumb(reason: "startRivuletPlayback")
-
-        do {
-            DisplayCriteriaManager.shared.configureForContent(
-                videoStream: metadata.primaryVideoStream
-            )
-            await DisplayCriteriaManager.shared.waitForDisplaySwitchIfNeeded()
-
-            let routingContext = ContentRoutingContext(
-                metadata: metadata,
-                serverURL: URL(string: serverURL)!,
-                authToken: authToken,
-                requiresProfileConversion: requiresProfileConversion,
-                playbackPolicy: .directPlayFirst,
-                useLocalRemux: true  // RivuletPlayer always handles locally
-            )
-            let plan = ContentRouter.plan(for: routingContext)
-            playbackPlan = plan
-            AppHangContext.setPlaybackRoute(plan.primary.description)
-
-            // If ContentRouter routed away from RivuletPlayer (FFmpeg unavailable,
-            // native MP4 direct play, or forced HLS transcode), hand off to the
-            // AVPlayer path instead of feeding a non-FFmpeg route into RivuletPlayer.
-            switch plan.primary {
-            case .avPlayerDirect, .hls, .aether:
-                await startAVPlayerPlayback()
-                return
-            case .localRemux:
-                break
-            }
-
-            // Reuse existing RivuletPlayer when transitioning episodes so the
-            // AVSampleBufferDisplayLayer stays in the view hierarchy. Creating a
-            // new player orphans the old display layer (still showing credits)
-            // while the new one is never attached — causing stale video on screen.
-            let isReuse = rivuletPlayer != nil
-            let rp = rivuletPlayer ?? RivuletPlayer()
-            self.rivuletPlayer = rp
-
-            // Wire up subtitle callbacks
-            rp.onSubtitleCue = { [weak self] text, start, end in
-                self?.subtitleManager.addCue(text: text, startTime: start, endTime: end)
-            }
-            rp.onBitmapSubtitleCue = { [weak self] cue in
-                self?.subtitleManager.addBitmapCue(cue)
-            }
-
-            // Clear stale subtitle cues from previous episode
-            subtitleManager.clear()
-
-            try await rp.load(route: plan.primary, startTime: startOffset)
-            rp.play()
-
-            playbackState = .playing
-            applyScreensaverInhibition(for: .playing)
-            self.duration = rp.duration
-
-            // Only subscribe to publishers on first creation — reuse keeps
-            // existing subscriptions which continue to receive new events.
-            if !isReuse {
-                rp.playbackStatePublisher
-                    .receive(on: DispatchQueue.main)
-                    .sink { [weak self] state in
-                        self?.handleRivuletStateChange(state)
-                    }
-                    .store(in: &cancellables)
-
-                rp.timePublisher
-                    .receive(on: DispatchQueue.main)
-                    .sink { [weak self] time in
-                        self?.currentTime = time
-                        self?.checkMarkers(at: time)
-                    }
-                    .store(in: &cancellables)
-
-                rp.errorPublisher
-                    .receive(on: DispatchQueue.main)
-                    .sink { [weak self] error in
-                        self?.errorMessage = error.userFacingDescription
-                        self?.playbackState = .failed(.loadFailed(error.localizedDescription))
-                    }
-                    .store(in: &cancellables)
-            }
-
-            updateTrackLists()
-            preloadThumbnails()
-            startControlsHideTimer()
-            configureSubtitleClockSyncForCurrentPlayer()
-
-            // Index for Siri Suggestions
-            let activity = NSUserActivity(activityType: "com.rivulet.playMedia")
-            activity.title = metadata.title
-            activity.isEligibleForSearch = true
-            activity.userInfo = ["ratingKey": metadata.ratingKey ?? ""]
-            activity.targetContentIdentifier = "rivulet://play?ratingKey=\(metadata.ratingKey ?? "")"
-            self.userActivity = activity
-            activity.becomeCurrent()
-        } catch {
-            let technicalError = error.localizedDescription
-            if let playerError = error as? PlayerError {
-                errorMessage = playerError.userFacingDescription
-            } else {
-                errorMessage = "Something went wrong during playback. Please try again."
-            }
-            playbackState = .failed(.loadFailed(technicalError))
-
-            SentrySDK.capture(error: error) { scope in
-                scope.setTag(value: "playback", key: "component")
-                scope.setTag(value: "rivulet", key: "player_type")
-                scope.setExtra(value: self.metadata.title ?? "unknown", key: "media_title")
-                scope.setExtra(value: self.metadata.type ?? "unknown", key: "media_type")
-                scope.setExtra(value: self.metadata.ratingKey ?? "unknown", key: "rating_key")
-                scope.setExtra(value: self.startOffset ?? 0, key: "start_offset")
-            }
-        }
-    }
-
-    /// Mirror ONLY the screensaver-inhibition rule from
-    /// `updatePlaybackState` for the rivuletPlayer path.
-    ///
-    /// rivuletPlayer assigns `playbackState` by direct assignment in
-    /// `handleRivuletStateChange` and the load branch (it does not route
-    /// through `updatePlaybackState`), so the custom FFmpeg /
-    /// AVSampleBuffer direct-play path (Dolby Vision, HDR10, and plain
-    /// SDR direct play) never asserted `isIdleTimerDisabled` the way the
-    /// AVPlayer KVO path does. Result: the tvOS screensaver overlaid live
-    /// video after the device's idle interval while audio kept playing.
-    /// It is not codec-specific — any remote input resets the idle timer,
-    /// so only a long PASSIVE watch (no input) crosses the interval and
-    /// surfaces it. This is the idle-timer rule ONLY; the other
-    /// `updatePlaybackState` side-effects (paused-poster / controls timer)
-    /// are intentionally NOT imported here, to keep this change scoped.
-    /// `.buffering` / `.loading` deliberately leave the flag unchanged
-    /// (a mid-playback stall must not let the screensaver in), exactly as
-    /// `updatePlaybackState` does.
-    private func applyScreensaverInhibition(for state: UniversalPlaybackState) {
-        switch state {
-        case .playing:
-            UIApplication.shared.isIdleTimerDisabled = true
-        case .paused, .ended, .idle:
-            UIApplication.shared.isIdleTimerDisabled = false
-        case .failed:
-            UIApplication.shared.isIdleTimerDisabled = false
-        default:
-            break
-        }
-    }
-
-    private func handleRivuletStateChange(_ state: UniversalPlaybackState) {
-        switch state {
-        case .playing:
-            playbackState = .playing
-            applyScreensaverInhibition(for: .playing)
-        case .paused:
-            playbackState = .paused
-            applyScreensaverInhibition(for: .paused)
-        case .buffering:
-            playbackState = .buffering
-            applyScreensaverInhibition(for: .buffering)
-        case .ended:
-            // Route through `updatePlaybackState` (not direct assignment) so
-            // the EOF to `handlePlaybackEnded` chain at line ~1000 fires for
-            // the rivuletPlayer pipeline too. Without this, only the
-            // marker-based triggers in `processMarkers` lead into
-            // `handlePlaybackEnded`; a true end-of-stream on rivuletPlayer
-            // is silently ignored. AVPlayer's path already routes through
-            // `updatePlaybackState(.ended)` via the
-            // `AVPlayerItemDidPlayToEndTime` notification.
-            // `updatePlaybackState(.ended)` also re-enables the idle timer,
-            // which covers the screensaver behavior the explicit
-            // `applyScreensaverInhibition` call here used to handle.
-            updatePlaybackState(.ended)
-        case .failed:
-            // Error details come through errorPublisher
-            applyScreensaverInhibition(for: state)
-        default:
-            break
-        }
     }
 
     // MARK: - AVPlayer Startup
@@ -1749,8 +1553,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // (AetherEngine 4.0.0, #63); before that the engine collapsed
                 // end-of-media to `.idle` and this never fired. Every other
                 // state keeps the existing direct assignment so Aether's
-                // loading/seeking behavior is unchanged. Mirrors the
-                // rivuletPlayer path's `handleRivuletStateChange(.ended)`.
+                // loading/seeking behavior is unchanged.
                 if state == .ended {
                     self.updatePlaybackState(.ended)
                 } else if state == .playing, player.isBuffering {
@@ -1767,8 +1570,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 self?.currentTime = time
                 // Drive marker handling for Aether (skip intro/credits/ad buttons,
                 // auto-skip, and the real Plex credits-marker post-video trigger).
-                // Mirrors the rivuletPlayer time sink (~line 1178) and the AVPlayer
-                // periodic observer (~line 979). Aether ticks at 0.1s (native host)
+                // Mirrors the AVPlayer periodic observer (~line 979). Aether
+                // ticks at 0.1s (native host)
                 // or 0.25s (software host), both finer than checkMarkers' ~0.5s
                 // assumption, so no throttle change is needed.
                 self?.checkMarkers(at: time)
@@ -2483,10 +2286,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         aetherPlayer?.stop()
         aetherPlayer = nil
 
-        // Stop RivuletPlayer if active
-        rivuletPlayer?.stop()
-        rivuletPlayer = nil
-
         teardownAVPlayerObservers()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
@@ -2561,11 +2360,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             ap.play()
             return
         }
-        if let rp = rivuletPlayer {
-            rp.play()
-        } else {
-            player?.play()
-        }
+        player?.play()
     }
 
     private func activePlayer_pause() {
@@ -2573,14 +2368,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             ap.pause()
             return
         }
-        if let rp = rivuletPlayer {
-            rp.pause()
-        } else {
-            if remuxServer != nil {
-                print("[Remux] activePlayer_pause() called")
-            }
-            player?.pause()
+        if remuxServer != nil {
+            print("[Remux] activePlayer_pause() called")
         }
+        player?.pause()
     }
 
     private func handleAetherBufferingChanged(_ buffering: Bool, player: AetherPlayer) {
@@ -2641,8 +2432,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     func seek(to time: TimeInterval) async {
         if let ap = aetherPlayer {
             await ap.seek(to: time)
-        } else if let rp = rivuletPlayer {
-            await rp.seek(to: time)
         } else {
             await player?.seek(to: CMTime(seconds: time, preferredTimescale: 600))
         }
@@ -2655,8 +2444,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         let targetTime = max(0, min(currentTime + seconds, duration))
         if let ap = aetherPlayer {
             await ap.seek(to: targetTime)
-        } else if let rp = rivuletPlayer {
-            await rp.seek(to: targetTime)
         } else {
             await player?.seek(to: CMTime(seconds: targetTime, preferredTimescale: 600))
         }
@@ -2916,93 +2703,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Delegate the actual pipeline switch to the auto-selection helper,
         // then persist the user's explicit choice as the saved preference so
         // future playback sessions restore it.
-        // TODO: AVPlayer path still needs AVMediaSelectionGroup wiring; this
-        // fix only covers the RivuletPlayer pipeline (custom player).
         selectAudioTrackWithoutSaving(id: id)
 
         if let track = audioTracks.first(where: { $0.id == id }) {
             AudioPreferenceManager.current = AudioPreference(from: track)
-        }
-    }
-
-    /// Switch audio track for RivuletPlayer HLS path by rebuilding the Plex transcode session.
-    /// Sets the preferred audio stream on the Plex server, then starts a fresh transcode session.
-    private func switchHLSAudioTrack(plexStreamId: Int) async {
-        guard let rp = rivuletPlayer, rp.activePipeline == .hls else { return }
-
-        let resumeTime = currentTime
-        let wasPlaying = rp.isPlaying
-
-        print("🎬 [AudioSwitch] Switching HLS audio to stream \(plexStreamId) at \(String(format: "%.1f", resumeTime))s")
-
-        // Stop the current Plex transcode session
-        rp.stop()
-        if let sessionId = plexSessionId {
-            await PlexNetworkManager.shared.stopTranscodeSession(
-                serverURL: serverURL, authToken: authToken, sessionId: sessionId
-            )
-            plexSessionId = nil
-        }
-
-        guard let ratingKey = metadata.ratingKey else { return }
-        let networkManager = PlexNetworkManager.shared
-
-        // Tell Plex which audio stream to use BEFORE starting the new transcode.
-        // Plex reads this preference when building the transcode session.
-        if let partId = metadata.Media?.first?.Part?.first?.id {
-            await networkManager.setSelectedAudioStream(
-                serverURL: serverURL,
-                authToken: authToken,
-                partId: partId,
-                audioStreamID: plexStreamId
-            )
-        }
-
-        // Build new HLS URL (Plex will use the audio stream we just set)
-        let forceVideoTranscode = ContentRouter.requiresVideoTranscode(metadata: metadata)
-        guard let result = networkManager.buildHLSDirectPlayURL(
-            serverURL: serverURL,
-            authToken: authToken,
-            ratingKey: ratingKey,
-            offsetMs: Int(resumeTime * 1000),
-            hasHDR: metadata.hasHDR,
-            useDolbyVision: metadata.hasDolbyVision,
-            forceVideoTranscode: forceVideoTranscode,
-            allowAudioDirectStream: allowAudioDirectStreamDecision(reason: "rivulet_hls_audio_switch")
-        ) else {
-            print("🎬 [AudioSwitch] Failed to build HLS URL")
-            return
-        }
-
-        streamURL = result.url
-        streamHeaders = result.headers
-        plexSessionId = URLComponents(url: result.url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "session" })?.value
-
-        // Wait for the new transcode to be ready
-        let transcodeReady = await waitForHLSTranscodeReady(url: result.url, headers: result.headers)
-        if !transcodeReady {
-            print("🎬 [AudioSwitch] New transcode session failed to start")
-            errorMessage = "Failed to switch audio track"
-            return
-        }
-
-        // Reload with new URL
-        do {
-            try await rp.loadHLSWithConversion(
-                url: result.url,
-                headers: result.headers,
-                startTime: resumeTime,
-                requiresProfileConversion: requiresProfileConversion
-            )
-            if wasPlaying {
-                rp.play()
-            }
-            self.duration = rp.duration
-            print("🎬 [AudioSwitch] Switched to audio stream \(plexStreamId) successfully")
-        } catch {
-            print("🎬 [AudioSwitch] Failed to reload with new audio: \(error)")
-            errorMessage = "Failed to switch audio track"
         }
     }
 
@@ -3013,12 +2717,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             currentAudioTrackId = id
             return
         }
-        if let rp = rivuletPlayer {
-            rp.selectAudioTrack(plexTrackId: id, plexAudioTracks: audioTracks)
-            if rp.activePipeline == .hls {
-                Task { await switchHLSAudioTrack(plexStreamId: id) }
-            }
-        }
         currentAudioTrackId = id
     }
 
@@ -3026,8 +2724,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Delegate the actual pipeline switch to the auto-selection helper,
         // then persist the user's explicit choice as the saved preference so
         // future playback sessions restore it.
-        // TODO: AVPlayer path still needs AVMediaSelectionGroup wiring; this
-        // fix only covers the RivuletPlayer pipeline (custom player).
         selectSubtitleTrackWithoutSaving(id: id)
 
         if let id = id, let track = subtitleTracks.first(where: { $0.id == id }) {
@@ -3050,120 +2746,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         } else {
             currentSubtitleTrackId = nil
             SubtitlePreferenceManager.current = .off
-        }
-    }
-
-    /// Load subtitle content for the active Rivulet playback pipeline.
-    private func loadSubtitleForRivuletPlayer(trackId: Int?) {
-        guard rivuletPlayer != nil else { return }
-
-        // Clear subtitles if no track selected
-        guard let trackId = trackId,
-              let track = subtitleTracks.first(where: { $0.id == trackId }) else {
-            subtitleManager.clear()
-            // Stop FFmpeg subtitle stream and callback for Rivulet
-            if let rp = rivuletPlayer {
-                rp.deselectEmbeddedSubtitle()
-                rp.onSubtitleCue = nil
-                rp.onBitmapSubtitleCue = nil
-            }
-            return
-        }
-
-        // For RivuletPlayer in DirectPlay mode, enable inline subtitle extraction via FFmpeg.
-        // The read loop delivers subtitle cues as it encounters them (no second HTTP connection).
-        // Falls back to Plex URL for external sidecar subs if FFmpeg has no subtitle tracks.
-        if let rp = rivuletPlayer, rp.activePipeline == .directPlay {
-            let ffmpegSubs = rp.ffmpegSubtitleTracks
-            if !ffmpegSubs.isEmpty {
-                print("🎬 [Subtitles] Enabling inline embedded subtitle for track \(trackId) (FFmpeg has \(ffmpegSubs.count) sub tracks)")
-                subtitleManager.clear()
-                rp.onSubtitleCue = { [weak self] text, start, end in
-                    self?.subtitleManager.addCue(text: text, startTime: start, endTime: end)
-                }
-                rp.onBitmapSubtitleCue = { [weak self] cue in
-                    self?.subtitleManager.addBitmapCue(cue)
-                }
-
-                // Select the subtitle stream in the demuxer.
-                // Returns false if the track is external (not in the container) —
-                // fall through to Plex URL fetch in that case.
-                if rp.selectEmbeddedSubtitle(plexTrackId: trackId, plexSubtitleTracks: subtitleTracks) {
-                    return
-                }
-
-                // Embedded mapping failed — clean up the callbacks before falling through
-                rp.onSubtitleCue = nil
-                rp.onBitmapSubtitleCue = nil
-            }
-
-            // No embedded match — try Plex URL (external sidecar subs)
-            print("🎬 [Subtitles] Track \(trackId) not embedded in container, trying Plex URL")
-        }
-
-        loadSubtitleFromPlexURL(trackId: trackId, track: track)
-    }
-
-    /// Load subtitle from Plex server URL for external sidecar subtitles.
-    private func loadSubtitleFromPlexURL(trackId: Int, track: MediaTrack) {
-        let codec = track.codec?.lowercased()
-        let supportedCodecs = ["srt", "subrip", "vtt", "webvtt", "ass", "ssa", "mov_text", "tx3g"]
-        let isLikelyTextSubtitle = codec.map { supportedCodecs.contains($0) } ?? true
-        if let codec, !isLikelyTextSubtitle {
-            print("🎬 [Subtitles] Non-text or unsupported subtitle codec '\(codec)' - attempting SRT conversion fallback")
-        }
-
-        let hintedFormat: SubtitleFormat? = isLikelyTextSubtitle ? SubtitleFormat(from: codec) : .srt
-        let headers = ["X-Plex-Token": authToken]
-
-        // Build candidate subtitle URLs from the track's key only. Plex's
-        // `/library/streams/{id}` endpoint is PUT-only (used to change stream
-        // selection); a GET against it returns 501, so the old fallback just
-        // spammed HTTPClientError events without ever loading a subtitle.
-        // If there's no `subtitleKey`, there's nothing to fetch.
-        var candidateURLStrings: [String] = []
-        if let trackKey = track.subtitleKey {
-            let isAbsolute = trackKey.hasPrefix("http://") || trackKey.hasPrefix("https://")
-            let baseKeyURL = isAbsolute ? trackKey : (serverURL + trackKey)
-            candidateURLStrings.append(baseKeyURL)
-
-            // Explicit conversion endpoint for codecs we cannot parse directly.
-            let separator = baseKeyURL.contains("?") ? "&" : "?"
-            candidateURLStrings.append(baseKeyURL + "\(separator)format=srt")
-        }
-
-        // Preserve order but avoid duplicate network requests.
-        var seen = Set<String>()
-        candidateURLStrings = candidateURLStrings.filter { seen.insert($0).inserted }
-
-        let candidateURLs = candidateURLStrings.compactMap(URL.init(string:))
-        guard !candidateURLs.isEmpty else {
-            print("🎬 [Subtitles] Could not build subtitle URL candidates for track \(trackId)")
-            subtitleManager.clear()
-            return
-        }
-
-        Task { @MainActor in
-            var loaded = false
-            for candidateURL in candidateURLs {
-                let formatHintForCandidate: SubtitleFormat? =
-                    candidateURL.query?.localizedCaseInsensitiveContains("format=srt") == true ? .srt : hintedFormat
-                await subtitleManager.load(url: candidateURL, headers: headers, format: formatHintForCandidate)
-                if subtitleManager.error == nil {
-                    loaded = true
-                    print("🎬 [Subtitles] Loaded subtitle track \(trackId) from \(candidateURL.absoluteString)")
-                    break
-                }
-                print(
-                    "🎬 [Subtitles] Candidate failed for track \(trackId): \(candidateURL.absoluteString) " +
-                    "(\(subtitleManager.error?.localizedDescription ?? "unknown error"))"
-                )
-            }
-
-            if !loaded {
-                print("🎬 [Subtitles] Failed to load subtitle track \(trackId) from all candidate URLs")
-                subtitleManager.clear()
-            }
         }
     }
 
@@ -3396,8 +2978,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                let forcedTrack = subtitleTracks.first(where: { $0.isForced }) {
                 selectSubtitleTrackWithoutSaving(id: forcedTrack.id)
             } else if let activeSubtitleTrackId = currentSubtitleTrackId {
-                // For custom renderers, selecting can require explicit file fetch/load.
-                loadSubtitleForRivuletPlayer(trackId: activeSubtitleTrackId)
+                selectSubtitleTrackWithoutSaving(id: activeSubtitleTrackId)
             }
             return
         }
@@ -3433,10 +3014,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             currentSubtitleTrackId = id
             return
-        }
-        if rivuletPlayer != nil {
-            rivuletPlayer?.selectSubtitleTrack(id: id)
-            loadSubtitleForRivuletPlayer(trackId: id)
         }
         currentSubtitleTrackId = id
     }
@@ -3546,19 +3123,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         metadata.Media?.first?.Part?.first?.Stream?
             .filter { $0.isSubtitle }
             .map { MediaTrack(from: $0) } ?? []
-    }
-
-    private func configureSubtitleClockSyncForCurrentPlayer() {
-        guard let rp = rivuletPlayer else {
-            subtitleClockSync.stop()
-            return
-        }
-        subtitleClockSync.start(
-            owner: "Rivulet",
-            subtitleManager: subtitleManager,
-            timeProvider: { rp.renderer.displayTime },
-            isPlayingProvider: { rp.isPlaying }
-        )
     }
 
     // MARK: - Controls Visibility
