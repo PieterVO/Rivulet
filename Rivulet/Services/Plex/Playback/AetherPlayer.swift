@@ -269,20 +269,20 @@ final class AetherPlayer: PlayerProtocol {
         preferredAudioLanguages: [String] = [],
         preferredSubtitleLanguages: [String] = []
     ) async throws {
-        // .lossless: FLAC encode non-stream-copy audio (TrueHD, DTS,
+        // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
         // DTS-HD MA, MP3, Opus). FLAC encode is ~3x realtime on A15 vs
-        // EAC3's ~0.5x realtime, so segment production keeps up
+        // EAC3's ~0.5x realtime, so segment production keeps up with
         // AVPlayer's HLS pipeline on high-bitrate 4K content.
         //
-        // Tradeoff: needs sink accepts multichannel LPCM over
+        // Tradeoff: needs a sink that accepts multichannel LPCM over
         // HDMI (Denon / Marantz / NAD AVRs). On AirPlay-to-HomePod or
-        // stereo-LPCM-only routes multichannel LPCM downmixes
-        // stereo, but encode-throughput win is still worth it.
+        // stereo-LPCM-only routes the multichannel LPCM downmixes to
+        // stereo, but the encode-throughput win is still worth it.
         //
-        // subtitleLanguageHintsByStreamIndex accepted call-site
-        // compatibility but unused: upstream 4.8.0 no per-stream
+        // subtitleLanguageHintsByStreamIndex is accepted for call-site
+        // compatibility but unused: upstream 4.8.0 has no per-stream
         // language-hint parameter. preferredSubtitleLanguages (below)
-        // supported replacement steering initial subtitle
+        // is the supported replacement for steering initial subtitle
         // selection.
         let options = LoadOptions(
             suppressDisplayCriteria: false,

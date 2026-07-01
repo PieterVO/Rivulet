@@ -505,10 +505,4 @@ class AetherPlayerViewController: AVPlayerViewController, AVPlayerViewController
         }
     }
 
-    // No deinit needed: pickerPollTimer uses [weak self] so it won't
-    // retain this VC. stopPickerPollTimer() is called by rebindPickerObservation
-    // on every AVPlayer swap, and on VC teardown AVKit's own cleanup nilifies
-    // self.player which stops the item -- the timer fires and returns early.
-    // If explicit pre-teardown cleanup is ever needed, call stopPickerPollTimer()
-    // from viewDidDisappear before calling super.
 }
