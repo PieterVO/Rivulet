@@ -22,6 +22,11 @@ final class PlayerTransportBarView: UIView {
     private let skipButton = UIButton(type: .system)
     private let backgroundEffectView: UIVisualEffectView
 
+    let subtitlesPill = PlayerPillButton(icon: UIImage(systemName: "captions.bubble"), title: "Subtitles")
+    let audioPill = PlayerPillButton(icon: UIImage(systemName: "speaker.wave.3"), title: "Audio")
+    let infoPill = PlayerPillButton(icon: UIImage(systemName: "info.circle"), title: "Info")
+    private let pillStack = UIStackView()
+
     var onSkipTapped: (() -> Void)?
 
     init(viewModel: UniversalPlayerViewModel) {
@@ -69,6 +74,14 @@ final class PlayerTransportBarView: UIView {
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
 
+        pillStack.axis = .horizontal
+        pillStack.spacing = 16
+        pillStack.addArrangedSubview(subtitlesPill)
+        pillStack.addArrangedSubview(audioPill)
+        pillStack.addArrangedSubview(infoPill)
+        addSubview(pillStack)
+        pillStack.translatesAutoresizingMaskIntoConstraints = false
+
         NSLayoutConstraint.activate([
             backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
             backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -87,6 +100,9 @@ final class PlayerTransportBarView: UIView {
 
             skipButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             skipButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -80),
+
+            pillStack.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            pillStack.trailingAnchor.constraint(equalTo: skipButton.leadingAnchor, constant: -24),
 
             progressBar.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 24),
             progressBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80),
