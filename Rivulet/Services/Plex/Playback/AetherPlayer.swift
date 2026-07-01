@@ -44,12 +44,6 @@ final class AetherPlayer: PlayerProtocol {
     /// on the main queue in wireUpPublishers so the host overlay binds directly.
     @Published private(set) var subtitleCues: [AetherSubtitleCue] = []
 
-    /// Subtitle renditions advertised in the generated HLS master playlist,
-    /// bridged from AetherEngine.SubtitleRendition into Rivulet's nameable
-    /// AetherSubtitleRenditionInfo. The host uses this to map a native-picker
-    /// AVMediaSelectionOption back to the engine track index it represents.
-    @Published private(set) var subtitleRenditions: [AetherSubtitleRenditionInfo] = []
-
     /// Mirrors engine.$isSubtitleActive. True when any subtitle track
     /// (embedded or sidecar) is selected and the engine has cue data.
     @Published private(set) var isSubtitleActive: Bool = false
@@ -121,25 +115,6 @@ final class AetherPlayer: PlayerProtocol {
                         startTime: cue.startTime,
                         endTime: cue.endTime,
                         body: body
-                    )
-                }
-            }
-            .store(in: &cancellables)
-
-        // Bridge subtitle renditions: each element's type is inferred as
-        // AetherEngine.SubtitleRendition (cannot be named explicitly in
-        // Rivulet -- same module/class name collision as SubtitleCue).
-        // Member access works on the inferred type; only the destination
-        // struct name (AetherSubtitleRenditionInfo) needs to be nameable.
-        engine.$subtitleRenditions
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] renditions in
-                self?.subtitleRenditions = renditions.map { r in
-                    AetherSubtitleRenditionInfo(
-                        renditionID: r.renditionID,
-                        name: r.name,
-                        language: r.language,
-                        trackIndex: r.trackIndex
                     )
                 }
             }
@@ -294,31 +269,27 @@ final class AetherPlayer: PlayerProtocol {
         preferredAudioLanguages: [String] = [],
         preferredSubtitleLanguages: [String] = []
     ) async throws {
-        // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
+        // .lossless: FLAC encode non-stream-copy audio (TrueHD, DTS,
         // DTS-HD MA, MP3, Opus). FLAC encode is ~3x realtime on A15 vs
-        // EAC3's ~0.5x realtime, so segment production keeps up with
+        // EAC3's ~0.5x realtime, so segment production keeps up
         // AVPlayer's HLS pipeline on high-bitrate 4K content.
         //
-        // Tradeoff: needs a sink that accepts multichannel LPCM over
+        // Tradeoff: needs sink accepts multichannel LPCM over
         // HDMI (Denon / Marantz / NAD AVRs). On AirPlay-to-HomePod or
-        // stereo-LPCM-only routes the multichannel LPCM downmixes to
-        // stereo, but the encode-throughput win is still worth it.
+        // stereo-LPCM-only routes multichannel LPCM downmixes
+        // stereo, but encode-throughput win is still worth it.
+        //
+        // subtitleLanguageHintsByStreamIndex accepted call-site
+        // compatibility but unused: upstream 4.8.0 no per-stream
+        // language-hint parameter. preferredSubtitleLanguages (below)
+        // supported replacement steering initial subtitle
+        // selection.
         let options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
             matchContentEnabled: true,
             panelIsInHDRMode: Self.panelIsInHDRMode(),
             audioBridgeMode: .lossless,
-            // Combined native-picker subtitles: advertiseSubtitleRenditions
-            // creates AVKit picker entries for text and bitmap tracks; the
-            // host maps selections back to Aether and paints the overlay.
-            // Keep prepareNativeSubtitles off here: Rivulet wants bitmap/image
-            // subtitles in the native list, which requires the decoy rendition
-            // path and host overlay. Enabling native mov_text in parallel can
-            // double-render text subtitles.
-            advertiseSubtitleRenditions: true,
-            prepareNativeSubtitles: false,
-            subtitleLanguageHintsByStreamIndex: subtitleLanguageHintsByStreamIndex,
             preferredAudioLanguages: preferredAudioLanguages,
             preferredSubtitleLanguages: preferredSubtitleLanguages
         )

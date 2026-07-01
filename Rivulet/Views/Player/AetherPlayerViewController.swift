@@ -26,16 +26,6 @@
 //  replaced wholesale (all three params at once) so SwiftUI diffing sees a
 //  clean value update.
 //
-//  Native picker observation
-//  -------------------------
-//  When advertiseSubtitleRenditions is on, each subtitle track appears as a
-//  decoy WebVTT rendition in AVKit's Subtitles menu. A 0.3 s periodic timer
-//  polls currentMediaSelection on the current AVPlayerItem; on change it maps
-//  the selected AVMediaSelectionOption to an AetherEngine track index (via
-//  aetherPlayer.subtitleRenditions) and calls aetherPlayer.selectSubtitleTrack.
-//  The timer is invalidated and re-armed whenever the bound AVPlayer changes
-//  (Aether reloads the item on audio-track switch / background reopen).
-//
 
 import AVKit
 import Combine
@@ -78,19 +68,6 @@ class AetherPlayerViewController: AVPlayerViewController, AVPlayerViewController
     /// so we track it via the `showsPlaybackControls` observed property and
     /// assume visible initially (conservative: more bottom padding at start).
     private var controlsVisible: Bool = true
-
-    // MARK: - Native picker observation
-
-    /// The legible AVMediaSelectionGroup for the current item.
-    /// Loaded once per AVPlayer binding and reset on teardown.
-    private var legibleGroup: AVMediaSelectionGroup?
-
-    /// Last AVMediaSelectionOption seen from the picker poll. Identity
-    /// comparison (===) detects changes without a slow isEqual.
-    private var lastSeenOption: AVMediaSelectionOption?
-
-    /// Timer that polls currentMediaSelection at 0.3 s intervals.
-    private var pickerPollTimer: Timer?
 
     // MARK: - Native Up Next (AVContentProposal)
 
@@ -432,8 +409,7 @@ class AetherPlayerViewController: AVPlayerViewController, AVPlayerViewController
     // MARK: - Player binding
 
     private func bindPlayerSpecific() {
-        // Bind AVPlayer instance (existing behavior). Re-arm the picker
-        // poll timer on every AVPlayer swap so we track the fresh item.
+        // Bind AVPlayer instance.
         viewModel.$aetherPlayer
             .compactMap { $0 }
             .flatMap { $0.$currentAVPlayer }
@@ -441,7 +417,6 @@ class AetherPlayerViewController: AVPlayerViewController, AVPlayerViewController
             .sink { [weak self] avPlayer in
                 guard let self else { return }
                 self.player = avPlayer
-                self.rebindPickerObservation(for: avPlayer)
                 // Aether swapped its internal AVPlayer/currentItem; the new item
                 // carries no proposal. Re-apply the cached next episode so the
                 // native Up Next card survives the swap. Clear the per-ratingKey
@@ -487,103 +462,6 @@ class AetherPlayerViewController: AVPlayerViewController, AVPlayerViewController
                 self?.handleNextEpisodeChange(next)
             }
             .store(in: &cancellables)
-    }
-
-    // MARK: - Native picker observation (subtitle track routing)
-
-    /// Called whenever the bound AVPlayer changes. Tears down the previous
-    /// poll timer, loads the legible group for the new item, and arms a
-    /// fresh timer.
-    private func rebindPickerObservation(for avPlayer: AVPlayer?) {
-        stopPickerPollTimer()
-        legibleGroup = nil
-        lastSeenOption = nil
-
-        guard let avPlayer else { return }
-
-        // Load the legible group asynchronously. AVPlayerItem.asset is
-        // already probed by Aether before currentAVPlayer is published, so
-        // the load typically resolves immediately. The timer is armed inside
-        // the continuation so it only polls once the group is ready.
-        Task { [weak self, weak avPlayer] in
-            guard let item = avPlayer?.currentItem else { return }
-
-            let group = try? await item.asset.loadMediaSelectionGroup(for: .legible)
-
-            await MainActor.run { [weak self] in
-                guard let self else { return }
-                self.legibleGroup = group
-                if group != nil {
-                    self.startPickerPollTimer()
-                }
-            }
-        }
-    }
-
-    private func startPickerPollTimer() {
-        pickerPollTimer?.invalidate()
-        pickerPollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
-            self?.pollPickerSelection()
-        }
-    }
-
-    private func stopPickerPollTimer() {
-        pickerPollTimer?.invalidate()
-        pickerPollTimer = nil
-    }
-
-    /// Reads the current legible selection and, if it changed since last poll,
-    /// routes the new selection to the Aether engine.
-    private func pollPickerSelection() {
-        guard
-            let group = legibleGroup,
-            let item = player?.currentItem
-        else { return }
-
-        let selected = item.currentMediaSelection.selectedMediaOption(in: group)
-
-        // Identity comparison: AVKit vends the same option object for the same
-        // selection; a pointer change reliably signals a user action.
-        guard selected !== lastSeenOption else { return }
-        lastSeenOption = selected
-
-        if let option = selected {
-            if let idx = aetherTrackIndex(for: option, in: group) {
-                // A decoy rendition advertised by Aether: the host decodes the
-                // selected text or bitmap track and paints the overlay.
-                viewModel.selectAetherSubtitleTrackFromNativePicker(aetherTrackId: idx)
-            } else {
-                // A native option surfaced by AVPlayer itself, or an option we
-                // don't own. Disable the host overlay so we never double-render.
-                viewModel.selectAetherSubtitleTrackFromNativePicker(aetherTrackId: nil)
-            }
-        } else {
-            // User chose "Off".
-            viewModel.selectAetherSubtitleTrackFromNativePicker(aetherTrackId: nil)
-        }
-    }
-
-    /// Maps an AVMediaSelectionOption from the native picker to the
-    /// AetherEngine track index it represents.
-    ///
-    /// Match priority:
-    ///   1. language + display name (most precise)
-    ///   2. language only (handles renamed renditions)
-    ///   3. ordinal position within legibleGroup.options (last resort)
-    ///
-    /// Returns the `trackIndex` field from the matched rendition.
-    private func aetherTrackIndex(for option: AVMediaSelectionOption, in group: AVMediaSelectionGroup) -> Int? {
-        let renditions = viewModel.aetherPlayer?.subtitleRenditions ?? []
-        guard !renditions.isEmpty else { return nil }
-
-        // Name match ONLY. Rendition names are unique per track
-        // (disambiguated in AetherEngine.makeSubtitleRenditions), and we
-        // control both the master NAME and the bridged list, so the name is the
-        // reliable key. Ordinal fallback is intentionally absent because AVKit
-        // may mix options it discovers itself with Aether's advertised
-        // renditions. Language tags are also unreliable: the master may emit
-        // ISO 639-2 "eng" while AVKit reports BCP-47 "en".
-        return renditions.first(where: { $0.name == option.displayName })?.trackIndex
     }
 
     // MARK: - AVPlayerViewControllerDelegate (Up Next)
