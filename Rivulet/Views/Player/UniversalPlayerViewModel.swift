@@ -692,10 +692,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             await fetchFullMetadataIfNeeded()
         }
 
-        // useLocalRemux: true only on the .rivulet path (RPlayer's own
-        // FFmpegRemuxSession + LocalRemuxServer for DV P7 / DTS / TrueHD).
-        // .apple uses the server's HLS transcode; .aether does its own demux.
-        let useLocalRemux = (PlayerPreference.current == .rivulet)
+        // Aether does its own demux; the AVPlayer routes use the server's
+        // HLS transcode rather than RPlayer's local remux server.
+        let useLocalRemux = false
         let routingContext = ContentRoutingContext(
             metadata: metadata,
             serverURL: URL(string: serverURL)!,
@@ -1123,23 +1122,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Fetch season/show poster for Now Playing artwork (episodes)
         await fetchSeasonPosterIfNeeded()
 
-        // RivuletPlayer's direct pipeline is progressive-file/sample-buffer
-        // only. Unsupported video codecs must use AVPlayer's Plex HLS
-        // transcode path; HLG uses AVPlayer direct/local-remux so tvOS owns
-        // HDR presentation without asking the server to convert it.
-        let mustUseAVPlayer = ContentRouter.requiresVideoTranscode(metadata: metadata)
-            || ContentRouter.isHLGContent(metadata: metadata)
-
-        // Player dispatch: .rivulet uses RivuletPlayer (unless the source
-        // codec has no Apple TV decoder and must transcode through AVPlayer's
-        // HLS path); .aether and .apple both go through startAVPlayerPlayback,
-        // with ContentRouter.plan() emitting the .aether route for the Aether
-        // path.
-        if PlayerPreference.current == .rivulet && !mustUseAVPlayer {
-            await startRivuletPlayback()
-        } else {
-            await startAVPlayerPlayback()
-        }
+        // Aether is the only VOD engine; ContentRouter.plan() emits the
+        // .aether route (or an AVPlayer fallback route) and
+        // startAVPlayerPlayback() drives both.
+        await startAVPlayerPlayback()
     }
 
     // MARK: - RivuletPlayer Startup
@@ -1169,6 +1155,17 @@ final class UniversalPlayerViewModel: ObservableObject {
             let plan = ContentRouter.plan(for: routingContext)
             playbackPlan = plan
             AppHangContext.setPlaybackRoute(plan.primary.description)
+
+            // If ContentRouter routed away from RivuletPlayer (FFmpeg unavailable,
+            // native MP4 direct play, or forced HLS transcode), hand off to the
+            // AVPlayer path instead of feeding a non-FFmpeg route into RivuletPlayer.
+            switch plan.primary {
+            case .avPlayerDirect, .hls, .aether:
+                await startAVPlayerPlayback()
+                return
+            case .localRemux:
+                break
+            }
 
             // Reuse existing RivuletPlayer when transitioning episodes so the
             // AVSampleBufferDisplayLayer stays in the view hierarchy. Creating a
@@ -1336,17 +1333,9 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         do {
             // Aether drives AVDisplayManager.preferredDisplayCriteria
-            // itself, synchronously before AVPlayer.replaceCurrentItem.
-            // Rivulet's DisplayCriteriaManager stands down for the
-            // .aether path to avoid two writers fighting over the
-            // panel-mode handshake. RPlayer + AVPlayer-direct paths
-            // continue to use DisplayCriteriaManager as before.
-            if PlayerPreference.current != .aether {
-                DisplayCriteriaManager.shared.configureForContent(
-                    videoStream: metadata.primaryVideoStream
-                )
-                await DisplayCriteriaManager.shared.waitForDisplaySwitchIfNeeded()
-            }
+            // itself, synchronously before AVPlayer.replaceCurrentItem, so
+            // Rivulet's DisplayCriteriaManager stands down here to avoid
+            // two writers fighting over the panel-mode handshake.
 
             let plan = playbackPlan ?? ContentRouter.plan(for: ContentRoutingContext(
                 metadata: metadata,

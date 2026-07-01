@@ -226,13 +226,6 @@ enum SettingsContent {
 
     private static var playback: [SettingsRowItem] {
         [
-            SettingsRowItem(id: "playerPreference", title: "Video Player",
-                            kind: .cycle(value: { PlayerPreference.current.description },
-                                         next: {
-                                             let all = PlayerPreference.allCases
-                                             let i = all.firstIndex(of: PlayerPreference.current) ?? 0
-                                             PlayerPreference.set(all[(i + 1) % all.count])
-                                         })),
             SettingsRowItem(id: "audioLanguage", title: "Audio Language",
                             kind: .navigationValue(.audioLanguagePicker, value: {
                                 LanguageOption(languageCode: AudioPreferenceManager.current.languageCode).description

@@ -22,9 +22,8 @@ enum PlaybackRoute: Sendable, CustomStringConvertible {
     case hls(url: URL, headers: [String: String]?)
 
     /// AetherEngine — FFmpeg demux + HLS-fMP4 remux + AVPlayer with
-    /// HDR10+ / HLG / EAC3+JOC Atmos stream-copy. Routed when the user
-    /// selects PlayerPreference.aether AND the source is Aether-compatible
-    /// (not DV P7, not Live TV, not AV1 on Apple TV).
+    /// HDR10+ / HLG / EAC3+JOC Atmos stream-copy. The only VOD engine;
+    /// routed whenever a direct-play URL is available.
     case aether(url: URL, headers: [String: String]?)
 
     var description: String {
@@ -207,15 +206,13 @@ struct ContentRouter {
         let hlsFallback = buildHLSRoute(context: context)
         let isHLG = Self.isHLGContent(metadata: context.metadata)
 
-        // Aether selected: route ALL VOD to Aether. Its FFmpeg backend
-        // demuxes every container/codec (SW-decoding AV1/MPEG-2/VC-1; DV
-        // P7 plays as HDR10 base, losing the DV layer). The player is the
-        // user's choice from Settings; we no longer switch players based
-        // on content. Only falls through if there is no direct-play URL.
-        if PlayerPreference.current == .aether,
-           let aetherRoute = buildAetherRoute(context: context) {
-            reasoning.append("user=aether,all-content")
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → Aether (user-selected)")
+        // Aether is the only VOD engine: route ALL VOD to Aether. Its
+        // FFmpeg backend demuxes every container/codec (SW-decoding
+        // AV1/MPEG-2/VC-1; DV P7 plays as HDR10 base, losing the DV layer).
+        // Only falls through if there is no direct-play URL.
+        if let aetherRoute = buildAetherRoute(context: context) {
+            reasoning.append("aether,all-content")
+            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → Aether")
             return PlaybackPlan(
                 policy: context.playbackPolicy,
                 primary: aetherRoute,

@@ -32,7 +32,7 @@ enum SettingsDescriptorStore {
         "cat_playback": SettingDescriptor(
             icon: "play.fill",
             iconColor: .blue,
-            description: "Configure audio, subtitles, skip behavior, autoplay, and video player options."
+            description: "Configure audio, subtitles, skip behavior, and autoplay."
         ),
         "cat_liveTV": SettingDescriptor(
             icon: "tv.fill",
@@ -153,11 +153,6 @@ enum SettingsDescriptorStore {
             icon: "rectangle.stack",
             iconColor: .purple,
             description: "When off, closing credits play uninterrupted and the player returns to Home at the end of the episode."
-        ),
-        "playerPreference": SettingDescriptor(
-            icon: "play.rectangle.fill",
-            iconColor: .blue,
-            description: "Choose the video player. Rivulet Player is the default custom FFmpeg engine for fast local playback with minimal server transcoding. Aether provides an AVPlayerViewController-style path with native HDR10+, HLG, Dolby Atmos, Dolby Vision (Profile 5 and 8.1), and lossless TrueHD and DTS. Apple AVPlayer is tvOS's native player and works well with HomePods."
         ),
         "avPlayerDV": SettingDescriptor(
             icon: "sparkles.tv",
