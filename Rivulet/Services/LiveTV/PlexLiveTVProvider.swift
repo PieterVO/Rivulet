@@ -75,7 +75,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
                 "cache_age_seconds": Int(Date().timeIntervalSince(lastFetch)),
                 "server_host": URL(string: serverURL)?.host ?? "unknown"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             return cachedChannels
         }
@@ -92,7 +92,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
             "server_host": URL(string: serverURL)?.host ?? "unknown",
             "source_id": sourceId
         ]
-        SentrySDK.addBreadcrumb(startBreadcrumb)
+        SentryBridge.addBreadcrumb(startBreadcrumb)
 
         // First check capabilities
         let caps: PlexLiveTVCapabilities
@@ -104,7 +104,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
         } catch {
             // Capture Plex Live TV capability check failure
             let capturedServerURL = self.serverURL
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_livetv", key: "component")
                 scope.setTag(value: "capability_check", key: "operation")
                 scope.setExtra(value: capturedServerURL, key: "server_url")
@@ -122,7 +122,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
             "has_dvr": caps.hasDVR,
             "server_host": URL(string: serverURL)?.host ?? "unknown"
         ]
-        SentrySDK.addBreadcrumb(capsBreadcrumb)
+        SentryBridge.addBreadcrumb(capsBreadcrumb)
 
         guard caps.liveTVEnabled else {
             throw LiveTVProviderError.notConnected
@@ -138,7 +138,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
         } catch {
             // Capture Plex Live TV channel fetch failure
             let capturedServerURL = self.serverURL
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_livetv", key: "component")
                 scope.setTag(value: "channel_fetch", key: "operation")
                 scope.setExtra(value: capturedServerURL, key: "server_url")
@@ -166,7 +166,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
             "channels_needing_transcode": channelsNeedingTranscode,
             "server_host": URL(string: serverURL)?.host ?? "unknown"
         ]
-        SentrySDK.addBreadcrumb(breakdownBreadcrumb)
+        SentryBridge.addBreadcrumb(breakdownBreadcrumb)
 
         // Update cache
         cachedChannels = channels
@@ -208,7 +208,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
             // Capture Plex Live TV EPG fetch failure
             let capturedServerURL = self.serverURL
             let capturedChannelCount = channels.count
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_livetv", key: "component")
                 scope.setTag(value: "epg_fetch", key: "operation")
                 scope.setExtra(value: capturedServerURL, key: "server_url")
@@ -292,7 +292,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
                 "channel_id": channel.id,
                 "operation": "build_stream_url"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             return nil
         }
@@ -312,7 +312,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
                 "stream_type": "hdhr_direct",
                 "url_host": originalURL.host ?? "unknown"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             return originalURL
         }
@@ -329,7 +329,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
                 "channel_id": channel.id,
                 "original_url_path": originalURL.path
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             return originalURL
         }
@@ -363,7 +363,7 @@ actor PlexLiveTVProvider: LiveTVProvider {
             "url_host": newURL.host ?? "unknown",
             "url_path": newURL.path
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
 
         return newURL
     }

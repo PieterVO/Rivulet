@@ -99,7 +99,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
             // Capture HTTP errors to Sentry (skip 401/403 auth errors and 5xx server errors)
             if httpResponse.statusCode != 401 && httpResponse.statusCode != 403 && !(500...599).contains(httpResponse.statusCode) {
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "plex_network", key: "component")
                     scope.setExtra(value: url.absoluteString, key: "url")
                     scope.setExtra(value: method, key: "method")
@@ -122,7 +122,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             }
 
             // Capture JSON decode errors to Sentry
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_network", key: "component")
                 scope.setTag(value: "json_decode", key: "error_type")
                 scope.setExtra(value: url.absoluteString, key: "url")
@@ -1886,7 +1886,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "dvr_types": dvrs.compactMap { $0.make ?? $0.model }.joined(separator: ", "),
                 "server_host": URL(string: serverURL)?.host ?? "unknown"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             return PlexLiveTVCapabilities(
                 allowTuners: hasDVRs,
@@ -1901,7 +1901,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "error": error.localizedDescription,
                 "server_host": URL(string: serverURL)?.host ?? "unknown"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             // If the endpoint fails, Live TV is not available
             return PlexLiveTVCapabilities()
@@ -1944,7 +1944,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "has_dvr_array": dvrContainer.MediaContainer.Dvr != nil,
                 "dvr_count": dvrContainer.MediaContainer.Dvr?.count ?? 0
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
             return []
         }
 
@@ -1960,7 +1960,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "dvr_make": dvr.make ?? "unknown",
                 "dvr_model": dvr.model ?? "unknown"
             ]
-            SentrySDK.addBreadcrumb(hdhrBreadcrumb)
+            SentryBridge.addBreadcrumb(hdhrBreadcrumb)
 
             hdhrStreamURLs = await fetchHDHomeRunLineup(deviceURI: deviceURI)
         } else {
@@ -1974,7 +1974,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "has_device_array": dvr.Device != nil,
                 "device_count": dvr.Device?.count ?? 0
             ]
-            SentrySDK.addBreadcrumb(dvbBreadcrumb)
+            SentryBridge.addBreadcrumb(dvbBreadcrumb)
         }
 
         // Extract provider path using DVR key (e.g., tv.plex.providers.epg.xmltv:28)
@@ -2080,7 +2080,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             "has_hdhr_device": hasHDHomeRunDevice,
             "server_host": URL(string: serverURL)?.host ?? "unknown"
         ]
-        SentrySDK.addBreadcrumb(summaryBreadcrumb)
+        SentryBridge.addBreadcrumb(summaryBreadcrumb)
 
         return channels
     }
@@ -2125,7 +2125,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "total_channels": channels.count,
                 "channels_with_urls": urlMap.count
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             return urlMap
         } catch {
@@ -2138,10 +2138,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 "device_host": lineupURL.host ?? "unknown",
                 "error": error.localizedDescription
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             // Capture error event for HDHomeRun failures
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_livetv", key: "component")
                 scope.setTag(value: "hdhr_lineup_fetch", key: "operation")
                 scope.setExtra(value: lineupURL.host ?? "unknown", key: "device_host")

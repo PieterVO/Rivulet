@@ -107,6 +107,16 @@ final class PlaybackInputCoordinator {
 
     @MainActor
     private func dispatch(action: PlaybackInputAction, source: PlaybackInputSource, target: PlaybackInputTarget) {
+        if isDuplicateTransportCommand(action, source: source) {
+            PlaybackInputTelemetry.shared.recordDeduped(
+                action: action,
+                source: source,
+                window: InputConfig.transportDedupeWindow,
+                crossSourceOnly: false
+            )
+            return
+        }
+
         if shouldDedupe(action), isDuplicate(action, source: source) {
             PlaybackInputTelemetry.shared.recordDeduped(
                 action: action,
@@ -140,6 +150,25 @@ final class PlaybackInputCoordinator {
         guard lastAction == action else { return false }
         if crossSourceOnly, lastActionSource == source { return false }
         return Date().timeIntervalSince(lastActionAt) < InputConfig.actionDedupeWindow
+    }
+
+    @MainActor
+    private func isDuplicateTransportCommand(_ action: PlaybackInputAction, source: PlaybackInputSource) -> Bool {
+        guard isTransportCommand(action), let lastAction, isTransportCommand(lastAction) else {
+            return false
+        }
+
+        let elapsed = Date().timeIntervalSince(lastActionAt)
+        return elapsed < InputConfig.transportDedupeWindow
+    }
+
+    private func isTransportCommand(_ action: PlaybackInputAction) -> Bool {
+        switch action {
+        case .play, .pause, .playPause:
+            return true
+        default:
+            return false
+        }
     }
 
     @MainActor

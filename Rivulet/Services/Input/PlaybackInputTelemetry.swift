@@ -56,7 +56,7 @@ final class PlaybackInputTelemetry {
             "source": sourceName,
             "is_scrubbing": isScrubbing
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     func recordDeduped(
@@ -79,7 +79,7 @@ final class PlaybackInputTelemetry {
             "window_ms": Int(window * 1000),
             "cross_source_only": crossSourceOnly
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     func recordCoalescedSeek(totalSeconds: TimeInterval, source: PlaybackInputSource) {
@@ -92,7 +92,7 @@ final class PlaybackInputTelemetry {
             "source": source.rawValue,
             "total_seconds": totalSeconds
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     func recordScrubTransition(
@@ -128,7 +128,7 @@ final class PlaybackInputTelemetry {
         let breadcrumb = Breadcrumb(level: .info, category: "playback_scrub_transition")
         breadcrumb.message = "\(surface.rawValue):\(transition.rawValue)"
         breadcrumb.data = data
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     func flushSessionSummary(reason: String) {
@@ -154,7 +154,7 @@ final class PlaybackInputTelemetry {
             "deduped_by_source": dedupedBySource,
             "scrub_transition_by_type": scrubTransitionByType
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
 
         resetSession()
     }

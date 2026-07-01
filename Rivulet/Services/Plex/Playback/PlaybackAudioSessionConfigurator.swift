@@ -283,17 +283,17 @@ private extension PlaybackAudioSessionConfigurator {
     /// Mark entry into a main-thread-blockable audio-session section on the
     /// Sentry scope + breadcrumb trail. Thread-safe; callable from any actor.
     static func appHangSectionEnter(_ name: String, owner: String) {
-        SentrySDK.configureScope { $0.setTag(value: name, key: "main_thread_section") }
+        SentryBridge.configureScope { $0.setTag(value: name, key: "main_thread_section") }
         let crumb = Breadcrumb(level: .info, category: "main_thread_section")
         crumb.message = "enter:\(name)"
         crumb.data = ["owner": owner]
-        SentrySDK.addBreadcrumb(crumb)
+        SentryBridge.addBreadcrumb(crumb)
     }
 
     static func appHangSectionExit(_ name: String) {
-        SentrySDK.configureScope { $0.setTag(value: "none", key: "main_thread_section") }
+        SentryBridge.configureScope { $0.setTag(value: "none", key: "main_thread_section") }
         let crumb = Breadcrumb(level: .info, category: "main_thread_section")
         crumb.message = "exit:\(name)"
-        SentrySDK.addBreadcrumb(crumb)
+        SentryBridge.addBreadcrumb(crumb)
     }
 }

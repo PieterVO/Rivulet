@@ -7,8 +7,8 @@
 //    [ Play ] [ 🔖 ] [ ⓘ ] [ › ]
 //
 //  Focus styling mirrors the SwiftUI `AppStoreActionButtonStyle`:
-//    - unfocused: white-20% background + ultra-thin material overlay +
-//      white-20% 0.5pt stroke, scale 1.0
+//    - unfocused: white-20% background + real Liquid Glass (UIGlassEffect)
+//      overlay + white-20% 0.5pt stroke, scale 1.0
 //    - focused: solid white background, no stroke, scale 1.08
 //    - pressed: -5% scale
 //
@@ -184,6 +184,12 @@ final class HeroButtonRowView: UIView {
 @MainActor
 final class HeroPillButton: UIControl {
 
+    /// Hardcoded pill width shared with the carousel/detail action row's
+    /// `FocusableActionButton` pills (see `MediaDetailChromeView`) so the
+    /// hero and carousel present identically-sized buttons.
+    static let pillWidth: CGFloat = 250
+    static let buttonHeight: CGFloat = 66
+
     var title: String = "" {
         didSet { titleLabel.text = title }
     }
@@ -206,15 +212,9 @@ final class HeroPillButton: UIControl {
     }
 
     private let background = UIView()
-    /// SwiftUI's `.ultraThinMaterial` is the second background under the
-    /// solid fill (it shows through when unfocused, fades out on focus).
-    /// On tvOS the modern system materials (`.systemUltraThinMaterial*`,
-    /// `.systemThinMaterial*`) are iOS-only, so SwiftUI falls back to a
-    /// traditional blur internally. We use `UIBlurEffect(style: .regular)`
-    /// which is the closest publicly-available tvOS equivalent — it
-    /// auto-adapts to the user interface style and renders as a thin
-    /// dark blur over the hero backdrop.
-    private let materialBackground = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+    /// Real Liquid Glass material, the second background under the solid
+    /// fill (it shows through when unfocused, fades out on focus).
+    private let materialBackground = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     private let strokeLayer = CAShapeLayer()
     private let contentStack = UIStackView()
     private let iconView = UIImageView()
@@ -268,7 +268,8 @@ final class HeroPillButton: UIControl {
         addSubview(contentStack)
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 66),
+            widthAnchor.constraint(equalToConstant: Self.pillWidth),
+            heightAnchor.constraint(equalToConstant: Self.buttonHeight),
 
             background.topAnchor.constraint(equalTo: topAnchor),
             background.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -281,8 +282,9 @@ final class HeroPillButton: UIControl {
             materialBackground.trailingAnchor.constraint(equalTo: trailingAnchor),
 
             contentStack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 32),
-            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -32),
+            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 32),
+            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
+            contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
 
             iconView.widthAnchor.constraint(equalToConstant: 24),
             iconView.heightAnchor.constraint(equalToConstant: 24)
@@ -368,9 +370,7 @@ final class HeroPillButton: UIControl {
 final class HeroCircleButton: UIControl {
 
     private let background = UIView()
-    /// See `HeroPillButton.materialBackground` for the rationale on the
-    /// tvOS material approximation.
-    private let materialBackground = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+    private let materialBackground = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     private let strokeLayer = CAShapeLayer()
     private let iconView = UIImageView()
 

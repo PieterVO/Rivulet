@@ -32,7 +32,7 @@ final class PreviewExpandedLayout: UICollectionViewLayout {
         // asynchronously, so the carousel uses PinnableCollectionView to hold it
         // centered through the morph — see PinnableCollectionView.swift.
         guard let cv = collectionView, itemCount > 0 else { return .zero }
-        let centeredWidth = cv.bounds.width - 2 * PreviewCarouselGeometry.centeredHorizontalInset
+        let centeredWidth = PreviewCarouselGeometry.centeredCardSize(in: cv.bounds).width
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap
         let totalCardSpan = stride * CGFloat(itemCount) - PreviewCarouselGeometry.sideCardGap
         let edgePad = PreviewCarouselGeometry.centeredHorizontalInset
@@ -41,12 +41,12 @@ final class PreviewExpandedLayout: UICollectionViewLayout {
 
     private func carouselCellFrame(for index: Int) -> CGRect {
         guard let cv = collectionView else { return .zero }
-        let centeredWidth = cv.bounds.width - 2 * PreviewCarouselGeometry.centeredHorizontalInset
-        let cardHeight = cv.bounds.height - PreviewCarouselGeometry.topInset
+        let centered = PreviewCarouselGeometry.centeredCardFrame(in: cv.bounds)
+        let centeredWidth = centered.width
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap
         let edgePad = PreviewCarouselGeometry.centeredHorizontalInset
         let x = edgePad + stride * CGFloat(index)
-        return CGRect(x: x, y: PreviewCarouselGeometry.topInset, width: centeredWidth, height: cardHeight)
+        return CGRect(x: x, y: centered.minY, width: centeredWidth, height: centered.height)
     }
 
     override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {

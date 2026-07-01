@@ -65,6 +65,23 @@ enum PreviewCarouselGeometry {
     /// (PreviewOverlayHost.swift:17). Card frame + chrome insets +
     /// corner radius all run on this curve.
     static let expandAnimationDuration: TimeInterval = 0.35
+
+    static func centeredCardSize(in bounds: CGRect) -> CGSize {
+        let width = max(0, bounds.width - 2 * centeredHorizontalInset)
+        let availableHeight = max(0, bounds.height - topInset)
+        let imageHeight = width * 9 / 16
+        return CGSize(width: width, height: min(availableHeight, imageHeight))
+    }
+
+    static func centeredCardFrame(in bounds: CGRect) -> CGRect {
+        let size = centeredCardSize(in: bounds)
+        return CGRect(
+            x: centeredHorizontalInset,
+            y: topInset,
+            width: size.width,
+            height: size.height
+        )
+    }
 }
 
 /// Slot positions for the 5-slot host. Cards live at these positions
@@ -95,17 +112,9 @@ func previewCarouselFrame(
     in bounds: CGRect
 ) -> CGRect {
     let geom = PreviewCarouselGeometry.self
-    let centeredWidth = bounds.width - 2 * geom.centeredHorizontalInset
-    let centeredHeight = bounds.height - geom.topInset
-
-    let centered = CGRect(
-        x: geom.centeredHorizontalInset,
-        y: geom.topInset,
-        width: centeredWidth,
-        height: centeredHeight
-    )
+    let centered = geom.centeredCardFrame(in: bounds)
 
     // Each step is one full card width plus the inter-card gap.
-    let stride = centeredWidth + geom.sideCardGap
+    let stride = centered.width + geom.sideCardGap
     return centered.offsetBy(dx: stride * CGFloat(slot.rawValue), dy: 0)
 }

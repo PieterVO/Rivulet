@@ -167,7 +167,7 @@ class PlexAuthManager: ObservableObject {
             scheduleErrorDismissal()
 
             // Capture PIN request failure to Sentry
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_auth", key: "component")
                 scope.setTag(value: "pin_request", key: "auth_step")
             }
@@ -672,7 +672,7 @@ class PlexAuthManager: ObservableObject {
                 connectionError = "Unable to reach Plex. Check your network connection."
 
                 // Capture server fetch failure to Sentry
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "plex_auth", key: "component")
                     scope.setTag(value: "server_discovery", key: "auth_step")
                 }
@@ -740,7 +740,7 @@ class PlexAuthManager: ObservableObject {
                 // User can still see cached content
 
                 // Capture connection verification failure to Sentry
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "plex_auth", key: "component")
                     scope.setTag(value: "connection_verify", key: "auth_step")
                     scope.setExtra(value: currentURL, key: "failed_url")

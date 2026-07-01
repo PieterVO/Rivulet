@@ -130,14 +130,6 @@ enum CaptionAppearance {
         default:          edge = .none
         }
 
-        #if DEBUG
-        print("""
-        [CaptionAppearance] relative=\(relative) scale=\(scale) \
-        bgOpacity=\(bgOpacity) windowOpacity=\(windowOpacity) \
-        usingWindow=\(useWindow) effectiveBgOpacity=\(backgroundOpacity) edge=\(edge)
-        """)
-        #endif
-
         return CaptionStyle(
             foreground: foreground,
             backgroundColor: backgroundColor,

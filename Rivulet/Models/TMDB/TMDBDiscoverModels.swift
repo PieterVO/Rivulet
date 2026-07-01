@@ -8,30 +8,45 @@
 import Foundation
 
 enum TMDBDiscoverSection: String, CaseIterable, Identifiable, Sendable {
+    case movieTrending
     case moviePopular
     case movieNowPlaying
     case movieUpcoming
     case movieTopRated
+    case tvTrending
     case tvPopular
     case tvAiringToday
     case tvOnTheAir
     case tvTopRated
 
+    static let allCases: [TMDBDiscoverSection] = [
+        .moviePopular,
+        .movieNowPlaying,
+        .movieUpcoming,
+        .movieTopRated,
+        .tvPopular,
+        .tvAiringToday,
+        .tvOnTheAir,
+        .tvTopRated
+    ]
+
     var id: String { rawValue }
 
     var mediaType: TMDBMediaType {
         switch self {
-        case .moviePopular, .movieNowPlaying, .movieUpcoming, .movieTopRated: return .movie
-        case .tvPopular, .tvAiringToday, .tvOnTheAir, .tvTopRated: return .tv
+        case .movieTrending, .moviePopular, .movieNowPlaying, .movieUpcoming, .movieTopRated: return .movie
+        case .tvTrending, .tvPopular, .tvAiringToday, .tvOnTheAir, .tvTopRated: return .tv
         }
     }
 
     var title: String {
         switch self {
+        case .movieTrending: return "Trending Movies"
         case .moviePopular: return "Popular Movies"
         case .movieNowPlaying: return "Now Playing"
         case .movieUpcoming: return "Upcoming"
         case .movieTopRated: return "Top Rated Movies"
+        case .tvTrending: return "Trending TV"
         case .tvPopular: return "Popular TV"
         case .tvAiringToday: return "Airing Today"
         case .tvOnTheAir: return "On The Air"
@@ -42,6 +57,7 @@ enum TMDBDiscoverSection: String, CaseIterable, Identifiable, Sendable {
     /// Path segment forwarded to the proxy after `/tmdb/list/`.
     var proxyPath: String {
         switch self {
+        case .movieTrending, .tvTrending: return "trending"
         case .moviePopular, .tvPopular: return "popular"
         case .movieNowPlaying: return "now_playing"
         case .movieUpcoming: return "upcoming"

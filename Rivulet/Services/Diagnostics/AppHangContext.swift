@@ -124,7 +124,7 @@ enum AppHangContext {
     // MARK: - Private
 
     private static func setTag(_ key: String, _ value: String) {
-        SentrySDK.configureScope { scope in
+        SentryBridge.configureScope { scope in
             scope.setTag(value: value, key: key)
         }
     }
@@ -137,6 +137,6 @@ enum AppHangContext {
         let crumb = Breadcrumb(level: .info, category: category)
         crumb.message = message
         if let data { crumb.data = data }
-        SentrySDK.addBreadcrumb(crumb)
+        SentryBridge.addBreadcrumb(crumb)
     }
 }

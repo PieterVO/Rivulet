@@ -219,16 +219,16 @@ final class CarouselMorphController {
         // math as PreviewCarouselLayout.cellFrame, kept in sync.)
         guard let cv = collectionView else { return .zero }
         let geom = PreviewCarouselGeometry.self
-        let centeredWidth = cv.bounds.width - 2 * geom.centeredHorizontalInset
-        let cardHeight = cv.bounds.height - geom.topInset
+        let centered = geom.centeredCardFrame(in: cv.bounds)
+        let centeredWidth = centered.width
         let stride = centeredWidth + geom.sideCardGap
         let edgePad = geom.centeredHorizontalInset
         let x = edgePad + stride * CGFloat(index)
         return CGRect(
             x: x - offset.x,
-            y: geom.topInset - offset.y,
+            y: centered.minY - offset.y,
             width: centeredWidth,
-            height: cardHeight
+            height: centered.height
         )
     }
 }

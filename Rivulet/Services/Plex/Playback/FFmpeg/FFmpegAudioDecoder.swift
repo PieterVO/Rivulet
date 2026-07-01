@@ -740,7 +740,7 @@ final class FFmpegAudioDecoder: @unchecked Sendable {
                     "sample_rate": sampleRate,
                     "channels": channels
                 ]
-                SentrySDK.addBreadcrumb(breadcrumb)
+                SentryBridge.addBreadcrumb(breadcrumb)
             }
         }
 
@@ -763,7 +763,7 @@ final class FFmpegAudioDecoder: @unchecked Sendable {
                         "current_pts": currentSeconds,
                         "last_pts": lastSeconds
                     ]
-                    SentrySDK.addBreadcrumb(breadcrumb)
+                    SentryBridge.addBreadcrumb(breadcrumb)
                 }
 
                 pts = CMTimeAdd(lastDecodedPTS, durationForFallback)
