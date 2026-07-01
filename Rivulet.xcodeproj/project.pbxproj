@@ -781,10 +781,10 @@
 		};
 		B2000020AAAA000000000001 /* XCRemoteSwiftPackageReference "AetherEngine" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/l984-451/AetherEngine";
+			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
 			requirement = {
-				kind = revision;
-				revision = 91b8f68b0c8036097d9a96395e263d6c40d55a97;
+				kind = exactVersion;
+				version = 4.8.0;
 			};
 		};
 		B3000020AAAA000000000001 /* XCRemoteSwiftPackageReference "LibDovi" */ = {
