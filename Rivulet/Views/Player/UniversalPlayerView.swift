@@ -545,7 +545,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             vm.showControlsTemporarily()
 
         case .seekRelative(let seconds):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             if vm.isScrubbing {
                 vm.updateSwipeScrubPosition(by: seconds)
             } else {
@@ -554,7 +554,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             vm.showControlsTemporarily()
 
         case .seekAbsolute(let time):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             Task { await vm.seek(to: time) }
             vm.showControlsTemporarily()
 
@@ -562,7 +562,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             break
 
         case .scrubNudge(let forward):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             let wasScrubbing = vm.isScrubbing
             let speedBefore = vm.scrubSpeed
             vm.scrubInDirection(forward: forward)
@@ -581,7 +581,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             vm.showControlsTemporarily()
 
         case .scrubRelative(let seconds):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             guard vm.playbackState == .paused else { return }
             vm.updateSwipeScrubPosition(by: seconds)
             vm.showControlsTemporarily()
@@ -614,25 +614,10 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             onResetRemoteInput?()
 
         case .showInfo:
-            guard vm.postVideoState == .hidden else { return }
-            if vm.isScrubbing {
-                let speedBefore = vm.scrubSpeed
-                PlaybackInputTelemetry.shared.recordScrubTransition(
-                    surface: .vod,
-                    transition: .cancel,
-                    source: source,
-                    speedBefore: speedBefore,
-                    speedAfter: 0
-                )
-                vm.cancelScrub()
-                onResetRemoteInput?()
-            }
-            if !vm.showInfoPanel {
-                vm.resetSettingsPanel()
-                withAnimation(.easeOut(duration: 0.3)) {
-                    vm.showInfoPanel = true
-                }
-            }
+            // Legacy swipe-down/gamepad/keyboard trigger for the old SwiftUI
+            // info panel. Media info is now reached only via the Info pill
+            // on the UIKit transport bar, so this is intentionally inert.
+            break
 
         case .back:
             if vm.postVideoState != .hidden {
@@ -649,10 +634,6 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 )
                 vm.cancelScrub()
                 onResetRemoteInput?()
-            } else if vm.showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    vm.showInfoPanel = false
-                }
             } else if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
@@ -748,16 +729,10 @@ struct UniversalPlayerView: View {
         }
         .animation(.easeInOut(duration: 1.0), value: viewModel.playbackState)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        .animation(.spring(response: 0.25, dampingFraction: 0.9), value: viewModel.showInfoPanel)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
         .animation(.easeInOut(duration: 0.5), value: viewModel.showPausedPoster)
         .onPlayPauseCommand {
-            if viewModel.showInfoPanel {
-                // Play/pause should still work when panel is open
-                inputCoordinator.handle(action: .playPause, source: .swiftUICommand)
-            } else {
-                handleSelectCommand()
-            }
+            handleSelectCommand()
         }
         // Note: Menu/Back button handling is done in PlayerContainerViewController
         // to intercept the event before SwiftUI can dismiss the player.
@@ -829,12 +804,6 @@ struct UniversalPlayerView: View {
             // Immediately report state changes to Plex
             reportStateChange(from: oldState, to: newState)
         }
-        // Manage focus scope when settings panel opens/closes
-        .onChange(of: viewModel.showInfoPanel) { _, showPanel in
-            if showPanel {
-                viewModel.resetSettingsPanel()
-            }
-        }
         // System appearance
     }
 
@@ -895,23 +864,13 @@ struct UniversalPlayerView: View {
                     .zIndex(50)
             }
 
-            // Info Panel (independent of controls visibility) - slides from top (triggered by d-pad down)
-            if viewModel.showInfoPanel {
-                VStack {
-                    PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: true)
-                    Spacer()
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(10)  // Keep above other elements during animation
-            }
         }
         // Focusable when skip button is not focused, post-video is not showing, and not in error state
         // When in error state, let the dismiss button receive focus instead
         .focusable(viewModel.postVideoState == .hidden && !viewModel.playbackState.isFailed)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Don't toggle controls if info panel is showing or in error state
-            guard !viewModel.showInfoPanel else { return }
+            // Don't toggle controls if in error state
             guard !viewModel.playbackState.isFailed else { return }
 
             // Tap anywhere to show/hide controls
@@ -927,28 +886,9 @@ struct UniversalPlayerView: View {
             // When post-video is showing, don't handle - let SwiftUI manage button focus
             guard viewModel.postVideoState == .hidden else { return }
 
-            if viewModel.showInfoPanel {
-                // Settings panel navigation - 3 column layout
-                switch direction {
-                case .up:
-                    if viewModel.focusedRowIndex == 0 {
-                        // At top row - close panel
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            viewModel.showInfoPanel = false
-                        }
-                    } else {
-                        viewModel.navigateSettings(direction: direction)
-                    }
-                case .down, .left, .right:
-                    viewModel.navigateSettings(direction: direction)
-                @unknown default:
-                    break
-                }
-            } else {
-                // Left/right are handled by GameController via RemoteHoldDetector
-                // for tap vs hold detection. Only handle up/down here.
-                handleMoveCommand(direction)
-            }
+            // Left/right are handled by GameController via RemoteHoldDetector
+            // for tap vs hold detection. Only handle up/down here.
+            handleMoveCommand(direction)
         }
     }
 

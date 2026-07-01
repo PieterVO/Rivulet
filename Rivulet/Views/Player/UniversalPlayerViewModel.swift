@@ -288,7 +288,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     @Published var showControls = true
-    @Published var showInfoPanel = false
     @Published var isScrubbing = false
     @Published var showPausedPoster = false
     @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
@@ -352,78 +351,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var currentSubtitleTrackId: Int?
     private var compatibilityNoticeTimer: Timer?
     private nonisolated(unsafe) var userActivity: NSUserActivity?
-
-    // MARK: - Playback Settings Panel State (Column-based layout)
-
-    /// Which column is focused: 0 = Subtitles, 1 = Audio (Media Info is not focusable)
-    @Published var focusedColumn: Int = 0
-
-    /// Which row within the focused column
-    @Published var focusedRowIndex: Int = 0
-
-    /// Number of rows in a given column
-    func rowCount(forColumn column: Int) -> Int {
-        switch column {
-        case 0: return 1 + subtitleTracks.count  // "Off" + subtitle tracks
-        case 1: return max(1, audioTracks.count)  // Audio tracks (at least 1)
-        default: return 0
-        }
-    }
-
-    /// Check if a specific setting is focused
-    func isSettingFocused(column: Int, index: Int) -> Bool {
-        return focusedColumn == column && focusedRowIndex == index
-    }
-
-    /// Navigate within settings panel
-    func navigateSettings(direction: MoveCommandDirection) {
-        switch direction {
-        case .up:
-            if focusedRowIndex > 0 {
-                focusedRowIndex -= 1
-            }
-        case .down:
-            let maxIndex = rowCount(forColumn: focusedColumn) - 1
-            if focusedRowIndex < maxIndex {
-                focusedRowIndex += 1
-            }
-        case .left:
-            if focusedColumn > 0 {
-                focusedColumn -= 1
-                // Clamp row index to new column's range
-                focusedRowIndex = min(focusedRowIndex, rowCount(forColumn: focusedColumn) - 1)
-            }
-        case .right:
-            if focusedColumn < 1 {  // Only 2 focusable columns (0 and 1)
-                focusedColumn += 1
-                // Clamp row index to new column's range
-                focusedRowIndex = min(focusedRowIndex, rowCount(forColumn: focusedColumn) - 1)
-            }
-        @unknown default:
-            break
-        }
-    }
-
-    /// Select the currently focused setting
-    func selectFocusedSetting() {
-        switch focusedColumn {
-        case 0:  // Subtitles
-            if focusedRowIndex == 0 {
-                selectSubtitleTrack(id: nil)
-            } else {
-                let trackIndex = focusedRowIndex - 1
-                if trackIndex < subtitleTracks.count {
-                    selectSubtitleTrack(id: subtitleTracks[trackIndex].id)
-                }
-            }
-        case 1:  // Audio
-            if focusedRowIndex < audioTracks.count {
-                selectAudioTrack(id: audioTracks[focusedRowIndex].id)
-            }
-        default:
-            break
-        }
-    }
 
     // MARK: - Player Instance
 
@@ -2417,16 +2344,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             self.errorMessage = error.userFacingDescription
             self.updatePlaybackState(.failed(error))
         }
-    }
-
-    // MARK: - Info Panel Navigation
-
-    /// Reset settings panel state when opening
-    func resetSettingsPanel() {
-        // Refresh track lists when panel opens
-        updateTrackLists()
-        focusedColumn = 0
-        focusedRowIndex = 0
     }
 
     func seek(to time: TimeInterval) async {

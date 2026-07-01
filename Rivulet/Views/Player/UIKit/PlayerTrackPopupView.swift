@@ -14,7 +14,7 @@
 
 import UIKit
 
-final class PlayerTrackPopupView: UIView {
+final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
 
     struct Row {
         let title: String
@@ -29,8 +29,6 @@ final class PlayerTrackPopupView: UIView {
     private let backgroundEffectView: UIVisualEffectView
     private var rowButtons: [PopupRowButton] = []
 
-    weak var anchorView: UIView?
-    private weak var containerView: UIView?
     var onDismiss: (() -> Void)?
 
     init(tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
@@ -91,8 +89,6 @@ final class PlayerTrackPopupView: UIView {
             stack.addArrangedSubview(button)
             rowButtons.append(button)
         }
-
-        widthAnchor.constraint(equalToConstant: 360).isActive = true
     }
 
     @objc private func rowTapped(_ sender: PopupRowButton) {
@@ -104,36 +100,11 @@ final class PlayerTrackPopupView: UIView {
     // MARK: - Presentation
 
     func present(in container: UIView, anchoredTo anchor: UIView) {
-        self.containerView = container
-        self.anchorView = anchor
-        alpha = 0
-        container.addSubview(self)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        let anchorFrame = anchor.convert(anchor.bounds, to: container)
-        NSLayoutConstraint.activate([
-            bottomAnchor.constraint(equalTo: container.topAnchor, constant: anchorFrame.minY - 16),
-            leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: anchorFrame.minX),
-        ])
-
-        setNeedsFocusUpdate()
-        UIView.animate(withDuration: 0.2) {
-            self.alpha = 1
-        }
-        UIAccessibility.post(notification: .screenChanged, argument: self)
-        UIView.performWithoutAnimation {
-            self.setNeedsFocusUpdate()
-            self.updateFocusIfNeeded()
-        }
+        presentAnchored(in: container, anchoredTo: anchor, width: 360)
     }
 
     func dismiss() {
-        onDismiss?()
-        UIView.animate(withDuration: 0.15, animations: {
-            self.alpha = 0
-        }, completion: { _ in
-            self.removeFromSuperview()
-        })
+        dismissAnchored()
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {

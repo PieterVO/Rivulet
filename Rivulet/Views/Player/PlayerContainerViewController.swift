@@ -170,12 +170,6 @@ class PlayerContainerViewController: UIViewController {
                 transportBar?.dismissActivePopup()
                 return
             }
-            if vm.showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    vm.showInfoPanel = false
-                }
-                return
-            }
             if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
@@ -220,16 +214,10 @@ class PlayerContainerViewController: UIViewController {
                 return
             }
             if press.type == .select {
-                if let vm = viewModel {
-                    if vm.isScrubbing {
-                        isHandlingSelectPress = true
-                        inputCoordinator.handle(action: .scrubCommit, source: .irPress)
-                        return
-                    } else if vm.showInfoPanel {
-                        isHandlingSelectPress = true
-                        handleSelectButton()
-                        return
-                    }
+                if let vm = viewModel, vm.isScrubbing {
+                    isHandlingSelectPress = true
+                    inputCoordinator.handle(action: .scrubCommit, source: .irPress)
+                    return
                 }
             }
         }
@@ -268,7 +256,7 @@ class PlayerContainerViewController: UIViewController {
     /// 1. Cancel intro skip countdown if active
     /// 2. Dismiss post-video overlay if showing
     /// 3. Cancel scrubbing if active
-    /// 4. Close info panel if open
+    /// 4. Close an open pill popup (Subtitles/Audio/Info) if any
     /// 5. Hide controls if visible
     /// 6. Dismiss player if nothing else to close
     private func handleMenuButton() {
@@ -293,10 +281,6 @@ class PlayerContainerViewController: UIViewController {
                 vm.cancelScrub()
             } else if transportBar?.hasActivePopup == true {
                 transportBar?.dismissActivePopup()
-            } else if vm.showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    vm.showInfoPanel = false
-                }
             } else if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
@@ -308,18 +292,12 @@ class PlayerContainerViewController: UIViewController {
         }
 
         // If we're consuming this menu press in-app (not dismissing), block SwiftUI fallback dismiss briefly.
-        let shouldBlockDismiss = vm.postVideoState == .hidden && (vm.isScrubbing || vm.showInfoPanel || vm.showControls)
+        let shouldBlockDismiss = vm.postVideoState == .hidden && (vm.isScrubbing || vm.showControls)
         if shouldBlockDismiss {
             blockDismissTemporarily()
         }
 
         inputCoordinator.handle(action: .back, source: .irPress)
-    }
-
-    /// Handle Select button press when info panel is open
-    private func handleSelectButton() {
-        guard let vm = viewModel else { return }
-        vm.selectFocusedSetting()
     }
 
     // MARK: - Swipe-to-Scrub Gesture
@@ -352,8 +330,7 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleTouchSurfaceTap() {
         guard let vm = viewModel else { return }
-        guard !vm.showInfoPanel,
-              !vm.isScrubbing,
+        guard !vm.isScrubbing,
               vm.postVideoState == .hidden,
               !vm.playbackState.isFailed
         else { return }
@@ -399,21 +376,21 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadLeftTap() {
         guard let vm = viewModel else { return }
-        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden else { return }
 
         inputCoordinator.handle(action: .stepSeek(forward: false), source: .irPress)
     }
 
     @objc private func handleDPadRightTap() {
         guard let vm = viewModel else { return }
-        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden else { return }
 
         inputCoordinator.handle(action: .stepSeek(forward: true), source: .irPress)
     }
 
     @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden else { return }
 
         switch gesture.state {
         case .began:
@@ -433,7 +410,7 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadRightLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard !vm.showInfoPanel && vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden else { return }
 
         switch gesture.state {
         case .began:
@@ -459,23 +436,10 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
-        // The same touch-surface pan drives two distinct interactions
-        // depending on player state:
-        //   • paused, panel closed → continuous swipe-to-scrub (existing).
-        //   • panel open OR active playback → discrete swipe gesture
-        //     that opens the panel (downward, when closed) or navigates
-        //     the menu (any direction, when open).
-        // For the discrete-swipe case we wait for the gesture to end
-        // and decide direction from total translation + final velocity,
-        // which reads the user's intent more reliably than sampling the
-        // first directional crossing during motion.
-        let isSwipeMode = vm.showInfoPanel || vm.playbackState != .paused
-        if isSwipeMode {
-            if gesture.state == .ended {
-                handleEndOfSwipe(gesture, vm: vm)
-            }
-            return
-        }
+        // Touch-surface pan only drives continuous swipe-to-scrub while
+        // paused. During active playback the pan is a no-op (previously
+        // it also opened the legacy info panel on a downward swipe).
+        guard vm.playbackState == .paused else { return }
 
         let translation = gesture.translation(in: view)
         let velocity = gesture.velocity(in: view)
@@ -502,52 +466,6 @@ class PlayerContainerViewController: UIViewController {
 
         default:
             break
-        }
-    }
-
-    /// Translate an end-of-pan gesture into a discrete swipe and dispatch
-    /// the corresponding action. Called only in the swipe-mode branch of
-    /// handlePanGesture (panel open, or active non-paused playback) — the
-    /// scrubbing path still owns paused-state pans.
-    private func handleEndOfSwipe(_ gesture: UIPanGestureRecognizer, vm: UniversalPlayerViewModel) {
-        let translation = gesture.translation(in: view)
-        let velocity = gesture.velocity(in: view)
-
-        let absX = abs(translation.x)
-        let absY = abs(translation.y)
-        let dominantHorizontal = absX > absY
-        let displacement = dominantHorizontal ? absX : absY
-        let speed = dominantHorizontal ? abs(velocity.x) : abs(velocity.y)
-
-        // Recognize a swipe if there's either meaningful displacement
-        // or a strong final velocity. Either alone is sufficient — a
-        // short fast flick reads as a swipe even if the displacement
-        // is small, and a slow long drag reads as a swipe even at
-        // low velocity.
-        let minDistance: CGFloat = 30
-        let minVelocity: CGFloat = 150
-        guard displacement >= minDistance || speed >= minVelocity else { return }
-
-        let direction: MoveCommandDirection
-        if dominantHorizontal {
-            direction = translation.x > 0 ? .right : .left
-        } else {
-            direction = translation.y > 0 ? .down : .up
-        }
-
-        if vm.showInfoPanel {
-            // Mirror UniversalPlayerView's onMoveCommand: swipe-up at
-            // the topmost row closes the panel.
-            if direction == .up && vm.focusedRowIndex == 0 {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                    vm.showInfoPanel = false
-                }
-            } else {
-                vm.navigateSettings(direction: direction)
-            }
-        } else if direction == .down {
-            // Active, non-paused playback: downward swipe opens the panel.
-            inputCoordinator.handle(action: .showInfo, source: .siriMicroGamepad)
         }
     }
 
