@@ -574,7 +574,7 @@ struct PlexHomeView: View {
         Task { await upgradeHeroFromTMDB() }
     }
 
-    /// Fetches Popular Movies + Popular TV from TMDB, filters to items the user
+    /// Fetches Trending Movies + Trending TV from TMDB, filters to items the user
     /// already has in their library (via the GUID index), and merges the result
     /// into `heroItems` so the currently-visible item stays put.
     ///
@@ -651,14 +651,16 @@ struct PlexHomeView: View {
     }
 
     /// Pure async helper. Returns up to `cap` library items chosen by
-    /// interleaving Popular Movies and Popular TV from TMDB, filtered to items
+    /// interleaving Trending Movies and Trending TV from TMDB, filtered to items
     /// the user already owns.
     static func computeTMDBHero(cap: Int) async -> [PlexMetadata] {
-        async let movies = TMDBDiscoverService.shared.fetchSection(.moviePopular)
-        async let shows = TMDBDiscoverService.shared.fetchSection(.tvPopular)
+        let indexEmpty = await LibraryGUIDIndex.shared.isEmpty
+        async let movies = TMDBDiscoverService.shared.fetchSection(.movieTrending)
+        async let shows = TMDBDiscoverService.shared.fetchSection(.tvTrending)
         let (m, s) = await (movies, shows)
+        homeLog.debug("[Hero] computeTMDBHero: trendingMovies=\(m.count, privacy: .public), trendingTV=\(s.count, privacy: .public), guidIndexEmpty=\(indexEmpty, privacy: .public)")
 
-        // Interleave [m0, s0, m1, s1, ...] preserving TMDB's popularity order.
+        // Interleave [m0, s0, m1, s1, ...] preserving TMDB's trending order.
         var interleaved: [TMDBListItem] = []
         let count = max(m.count, s.count)
         for i in 0..<count {
@@ -673,6 +675,8 @@ struct PlexHomeView: View {
                 if matches.count >= cap { break }
             }
         }
+        let matchTitles = matches.map { "\($0.title ?? "?") [\($0.type ?? "?")]" }.joined(separator: ", ")
+        homeLog.debug("[Hero] computeTMDBHero: \(interleaved.count, privacy: .public) trending items -> \(matches.count, privacy: .public) matches (cap=\(cap, privacy: .public)): \(matchTitles, privacy: .public)")
         return matches
     }
 
@@ -682,8 +686,9 @@ struct PlexHomeView: View {
         let allIdentifiers = hubs.compactMap { $0.hubIdentifier }.joined(separator: ", ")
         homeLog.debug("[Hero] available hubs: \(allIdentifiers, privacy: .public)")
 
-        // Some servers expose a curated hub even without Plex Pass — keep
-        // matching it as a higher-priority fallback than Recently Added.
+        // Some servers expose a curated hub even without Plex Pass. Use it
+        // only when Plex identifies it as curated; otherwise the async TMDB
+        // trending upgrade is the source for hot hero items.
         let curatedKeywords = ["recommended", "promoted", "featured", "spotlight"]
         let curated = hubs.first { hub in
             guard let id = hub.hubIdentifier?.lowercased(),
@@ -695,13 +700,7 @@ struct PlexHomeView: View {
             return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
         }
 
-        let recentlyAdded = hubs.first { isRecentlyAddedHub($0) && ($0.Metadata?.isEmpty == false) }
-        if let items = recentlyAdded?.Metadata, !items.isEmpty {
-            homeLog.info("[Hero] Fallback to Recently Added hub with \(items.count) items")
-            return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
-        }
-
-        if let firstHub = hubs.first(where: { $0.Metadata?.isEmpty == false }),
+        if let firstHub = hubs.first(where: { !isRecentlyAddedHub($0) && ($0.Metadata?.isEmpty == false) }),
            let items = firstHub.Metadata, !items.isEmpty {
             homeLog.info("[Hero] Fallback to first non-empty hub \(firstHub.hubIdentifier ?? "?", privacy: .public)")
             return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
@@ -1359,23 +1358,10 @@ struct InfiniteContentRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Section title with item count
-            HStack(spacing: 12) {
-                Text(title)
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.6))
-
-                if let total = totalSize, total > items.count {
-                    Text("\(items.count) of \(total)")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.3))
-                } else if hasReachedEnd && items.count > pageSize {
-                    Text("All \(items.count)")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.3))
-                }
-            }
-            .padding(.horizontal, ScaledDimensions.rowHorizontalPadding)
+            Text(title)
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+                .padding(.horizontal, ScaledDimensions.rowHorizontalPadding)
 
             // Horizontal scroll of posters with infinite loading
             ScrollView(.horizontal, showsIndicators: false) {

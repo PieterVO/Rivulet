@@ -208,6 +208,16 @@ struct TVSidebarView: View {
                 await PlexWatchlistService.shared.fetchWatchlist()
             }
 
+            // IMMEDIATE: hydrate the library GUID index from last launch's
+            // persisted snapshot. Local decode (a few ms), so it runs with no
+            // defer — this makes "do I own this?" answers (and the trending
+            // hero upgrade) available right after the home paints, instead of
+            // waiting ~20s for the network rebuild below. A fresh network
+            // rebuild always supersedes this (see LibraryGUIDIndex.hasFreshData).
+            Task.detached(priority: .userInitiated) {
+                _ = await LibraryGUIDIndex.shared.hydrateFromDisk()
+            }
+
             // BACKGROUND: Libraries -> library hubs -> prefetch (chained, not blocking home).
             // Delayed so the big per-library hub decodes (316KB/550KB payloads)
             // don't saturate the cores during the home's first paint.
@@ -222,15 +232,15 @@ struct TVSidebarView: View {
                 // matches by external GUID, so the fetch must include them
                 // (Plex omits them from the default summary response).
                 //
-                // DEFERRED 20s past launch: this fetches ~5MB per library
-                // (size: 5000 + includeGuids) — ~20MB total — and was running
-                // inside the launch window, contending with the home's
-                // critical path for network + decode. The only cost of the
-                // delay is "in your library" badges on Discover/Watchlist
-                // resolving late. Follow-up: persist the index to disk with a
-                // TTL so cold launches don't refetch 20MB at all.
+                // DEFERRED 5s past launch: this fetches ~5MB per library
+                // (size: 5000 + includeGuids) — ~20MB total — so it must stay
+                // clear of the home's first-paint window. It no longer gates the
+                // trending hero or "in your library" badges: hydrateFromDisk()
+                // above serves last launch's snapshot in ms. This fetch refreshes
+                // that snapshot from the server, and replace(with:) re-posts
+                // .libraryGUIDIndexDidUpdate so the hero picks up any new data.
                 Task.detached(priority: .background) {
-                    try? await Task.sleep(for: .seconds(20))
+                    try? await Task.sleep(for: .seconds(5))
                     let (serverURL, token) = await MainActor.run {
                         (PlexAuthManager.shared.selectedServerURL, PlexAuthManager.shared.selectedServerToken)
                     }

@@ -14,6 +14,10 @@
 //  morphed via spring to the centered carousel frame. The collection
 //  view sits behind it and is revealed by a crossfade once the
 //  morph completes.
+//  UIKit home rows can also pass snapshots for every visible source tile.
+//  Those snapshots animate into the carousel's visible card frames together,
+//  so the row reads as enlarging into the carousel instead of a modal
+//  appearing over it.
 //
 //  Visual goals:
 //   - Smooth 60fps paging with parallax (artwork lags the card).
@@ -36,6 +40,9 @@ final class PreviewCarouselViewController: UIViewController {
     private var items: [MediaItem]
     private(set) var selectedIndex: Int
     private let initialSourceFrame: CGRect
+    private let entrySnapshots: [PreviewEntrySnapshot]
+    private let sourceItemIDs: [String]?
+    private let onPrepareDismiss: (PreviewSourceTarget?) -> Void
     private let onDismiss: (PreviewSourceTarget?) -> Void
     private var dismissSourceTarget: PreviewSourceTarget?
 
@@ -43,6 +50,7 @@ final class PreviewCarouselViewController: UIViewController {
 
     private(set) var state = PreviewStateMachine()
     private var hasRunEntryMorph = false
+    private var hasPreparedEntrySnapshots = false
     private var didStandaloneExpand = false
 
     /// CADisplayLink-driven paging state. Replaces UIViewPropertyAnimator
@@ -90,6 +98,11 @@ final class PreviewCarouselViewController: UIViewController {
     /// collection view until the entry settles, then fades out as
     /// the real collection-view cell becomes visible underneath.
     private let morphSnapshot = PreviewCardView(frame: .zero)
+
+    /// Source tile snapshots captured from the presenting row. These sit above
+    /// the hidden live carousel during entry, animate to carousel card frames,
+    /// then fade out as the real backdrop plane + cells fade in.
+    private let entrySnapshotContainer = UIView()
 
     /// Below-fold detail surface. Sits ABOVE the collection view (which holds
     /// the hero chrome) and wakes up only after the expand morph completes.
@@ -144,7 +157,10 @@ final class PreviewCarouselViewController: UIViewController {
         selectedIndex: Int,
         sourceFrame: CGRect,
         sourceTarget: PreviewSourceTarget?,
+        entrySnapshots: [PreviewEntrySnapshot] = [],
+        sourceItemIDs: [String]? = nil,
         standaloneDetail: Bool = false,
+        onPrepareDismiss: @escaping (PreviewSourceTarget?) -> Void = { _ in },
         onDismiss: @escaping (PreviewSourceTarget?) -> Void
     ) {
         precondition(!items.isEmpty, "PreviewCarouselViewController requires at least one item")
@@ -152,6 +168,9 @@ final class PreviewCarouselViewController: UIViewController {
         self.items = items
         self.selectedIndex = selectedIndex
         self.initialSourceFrame = sourceFrame
+        self.entrySnapshots = entrySnapshots
+        self.sourceItemIDs = sourceItemIDs?.count == items.count ? sourceItemIDs : nil
+        self.onPrepareDismiss = onPrepareDismiss
         self.dismissSourceTarget = sourceTarget
         self.standaloneDetail = standaloneDetail
         self.onDismiss = onDismiss
@@ -163,18 +182,18 @@ final class PreviewCarouselViewController: UIViewController {
             self.transitioningDelegate = blurFade
             return
         }
-        // .fullScreen because this overlay is OPAQUE by design: it renders
-        // its own full-viewport backdrop image plus a dimmed surround and is
-        // not meant to show home content behind it. fullScreen lets tvOS drop
-        // the presenter's views (cheaper); overFullScreen would only matter if
-        // the overlay were see-through. See perf-spike/UIKIT_FOUNDATIONS.md §3.
+        // Keep the presenter alive behind us. The row-entry and row-exit
+        // morphs need Home visible while source tile snapshots animate into
+        // and out of the carousel. The explicit `backdrop` view below owns
+        // the black surround and fades it in/out on the morph timeline.
         //
         // NOTE: presentation style does NOT control Menu dismissal. Menu flows
         // up the responder chain via pressesEnded reaching UIApplication
         // regardless of style. We own Menu by claiming first responder
         // (canBecomeFirstResponder + becomeFirstResponder in viewDidAppear) and
         // absorbing the press in our handler. See §2.
-        self.modalPresentationStyle = .fullScreen
+        self.modalPresentationStyle = .overFullScreen
+        self.restoresFocusAfterTransition = false
         // No modal transition — the entry morph IS the transition.
         // The caller presents with animated: false so viewDidAppear
         // fires immediately for the spring animator.
@@ -188,10 +207,11 @@ final class PreviewCarouselViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = .clear
 
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         backdrop.backgroundColor = .black
+        backdrop.alpha = entrySnapshots.isEmpty ? 1 : 0
 
         view.addSubview(backdrop)
         NSLayoutConstraint.activate([
@@ -249,6 +269,17 @@ final class PreviewCarouselViewController: UIViewController {
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
+        entrySnapshotContainer.translatesAutoresizingMaskIntoConstraints = false
+        entrySnapshotContainer.isUserInteractionEnabled = false
+        entrySnapshotContainer.isHidden = entrySnapshots.isEmpty
+        view.addSubview(entrySnapshotContainer)
+        NSLayoutConstraint.activate([
+            entrySnapshotContainer.topAnchor.constraint(equalTo: view.topAnchor),
+            entrySnapshotContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            entrySnapshotContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            entrySnapshotContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         // Below-fold detail surface above the collection view (chrome). Hidden
         // and inert until the expand morph completes. Full-screen; it manages
         // its own internal translation. onScrollProgress is wired in Iter 3 to
@@ -274,11 +305,11 @@ final class PreviewCarouselViewController: UIViewController {
                 title: detail.item.title,
                 subtitle: detail.genres.prefix(3).joined(separator: ", "),
                 body: detail.item.overview)
-            self.present(InfoPopupViewController(content: content, width: 840), animated: true)
+            self.present(InfoPopupViewController(content: content, width: 840, scrollable: true), animated: true)
         }
         expandedDetail.onSelectAdvisory = { [weak self] advisory in
             let content = InfoPopupContent.advisory(advisory)
-            self?.present(InfoPopupViewController(content: content, width: 720), animated: true)
+            self?.present(InfoPopupViewController(content: content, width: 720, scrollable: true), animated: true)
         }
         // Episode thumb Select → play the episode.
         expandedDetail.onPlayEpisode = { [weak self] episode in
@@ -351,14 +382,33 @@ final class PreviewCarouselViewController: UIViewController {
         view.addSubview(focusAnchor)
 
         previewCarouselLog.info("[PCV] viewDidLoad items=\(self.items.count, privacy: .public) selected=\(self.selectedIndex, privacy: .public)")
-        // Force a layout pass so cellForItemAt is invoked synchronously
-        // for the cells in the initial viewport.
-        collectionView.layoutIfNeeded()
-        previewCarouselLog.info("[PCV] after layoutIfNeeded contentSize=\(self.collectionView.contentSize.width, privacy: .public)")
+        // NOTE: do NOT force collectionView.layoutIfNeeded() here. `view`
+        // has no real frame yet at viewDidLoad time (it's sized by the
+        // presentation controller AFTER this runs) — forcing a layout pass
+        // against a zero-width view collapses every cell's internal Auto
+        // Layout (logged "UIView-Encapsulated-Layout-Width == 0" warnings)
+        // and leaves PreviewCardView's chrome permanently mis-laid-out for
+        // that dequeue, since the diffable/flow layout caches attributes
+        // from this first (wrong) pass. The real, bounds-valid layout pass
+        // happens in viewDidLayoutSubviews(); cellForItemAt still runs
+        // synchronously there before the entry morph reads cell content.
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // `.fullScreen` presentation runs viewDidLayoutSubviews at least
+        // once on a TRANSITIONAL pass before `view` has its real frame
+        // (zero/garbage bounds). Writing `collectionView.contentOffset` in
+        // that pass forces UICollectionView to lay out + dequeue cells
+        // against those bad bounds, which collapses every PreviewCardView's
+        // internal Auto Layout to zero width (logged as
+        // "UIView-Encapsulated-Layout-Width == 0") and corrupts that
+        // dequeue's chrome content for good — re-snapshotting it later
+        // (entry/exit morphs) just captures the corrupted, zero-sized
+        // content, which is why the carousel reads as black even though
+        // entrySnapshots/backdropPlane/alpha timing are all correct.
+        guard view.bounds.width > 0, view.bounds.height > 0 else { return }
+
         // Center the carousel on `selectedIndex` so the first frame
         // shows the chosen item under the morph snapshot. We do this
         // every layout pass because `collectionViewContentSize`
@@ -374,18 +424,24 @@ final class PreviewCarouselViewController: UIViewController {
         // Position the morph snapshot. Pre-entry: at the source
         // frame. Post-entry: hidden anyway.
         if !hasRunEntryMorph {
-            morphSnapshot.translatesAutoresizingMaskIntoConstraints = true
-            morphSnapshot.frame = initialSourceFrame == .zero
-                ? centeredFrameInWindow()
-                : initialSourceFrame
-            // Show item[selectedIndex] in the snapshot so the morph
-            // is visually meaningful.
-            morphSnapshot.item = items.indices.contains(selectedIndex)
-                ? items[selectedIndex]
-                : nil
-            // Hide the underlying cell artwork so we don't double-
-            // render the same image (snapshot on top + cell below).
+            backdrop.alpha = entrySnapshots.isEmpty ? 1 : 0
+            backdropPlane.alpha = 0
             collectionView.alpha = 0
+            if entrySnapshots.isEmpty {
+                morphSnapshot.isHidden = false
+                morphSnapshot.translatesAutoresizingMaskIntoConstraints = true
+                morphSnapshot.frame = initialSourceFrame == .zero
+                    ? centeredFrameInWindow()
+                    : view.convert(initialSourceFrame, from: nil)
+                // Show item[selectedIndex] in the snapshot so the morph
+                // is visually meaningful.
+                morphSnapshot.item = items.indices.contains(selectedIndex)
+                    ? items[selectedIndex]
+                    : nil
+            } else {
+                morphSnapshot.isHidden = true
+                prepareEntrySnapshotsIfNeeded()
+            }
         }
 
         // Standalone detail (e.g. a Related drill-in): open ALREADY expanded,
@@ -404,7 +460,9 @@ final class PreviewCarouselViewController: UIViewController {
         guard !isExpanded, items.indices.contains(selectedIndex) else { return }
         // Reveal — mirror the `.zero`-source entry (no spring, no snapshot).
         morphSnapshot.isHidden = true
+        backdrop.alpha = 1
         collectionView.alpha = 1
+        backdropPlane.alpha = 1
         state.completeEntryMorph()                 // entryMorph → carouselStable
         updateCurrentCellChrome(animated: false)   // sets expandedDetail.item + chrome
         collectionView.layoutIfNeeded()
@@ -453,11 +511,18 @@ final class PreviewCarouselViewController: UIViewController {
         guard !hasRunEntryMorph else { return }
         hasRunEntryMorph = true
 
+        if !entrySnapshots.isEmpty {
+            runRowEntryMorph()
+            return
+        }
+
         if initialSourceFrame == .zero {
             // No source to morph from. Reveal the collection view
             // immediately and skip the spring.
             morphSnapshot.isHidden = true
+            backdrop.alpha = 1
             collectionView.alpha = 1
+            backdropPlane.alpha = 1
             state.completeEntryMorph()
             updateCurrentCellChrome(animated: false)
             return
@@ -482,6 +547,8 @@ final class PreviewCarouselViewController: UIViewController {
         morpher.addAnimations { [weak self] in
             guard let self else { return }
             self.morphSnapshot.frame = targetFrame
+            self.backdrop.alpha = 1
+            self.backdropPlane.alpha = 1
             self.collectionView.alpha = 1
         }
         morpher.addCompletion { [weak self] _ in
@@ -521,18 +588,105 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Geometry helpers
 
+    /// Places (or re-places) the row snapshots at their source frames.
+    /// `entry.sourceFrame` was captured in WINDOW coordinates by the
+    /// presenter; converting it via `view.convert(_:from: nil)` only
+    /// resolves correctly once `view.window` is non-nil. Called from
+    /// `viewDidLayoutSubviews()`, which can fire before the view is attached
+    /// to a window (pre-presentation layout) — so this re-syncs the frames
+    /// on every pre-entry layout pass instead of computing them once and
+    /// locking in a possibly-wrong (zero/garbage) result.
+    private func prepareEntrySnapshotsIfNeeded() {
+        guard view.window != nil else { return }
+        entrySnapshotContainer.isHidden = false
+        entrySnapshotContainer.alpha = 1
+
+        if !hasPreparedEntrySnapshots {
+            hasPreparedEntrySnapshots = true
+            for entry in entrySnapshots.sorted(by: { $0.itemIndex < $1.itemIndex }) {
+                let snapshot = entry.snapshotView
+                snapshot.removeFromSuperview()
+                snapshot.layer.cornerCurve = .continuous
+                snapshot.layer.cornerRadius = 16
+                snapshot.layer.masksToBounds = true
+                snapshot.layer.zPosition = entry.itemIndex == selectedIndex
+                    ? 100
+                    : CGFloat(50 - abs(entry.itemIndex - selectedIndex))
+                entrySnapshotContainer.addSubview(snapshot)
+            }
+        }
+        for entry in entrySnapshots {
+            entry.snapshotView.frame = view.convert(entry.sourceFrame, from: nil)
+        }
+    }
+
+    private func runRowEntryMorph() {
+        prepareEntrySnapshotsIfNeeded()
+
+        // Ensure the live carousel is in its final first-frame position behind
+        // the source snapshots before it fades in.
+        collectionView.layoutIfNeeded()
+        collectionView.contentOffset = layout.contentOffsetCentered(index: selectedIndex)
+        backdropPlane.sync(to: layout, offset: collectionView.contentOffset)
+        backdrop.alpha = 0
+        backdropPlane.alpha = 0
+        collectionView.alpha = 0
+        entrySnapshotContainer.alpha = 1
+
+        let timing = UISpringTimingParameters(
+            mass: 1.0,
+            stiffness: 195.0,
+            damping: 24.58,
+            initialVelocity: .zero
+        )
+        let morpher = UIViewPropertyAnimator(duration: 0.45, timingParameters: timing)
+        morpher.addAnimations { [weak self] in
+            guard let self else { return }
+            for entry in self.entrySnapshots {
+                guard self.items.indices.contains(entry.itemIndex) else {
+                    entry.snapshotView.alpha = 0
+                    continue
+                }
+                entry.snapshotView.frame = self.carouselFrameInView(for: entry.itemIndex)
+                entry.snapshotView.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
+            }
+        }
+        morpher.addCompletion { [weak self] _ in
+            guard let self else { return }
+            for entry in self.entrySnapshots {
+                entry.snapshotView.removeFromSuperview()
+            }
+            self.entrySnapshotContainer.isHidden = true
+            self.state.completeEntryMorph()
+            self.updateCurrentCellChrome(animated: true)
+        }
+        morpher.startAnimation()
+
+        UIView.animate(
+            withDuration: 0.45,
+            delay: 0,
+            options: [.curveEaseInOut, .allowUserInteraction]
+        ) { [weak self] in
+            guard let self else { return }
+            self.entrySnapshotContainer.alpha = 0
+            self.backdrop.alpha = 1
+            self.backdropPlane.alpha = 1
+            self.collectionView.alpha = 1
+        }
+    }
+
+    private func carouselFrameInView(for index: Int) -> CGRect {
+        let geom = PreviewCarouselGeometry.self
+        let centered = geom.centeredCardFrame(in: view.bounds)
+        let stride = centered.width + geom.sideCardGap
+        let selectedOffset = stride * CGFloat(selectedIndex)
+        return centered.offsetBy(dx: stride * CGFloat(index) - selectedOffset, dy: 0)
+    }
+
     /// Frame the centered cell occupies in the view's coordinate
     /// space. Used by the morph snapshot for its target frame.
     private func centeredFrameInWindow() -> CGRect {
-        let geom = PreviewCarouselGeometry.self
-        let centeredWidth = view.bounds.width - 2 * geom.centeredHorizontalInset
-        let centeredHeight = view.bounds.height - geom.topInset
-        return CGRect(
-            x: geom.centeredHorizontalInset,
-            y: geom.topInset,
-            width: centeredWidth,
-            height: centeredHeight
-        )
+        PreviewCarouselGeometry.centeredCardFrame(in: view.bounds)
     }
 
     // MARK: - Input handling
@@ -1116,15 +1270,22 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Dismiss the overlay. The artwork now lives in the VC-owned
-    /// `backdropPlane` (not in the cell), so the old "fly a chrome-only
-    /// PreviewCardView snapshot back to the source tile" reverse-entry morph
-    /// desynced: the chrome snapshot flew off while the artwork plane sat
-    /// orphaned ("metadata dismisses first, then the carousel"). Instead we
-    /// fade ALL overlay layers together — backdrop plane (artwork), the
-    /// collection view (chrome), and the black backdrop — on ONE animator, so
-    /// everything leaves in lockstep.
+    /// Dismiss the overlay. If we entered via row snapshots, reverse that
+    /// exact morph (`runRowExitMorph`) so exit mirrors entry. Otherwise the
+    /// artwork lives in the VC-owned `backdropPlane` (not in the cell), so
+    /// the old "fly a chrome-only PreviewCardView snapshot back to the
+    /// source tile" reverse-entry morph desynced: the chrome snapshot flew
+    /// off while the artwork plane sat orphaned ("metadata dismisses first,
+    /// then the carousel"). In that case we fade ALL overlay layers
+    /// together — backdrop plane (artwork), the collection view (chrome),
+    /// and the black backdrop — on ONE animator, so everything leaves in
+    /// lockstep.
     private func performDismissMorph() {
+        onPrepareDismiss(dismissSourceTarget)
+        if !entrySnapshots.isEmpty {
+            runRowExitMorph()
+            return
+        }
         let animator = UIViewPropertyAnimator(
             duration: PreviewCarouselGeometry.expandAnimationDuration,
             curve: .easeInOut
@@ -1145,11 +1306,91 @@ final class PreviewCarouselViewController: UIViewController {
         animator.startAnimation()
     }
 
+    /// Reverse of `runRowEntryMorph()`: re-snapshot the live carousel cards
+    /// at their current carousel frames, then animate those snapshots back
+    /// to their source row frames while the real backdrop/collection/detail
+    /// layers fade out underneath — the exact inverse of the entry morph.
+    private func runRowExitMorph() {
+        entrySnapshotContainer.isHidden = false
+        entrySnapshotContainer.alpha = 1
+
+        // `PreviewCardView` is intentionally transparent — its artwork is
+        // composited from the VC-owned `backdropPlane`, not drawn in the
+        // cell itself (see PreviewCardView.swift). Snapshotting
+        // `cellForItem(at:)` alone would capture chrome over nothing,
+        // reading as empty/black. Render the full composited stack once
+        // (backdrop + backdropPlane artwork + collection chrome) and crop
+        // a piece per card instead.
+        let compositeRenderer = UIGraphicsImageRenderer(bounds: view.bounds)
+        let composite = compositeRenderer.image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
+        }
+
+        var liveSnapshots: [PreviewEntrySnapshot] = []
+        for entry in entrySnapshots {
+            guard items.indices.contains(entry.itemIndex) else { continue }
+            let cardFrame = carouselFrameInView(for: entry.itemIndex)
+            guard cardFrame.width > 1, cardFrame.height > 1 else { continue }
+            guard let cropped = composite.cgImage?.cropping(to: CGRect(
+                x: cardFrame.minX * composite.scale,
+                y: cardFrame.minY * composite.scale,
+                width: cardFrame.width * composite.scale,
+                height: cardFrame.height * composite.scale
+            )) else { continue }
+            let snapshot = UIImageView(image: UIImage(cgImage: cropped, scale: composite.scale, orientation: composite.imageOrientation))
+            snapshot.frame = cardFrame
+            snapshot.contentMode = .scaleToFill
+            snapshot.layer.cornerCurve = .continuous
+            snapshot.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
+            snapshot.layer.masksToBounds = true
+            snapshot.layer.zPosition = entry.itemIndex == selectedIndex
+                ? 100
+                : CGFloat(50 - abs(entry.itemIndex - selectedIndex))
+            entrySnapshotContainer.addSubview(snapshot)
+            liveSnapshots.append(PreviewEntrySnapshot(
+                itemIndex: entry.itemIndex,
+                sourceFrame: entry.sourceFrame,
+                snapshotView: snapshot
+            ))
+        }
+
+        backdropPlane.alpha = 0
+        collectionView.alpha = 0
+        expandedDetail.alpha = 0
+
+        let timing = UISpringTimingParameters(
+            mass: 1.0,
+            stiffness: 195.0,
+            damping: 24.58,
+            initialVelocity: .zero
+        )
+        let morpher = UIViewPropertyAnimator(duration: 0.45, timingParameters: timing)
+        morpher.addAnimations { [weak self] in
+            guard let self else { return }
+            for entry in liveSnapshots {
+                entry.snapshotView.frame = self.view.convert(entry.sourceFrame, from: nil)
+                entry.snapshotView.layer.cornerRadius = 16
+                entry.snapshotView.alpha = 0
+            }
+            self.backdrop.alpha = 0
+        }
+        morpher.addCompletion { [weak self] _ in
+            guard let self else { return }
+            self.dismiss(animated: false) {
+                self.onDismiss(self.dismissSourceTarget)
+            }
+        }
+        morpher.startAnimation()
+    }
+
     private func makeSourceTarget(for index: Int) -> PreviewSourceTarget? {
         guard let existing = dismissSourceTarget,
               items.indices.contains(index) else { return dismissSourceTarget }
+        if let sourceItemIDs, sourceItemIDs.indices.contains(index) {
+            return PreviewSourceTarget(rowID: existing.rowID, itemID: sourceItemIDs[index])
+        }
         let item = items[index]
-        return PreviewSourceTarget(rowID: existing.rowID, itemID: "\(item.id)")
+        return PreviewSourceTarget(rowID: existing.rowID, itemID: item.ref.itemID)
     }
 }
 

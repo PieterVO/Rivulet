@@ -696,11 +696,11 @@ class PlexDataStore: ObservableObject {
     // MARK: - Library-Specific Hubs (for separated Home screen)
 
     /// Load hubs for each library that should appear on the Home screen
-    func loadLibraryHubsIfNeeded() async {
+    func loadLibraryHubsIfNeeded(forceRefresh: Bool = false) async {
         // If already loading, wait for that task (deduplication)
         if let existingTask = libraryHubsLoadTask {
             await existingTask.value
-            return
+            if !forceRefresh { return }
         }
 
         let librariesToLoad = librariesForHomeScreen
@@ -710,9 +710,10 @@ class PlexDataStore: ObservableObject {
             return
         }
 
-        // Skip if we already have hubs for all libraries
+        // Skip if we already have hubs for all libraries, unless the caller is
+        // explicitly doing stale-while-revalidate for Home rows.
         let missingLibraries = librariesToLoad.filter { libraryHubs[$0.key] == nil }
-        guard !missingLibraries.isEmpty else {
+        guard forceRefresh || !missingLibraries.isEmpty else {
             return
         }
 
@@ -722,14 +723,16 @@ class PlexDataStore: ObservableObject {
         }
 
         let userId = profileManager.selectedUserId
-        print("📦 PlexDataStore: Loading hubs for \(missingLibraries.count) libraries... (userId: \(userId.map(String.init) ?? "none"))")
+        let librariesToFetch = forceRefresh ? librariesToLoad : missingLibraries
+        print("📦 PlexDataStore: Loading hubs for \(librariesToFetch.count) libraries... (userId: \(userId.map(String.init) ?? "none"), force=\(forceRefresh))")
         isLoadingLibraryHubs = true
 
         libraryHubsLoadTask = Task {
             // Try cache first for each missing library
             var librariesNeedingFetch: [PlexLibrary] = []
-            for library in missingLibraries {
-                if let cached = await cacheManager.getCachedLibraryHubs(forLibrary: library.key), !cached.isEmpty {
+            for library in librariesToFetch {
+                if !forceRefresh,
+                   let cached = await cacheManager.getCachedLibraryHubs(forLibrary: library.key), !cached.isEmpty {
                     libraryHubs[library.key] = cached
                 } else {
                     librariesNeedingFetch.append(library)
@@ -737,7 +740,7 @@ class PlexDataStore: ObservableObject {
             }
 
             // If cache provided some data, update UI immediately
-            if librariesNeedingFetch.count < missingLibraries.count {
+            if librariesNeedingFetch.count < librariesToFetch.count {
                 libraryHubsVersion = UUID()
                 isLoadingLibraryHubs = false
                 // Stage 1: refresh the additive MediaItem projection — the
@@ -768,7 +771,7 @@ class PlexDataStore: ObservableObject {
                         }
                     }
 
-                    for await (key, title, hubs) in group {
+                    for await (key, _, hubs) in group {
                         if let hubs {
                             libraryHubs[key] = hubs
                             recordFetch(for: "libraryHubs:\(key)")
@@ -779,7 +782,7 @@ class PlexDataStore: ObservableObject {
 
             // Also background-refresh libraries that were served from cache
             let fetchKeys = Set(librariesNeedingFetch.map { $0.key })
-            let cachedLibraries = missingLibraries.filter { !fetchKeys.contains($0.key) }
+            let cachedLibraries = librariesToFetch.filter { !fetchKeys.contains($0.key) }
             if !cachedLibraries.isEmpty {
                 await withTaskGroup(of: (String, String, [PlexHub]?).self) { group in
                     for library in cachedLibraries {
@@ -800,7 +803,7 @@ class PlexDataStore: ObservableObject {
                         }
                     }
 
-                    for await (key, title, hubs) in group {
+                    for await (key, _, hubs) in group {
                         if let hubs {
                             libraryHubs[key] = hubs
                             recordFetch(for: "libraryHubs:\(key)")
@@ -1042,12 +1045,7 @@ class PlexDataStore: ObservableObject {
             return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
         }
 
-        let recentlyAdded = hubs.first { isRecentlyAddedHub($0) && ($0.Metadata?.isEmpty == false) }
-        if let items = recentlyAdded?.Metadata, !items.isEmpty {
-            return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
-        }
-
-        if let firstHub = hubs.first(where: { $0.Metadata?.isEmpty == false }),
+        if let firstHub = hubs.first(where: { !isRecentlyAddedHub($0) && ($0.Metadata?.isEmpty == false) }),
            let items = firstHub.Metadata, !items.isEmpty {
             return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
         }

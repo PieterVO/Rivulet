@@ -139,7 +139,7 @@ final class HLSPipeline {
             "audio_codec": demuxer.audioCodecType ?? "unknown",
             "profile_conversion": requiresProfileConversion
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     // MARK: - Playback Control
@@ -366,7 +366,7 @@ final class HLSPipeline {
                     if !Task.isCancelled {
                         let streamURL = await self.streamURL
                         let demuxer = await self.demuxer
-                        SentrySDK.capture(error: error) { scope in
+                        SentryBridge.capture(error: error) { scope in
                             scope.setTag(value: "hls_pipeline", key: "component")
                             scope.setTag(value: "segment_download", key: "error_type")
                             scope.setTag(value: demuxer?.videoCodecType ?? "unknown", key: "video_codec")
@@ -461,14 +461,14 @@ final class HLSPipeline {
                     // Log renderer errors
                     if let layerError = renderer.displayLayerError {
                         playerDebugLog("[HLSPipeline] Display layer error: \(layerError)")
-                        SentrySDK.capture(error: layerError) { scope in
+                        SentryBridge.capture(error: layerError) { scope in
                             scope.setTag(value: "hls_pipeline", key: "component")
                             scope.setTag(value: "display_layer", key: "error_type")
                         }
                     }
                     if let audioError = renderer.audioRendererError {
                         playerDebugLog("[HLSPipeline] Audio renderer error: \(audioError)")
-                        SentrySDK.capture(error: audioError) { scope in
+                        SentryBridge.capture(error: audioError) { scope in
                             scope.setTag(value: "hls_pipeline", key: "component")
                             scope.setTag(value: "audio_renderer", key: "error_type")
                         }
@@ -486,7 +486,7 @@ final class HLSPipeline {
                 } catch {
                     if !Task.isCancelled {
                         playerDebugLog("[HLSPipeline] Segment \(segIndex) parse error: \(error)")
-                        SentrySDK.capture(error: error) { scope in
+                        SentryBridge.capture(error: error) { scope in
                             scope.setTag(value: "hls_pipeline", key: "component")
                             scope.setTag(value: "segment_demux", key: "error_type")
                             scope.setExtra(value: segIndex, key: "segment_index")

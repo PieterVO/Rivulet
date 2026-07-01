@@ -2,6 +2,7 @@ const TMDB_BASE = "https://api.themoviedb.org/3";
 const TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 const LIST_TTL_SECONDS = 60 * 60; // 1 hour for popular/trending lists
 const LIST_SECTIONS = new Set([
+  "trending",
   "popular",
   "now_playing",
   "upcoming",
@@ -46,7 +47,9 @@ export default {
           return addCors(new Response("Unknown list section", { status: 404 }));
         }
         const page = url.searchParams.get("page") ?? "1";
-        const upstreamUrl = new URL(`${TMDB_BASE}/${type}/${section}`);
+        const upstreamUrl = section === "trending"
+          ? new URL(`${TMDB_BASE}/trending/${type}/week`)
+          : new URL(`${TMDB_BASE}/${type}/${section}`);
         upstreamUrl.searchParams.set("api_key", env.TMDB_API_KEY);
         upstreamUrl.searchParams.set("page", page);
         if (language) upstreamUrl.searchParams.set("language", language);

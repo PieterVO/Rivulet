@@ -72,6 +72,20 @@ final class PlaybackInputCoordinatorTests: XCTestCase {
         XCTAssertEqual(target.received[0].1, .keyboard)
     }
 
+    func testRapidTransportCommandsFromDifferentInputPathsAreDeduped() {
+        let coordinator = PlaybackInputCoordinator()
+        let target = MockTarget()
+        coordinator.target = target
+
+        coordinator.handle(action: .playPause, source: .keyboard)
+        coordinator.handle(action: .pause, source: .mpRemoteCommand)
+        coordinator.handle(action: .playPause, source: .swiftUICommand)
+
+        XCTAssertEqual(target.received.count, 1)
+        XCTAssertEqual(target.received[0].0, .playPause)
+        XCTAssertEqual(target.received[0].1, .keyboard)
+    }
+
     func testSeekWhileScrubbingBypassesCoalescing() {
         let coordinator = PlaybackInputCoordinator()
         let target = MockTarget()

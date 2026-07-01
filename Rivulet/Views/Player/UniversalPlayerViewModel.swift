@@ -288,7 +288,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     @Published var showControls = true
-    @Published var showInfoPanel = false
     @Published var isScrubbing = false
     @Published var showPausedPoster = false
     @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
@@ -322,23 +321,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var postVideoState: PostVideoState = .hidden
     @Published var videoFrameState: VideoFrameState = .fullscreen
     @Published private(set) var nextEpisode: PlexMetadata?
-    /// Set when the CURRENT episode-end has been handled on the Aether native
-    /// route (mark-watched + next-episode resolution). Guards handlePlaybackEnded()
-    /// re-entry so the credits-marker entry and the later .ended entry do not
-    /// both mark-watched / re-resolve. Reset on episode change in playNextEpisode().
-    private var nativeUpNextHandledForEpisodeEnd = false
     /// Set once the next episode has been RESOLVED EARLY for the current episode
-    /// on the Aether native route (driven by the first non-nil currentAVPlayer).
-    /// AVContentProposal is forward-looking, so the proposal must be attached
-    /// before the playhead reaches the credits time; we therefore resolve the
-    /// next episode early rather than at the credits marker. Guards the fetch so
+    /// (driven by Aether's first non-nil currentAVPlayer). Guards the fetch so
     /// it runs once per episode even though currentAVPlayer re-emits on every
     /// Aether internal AVPlayer swap. Reset on episode change in playNextEpisode().
-    private var nativeUpNextResolvedForEpisode = false
-    /// Set when the user dismisses (rejects) the native Up Next card. Flips
-    /// `nativeUpNextCardWillPresent` to false so the manual Skip Credits button
-    /// returns for the rest of the credits. Reset per episode in playNextEpisode().
-    private var nativeUpNextRejectedForEpisode = false
+    private var nextEpisodeResolvedEarly = false
     @Published private(set) var recommendations: [PlexMetadata] = []
     @Published var countdownSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
@@ -352,78 +339,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var currentSubtitleTrackId: Int?
     private var compatibilityNoticeTimer: Timer?
     private nonisolated(unsafe) var userActivity: NSUserActivity?
-
-    // MARK: - Playback Settings Panel State (Column-based layout)
-
-    /// Which column is focused: 0 = Subtitles, 1 = Audio (Media Info is not focusable)
-    @Published var focusedColumn: Int = 0
-
-    /// Which row within the focused column
-    @Published var focusedRowIndex: Int = 0
-
-    /// Number of rows in a given column
-    func rowCount(forColumn column: Int) -> Int {
-        switch column {
-        case 0: return 1 + subtitleTracks.count  // "Off" + subtitle tracks
-        case 1: return max(1, audioTracks.count)  // Audio tracks (at least 1)
-        default: return 0
-        }
-    }
-
-    /// Check if a specific setting is focused
-    func isSettingFocused(column: Int, index: Int) -> Bool {
-        return focusedColumn == column && focusedRowIndex == index
-    }
-
-    /// Navigate within settings panel
-    func navigateSettings(direction: MoveCommandDirection) {
-        switch direction {
-        case .up:
-            if focusedRowIndex > 0 {
-                focusedRowIndex -= 1
-            }
-        case .down:
-            let maxIndex = rowCount(forColumn: focusedColumn) - 1
-            if focusedRowIndex < maxIndex {
-                focusedRowIndex += 1
-            }
-        case .left:
-            if focusedColumn > 0 {
-                focusedColumn -= 1
-                // Clamp row index to new column's range
-                focusedRowIndex = min(focusedRowIndex, rowCount(forColumn: focusedColumn) - 1)
-            }
-        case .right:
-            if focusedColumn < 1 {  // Only 2 focusable columns (0 and 1)
-                focusedColumn += 1
-                // Clamp row index to new column's range
-                focusedRowIndex = min(focusedRowIndex, rowCount(forColumn: focusedColumn) - 1)
-            }
-        @unknown default:
-            break
-        }
-    }
-
-    /// Select the currently focused setting
-    func selectFocusedSetting() {
-        switch focusedColumn {
-        case 0:  // Subtitles
-            if focusedRowIndex == 0 {
-                selectSubtitleTrack(id: nil)
-            } else {
-                let trackIndex = focusedRowIndex - 1
-                if trackIndex < subtitleTracks.count {
-                    selectSubtitleTrack(id: subtitleTracks[trackIndex].id)
-                }
-            }
-        case 1:  // Audio
-            if focusedRowIndex < audioTracks.count {
-                selectAudioTrack(id: audioTracks[focusedRowIndex].id)
-            }
-        default:
-            break
-        }
-    }
 
     // MARK: - Player Instance
 
@@ -452,9 +367,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var requiresProfileConversion = false
 
     /// The VOD player: AetherEngine, surfaced through a PlayerProtocol
-    /// adapter. @Published so AetherPlayerViewController can subscribe and
-    /// rebind the underlying AVPlayer on every Aether internal reload
-    /// (audio-track switch, background reopen).
+    /// adapter. @Published to drive internal subscriptions that rebind the
+    /// underlying AVPlayer on every Aether internal reload (audio-track
+    /// switch, background reopen).
     @Published private(set) var aetherPlayer: AetherPlayer?
 
     /// Subtitle manager for custom subtitle rendering.
@@ -2419,16 +2334,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Info Panel Navigation
-
-    /// Reset settings panel state when opening
-    func resetSettingsPanel() {
-        // Refresh track lists when panel opens
-        updateTrackLists()
-        focusedColumn = 0
-        focusedRowIndex = 0
-    }
-
     func seek(to time: TimeInterval) async {
         if let ap = aetherPlayer {
             await ap.seek(to: time)
@@ -3418,16 +3323,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // The native Up Next card OWNS the credits moment on the native route. If
-        // the card will present (native route + resolved next episode), suppress
-        // BOTH the auto-skip jump AND the manual Skip Credits button — the card is
-        // the sole credits affordance, so the skip button never flashes for a few
-        // seconds before the card appears. (Software/DV route has no card, so its
-        // auto-skip and manual skip button behave as before.)
-        if nativeUpNextCardWillPresent {
-            return
-        }
-
         // Check for auto-skip (only when inside actual marker range)
         if autoSkipCredits && !skippedCreditsIds.contains(creditsId) && insideMarker {
             skippedCreditsIds.insert(creditsId)
@@ -3568,57 +3463,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         UserDefaults.standard.object(forKey: "showPostVideoUpNext") as? Bool ?? true
     }
 
-    /// True when Aether is on its natively-playable route (a real AVPlayer
-    /// exists). On this route the Apple native AVContentProposal "Up Next"
-    /// card owns the end-of-episode experience, so the custom post-video
-    /// overlay is suppressed. On the software/DV route currentAVPlayer is nil
-    /// and this is false, so the custom EpisodeSummaryOverlay runs as before.
-    var isAetherNativeRouteActive: Bool {
-        aetherPlayer?.currentAVPlayer != nil
-    }
-
-    /// True when the native Up Next card will (or already does) present for this
-    /// item: an episode on the Aether native route whose next episode has been
-    /// resolved (or is resolving). When this holds, the credits auto-skip is
-    /// suppressed so the card wins — the card presents at the credits marker and
-    /// auto-accepts, rather than the skip jumping the playhead past it. On the
-    /// software/DV route (no card) this is false, so auto-skip behaves as before.
-    var nativeUpNextCardWillPresent: Bool {
-        metadata.type == "episode"
-            && isAetherNativeRouteActive
-            && !nativeUpNextRejectedForEpisode
-            && (nextEpisode != nil || nativeUpNextResolvedForEpisode)
-    }
-
-    /// Called by the Aether host when the user dismisses (rejects) the native Up
-    /// Next card. Re-enables the manual Skip Credits button for the remainder of
-    /// the credits (nativeUpNextCardWillPresent becomes false).
-    func handleNativeUpNextRejected() {
-        nativeUpNextRejectedForEpisode = true
-    }
-
-    /// Resolve the next episode EARLY on the Aether native route so the VC can
-    /// attach an AVContentProposal to currentItem well before the playhead
-    /// reaches the credits time (AVKit presents the card when playback reaches
-    /// contentTimeForTransition). Runs once per episode; later currentAVPlayer
-    /// re-emissions are no-ops here (the VC re-applies the cached proposal to the
-    /// new item). Does NOT mark-watched or set postVideoState; those stay in
-    /// handlePlaybackEnded()'s native branch.
+    /// Resolve the next episode EARLY (as soon as Aether's AVPlayer is
+    /// available) so it's ready by the time handlePlaybackEnded() presents the
+    /// EpisodeSummaryOverlay, rather than fetching only at end-of-episode. Runs
+    /// once per episode; later currentAVPlayer re-emissions are no-ops.
     private func resolveNextEpisodeEarlyIfNeeded() async {
         guard metadata.type == "episode" else { return }
-        guard isAetherNativeRouteActive else { return }
-        // Note: auto-skip-credits no longer suppresses resolution. On the native
-        // route the card wins over the credits skip (see nativeUpNextCardWillPresent
-        // + handleCreditsMarkerActive), so we must resolve the next episode here
-        // regardless of the auto-skip setting.
-        guard !nativeUpNextResolvedForEpisode else { return }
-        nativeUpNextResolvedForEpisode = true
+        guard !nextEpisodeResolvedEarly else { return }
+        nextEpisodeResolvedEarly = true
 
         if metadata.parentRatingKey == nil || metadata.index == nil {
             await fetchFullMetadataIfNeeded()
         }
         let next = await fetchNextEpisode()
-        guard let next else { return }  // end of series / fetch failure: no card
+        guard let next else { return }
         nextEpisode = next
         Task { await preloadNextEpisode() }
     }
@@ -3633,18 +3491,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func triggerPostVideoTransition() {
         let isEpisode = metadata.type == "episode"
 
-        // Aether native route: route through handlePlaybackEnded() so the next
-        // episode is resolved at the credits marker and the native
-        // AVContentProposal card can be built from it. handlePlaybackEnded() is
-        // native-route aware: it resolves + preloads the next episode but does
-        // NOT present the custom EpisodeSummaryOverlay on this route, and runs
-        // markCurrentAsWatched() exactly once. This bypasses the showPostVideoUpNext
-        // opt-out, which gates only the custom overlay, not the native card.
-        if isEpisode && isAetherNativeRouteActive {
-            Task { await handlePlaybackEnded() }
-            return
-        }
-
         if showPostVideoUpNext || !isEpisode {
             Task { await handlePlaybackEnded() }
         } else {
@@ -3654,60 +3500,6 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func handlePlaybackEnded() async {
         let isEpisode = metadata.type == "episode"
-
-        // Aether native route: Apple's AVContentProposal card owns Up Next.
-        // We still RESOLVE the next episode (so the card can be built from it,
-        // see AetherPlayerViewController observing `nextEpisode`) and preload
-        // its stream/thumb, but we do NOT present the custom EpisodeSummaryOverlay
-        // (no shrink, no summary panel, no custom autoplay countdown). The native
-        // route is detected by a live AVPlayer; the software/DV route has
-        // currentAVPlayer == nil and falls through to the custom overlay below.
-        //
-        // This branch runs BEFORE the postVideoState guard because on the native
-        // route postVideoState stays .hidden, so that guard would not protect
-        // against the credits-marker entry and the later .ended entry both
-        // running. The nativeUpNextHandledForEpisodeEnd flag (set here, reset on
-        // episode change in playNextEpisode()) guards re-entry so
-        // markCurrentAsWatched() / next-episode resolution run exactly once per
-        // episode-end.
-        if isEpisode && isAetherNativeRouteActive {
-            // Re-entry guard: if this episode-end was already handled on the
-            // native route (credits-marker entry, then a later .ended entry),
-            // do nothing more. mark-watched + resolve already ran once.
-            guard !nativeUpNextHandledForEpisodeEnd else { return }
-            // Claim this episode-end now so the later .ended entry is a no-op
-            // even when there is no next episode (end of series): mark-watched
-            // must run exactly once. Reset on episode change in playNextEpisode().
-            nativeUpNextHandledForEpisodeEnd = true
-
-            await markCurrentAsWatched()
-            postVideoState = .hidden  // never show the custom overlay on this route
-
-            // The next episode is normally resolved EARLY by
-            // resolveNextEpisodeEarlyIfNeeded() (so the card can present before
-            // the credits). Only fetch here as a fallback if that never ran
-            // (e.g. parent keys arrived late), to avoid a second fetchNextEpisode()
-            // which would double-advance shuffledQueueIndex.
-            if nextEpisode == nil && !nativeUpNextResolvedForEpisode {
-                if metadata.parentRatingKey == nil || metadata.index == nil {
-                    await fetchFullMetadataIfNeeded()
-                }
-                nextEpisode = await fetchNextEpisode()
-            }
-
-            // No next episode (end of series / fetch failure): no card, nothing
-            // more to do. The episode ends normally.
-            guard nextEpisode != nil else { return }
-
-            // Preload the next episode's stream + thumb in the background so the
-            // native card's previewImage and the subsequent playNextEpisode()
-            // are fast. The VC builds/sets the proposal off the `nextEpisode`
-            // change above.
-            Task {
-                await preloadNextEpisode()
-            }
-            return
-        }
 
         // Don't re-enter if already showing post-video
         guard postVideoState == .hidden else { return }
@@ -4045,12 +3837,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         userDeclinedIntroAutoSkip = false
         nextEpisode = nil
 
-        // New episode: allow the native Up Next card to present again.
-        nativeUpNextHandledForEpisodeEnd = false
-        // New episode: allow the early native-card resolve to run again.
-        nativeUpNextResolvedForEpisode = false
-        // New episode: clear any prior card rejection (skip button suppression).
-        nativeUpNextRejectedForEpisode = false
+        // New episode: allow the early next-episode resolve to run again.
+        nextEpisodeResolvedEarly = false
 
         // Ensure next episode has required metadata for subsequent next-up detection
         if metadata.parentRatingKey == nil || metadata.index == nil {

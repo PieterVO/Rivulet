@@ -11,6 +11,7 @@ enum InputConfig {
     static let holdThreshold: TimeInterval = 0.4
     static let seekCoalesceInterval: TimeInterval = 0.05
     static let actionDedupeWindow: TimeInterval = 0.08
+    static let transportDedupeWindow: TimeInterval = 0.35
     static let blockDismissTimeout: TimeInterval = 0.3
 
     static let tapSeekSeconds: TimeInterval = 10

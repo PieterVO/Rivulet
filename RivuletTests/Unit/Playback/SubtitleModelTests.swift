@@ -3,7 +3,7 @@ import CoreGraphics
 @testable import Rivulet
 
 @MainActor
-final class AetherSubtitleModelTests: XCTestCase {
+final class SubtitleModelTests: XCTestCase {
 
     // MARK: - Helpers
 
@@ -27,21 +27,21 @@ final class AetherSubtitleModelTests: XCTestCase {
     // MARK: - activeCues lookup
 
     func testActiveCues_returnsMatchingCue_atMidpoint() {
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         model.update(cues: makeCues())
         model.sourceTime = 3
         XCTAssertEqual(model.activeCues.map(\.id), [0])
     }
 
     func testActiveCues_returnsSecondCue_inSecondWindow() {
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         model.update(cues: makeCues())
         model.sourceTime = 7
         XCTAssertEqual(model.activeCues.map(\.id), [1])
     }
 
     func testActiveCues_returnsEmpty_betweenCues() {
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         model.update(cues: makeCues())
         model.sourceTime = 5.5
         XCTAssertEqual(model.activeCues.map(\.id), [])
@@ -52,7 +52,7 @@ final class AetherSubtitleModelTests: XCTestCase {
     func testActiveCues_respectsDelaySeconds() {
         // delaySeconds=2 at sourceTime=7 -> effective lookup = 5, which is
         // cue0's endTime (inclusive), so cue0 is active.
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         model.update(cues: makeCues())
         model.delaySeconds = 2
         model.sourceTime = 7
@@ -63,7 +63,7 @@ final class AetherSubtitleModelTests: XCTestCase {
 
     func testActiveCues_returnsBitmapCue() {
         // Bitmap (PGS/DVB) cues must flow through the model just like text.
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         let img = make1x1Image()
         model.update(cues: [
             AetherSubtitleCue(
@@ -84,14 +84,14 @@ final class AetherSubtitleModelTests: XCTestCase {
     // MARK: - maxCueDuration
 
     func testMaxCueDuration_computedFromCues() {
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         // cue durations 4 and 4 -> max 4, clamped to minimum 6
         model.update(cues: makeCues())
         XCTAssertEqual(model.maxCueDuration, 6, "should clamp to minimum 6")
     }
 
     func testMaxCueDuration_reflectsLongerCue() {
-        let model = AetherSubtitleModel()
+        let model = SubtitleModel()
         let longCue = AetherSubtitleCue(id: 0, startTime: 0, endTime: 10, body: .text("long"))
         model.update(cues: [longCue])
         XCTAssertEqual(model.maxCueDuration, 10, "should reflect the actual long cue")

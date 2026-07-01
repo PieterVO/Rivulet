@@ -2,7 +2,7 @@
 //  AetherSubtitleOverlayView.swift
 //  Rivulet
 //
-//  SwiftUI overlay that renders subtitle cues from an AetherSubtitleModel.
+//  SwiftUI overlay that renders subtitle cues from a SubtitleModel.
 //  Mounted in AVPlayerViewController.contentOverlayView (above video, below
 //  AVKit's transport bar) via a retained UIHostingController child VC.
 //  See AetherPlayerViewController.swift for the mounting code.
@@ -22,7 +22,7 @@ import SwiftUI
 
 struct AetherSubtitleOverlayView: View {
 
-    @ObservedObject var model: AetherSubtitleModel
+    @ObservedObject var model: SubtitleModel
 
     /// Current caption appearance. Replaced wholesale on CaptionAppearance changes.
     var style: CaptionStyle

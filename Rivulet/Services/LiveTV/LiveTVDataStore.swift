@@ -694,7 +694,7 @@ class LiveTVDataStore: ObservableObject {
                 "source_type": String(describing: channel.sourceType),
                 "has_stream_url": channel.streamURL != nil
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
             return channel.streamURL
         }
 
@@ -713,7 +713,7 @@ class LiveTVDataStore: ObservableObject {
                 "url_host": url.host ?? "unknown",
                 "url_path": url.path
             ]
-            SentrySDK.addBreadcrumb(successBreadcrumb)
+            SentryBridge.addBreadcrumb(successBreadcrumb)
         } else {
             let breadcrumb = Breadcrumb(level: .warning, category: "livetv_stream")
             breadcrumb.message = "Provider returned nil stream URL"
@@ -724,7 +724,7 @@ class LiveTVDataStore: ObservableObject {
                 "source_type": String(describing: channel.sourceType),
                 "embedded_stream_url": channel.streamURL?.absoluteString ?? "none"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
         }
 
         return url

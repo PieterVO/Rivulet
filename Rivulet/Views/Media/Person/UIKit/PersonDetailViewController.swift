@@ -466,7 +466,7 @@ final class PersonDetailViewController: UIViewController {
     private func presentBiography() {
         guard let detail, let bio = detail.biography, !bio.isEmpty else { return }
         let content = InfoPopupContent.description(title: detail.name, subtitle: nil, body: bio)
-        let popup = InfoPopupViewController(content: content, width: 840)
+        let popup = InfoPopupViewController(content: content, width: 840, scrollable: true)
         present(popup, animated: true)
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-// MARK: - AetherSubtitleModel
+// MARK: - SubtitleModel
 
 /// Manages the active-cue set for an Aether-driven subtitle overlay.
 ///
@@ -13,7 +13,7 @@ import Combine
 /// bitmap bodies), not Rivulet's text-only RPlayer `SubtitleCue`, so the
 /// overlay can render PGS/DVB bitmap subtitles too.
 @MainActor
-final class AetherSubtitleModel: ObservableObject {
+final class SubtitleModel: ObservableObject {
 
     // MARK: - Published state
 

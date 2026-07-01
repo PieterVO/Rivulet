@@ -33,6 +33,7 @@ struct FFmpegTrackInfo: Sendable {
     let width: Int32
     let height: Int32
     let bitDepth: Int32
+    let frameRate: Double?
 
     // Audio-specific
     let sampleRate: Int32
@@ -775,7 +776,7 @@ final class FFmpegDemuxer: @unchecked Sendable {
                         "frames_per_packet": framesPerPacket,
                         "sample_rate": Int(sampleRate)
                     ]
-                    SentrySDK.addBreadcrumb(breadcrumb)
+                    SentryBridge.addBreadcrumb(breadcrumb)
                 }
             }
         }
@@ -806,7 +807,7 @@ final class FFmpegDemuxer: @unchecked Sendable {
                     "payload_size": payloadSize,
                     "synthesized_pts": synthesizedPTSSeconds
                 ]
-                SentrySDK.addBreadcrumb(breadcrumb)
+                SentryBridge.addBreadcrumb(breadcrumb)
             }
         }
 
@@ -829,7 +830,7 @@ final class FFmpegDemuxer: @unchecked Sendable {
                     "sample_rate": Int(asbd.mSampleRate),
                     "frames_per_packet": Int(asbd.mFramesPerPacket)
                 ]
-                SentrySDK.addBreadcrumb(breadcrumb)
+                SentryBridge.addBreadcrumb(breadcrumb)
             }
         }
         if ptsSeconds.isFinite {
@@ -926,6 +927,7 @@ final class FFmpegDemuxer: @unchecked Sendable {
                 language: language, title: title, isDefault: isDefault,
                 width: codecpar.pointee.width, height: codecpar.pointee.height,
                 bitDepth: Int32(codecpar.pointee.bits_per_raw_sample),
+                frameRate: Self.frameRate(for: stream.pointee),
                 sampleRate: codecpar.pointee.sample_rate,
                 channels: codecpar.pointee.ch_layout.nb_channels,
                 channelLayout: channelLayout
@@ -937,6 +939,22 @@ final class FFmpegDemuxer: @unchecked Sendable {
             case .subtitle: subtitleTracks.append(info)
             }
         }
+    }
+
+    private static func frameRate(for stream: AVStream) -> Double? {
+        let avg = stream.avg_frame_rate
+        if avg.num > 0, avg.den > 0 {
+            let fps = Double(avg.num) / Double(avg.den)
+            if fps.isFinite, fps > 0 { return fps }
+        }
+
+        let nominal = stream.r_frame_rate
+        if nominal.num > 0, nominal.den > 0 {
+            let fps = Double(nominal.num) / Double(nominal.den)
+            if fps.isFinite, fps > 0 { return fps }
+        }
+
+        return nil
     }
 
     private func selectBestStreams(in ctx: UnsafeMutablePointer<AVFormatContext>) {

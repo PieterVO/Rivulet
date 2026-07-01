@@ -299,9 +299,38 @@ final class ShelfRowCell: UICollectionViewCell {
     /// cell.
     func prepareFocusRestore(on itemIndex: Int) {
         pendingFocusIndex = itemIndex
+        prepareFocusRestoreLayout(on: itemIndex)
+        setNeedsFocusUpdate()
+    }
+
+    /// Jump the row's horizontal window so `itemIndex` is realized/visible
+    /// without changing the pending focus target yet. Used while a modal is
+    /// still covering Home, so the eventual focus update has no visible
+    /// scroll jump when the modal disappears.
+    func prepareFocusRestoreLayout(on itemIndex: Int) {
         setOffset(clampedTo: snappedOffset(toShow: itemIndex), animated: false)
         rowCollectionView.layoutIfNeeded()
-        setNeedsFocusUpdate()
+    }
+
+    /// Clear any stranded focus transforms from visible non-target tiles.
+    /// The currently focused Home tile can keep its TVPosterView/TVCardView
+    /// visual state after focus moves into a modal; clear it while Home is
+    /// still covered so the old tile is not visibly focused beside the new
+    /// restore target when the modal disappears.
+    func resetVisibleFocusAppearance(except itemIndex: Int?) {
+        for cell in rowCollectionView.visibleCells {
+            let index = rowCollectionView.indexPath(for: cell)?.item
+            guard index != itemIndex else { continue }
+            Self.clearFocusAppearance(in: cell)
+        }
+    }
+
+    static func clearFocusAppearance(in view: UIView) {
+        view.layer.removeAllAnimations()
+        if !view.transform.isIdentity { view.transform = .identity }
+        if !CATransform3DIsIdentity(view.layer.transform) { view.layer.transform = CATransform3DIdentity }
+        view.motionEffects.forEach { view.removeMotionEffect($0) }
+        view.subviews.forEach { clearFocusAppearance(in: $0) }
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -318,6 +347,40 @@ final class ShelfRowCell: UICollectionViewCell {
         guard let attrs = rowCollectionView.layoutAttributesForItem(at: IndexPath(item: index, section: 0)),
               let window = window else { return nil }
         return rowCollectionView.convert(attrs.frame, to: window)
+    }
+
+    /// Snapshots of every realized, visible source tile. The owning controller
+    /// maps row item indices to preview item indices before presenting the
+    /// carousel so the modal can animate the row into carousel geometry.
+    func visibleEntrySnapshots(itemIndexMap: [Int: Int]? = nil) -> [PreviewEntrySnapshot] {
+        guard let window else { return [] }
+        rowCollectionView.layoutIfNeeded()
+
+        let visible = rowCollectionView.indexPathsForVisibleItems.sorted { $0.item < $1.item }
+
+        let visibleBounds = window.bounds.insetBy(dx: -80, dy: -80)
+        return visible
+            .compactMap { indexPath -> PreviewEntrySnapshot? in
+                let targetIndex: Int
+                if let itemIndexMap {
+                    guard let mappedIndex = itemIndexMap[indexPath.item] else { return nil }
+                    targetIndex = mappedIndex
+                } else {
+                    targetIndex = indexPath.item
+                }
+                guard indexPath.item < realCount,
+                      let cell = rowCollectionView.cellForItem(at: indexPath),
+                      let snapshot = cell.snapshotView(afterScreenUpdates: false)
+                else { return nil }
+
+                let frame = cell.convert(cell.bounds, to: window)
+                guard frame.intersects(visibleBounds), frame.width > 1, frame.height > 1 else { return nil }
+                return PreviewEntrySnapshot(
+                    itemIndex: targetIndex,
+                    sourceFrame: frame,
+                    snapshotView: snapshot
+                )
+            }
     }
 
     private func applyMetrics(for kind: TileKind) {

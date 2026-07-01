@@ -7,10 +7,7 @@
 //
 //   - InfiniteContentRow / ContentRow (Continue Watching, Recently Added,
 //     Personalized Recommendations): 30pt semibold, foreground white-0.6,
-//     with an inline 17pt medium white-0.3 count indicator. Spacing
-//     between title + count is 12pt. The count reads either
-//     "<loaded> of <total>" (when total > loaded) or "All <count>"
-//     (when paginated through and total exceeds page size).
+//     with no inline count indicator.
 //
 //   - WatchlistHubRow: ScaledDimensions.sectionTitleSize (30pt) bold,
 //     full white. No count.
@@ -67,9 +64,8 @@ final class HubHeaderView: UICollectionReusableView {
         ])
     }
 
-    /// Configure with `title`, optional `loadedCount` / `totalCount` (only
-    /// honoured for `.swiftUIInfiniteRow` style — Watchlist headers never
-    /// show a count).
+    /// Configure with `title`. Count parameters are accepted for call-site
+    /// compatibility but row headers intentionally do not display amounts.
     func configure(title: String,
                    style: Style,
                    loadedCount: Int? = nil,
@@ -85,33 +81,7 @@ final class HubHeaderView: UICollectionReusableView {
         }
         titleLabel.text = title
 
-        if style == .swiftUIInfiniteRow,
-           let loaded = loadedCount,
-           let total = totalCount,
-           total > loaded {
-            // SwiftUI: "X of Y" only when total > items.count.
-            countLabel.font = .systemFont(ofSize: 17, weight: .medium)
-            countLabel.textColor = UIColor.white.withAlphaComponent(0.3)
-            countLabel.text = "\(loaded) of \(total)"
-            countLabel.isHidden = false
-        } else if style == .swiftUIInfiniteRow,
-                  let loaded = loadedCount,
-                  loaded > pageSize {
-            // SwiftUI: "All <count>" once paginated through (hasReachedEnd
-            // && items.count > pageSize). We approximate "hasReachedEnd"
-            // by absence of a totalCount or totalCount == loadedCount.
-            if totalCount == nil || totalCount == loaded {
-                countLabel.font = .systemFont(ofSize: 17, weight: .medium)
-                countLabel.textColor = UIColor.white.withAlphaComponent(0.3)
-                countLabel.text = "All \(loaded)"
-                countLabel.isHidden = false
-            } else {
-                countLabel.text = nil
-                countLabel.isHidden = true
-            }
-        } else {
-            countLabel.text = nil
-            countLabel.isHidden = true
-        }
+        countLabel.text = nil
+        countLabel.isHidden = true
     }
 }

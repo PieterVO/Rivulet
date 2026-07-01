@@ -55,6 +55,14 @@ private let chromeLog = Logger(
 
 final class MediaDetailChromeView: UIView {
 
+    /// Hardcoded action-button sizing shared with the home hero's
+    /// `HeroPillButton`/`HeroCircleButton` (see `HeroButtonRowView`) so the
+    /// carousel/expanded-detail row matches the hero exactly. Width is
+    /// fixed regardless of content (icon/label/progress) so pills don't
+    /// grow or shrink per item.
+    private static let actionButtonHeight: CGFloat = HeroPillButton.buttonHeight
+    private static let actionPillWidth: CGFloat = HeroPillButton.pillWidth
+
     // MARK: - Public surface
 
     /// Layout mode — narrows insets, swaps action-row interactivity.
@@ -293,15 +301,10 @@ final class MediaDetailChromeView: UIView {
         actionAndCastRow.addSubview(actionButtonsStack)
         actionAndCastRow.addSubview(castLabel)
 
-        // The inner actionButtonsStack uses default `distribution = .fill`
-        // which, given the play pill's `widthAnchor >= 220` (an
-        // inequality), will stretch the pill to fill any extra width
-        // the stack has. We don't want that — the stack should hug
-        // its children at their intrinsic widths. Setting hugging to
-        // .required tells the layout engine: "do not grow this stack
-        // wider than the sum of its children." Combined with the
-        // stack's `leadingAnchor` pin (no trailing pin) on the parent
-        // UIView, the stack width settles at exactly content-width.
+        // Each action button has a hardcoded width (Self.actionPillWidth /
+        // Self.actionButtonHeight), so the stack already settles at a
+        // fixed total width. Hugging is still set to .required so the
+        // stack itself never stretches beyond the sum of its children.
         actionButtonsStack.setContentHuggingPriority(.required, for: .horizontal)
         actionButtonsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
         castLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -665,15 +668,14 @@ final class MediaDetailChromeView: UIView {
         playButton = pill
     }
 
-    /// Watchlist pill — same geometry family as the Play pill (64pt tall,
-    /// content-hugging) with bookmark icon + state-reflecting label.
+    /// Watchlist pill — same hardcoded geometry as the Play pill
+    /// (Self.actionPillWidth × Self.actionButtonHeight) with bookmark
+    /// icon + state-reflecting label.
     private func makeWatchlistPill(item: MediaItem) -> FocusableActionButton {
         let pill = FocusableActionButton()
         pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.layer.cornerRadius = 32
+        pill.layer.cornerRadius = Self.actionButtonHeight / 2
         pill.layer.cornerCurve = .continuous
-        pill.setContentHuggingPriority(.required, for: .horizontal)
-        pill.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let icon = UIImageView()
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -685,17 +687,22 @@ final class MediaDetailChromeView: UIView {
         label.font = .systemFont(ofSize: 24, weight: .semibold)
         label.textColor = .white
 
-        pill.addSubview(icon)
-        pill.addSubview(label)
+        let contentStack = UIStackView(arrangedSubviews: [icon, label])
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.axis = .horizontal
+        contentStack.alignment = .center
+        contentStack.spacing = 12
+
+        pill.addSubview(contentStack)
         NSLayoutConstraint.activate([
-            pill.heightAnchor.constraint(equalToConstant: 64),
-            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 20),
-            icon.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            pill.widthAnchor.constraint(equalToConstant: Self.actionPillWidth),
+            pill.heightAnchor.constraint(equalToConstant: Self.actionButtonHeight),
+            contentStack.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
+            contentStack.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: pill.leadingAnchor, constant: 20),
+            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: pill.trailingAnchor, constant: -18),
             icon.widthAnchor.constraint(equalToConstant: 20),
-            icon.heightAnchor.constraint(equalToConstant: 20),
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
-            label.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -18),
-            label.centerYAnchor.constraint(equalTo: pill.centerYAnchor)
+            icon.heightAnchor.constraint(equalToConstant: 20)
         ])
         pill.invertOnFocus = [icon, label]
 
@@ -846,15 +853,8 @@ final class MediaDetailChromeView: UIView {
     private func makePlayPill(item: MediaItem) -> FocusableActionButton {
         let pill = FocusableActionButton()
         pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.layer.cornerRadius = 32
+        pill.layer.cornerRadius = Self.actionButtonHeight / 2
         pill.layer.cornerCurve = .continuous
-        // Hug content — refuse to stretch when the parent stack has
-        // extra width. Combined with the deterministic internal
-        // layout (fixed leading inset / icon width / progress width /
-        // trailing inset), the pill resolves to ~220pt wide regardless
-        // of container size.
-        pill.setContentHuggingPriority(.required, for: .horizontal)
-        pill.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let playIcon = UIImageView(image: UIImage(systemName: "play.fill"))
         playIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -876,31 +876,33 @@ final class MediaDetailChromeView: UIView {
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
         progressTrack.layer.cornerRadius = 1.5
 
-        pill.addSubview(playIcon)
-        pill.addSubview(progressTrack)
-        pill.addSubview(timeLabel)
+        // Content is centered in the pill (not leading-anchored) so a
+        // hardcoded pill width wider than the content doesn't leave it
+        // stranded on the left.
+        let contentStack = UIStackView(arrangedSubviews: [playIcon, progressTrack, timeLabel])
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.axis = .horizontal
+        contentStack.alignment = .center
+        contentStack.spacing = 12
 
-        // Pin progressTrack to a fixed 90pt width. Pill width is
-        // deterministic: 18 leading + 18 icon + 12 gap + 90 progress
-        // + 12 gap + label intrinsic + 18 trailing ≈ 220pt total.
-        // Without a fixed progress width the pill becomes stretchy
-        // and absorbs any extra width its container offers.
+        pill.addSubview(contentStack)
+
+        // Pill width is hardcoded (Self.actionPillWidth), shared with the
+        // hero's play pill — not derived from icon/progress/label content.
         NSLayoutConstraint.activate([
-            pill.heightAnchor.constraint(equalToConstant: 64),
+            pill.widthAnchor.constraint(equalToConstant: Self.actionPillWidth),
+            pill.heightAnchor.constraint(equalToConstant: Self.actionButtonHeight),
 
-            playIcon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 20),
-            playIcon.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            contentStack.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
+            contentStack.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: pill.leadingAnchor, constant: 20),
+            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: pill.trailingAnchor, constant: -18),
+
             playIcon.widthAnchor.constraint(equalToConstant: 20),
             playIcon.heightAnchor.constraint(equalToConstant: 20),
 
-            progressTrack.leadingAnchor.constraint(equalTo: playIcon.trailingAnchor, constant: 12),
-            progressTrack.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
             progressTrack.heightAnchor.constraint(equalToConstant: 3),
-            progressTrack.widthAnchor.constraint(equalToConstant: 60),
-
-            timeLabel.leadingAnchor.constraint(equalTo: progressTrack.trailingAnchor, constant: 12),
-            timeLabel.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -18),
-            timeLabel.centerYAnchor.constraint(equalTo: pill.centerYAnchor)
+            progressTrack.widthAnchor.constraint(equalToConstant: 60)
         ])
 
         pill.invertOnFocus = [playIcon, timeLabel]
@@ -911,7 +913,7 @@ final class MediaDetailChromeView: UIView {
     private func makeCircleButton(systemImage: String) -> FocusableActionButton {
         let circle = FocusableActionButton()
         circle.translatesAutoresizingMaskIntoConstraints = false
-        circle.layer.cornerRadius = 32
+        circle.layer.cornerRadius = Self.actionButtonHeight / 2
 
         let icon = UIImageView(image: UIImage(systemName: systemImage))
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -919,16 +921,9 @@ final class MediaDetailChromeView: UIView {
         icon.contentMode = .scaleAspectFit
         circle.addSubview(icon)
 
-        // Pill height stays 54 to match the play pill row; circles
-        // are 54×54 with an 18pt icon. setContentHugging .required
-        // keeps the stack from stretching them sideways when extra
-        // width is available.
-        circle.setContentHuggingPriority(.required, for: .horizontal)
-        circle.setContentCompressionResistancePriority(.required, for: .horizontal)
-
         NSLayoutConstraint.activate([
-            circle.widthAnchor.constraint(equalToConstant: 64),
-            circle.heightAnchor.constraint(equalToConstant: 64),
+            circle.widthAnchor.constraint(equalToConstant: Self.actionButtonHeight),
+            circle.heightAnchor.constraint(equalToConstant: Self.actionButtonHeight),
             icon.centerXAnchor.constraint(equalTo: circle.centerXAnchor),
             icon.centerYAnchor.constraint(equalTo: circle.centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 30),

@@ -30,7 +30,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
         // Content is item count * stride, plus enough leading +
         // trailing padding so the first and last items can center
         // in the viewport. Padding = (viewport width - card width) / 2.
-        let centeredWidth = cv.bounds.width - 2 * PreviewCarouselGeometry.centeredHorizontalInset
+        let centeredWidth = PreviewCarouselGeometry.centeredCardSize(in: cv.bounds).width
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap
         let totalCardSpan = stride * CGFloat(itemCount) - PreviewCarouselGeometry.sideCardGap
         // Pad on both sides so item 0 and item N-1 can center.
@@ -48,16 +48,16 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
 
     private func cellFrame(for index: Int) -> CGRect {
         guard let cv = collectionView else { return .zero }
-        let centeredWidth = cv.bounds.width - 2 * PreviewCarouselGeometry.centeredHorizontalInset
-        let cardHeight = cv.bounds.height - PreviewCarouselGeometry.topInset
+        let centered = PreviewCarouselGeometry.centeredCardFrame(in: cv.bounds)
+        let centeredWidth = centered.width
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap
         let edgePad = PreviewCarouselGeometry.centeredHorizontalInset
         let x = edgePad + stride * CGFloat(index)
         return CGRect(
             x: x,
-            y: PreviewCarouselGeometry.topInset,
+            y: centered.minY,
             width: centeredWidth,
-            height: cardHeight
+            height: centered.height
         )
     }
 
@@ -66,7 +66,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
     /// constants.
     var stride: CGFloat {
         guard let cv = collectionView else { return 0 }
-        let centeredWidth = cv.bounds.width - 2 * PreviewCarouselGeometry.centeredHorizontalInset
+        let centeredWidth = PreviewCarouselGeometry.centeredCardSize(in: cv.bounds).width
         return centeredWidth + PreviewCarouselGeometry.sideCardGap
     }
 
@@ -114,7 +114,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
 
     override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
         guard let cv = collectionView, itemCount > 0 else { return nil }
-        let centeredWidth = cv.bounds.width - 2 * PreviewCarouselGeometry.centeredHorizontalInset
+        let centeredWidth = PreviewCarouselGeometry.centeredCardSize(in: cv.bounds).width
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap
         let edgePad = PreviewCarouselGeometry.centeredHorizontalInset
 

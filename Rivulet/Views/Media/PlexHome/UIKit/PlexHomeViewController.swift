@@ -468,6 +468,14 @@ final class PlexHomeViewController: UIViewController {
     private var heroCurrentIndex: Int = 0
     private var heroItems: [PlexMetadata] = []
 
+    /// Coalescing state for the TMDB trending-hero upgrade. The upgrade is
+    /// triggered from many sites (hub loads, library refreshes, the GUID-index
+    /// notification); without coalescing it re-runs 20+ times per launch. An
+    /// in-flight run absorbs concurrent triggers, and a run is skipped entirely
+    /// when the GUID index generation hasn't changed since the last completed run.
+    private var heroUpgradeTask: Task<Void, Never>?
+    private var lastUpgradedIndexGeneration = -1
+
     private var dataStoreObservers: Set<AnyCancellable> = []
 
     private var hasMarkedFirstFrame = false
@@ -476,6 +484,7 @@ final class PlexHomeViewController: UIViewController {
 
     /// Pending focus restoration after preview dismiss.
     private var pendingPreviewRestore: PreviewSourceTarget?
+    private var shouldRestoreCollectionFocusMemoryAfterPreview = false
 
     /// Per-section pagination state. Keyed by HomeSectionID. Mirrors the
     /// per-row state SwiftUI InfiniteContentRow keeps locally
@@ -640,7 +649,7 @@ final class PlexHomeViewController: UIViewController {
             // Deferred secondary content — fills in a beat after the home is up.
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(2))
-                await dataStore.loadLibraryHubsIfNeeded()
+                await dataStore.loadLibraryHubsIfNeeded(forceRefresh: true)
                 selectHeroItemsIfNeeded()
             }
             Task {
@@ -1212,10 +1221,10 @@ final class PlexHomeViewController: UIViewController {
         guard !prevInside, nextInside else { return }
         let landed = context.nextFocusedView
         for case let row as ShelfRowCell in collectionView.visibleCells {
-            for case let cell as PosterCell in row.rowCollectionView.visibleCells {
-                let isLanded = landed === cell || landed?.isDescendant(of: cell) == true
-                if !isLanded { cell.resetStaleFocusAppearance() }
-            }
+            let landedIndex = row.rowCollectionView.visibleCells.first {
+                landed === $0 || landed?.isDescendant(of: $0) == true
+            }.flatMap { row.rowCollectionView.indexPath(for: $0)?.item }
+            row.resetVisibleFocusAppearance(except: landedIndex)
         }
     }
 
@@ -2266,7 +2275,7 @@ final class PlexHomeViewController: UIViewController {
             NotificationCenter.default.publisher(for: .libraryGUIDIndexDidUpdate)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in
-                    Task { await self?.upgradeHeroFromTMDB() }
+                    self?.requestHeroUpgrade()
                 }
                 .store(in: &dataStoreObservers)
         }
@@ -2601,7 +2610,8 @@ final class PlexHomeViewController: UIViewController {
                     selectedIndex: itemIndex,
                     sourceRowID: section.id.raw,
                     sourceItemID: sourceItemID,
-                    sourceIndexPath: indexPath
+                    sourceIndexPath: indexPath,
+                    sourceItemIDs: sourceItemIDs(for: section)
                 )
             }
         case .watchlist:
@@ -2979,7 +2989,21 @@ final class PlexHomeViewController: UIViewController {
         }
 
         if case .home = mode {
-            Task { await upgradeHeroFromTMDB() }
+            requestHeroUpgrade()
+        }
+    }
+
+    /// Coalescing entry point for the trending-hero upgrade. Concurrent triggers
+    /// join the in-flight run instead of spawning parallel ones.
+    private func requestHeroUpgrade() {
+        if let existing = heroUpgradeTask {
+            // A run is already in flight; it will observe the latest state.
+            _ = existing
+            return
+        }
+        heroUpgradeTask = Task { [weak self] in
+            await self?.upgradeHeroFromTMDB()
+            self?.heroUpgradeTask = nil
         }
     }
 
@@ -2994,12 +3018,7 @@ final class PlexHomeViewController: UIViewController {
             return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
         }
 
-        let recentlyAdded = hubs.first { isRecentlyAdded($0) && ($0.Metadata?.isEmpty == false) }
-        if let items = recentlyAdded?.Metadata, !items.isEmpty {
-            return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
-        }
-
-        if let firstHub = hubs.first(where: { $0.Metadata?.isEmpty == false }),
+        if let firstHub = hubs.first(where: { !isRecentlyAdded($0) && ($0.Metadata?.isEmpty == false) }),
            let items = firstHub.Metadata, !items.isEmpty {
             return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
         }
@@ -3008,9 +3027,30 @@ final class PlexHomeViewController: UIViewController {
 
     @MainActor
     private func upgradeHeroFromTMDB() async {
-        guard showHomeHero else { return }
+        guard showHomeHero else {
+            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB skipped: showHomeHero=false")
+            return
+        }
+
+        // Skip if the GUID index hasn't changed since the last completed run.
+        // The upgrade is triggered from many sites; between the disk-hydrate and
+        // the network refresh the index is identical, so recomputing (2 cached
+        // fetches + 40 lookups) would be pure waste.
+        let generation = await LibraryGUIDIndex.shared.generation
+        guard generation != lastUpgradedIndexGeneration else {
+            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB skipped: index generation \(generation, privacy: .public) unchanged")
+            return
+        }
+        lastUpgradedIndexGeneration = generation
+
+        homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB: starting (gen=\(generation, privacy: .public), current heroItems=\(self.heroItems.count, privacy: .public))")
         let curated = await PlexHomeView.computeTMDBHero(cap: Self.heroItemCap)
-        guard curated.count >= Self.heroTMDBMinMatches else { return }
+        guard curated.count >= Self.heroTMDBMinMatches else {
+            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public)); keeping hub-backed hero")
+            // A later index generation may yield enough matches; allow re-run.
+            lastUpgradedIndexGeneration = -1
+            return
+        }
 
         // Preserve currently-visible item if it's in the curated set.
         let mergedItems: [PlexMetadata]
@@ -3041,12 +3081,30 @@ final class PlexHomeViewController: UIViewController {
 
         let newKeys = mergedItems.compactMap { $0.ratingKey }
         let currentKeys = heroItems.compactMap { $0.ratingKey }
-        guard newKeys != currentKeys else { return }
+        guard newKeys != currentKeys else {
+            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB no-op: merged hero identical to current (\(newKeys.count, privacy: .public) items)")
+            return
+        }
 
+        homeUIKitLog.info("[Hero] upgradeHeroFromTMDB APPLIED: replacing hero with \(mergedItems.count, privacy: .public) trending-matched items")
         heroItems = mergedItems
         dataStore.cacheHeroItems(mergedItems, forLibrary: "home")
         updateBackdropForCurrentHeroItem()
         applySnapshot(animated: false)
+        // The hero cell's diffable item id is a constant ("hero-overlay"), so
+        // applySnapshot alone never re-vends it — the cell keeps rendering the
+        // items it was first configured with. Force a reconfigure so it picks
+        // up the swapped heroItems.
+        reconfigureHeroCell()
+    }
+
+    /// Re-vend the single hero cell after `heroItems` changes. Needed because the
+    /// hero item identifier is constant across snapshots (see `applySnapshot`).
+    private func reconfigureHeroCell() {
+        var snap = dataSource.snapshot()
+        guard snap.sectionIdentifiers.contains(.hero) else { return }
+        snap.reconfigureItems([HomeItemID(sectionID: .hero, itemID: "hero-overlay")])
+        dataSource.apply(snap, animatingDifferences: false)
     }
 
     // MARK: - Recommendations
@@ -3313,7 +3371,8 @@ final class PlexHomeViewController: UIViewController {
             selectedIndex: indexPath.item,
             sourceRowID: section.id.raw,
             sourceItemID: sourceItemID,
-            sourceIndexPath: indexPath
+            sourceIndexPath: indexPath,
+            sourceItemIDs: sourceItemIDs(for: section)
         )
     }
 
@@ -3329,12 +3388,21 @@ final class PlexHomeViewController: UIViewController {
         // SwiftUI WatchlistHubRow's tap-resolution fix (commit `bb15fdb`).
         let validIndex = pairs.firstIndex(where: { $0.sourceID == tapped.id }) ?? 0
         let mediaItems = pairs.map(\.item)
+        let sourceItemIDs = pairs.map(\.sourceID)
+        var sourceIndexMap: [Int: Int] = [:]
+        for (previewIndex, pair) in pairs.enumerated() {
+            if let sourceIndex = entries.firstIndex(where: { $0.id == pair.sourceID }) {
+                sourceIndexMap[sourceIndex] = previewIndex
+            }
+        }
         presentPreviewOverlay(
             items: mediaItems,
             selectedIndex: validIndex,
             sourceRowID: section.id.raw,
             sourceItemID: tapped.id,
-            sourceIndexPath: indexPath
+            sourceIndexPath: indexPath,
+            sourceIndexMap: sourceIndexMap,
+            sourceItemIDs: sourceItemIDs
         )
     }
 
@@ -3523,7 +3591,9 @@ final class PlexHomeViewController: UIViewController {
         selectedIndex: Int,
         sourceRowID: String,
         sourceItemID: String,
-        sourceIndexPath: IndexPath
+        sourceIndexPath: IndexPath,
+        sourceIndexMap: [Int: Int]? = nil,
+        sourceItemIDs: [String]? = nil
     ) {
         let request = PreviewRequest(
             items: items,
@@ -3539,26 +3609,40 @@ final class PlexHomeViewController: UIViewController {
         if let inWindow = tileFrameInWindow(at: sourceIndexPath) {
             sourceFrames[sourceTarget] = inWindow
         }
+        let entrySnapshots = previewEntrySnapshots(
+            at: sourceIndexPath,
+            itemIndexMap: sourceIndexMap
+        )
 
         // Flag-gated UIKit branch — when PreviewImplPreference is .uikit,
         // present the new PreviewCarouselViewController instead of the
         // SwiftUI PreviewOverlayHost. Default is currently .uikit during
         // perf-spike active iteration (see HomeImplPreference.swift).
         if PreviewImplPreference.current == .uikit {
+            suppressPreviewPresentationFocusMemory()
             let carouselVC = PreviewCarouselViewController(
                 items: items,
                 selectedIndex: selectedIndex,
                 sourceFrame: sourceFrames[sourceTarget] ?? .zero,
                 sourceTarget: sourceTarget,
+                entrySnapshots: entrySnapshots,
+                sourceItemIDs: sourceItemIDs,
+                onPrepareDismiss: { [weak self] sourceTarget in
+                    self?.preparePreviewRestoreForPendingDismiss(sourceTarget)
+                },
                 onDismiss: { [weak self] sourceTarget in
-                    self?.pendingPreviewRestore = sourceTarget
+                    if let sourceTarget {
+                        self?.pendingPreviewRestore = sourceTarget
+                    }
+                    self?.applyPendingPreviewRestoreIfNeeded()
                 }
             )
             var topVC: UIViewController = self
             while let presented = topVC.presentedViewController { topVC = presented }
             // animated: false — the carousel's spring morph IS the
             // transition. Modal transitions would compose on top.
-            topVC.present(carouselVC, animated: false) {
+            topVC.present(carouselVC, animated: false) { [weak self] in
+                self?.resetVisibleFocusAppearance(except: nil)
             }
             return
         }
@@ -3604,33 +3688,96 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Focus restoration after preview dismiss
 
+    private func suppressPreviewPresentationFocusMemory() {
+        if collectionView.remembersLastFocusedIndexPath {
+            shouldRestoreCollectionFocusMemoryAfterPreview = true
+            collectionView.remembersLastFocusedIndexPath = false
+        }
+    }
+
+    private func preparePreviewRestoreForPendingDismiss(_ target: PreviewSourceTarget?) {
+        guard let target else { return }
+        pendingPreviewRestore = target
+        if collectionView.remembersLastFocusedIndexPath {
+            shouldRestoreCollectionFocusMemoryAfterPreview = true
+            collectionView.remembersLastFocusedIndexPath = false
+        }
+        _ = preparePreviewRestoreLayout(for: target, routeFocus: false)
+        resetVisibleFocusAppearance(except: target)
+    }
+
     private func applyPendingPreviewRestoreIfNeeded() {
         guard let target = pendingPreviewRestore else { return }
-        guard let indexPath = indexPath(for: target) else {
-            pendingPreviewRestore = nil
+        guard preparePreviewRestoreLayout(for: target, routeFocus: true) else {
+            finishPendingPreviewRestore()
             return
         }
-        pendingPreviewRestore = nil
         // Defer to next runloop so the preview-dismiss layout pass finishes
         // before we ask the focus engine to update.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if indexPath.section < self.sectionsSnapshot.count,
-               self.isShelfKind(self.sectionsSnapshot[indexPath.section].kind) {
-                // Shelf rows: the outer item is the full-width row; the tile
-                // lives in the row's own collection view. Bring the row on
-                // screen, then route focus to the tile.
-                let rowPath = IndexPath(item: 0, section: indexPath.section)
-                self.collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
-                self.collectionView.layoutIfNeeded()
-                if let row = self.collectionView.cellForItem(at: rowPath) as? ShelfRowCell {
-                    row.prepareFocusRestore(on: indexPath.item)
-                }
-            } else {
-                self.collectionView.scrollToItem(at: indexPath, at: [.centeredVertically, .centeredHorizontally], animated: false)
+            guard self.pendingPreviewRestore == target else { return }
+            guard self.preparePreviewRestoreLayout(for: target, routeFocus: true) else {
+                self.finishPendingPreviewRestore()
+                return
             }
+            self.resetVisibleFocusAppearance(except: target)
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
+            self.finishPendingPreviewRestore()
+        }
+    }
+
+    @discardableResult
+    private func preparePreviewRestoreLayout(for target: PreviewSourceTarget, routeFocus: Bool) -> Bool {
+        guard let indexPath = indexPath(for: target) else { return false }
+        UIView.performWithoutAnimation {
+            if indexPath.section < sectionsSnapshot.count,
+               isShelfKind(sectionsSnapshot[indexPath.section].kind) {
+                // Shelf rows: the outer item is the full-width row; the tile
+                // lives in the row's own collection view. Bring both layers on
+                // screen before the modal disappears so focus does not flash
+                // on the old source tile or visibly jump to the new one.
+                let rowPath = IndexPath(item: 0, section: indexPath.section)
+                collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
+                collectionView.layoutIfNeeded()
+                if let row = collectionView.cellForItem(at: rowPath) as? ShelfRowCell {
+                    if routeFocus {
+                        row.prepareFocusRestore(on: indexPath.item)
+                    } else {
+                        row.prepareFocusRestoreLayout(on: indexPath.item)
+                    }
+                }
+            } else {
+                collectionView.scrollToItem(at: indexPath, at: [.centeredVertically, .centeredHorizontally], animated: false)
+                collectionView.layoutIfNeeded()
+            }
+        }
+        return true
+    }
+
+    private func resetVisibleFocusAppearance(except target: PreviewSourceTarget?) {
+        let targetIndexPath = target.flatMap(indexPath(for:))
+        for cell in collectionView.visibleCells {
+            if let row = cell as? ShelfRowCell {
+                let rowIndexPath = collectionView.indexPath(for: row)
+                let targetItem = rowIndexPath?.section == targetIndexPath?.section
+                    ? targetIndexPath?.item
+                    : nil
+                row.resetVisibleFocusAppearance(except: targetItem)
+            } else {
+                let indexPath = collectionView.indexPath(for: cell)
+                guard indexPath != targetIndexPath else { continue }
+                ShelfRowCell.clearFocusAppearance(in: cell)
+            }
+        }
+    }
+
+    private func finishPendingPreviewRestore() {
+        pendingPreviewRestore = nil
+        if shouldRestoreCollectionFocusMemoryAfterPreview {
+            shouldRestoreCollectionFocusMemoryAfterPreview = false
+            collectionView.remembersLastFocusedIndexPath = true
         }
     }
 
@@ -3649,6 +3796,47 @@ final class PlexHomeViewController: UIViewController {
         return collectionView.convert(attrs.frame, to: window)
     }
 
+    private func previewEntrySnapshots(
+        at indexPath: IndexPath,
+        itemIndexMap: [Int: Int]? = nil
+    ) -> [PreviewEntrySnapshot] {
+        guard indexPath.section < sectionsSnapshot.count else { return [] }
+        if isShelfKind(sectionsSnapshot[indexPath.section].kind) {
+            let rowPath = IndexPath(item: 0, section: indexPath.section)
+            guard let row = collectionView.cellForItem(at: rowPath) as? ShelfRowCell else { return [] }
+            return row.visibleEntrySnapshots(itemIndexMap: itemIndexMap)
+        }
+        guard let frame = tileFrameInWindow(at: indexPath),
+              let cell = collectionView.cellForItem(at: indexPath),
+              let snapshot = cell.snapshotView(afterScreenUpdates: false)
+        else { return [] }
+        let targetIndex: Int
+        if let itemIndexMap {
+            guard let mappedIndex = itemIndexMap[indexPath.item] else { return [] }
+            targetIndex = mappedIndex
+        } else {
+            targetIndex = indexPath.item
+        }
+        return [
+            PreviewEntrySnapshot(
+                itemIndex: targetIndex,
+                sourceFrame: frame,
+                snapshotView: snapshot
+            )
+        ]
+    }
+
+    private func sourceItemIDs(for section: HomeSectionData) -> [String] {
+        switch section.kind {
+        case .watchlist:
+            return section.watchlistItems.map(\.id)
+        default:
+            return section.items.enumerated().map { index, item in
+                item.ref.itemID.isEmpty ? "\(section.id.raw)-\(index)" : item.ref.itemID
+            }
+        }
+    }
+
     private func indexPath(for target: PreviewSourceTarget) -> IndexPath? {
         guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id.raw == target.rowID }) else { return nil }
         let section = sectionsSnapshot[sectionIndex]
@@ -3658,7 +3846,10 @@ final class PlexHomeViewController: UIViewController {
             return nil
         case .continueWatching, .recentlyAdded, .recommendations, .grid, .discoverList,
              .searchGrid:
-            if let itemIndex = section.items.firstIndex(where: { $0.ref.itemID == target.itemID }) {
+            if let itemIndex = section.items.enumerated().first(where: { index, item in
+                let sourceID = item.ref.itemID.isEmpty ? "\(section.id.raw)-\(index)" : item.ref.itemID
+                return sourceID == target.itemID
+            })?.offset {
                 return IndexPath(item: itemIndex, section: sectionIndex)
             }
         case .watchlist:

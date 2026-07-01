@@ -252,7 +252,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "slot_id": String(slot.id.uuidString.prefix(8)),
                 "is_muted": isMuted
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             do {
                 try await slot.load(url: url, headers: [:])
@@ -277,13 +277,13 @@ final class MultiStreamViewModel: ObservableObject {
                     "slot_index": slotIndex,
                     "load_duration_ms": Int(loadDuration * 1000)
                 ]
-                SentrySDK.addBreadcrumb(successBreadcrumb)
+                SentryBridge.addBreadcrumb(successBreadcrumb)
             } catch {
                 print("MultiStream: Failed to load '\(channel.name)': \(error)")
                 print("📺 [MultiStreamVM \(debugId)] addChannel FAILED id=\(channel.id), slotIndex=\(slotIndex), error=\(error)")
 
                 // Capture playback failure with detailed context
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "livetv_playback", key: "component")
                     scope.setTag(value: "stream_load", key: "operation")
                     scope.setTag(value: String(describing: channel.sourceType), key: "source_type")
@@ -319,7 +319,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "source_type": String(describing: channel.sourceType)
             ]
             event.fingerprint = ["livetv", "no_stream_url", String(describing: channel.sourceType)]
-            SentrySDK.capture(event: event)
+            SentryBridge.capture(event: event)
         }
     }
 
@@ -444,7 +444,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "streams_count": streams.count,
                 "channel_name": channel.name
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             // Still close picker even on failure
             showChannelPicker = false
@@ -464,7 +464,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "channel_id": channel.id,
                 "current_channel_id": currentChannelId
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             showChannelPicker = false
             replaceSlotIndex = nil
@@ -521,7 +521,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "is_plex_transcode": url.path.contains("/transcode/"),
                 "slot_index": index
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             do {
                 try await newSlot.load(url: url, headers: [:])
@@ -531,7 +531,7 @@ final class MultiStreamViewModel: ObservableObject {
                 print("MultiStream: Failed to load replacement '\(channel.name)': \(error)")
 
                 // Capture replacement failure with context
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "livetv_playback", key: "component")
                     scope.setTag(value: "stream_replace", key: "operation")
                     scope.setTag(value: String(describing: channel.sourceType), key: "source_type")
@@ -558,7 +558,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "operation": "replace_stream_url"
             ]
             event.fingerprint = ["livetv", "no_stream_url", "replace"]
-            SentrySDK.capture(event: event)
+            SentryBridge.capture(event: event)
         }
 
         intentionallyStoppedSlots.remove(oldSlot.id)
@@ -932,7 +932,7 @@ final class MultiStreamViewModel: ObservableObject {
             "attempt": attempt,
             "stream_url_host": url.host ?? "unknown"
         ]
-        SentrySDK.addBreadcrumb(breadcrumb)
+        SentryBridge.addBreadcrumb(breadcrumb)
 
         do {
             let slot = streams[slotIndex]
@@ -948,7 +948,7 @@ final class MultiStreamViewModel: ObservableObject {
                 return
             }
             print("📺 [MultiStreamVM \(debugId)] auto-recovery failed channel=\(channel.name) slotId=\(slotId) error=\(error)")
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "livetv_playback", key: "component")
                 scope.setTag(value: "auto_recovery", key: "operation")
                 scope.setExtra(value: channel.name, key: "channel_name")

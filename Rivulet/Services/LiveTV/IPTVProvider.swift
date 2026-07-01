@@ -139,7 +139,7 @@ actor IPTVProvider: LiveTVProvider {
             if !isHTTPError && !isCancelled {
                 let capturedSourceType = self.sourceType
                 let capturedDisplayName = self.displayName
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "iptv", key: "component")
                     scope.setTag(value: String(describing: capturedSourceType), key: "source_type")
                     scope.setExtra(value: capturedDisplayName, key: "source_name")
@@ -193,7 +193,7 @@ actor IPTVProvider: LiveTVProvider {
             // locally and surface via the UI, but don't file Sentry events.
             if shouldCaptureEPGError(error) {
                 let capturedDisplayName = self.displayName
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "iptv", key: "component")
                     scope.setTag(value: "epg_fetch", key: "operation")
                     scope.setExtra(value: capturedDisplayName, key: "source_name")

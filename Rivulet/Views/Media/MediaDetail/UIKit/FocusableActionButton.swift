@@ -43,15 +43,37 @@ final class FocusableActionButton: UIControl {
     private let restingFill = UIColor.white.withAlphaComponent(0.15)
     private let glassRestingFill = UIColor.white.withAlphaComponent(0.06)
 
+    /// Real Liquid Glass material, behind the color fill. Shows through at
+    /// rest, fades out on focus (matches HeroPillButton/HeroCircleButton).
+    private let materialBackground = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = restingFill
         layer.cornerCurve = .continuous
+
+        materialBackground.translatesAutoresizingMaskIntoConstraints = false
+        materialBackground.isUserInteractionEnabled = false
+        insertSubview(materialBackground, at: 0)
+        NSLayoutConstraint.activate([
+            materialBackground.topAnchor.constraint(equalTo: topAnchor),
+            materialBackground.bottomAnchor.constraint(equalTo: bottomAnchor),
+            materialBackground.leadingAnchor.constraint(equalTo: leadingAnchor),
+            materialBackground.trailingAnchor.constraint(equalTo: trailingAnchor)
+        ])
+
         addTarget(self, action: #selector(primary), for: .primaryActionTriggered)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        materialBackground.layer.cornerRadius = layer.cornerRadius
+        materialBackground.layer.cornerCurve = .continuous
+        materialBackground.clipsToBounds = true
+    }
 
     @objc private func primary() { fireOnce() }
 
@@ -89,6 +111,7 @@ final class FocusableActionButton: UIControl {
                 self.backgroundColor = focused
                     ? UIColor.white.withAlphaComponent(0.18)
                     : self.glassRestingFill
+                self.materialBackground.alpha = focused ? 0 : 1
                 self.layer.borderWidth = 1
                 self.layer.borderColor = (focused
                     ? UIColor.white.withAlphaComponent(0.25)
@@ -100,6 +123,7 @@ final class FocusableActionButton: UIControl {
             guard let self else { return }
             self.transform = focused ? CGAffineTransform(scaleX: 1.06, y: 1.06) : .identity
             self.backgroundColor = focused ? .white : self.restingFill
+            self.materialBackground.alpha = focused ? 0 : 1
             for v in self.invertOnFocus {
                 if let iv = v as? UIImageView { iv.tintColor = focused ? .black : .white }
                 if let lb = v as? UILabel { lb.textColor = focused ? .black : .white }

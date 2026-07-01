@@ -88,7 +88,7 @@ final class HLSSegmentFetcher {
         // Step 5: Fetch init segment
         guard let initURL = initSegmentURL else {
             let error = HLSFetcherError.missingInitSegment
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "dv_hls_fetcher", key: "component")
                 scope.setTag(value: "missing_init_segment", key: "error_type")
                 scope.setExtra(value: resolvedVariantURL.absoluteString, key: "variant_url")
@@ -182,7 +182,7 @@ final class HLSSegmentFetcher {
             let error = HLSFetcherError.httpError(httpResponse.statusCode, url)
             // Only report non-transient HTTP errors to Sentry (skip 5xx server errors)
             if !(500...599).contains(httpResponse.statusCode) {
-                SentrySDK.capture(error: error) { scope in
+                SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "dv_hls_fetcher", key: "component")
                     scope.setTag(value: String(httpResponse.statusCode), key: "http_status")
                     scope.setExtra(value: url.host ?? "unknown", key: "host")
@@ -236,7 +236,7 @@ final class HLSSegmentFetcher {
 
         guard !variants.isEmpty else {
             let error = HLSFetcherError.noVariantsFound
-            SentrySDK.capture(error: error) { scope in
+            SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "dv_hls_fetcher", key: "component")
                 scope.setTag(value: "no_variants", key: "error_type")
                 scope.setExtra(value: masterURL.host ?? "unknown", key: "host")

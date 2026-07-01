@@ -545,7 +545,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             vm.showControlsTemporarily()
 
         case .seekRelative(let seconds):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             if vm.isScrubbing {
                 vm.updateSwipeScrubPosition(by: seconds)
             } else {
@@ -554,7 +554,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             vm.showControlsTemporarily()
 
         case .seekAbsolute(let time):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             Task { await vm.seek(to: time) }
             vm.showControlsTemporarily()
 
@@ -562,7 +562,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             break
 
         case .scrubNudge(let forward):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             let wasScrubbing = vm.isScrubbing
             let speedBefore = vm.scrubSpeed
             vm.scrubInDirection(forward: forward)
@@ -581,7 +581,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             vm.showControlsTemporarily()
 
         case .scrubRelative(let seconds):
-            guard !vm.showInfoPanel, vm.postVideoState == .hidden else { return }
+            guard vm.postVideoState == .hidden else { return }
             guard vm.playbackState == .paused else { return }
             vm.updateSwipeScrubPosition(by: seconds)
             vm.showControlsTemporarily()
@@ -614,25 +614,12 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             onResetRemoteInput?()
 
         case .showInfo:
+            // Legacy swipe-down/gamepad/keyboard trigger for the old SwiftUI
+            // info panel. Media info is now reached only via the Info pill
+            // on the UIKit transport bar, so surface the controls (where the
+            // pill lives) instead of leaving the input silently dead.
             guard vm.postVideoState == .hidden else { return }
-            if vm.isScrubbing {
-                let speedBefore = vm.scrubSpeed
-                PlaybackInputTelemetry.shared.recordScrubTransition(
-                    surface: .vod,
-                    transition: .cancel,
-                    source: source,
-                    speedBefore: speedBefore,
-                    speedAfter: 0
-                )
-                vm.cancelScrub()
-                onResetRemoteInput?()
-            }
-            if !vm.showInfoPanel {
-                vm.resetSettingsPanel()
-                withAnimation(.easeOut(duration: 0.3)) {
-                    vm.showInfoPanel = true
-                }
-            }
+            vm.showControlsTemporarily()
 
         case .back:
             if vm.postVideoState != .hidden {
@@ -649,10 +636,6 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 )
                 vm.cancelScrub()
                 onResetRemoteInput?()
-            } else if vm.showInfoPanel {
-                withAnimation(.easeOut(duration: 0.3)) {
-                    vm.showInfoPanel = false
-                }
             } else if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
@@ -674,7 +657,6 @@ struct UniversalPlayerView: View {
 
     @State private var hasStartedPlayback = false
     @State private var lastReportedTime: TimeInterval = 0
-    @FocusState private var isSkipButtonFocused: Bool
 
     /// Initialize with metadata (creates viewModel internally)
     @MainActor
@@ -749,20 +731,10 @@ struct UniversalPlayerView: View {
         }
         .animation(.easeInOut(duration: 1.0), value: viewModel.playbackState)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        .animation(.spring(response: 0.25, dampingFraction: 0.9), value: viewModel.showInfoPanel)
-        .animation(.easeInOut(duration: 0.3), value: viewModel.showSkipButton)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
         .animation(.easeInOut(duration: 0.5), value: viewModel.showPausedPoster)
         .onPlayPauseCommand {
-            // Skip button handles its own press via Button action
-            guard !isSkipButtonFocused else { return }
-
-            if viewModel.showInfoPanel {
-                // Play/pause should still work when panel is open
-                inputCoordinator.handle(action: .playPause, source: .swiftUICommand)
-            } else {
-                handleSelectCommand()
-            }
+            handleSelectCommand()
         }
         // Note: Menu/Back button handling is done in PlayerContainerViewController
         // to intercept the event before SwiftUI can dismiss the player.
@@ -834,46 +806,6 @@ struct UniversalPlayerView: View {
             // Immediately report state changes to Plex
             reportStateChange(from: oldState, to: newState)
         }
-        // Manage focus scope when settings panel opens/closes
-        .onChange(of: viewModel.showInfoPanel) { _, showPanel in
-            if showPanel {
-                // Reset skip button focus when info panel opens (button becomes hidden)
-                isSkipButtonFocused = false
-                viewModel.resetSettingsPanel()
-            }
-        }
-        // Auto-focus skip button when it appears
-        .onChange(of: viewModel.showSkipButton) { _, showButton in
-            if showButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
-                // Brief delay to ensure button is rendered
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    // Re-check conditions before focusing (state may have changed)
-                    if viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
-                        isSkipButtonFocused = true
-                    }
-                }
-            } else if !showButton {
-                isSkipButtonFocused = false
-            }
-        }
-        // Manage focus scope for post-video overlay
-        .onChange(of: viewModel.postVideoState) { previous, state in
-            if previous == .hidden && state != .hidden {
-                // Reset skip button focus when post-video opens (button becomes hidden)
-                isSkipButtonFocused = false
-            }
-        }
-        // Auto-focus skip button when controls hide (if skip button is visible)
-        .onChange(of: viewModel.showControls) { _, showControls in
-            if !showControls && viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
-                // Controls just hid, skip button is visible - focus it
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    if viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden && !viewModel.showControls {
-                        isSkipButtonFocused = true
-                    }
-                }
-            }
-        }
         // System appearance
     }
 
@@ -934,36 +866,13 @@ struct UniversalPlayerView: View {
                     .zIndex(50)
             }
 
-            // Skip Button (intro/credits) - shows regardless of controls visibility, but not during post-video
-            if viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden {
-                skipButtonOverlay
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
-            }
-
-            // Controls Overlay (transport bar at bottom)
-            // Always show when scrubbing so user can see the progress bar, but not during post-video
-            if (viewModel.showControls || viewModel.isScrubbing) && viewModel.playbackState.isActive && viewModel.postVideoState == .hidden {
-                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false, hideTitle: viewModel.showPausedPoster)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
-            }
-
-            // Info Panel (independent of controls visibility) - slides from top (triggered by d-pad down)
-            if viewModel.showInfoPanel {
-                VStack {
-                    PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: true)
-                    Spacer()
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(10)  // Keep above other elements during animation
-            }
         }
         // Focusable when skip button is not focused, post-video is not showing, and not in error state
         // When in error state, let the dismiss button receive focus instead
-        .focusable(!isSkipButtonFocused && viewModel.postVideoState == .hidden && !viewModel.playbackState.isFailed)
+        .focusable(viewModel.postVideoState == .hidden && !viewModel.playbackState.isFailed)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Don't toggle controls if info panel is showing or in error state
-            guard !viewModel.showInfoPanel else { return }
+            // Don't toggle controls if in error state
             guard !viewModel.playbackState.isFailed else { return }
 
             // Tap anywhere to show/hide controls
@@ -979,28 +888,9 @@ struct UniversalPlayerView: View {
             // When post-video is showing, don't handle - let SwiftUI manage button focus
             guard viewModel.postVideoState == .hidden else { return }
 
-            if viewModel.showInfoPanel {
-                // Settings panel navigation - 3 column layout
-                switch direction {
-                case .up:
-                    if viewModel.focusedRowIndex == 0 {
-                        // At top row - close panel
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            viewModel.showInfoPanel = false
-                        }
-                    } else {
-                        viewModel.navigateSettings(direction: direction)
-                    }
-                case .down, .left, .right:
-                    viewModel.navigateSettings(direction: direction)
-                @unknown default:
-                    break
-                }
-            } else {
-                // Left/right are handled by GameController via RemoteHoldDetector
-                // for tap vs hold detection. Only handle up/down here.
-                handleMoveCommand(direction)
-            }
+            // Left/right are handled by GameController via RemoteHoldDetector
+            // for tap vs hold detection. Only handle up/down here.
+            handleMoveCommand(direction)
         }
     }
 
@@ -1264,76 +1154,6 @@ struct UniversalPlayerView: View {
         }
     }
 
-    // MARK: - Skip Button Overlay
-
-    /// Returns the skip button label, appending countdown if active
-    private var skipButtonDisplayLabel: String {
-        if viewModel.introSkipCountdownSeconds > 0 {
-            return "\(viewModel.skipButtonLabel) (\(viewModel.introSkipCountdownSeconds))"
-        }
-        return viewModel.skipButtonLabel
-    }
-
-    private var skipButtonOverlay: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                Button {
-                    Task { await viewModel.skipActiveMarker() }
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "forward.fill")
-                            .font(.system(size: 20, weight: .semibold))
-                        Text(skipButtonDisplayLabel)
-                            .font(.system(size: 24, weight: .semibold))
-                            .contentTransition(.numericText())
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(.black.opacity(isSkipButtonFocused ? 0.75 : 0.55))
-                            .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(.ultraThinMaterial)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .strokeBorder(
-                                        isSkipButtonFocused ? .white : .white.opacity(0.15),
-                                        lineWidth: isSkipButtonFocused ? 3 : 1
-                                    )
-                            )
-                    )
-                    // Focused glow effect - makes selection very obvious
-                    .shadow(
-                        color: isSkipButtonFocused ? .white.opacity(0.5) : .clear,
-                        radius: 16,
-                        x: 0,
-                        y: 0
-                    )
-                    // Drop shadow for depth
-                    .shadow(
-                        color: .black.opacity(0.4),
-                        radius: 8,
-                        x: 0,
-                        y: 4
-                    )
-                    .scaleEffect(isSkipButtonFocused ? 1.08 : 1.0)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isSkipButtonFocused)
-                }
-                .buttonStyle(CardButtonStyle())
-                .focused($isSkipButtonFocused)
-            }
-            .padding(.trailing, 80)
-            // Move button up when controls are visible to avoid overlap with transport bar
-            .padding(.bottom, viewModel.showControls ? 200 : 80)
-            .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
-        }
-    }
-
     // MARK: - Input Handling
 
     private func handleMoveCommand(_ direction: MoveCommandDirection) {
@@ -1346,23 +1166,12 @@ struct UniversalPlayerView: View {
         case .right:
             inputCoordinator.handle(action: .stepSeek(forward: true), source: .swiftUICommand)
         case .down:
-            if isSkipButtonFocused {
-                // Down from skip button: unfocus skip button, show controls
-                isSkipButtonFocused = false
-                viewModel.showControlsTemporarily()
-                return
-            }
-            // Show info panel (cancels any active scrubbing)
+            // Surface controls, where the Info pill lives (cancels any active scrubbing)
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
             }
             inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
         case .up:
-            // If skip button is visible and controls are showing, focus skip button
-            if viewModel.showSkipButton && viewModel.showControls && !isSkipButtonFocused {
-                isSkipButtonFocused = true
-                return
-            }
             // Cancel scrubbing on up
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
@@ -1373,13 +1182,6 @@ struct UniversalPlayerView: View {
     }
 
     private func handleSelectCommand() {
-        // Only handle skip if button is actually visible AND focused
-        let skipButtonVisible = viewModel.showSkipButton && !viewModel.showInfoPanel && viewModel.postVideoState == .hidden
-        if isSkipButtonFocused && skipButtonVisible {
-            // Skip button is focused - trigger skip
-            Task { await viewModel.skipActiveMarker() }
-            return
-        }
         inputCoordinator.handle(action: .playPause, source: .swiftUICommand)
     }
 

@@ -46,23 +46,39 @@ final class DoviProfileConverter {
 
     /// Rolling window of recent conversion times (seconds)
     private var recentTimings: [Double] = []
-    private let timingWindowSize = 48
 
     /// Rolling average conversion time in milliseconds
-    private(set) var averageConversionTimeMs: Double = 0
+    nonisolated(unsafe) private(set) var averageConversionTimeMs: Double = 0
+
+    /// Target stream frame rate used for realtime conversion budget checks.
+    nonisolated(unsafe) var targetFrameRate: Double = 23.976
+
+    nonisolated var frameBudgetMs: Double {
+        1000.0 / max(1.0, targetFrameRate)
+    }
+
+    private var timingWindowFrameCount: Int {
+        max(24, min(120, Int((max(1.0, targetFrameRate) * 2.0).rounded(.toNearestOrAwayFromZero))))
+    }
+
+    private var periodicReportFrameCount: Int {
+        max(120, min(600, Int((max(1.0, targetFrameRate) * 10.0).rounded(.toNearestOrAwayFromZero))))
+    }
 
     /// Whether conversion can sustain the given framerate based on recent measurements.
-    /// Returns true if fewer than `timingWindowSize` frames have been measured (not enough data).
-    func canSustainRealTime(fps: Double = 23.976) -> Bool {
-        guard recentTimings.count >= timingWindowSize else { return true }
-        let budgetMs = 1000.0 / fps
+    /// Returns true if fewer than the rolling timing-window frames have been measured.
+    func canSustainRealTime(fps: Double? = nil) -> Bool {
+        let targetFPS = max(1.0, fps ?? targetFrameRate)
+        let requiredSamples = max(24, min(120, Int((targetFPS * 2.0).rounded(.toNearestOrAwayFromZero))))
+        guard recentTimings.count >= requiredSamples else { return true }
+        let budgetMs = 1000.0 / targetFPS
         return averageConversionTimeMs <= budgetMs
     }
 
     /// Record a conversion timing measurement and update rolling average
     private func recordTiming(_ seconds: Double) {
         recentTimings.append(seconds)
-        if recentTimings.count > timingWindowSize {
+        if recentTimings.count > timingWindowFrameCount {
             recentTimings.removeFirst()
         }
         averageConversionTimeMs = (recentTimings.reduce(0, +) / Double(recentTimings.count)) * 1000.0
@@ -135,9 +151,13 @@ final class DoviProfileConverter {
                 let outDump = nalParser.describeDetailed(convertedSample)
                 playerDebugLog("[DoviConverter] Output NALs: \(outDump)")
             }
-        } else if framesConverted == timingWindowSize {
-            playerDebugLog("[DoviConverter] Conversion avg after \(timingWindowSize) frames: \(String(format: "%.1f", averageConversionTimeMs))ms/frame (budget=41.7ms at 23.976fps)")
-        } else if framesConverted % 240 == 0 {
+        } else if framesConverted == timingWindowFrameCount {
+            playerDebugLog(
+                "[DoviConverter] Conversion avg after \(timingWindowFrameCount) frames: " +
+                "\(String(format: "%.1f", averageConversionTimeMs))ms/frame " +
+                "(budget=\(String(format: "%.1f", frameBudgetMs))ms at \(String(format: "%.3f", targetFrameRate))fps)"
+            )
+        } else if framesConverted % periodicReportFrameCount == 0 {
             playerDebugLog("[DoviConverter] Conversion avg: \(String(format: "%.1f", averageConversionTimeMs))ms/frame (\(framesConverted) frames)")
         }
 

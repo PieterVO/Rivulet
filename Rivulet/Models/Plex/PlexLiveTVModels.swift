@@ -243,7 +243,7 @@ extension PlexLiveTVChannel {
             "session_id": String(sessionId.prefix(8)),
             "server_host": URL(string: serverURL)?.host ?? "unknown"
         ]
-        SentrySDK.addBreadcrumb(startBreadcrumb)
+        SentryBridge.addBreadcrumb(startBreadcrumb)
 
         var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8")
 
@@ -321,7 +321,7 @@ extension PlexLiveTVChannel {
                 "url_host": url.host ?? "unknown",
                 "has_query_params": url.query != nil
             ]
-            SentrySDK.addBreadcrumb(successBreadcrumb)
+            SentryBridge.addBreadcrumb(successBreadcrumb)
         } else {
             let failBreadcrumb = Breadcrumb(level: .error, category: "plex_livetv")
             failBreadcrumb.message = "Failed to build Plex transcode URL - URLComponents failed"
@@ -330,7 +330,7 @@ extension PlexLiveTVChannel {
                 "channel_key": key,
                 "server_url": serverURL
             ]
-            SentrySDK.addBreadcrumb(failBreadcrumb)
+            SentryBridge.addBreadcrumb(failBreadcrumb)
         }
 
         return resultURL
@@ -385,7 +385,7 @@ extension PlexLiveTVChannel {
                     "has_stream_url": true,
                     "server_host": URL(string: serverURL)?.host ?? "unknown"
                 ]
-                SentrySDK.addBreadcrumb(breadcrumb)
+                SentryBridge.addBreadcrumb(breadcrumb)
                 return URL(string: hdhrURL)
             }
 
@@ -407,7 +407,7 @@ extension PlexLiveTVChannel {
                 "transcode_url_built": transcodeURL != nil,
                 "transcode_url_host": transcodeURL?.host ?? "none"
             ]
-            SentrySDK.addBreadcrumb(breadcrumb)
+            SentryBridge.addBreadcrumb(breadcrumb)
 
             // If transcode URL failed, capture as an error
             if transcodeURL == nil {
@@ -425,7 +425,7 @@ extension PlexLiveTVChannel {
                     "operation": "build_transcode_url"
                 ]
                 event.fingerprint = ["plex_livetv", "transcode_url_build_failed"]
-                SentrySDK.capture(event: event)
+                SentryBridge.capture(event: event)
             }
 
             return transcodeURL
