@@ -616,8 +616,10 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
         case .showInfo:
             // Legacy swipe-down/gamepad/keyboard trigger for the old SwiftUI
             // info panel. Media info is now reached only via the Info pill
-            // on the UIKit transport bar, so this is intentionally inert.
-            break
+            // on the UIKit transport bar, so surface the controls (where the
+            // pill lives) instead of leaving the input silently dead.
+            guard vm.postVideoState == .hidden else { return }
+            vm.showControlsTemporarily()
 
         case .back:
             if vm.postVideoState != .hidden {
@@ -1164,7 +1166,7 @@ struct UniversalPlayerView: View {
         case .right:
             inputCoordinator.handle(action: .stepSeek(forward: true), source: .swiftUICommand)
         case .down:
-            // Show info panel (cancels any active scrubbing)
+            // Surface controls, where the Info pill lives (cancels any active scrubbing)
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
             }

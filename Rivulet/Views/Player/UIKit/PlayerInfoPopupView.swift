@@ -17,6 +17,7 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
     private let backgroundEffectView: UIVisualEffectView
 
     var onDismiss: (() -> Void)?
+    let presentedWidth: CGFloat = 480
 
     init(metadata: PlexMetadata) {
         self.metadata = metadata
@@ -250,15 +251,11 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
         }
     }
 
-    // MARK: - Presentation
-
-    func present(in container: UIView, anchoredTo anchor: UIView) {
-        presentAnchored(in: container, anchoredTo: anchor, width: 480)
-    }
-
-    func dismiss() {
-        dismissAnchored()
-    }
+    // Info has no selectable rows, but the popup still needs to be a real
+    // focus target -- otherwise focus never leaves the Info pill behind it
+    // and pressesBegan below never fires. Scrolling is driven by up/down
+    // presses via the inherited UIScrollView focus-scroll behavior.
+    override var canBecomeFocused: Bool { true }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .menu {

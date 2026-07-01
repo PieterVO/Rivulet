@@ -11,10 +11,20 @@ import UIKit
 
 protocol AnchoredPopupPresenting: UIView {
     var onDismiss: (() -> Void)? { get set }
+    /// Fixed popup width; each conformer sets this to match its content.
+    var presentedWidth: CGFloat { get }
 }
 
 extension AnchoredPopupPresenting {
-    func presentAnchored(in container: UIView, anchoredTo anchor: UIView, width: CGFloat) {
+    func present(in container: UIView, anchoredTo anchor: UIView) {
+        presentAnchored(in: container, anchoredTo: anchor, width: presentedWidth)
+    }
+
+    func dismiss() {
+        dismissAnchored()
+    }
+
+    private func presentAnchored(in container: UIView, anchoredTo anchor: UIView, width: CGFloat) {
         alpha = 0
         container.addSubview(self)
         translatesAutoresizingMaskIntoConstraints = false
@@ -36,7 +46,7 @@ extension AnchoredPopupPresenting {
         }
     }
 
-    func dismissAnchored() {
+    private func dismissAnchored() {
         onDismiss?()
         UIView.animate(withDuration: 0.15, animations: {
             self.alpha = 0

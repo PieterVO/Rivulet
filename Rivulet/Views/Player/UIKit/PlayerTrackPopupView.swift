@@ -30,6 +30,7 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
     private var rowButtons: [PopupRowButton] = []
 
     var onDismiss: (() -> Void)?
+    let presentedWidth: CGFloat = 360
 
     init(tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
@@ -97,15 +98,6 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
         dismiss()
     }
 
-    // MARK: - Presentation
-
-    func present(in container: UIView, anchoredTo anchor: UIView) {
-        presentAnchored(in: container, anchoredTo: anchor, width: 360)
-    }
-
-    func dismiss() {
-        dismissAnchored()
-    }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let first = rowButtons.first(where: { $0.row.isSelected }) {
