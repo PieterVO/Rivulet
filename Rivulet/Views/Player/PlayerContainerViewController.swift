@@ -18,6 +18,7 @@ class PlayerContainerViewController: UIViewController {
     // MARK: - Properties
 
     private var hostingController: UIHostingController<AnyView>?
+    private var transportBar: PlayerTransportBarView?
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
     private var touchSurfaceTapGesture: UITapGestureRecognizer?
@@ -75,6 +76,30 @@ class PlayerContainerViewController: UIViewController {
                 hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
             ])
             hosting.didMove(toParent: self)
+        }
+
+        if let vm = viewModel {
+            let bar = PlayerTransportBarView(viewModel: vm)
+            bar.onSkipTapped = { [weak vm] in
+                Task { await vm?.skipActiveMarker() }
+            }
+            view.addSubview(bar)
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                bar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ])
+            self.transportBar = bar
+
+            vm.$showControls
+                .receive(on: DispatchQueue.main)
+                .sink { [weak bar] show in
+                    UIView.animate(withDuration: 0.25) {
+                        bar?.alpha = show ? 1 : 0
+                    }
+                }
+                .store(in: &cancellables)
         }
 
         // Menu button is handled via pressesBegan (not gesture recognizer)

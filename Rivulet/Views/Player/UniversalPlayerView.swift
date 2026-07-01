@@ -940,13 +940,6 @@ struct UniversalPlayerView: View {
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
 
-            // Controls Overlay (transport bar at bottom)
-            // Always show when scrubbing so user can see the progress bar, but not during post-video
-            if (viewModel.showControls || viewModel.isScrubbing) && viewModel.playbackState.isActive && viewModel.postVideoState == .hidden {
-                PlayerControlsOverlay(viewModel: viewModel, showInfoPanel: false, hideTitle: viewModel.showPausedPoster)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.25)))
-            }
-
             // Info Panel (independent of controls visibility) - slides from top (triggered by d-pad down)
             if viewModel.showInfoPanel {
                 VStack {
