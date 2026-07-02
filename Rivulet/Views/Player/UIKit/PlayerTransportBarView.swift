@@ -165,6 +165,10 @@ final class PlayerTransportBarView: UIView {
     private func bind() {
         guard let viewModel else { return }
 
+        progressBar.filmstripProvider = { [weak viewModel] times, maxWidth in
+            await viewModel?.filmstripImages(times: times, maxPixelWidth: maxWidth) ?? times.map { _ in nil }
+        }
+
         viewModel.$currentTime
             .combineLatest(viewModel.$duration, viewModel.$isScrubbing, viewModel.$scrubTime)
             .receive(on: DispatchQueue.main)

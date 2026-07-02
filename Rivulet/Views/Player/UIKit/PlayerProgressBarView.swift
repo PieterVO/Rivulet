@@ -4,14 +4,23 @@
 //
 //  Transport scrubber styled after AVPlayerViewController (tvOS 15+):
 //  a thin rounded white bar with no knob — the fill edge is the playhead.
-//  While scrubbing the bar thickens slightly, the scrub time follows the
-//  playhead below the bar, a ghost fill marks the actual playback
-//  position, and a thumbnail preview floats above. Time remaining sits
-//  below the right end. Plex markers (intro/credits) tint their range.
+//  While scrubbing, the bar morphs into a 100pt filmstrip of BIF
+//  trickplay frames with a hairline playhead and a fainter line marking
+//  the actual playback position; a callout follows the playhead above
+//  the strip. If no filmstrip data is available (still loading, or the
+//  title has no BIF), scrubbing looks exactly like before: thin bar +
+//  floating single thumbnail. Time remaining sits below the right end,
+//  with an "Ends at" clock-time label beside it at rest. Plex markers
+//  (intro/credits) tint their range on both the thin bar and the strip.
 //
 //  The view's own height covers only the track + label band; the
-//  thumbnail overhangs above it (clipsToBounds = false) so the transport
-//  bar doesn't reserve blank space when not scrubbing.
+//  thumbnail/strip overhangs above it (clipsToBounds = false) so the
+//  transport bar doesn't reserve blank space when not scrubbing.
+//
+//  One-clock rule: the strip's alpha/height and the thin-bar fill all
+//  ride the SAME `UIView.animate` block in `update(...)` that already
+//  animates `trackHeightConstraint` + `layoutIfNeeded`. No second
+//  animator, no CABasicAnimation, no separate CADisplayLink.
 //
 
 import UIKit
@@ -22,11 +31,13 @@ final class PlayerProgressBarView: UIView {
 
     private enum Metrics {
         static let trackHeight: CGFloat = 8
-        static let trackHeightScrubbing: CGFloat = 12
+        static let stripHeight: CGFloat = 100
+        static let stripTileAspect: CGFloat = 16.0 / 9.0
         static let labelBandSpacing: CGFloat = 14
         static let thumbnailWidth: CGFloat = 320
         static let thumbnailHeight: CGFloat = 180
         static let thumbnailGap: CGFloat = 20
+        static let endsAtGap: CGFloat = 24
     }
 
     // MARK: - Marker coloring
@@ -49,13 +60,45 @@ final class PlayerProgressBarView: UIView {
     private let markersContainer = UIView()
     private let currentTimeLabel = UILabel()
     private let remainingTimeLabel = UILabel()
+    private let endsAtLabel = UILabel()
     private let scrubStepLabel = UILabel()
     private let thumbnailImageView = UIImageView()
     private let thumbnailContainer = UIView()
 
+    // Filmstrip morph subviews.
+    private let stripContainer = UIView()
+    private var stripTiles: [UIImageView] = []
+    private let playheadLine = UIView()
+    private let livePositionLine = UIView()
+    private let calloutLabel = UILabel()
+
+    /// Supplies filmstrip frames for `times` (evenly spaced across the
+    /// track width), downsampled to `maxPixelWidth`. Wired by
+    /// PlayerTransportBarView to `UniversalPlayerViewModel.filmstripImages`.
+    var filmstripProvider: (([TimeInterval], CGFloat) async -> [UIImage?])?
+
+    private var stripLoadTask: Task<Void, Never>?
+    /// Sticky for the scrub session once a filmstrip is confirmed to
+    /// have real frames; avoids re-fetching (and re-flickering the
+    /// thin-bar fallback) on every scrub start/stop within one playback.
+    private var stripLoaded = false
+    private var duration: TimeInterval = 0
+    /// Cached from the last `update(...)` call so `reapplyStripMorph()`
+    /// (fired from an async load completion, off the normal update path)
+    /// can redraw the marker band and playhead without losing state.
+    private var lastMarkers: [PlexMarker] = []
+    private var lastProgress: Double = 0
+    private var lastCurrentProgress: Double = 0
+
     private var trackHeightConstraint: NSLayoutConstraint!
     private var currentTimeCenterXConstraint: NSLayoutConstraint!
     private var thumbnailCenterXConstraint: NSLayoutConstraint!
+
+    private static let endsAtFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -86,6 +129,10 @@ final class PlayerProgressBarView: UIView {
         remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.7)
         remainingTimeLabel.textAlignment = .right
 
+        endsAtLabel.font = .systemFont(ofSize: 17, weight: .medium)
+        endsAtLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        endsAtLabel.textAlignment = .right
+
         scrubStepLabel.font = .systemFont(ofSize: 20, weight: .medium)
         scrubStepLabel.textColor = UIColor.white.withAlphaComponent(0.8)
         scrubStepLabel.isHidden = true
@@ -107,15 +154,34 @@ final class PlayerProgressBarView: UIView {
         thumbnailImageView.layer.cornerCurve = .continuous
         thumbnailContainer.addSubview(thumbnailImageView)
 
-        [trackBackground, thumbnailContainer, currentTimeLabel, remainingTimeLabel, scrubStepLabel].forEach {
+        // Filmstrip: clipped, rounded, pinned to trackBackground's own
+        // bounds so it grows/shrinks with trackHeightConstraint for free.
+        stripContainer.clipsToBounds = true
+        stripContainer.layer.cornerCurve = .continuous
+        stripContainer.alpha = 0
+        stripContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        stripContainer.frame = trackBackground.bounds
+
+        playheadLine.backgroundColor = .white
+        livePositionLine.backgroundColor = UIColor.white.withAlphaComponent(0.5)
+        stripContainer.addSubview(playheadLine)
+        stripContainer.addSubview(livePositionLine)
+
+        calloutLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .semibold)
+        calloutLabel.textColor = .white
+        calloutLabel.textAlignment = .center
+        calloutLabel.isHidden = true
+
+        [trackBackground, thumbnailContainer, currentTimeLabel, remainingTimeLabel,
+         endsAtLabel, scrubStepLabel, calloutLabel].forEach {
             addSubview($0)
         }
-        [currentPositionGhost, progressFill, markersContainer].forEach {
+        [currentPositionGhost, progressFill, markersContainer, stripContainer].forEach {
             trackBackground.addSubview($0)
         }
 
         [trackBackground, thumbnailContainer, thumbnailImageView,
-         currentTimeLabel, remainingTimeLabel, scrubStepLabel].forEach {
+         currentTimeLabel, remainingTimeLabel, endsAtLabel, scrubStepLabel, calloutLabel].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
 
@@ -142,7 +208,7 @@ final class PlayerProgressBarView: UIView {
 
             // Label band below the track. The scrub time follows the
             // playhead (AVPlayerViewController behavior); remaining time
-            // is pinned below the right end.
+            // is pinned below the right end, with "Ends at" to its left.
             currentTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: Metrics.labelBandSpacing),
             currentTimeCenterXConstraint,
 
@@ -152,6 +218,9 @@ final class PlayerProgressBarView: UIView {
             remainingTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: Metrics.labelBandSpacing),
             remainingTimeLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
 
+            endsAtLabel.centerYAnchor.constraint(equalTo: remainingTimeLabel.centerYAnchor),
+            endsAtLabel.trailingAnchor.constraint(equalTo: remainingTimeLabel.leadingAnchor, constant: -Metrics.endsAtGap),
+
             bottomAnchor.constraint(equalTo: currentTimeLabel.bottomAnchor),
         ])
     }
@@ -159,6 +228,7 @@ final class PlayerProgressBarView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         trackBackground.layer.cornerRadius = trackHeightConstraint.constant / 2
+        stripContainer.layer.cornerRadius = trackBackground.layer.cornerRadius
     }
 
     // MARK: - Update
@@ -172,19 +242,37 @@ final class PlayerProgressBarView: UIView {
         scrubThumbnail: UIImage?,
         markers: [PlexMarker]
     ) {
+        let wasScrubbing = self.isScrubbing
+        self.isScrubbing = isScrubbing
+        self.duration = duration
+        self.lastMarkers = markers
+
         let displayTime = isScrubbing ? scrubTime : currentTime
         let progress: Double = duration > 0 ? min(1, max(0, displayTime / duration)) : 0
 
         let width = trackBackground.bounds.width
-        let trackHeight = isScrubbing ? Metrics.trackHeightScrubbing : Metrics.trackHeight
-
-        currentPositionGhost.isHidden = !isScrubbing
         let currentProgress: Double = duration > 0 ? min(1, max(0, currentTime / duration)) : 0
+        lastProgress = progress
+        lastCurrentProgress = currentProgress
+
+        if isScrubbing && !wasScrubbing {
+            beginFilmstripLoad()
+        } else if !isScrubbing && wasScrubbing {
+            stripLoadTask?.cancel()
+            stripLoadTask = nil
+        }
+
+        let stripOpen = isScrubbing && stripLoaded
+        let trackHeight: CGFloat = stripOpen ? Metrics.stripHeight : Metrics.trackHeight
+
+        currentPositionGhost.isHidden = !isScrubbing || stripOpen
         trackHeightConstraint.constant = trackHeight
 
         UIView.animate(withDuration: 0.15) {
+            self.progressFill.alpha = stripOpen ? 0 : 1
+            self.stripContainer.alpha = stripOpen ? 1 : 0
             self.progressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackHeight)
-            if isScrubbing {
+            if isScrubbing && !stripOpen {
                 self.currentPositionGhost.frame = CGRect(
                     x: 0, y: 0,
                     width: width * currentProgress,
@@ -194,12 +282,18 @@ final class PlayerProgressBarView: UIView {
             self.layoutIfNeeded()
         }
 
-        renderMarkers(markers, duration: duration, trackWidth: width, trackHeight: trackHeight)
+        renderMarkers(markers, duration: duration, trackWidth: width,
+                      trackHeight: stripOpen ? 4 : trackHeight, bottomAligned: stripOpen)
+
+        if stripOpen {
+            layoutStripOverlay(progress: progress, currentProgress: currentProgress, width: width)
+        }
 
         // The playhead-following time label appears only while scrubbing
-        // (the control buttons own that band otherwise), clamped so it
-        // never runs off the track ends or under the remaining-time label.
-        currentTimeLabel.isHidden = !isScrubbing
+        // without the strip open (the callout replaces it once the strip
+        // is up); clamped so it never runs off the track ends or under
+        // the remaining-time label.
+        currentTimeLabel.isHidden = !isScrubbing || stripOpen
         currentTimeLabel.text = Self.formatTime(displayTime)
         currentTimeLabel.sizeToFit()
         let halfLabel = currentTimeLabel.bounds.width / 2
@@ -210,24 +304,115 @@ final class PlayerProgressBarView: UIView {
 
         remainingTimeLabel.text = "-\(Self.formatTime(max(0, duration - displayTime)))"
 
+        let endsAt = Date().addingTimeInterval(max(0, duration - displayTime))
+        endsAtLabel.text = "Ends at \(Self.endsAtFormatter.string(from: endsAt))"
+        endsAtLabel.isHidden = duration <= 0
+
         scrubStepLabel.isHidden = !isScrubbing || scrubStepLabelText == nil
         scrubStepLabel.text = scrubStepLabelText
 
-        thumbnailContainer.isHidden = !(isScrubbing && scrubThumbnail != nil)
+        // No-BIF fallback: unchanged floating single-thumbnail behavior.
+        thumbnailContainer.isHidden = !(isScrubbing && !stripOpen && scrubThumbnail != nil)
         thumbnailImageView.image = scrubThumbnail
-        if isScrubbing {
+        if isScrubbing && !stripOpen {
             // Clamp the thumbnail inside the track bounds like
             // AVPlayerViewController does at the extremes.
             let halfThumb = Metrics.thumbnailWidth / 2
             let clampedCenter = min(max(width * CGFloat(progress), halfThumb), max(halfThumb, width - halfThumb))
             thumbnailCenterXConstraint.constant = clampedCenter
         }
+
+        calloutLabel.isHidden = !stripOpen
     }
 
-    private func renderMarkers(_ markers: [PlexMarker], duration: TimeInterval, trackWidth: CGFloat, trackHeight: CGFloat) {
+    /// Tracked purely so `update(...)` can detect the scrub-start/scrub-
+    /// end edge without adding a parameter to every call site.
+    private var isScrubbing = false
+
+    // MARK: - Filmstrip load
+
+    private func beginFilmstripLoad() {
+        guard stripLoadTask == nil, !stripLoaded, let provider = filmstripProvider else { return }
+        let width = trackBackground.bounds.width
+        guard width > 0, duration > 0 else { return }
+        let tileWidth = Metrics.stripHeight * Metrics.stripTileAspect
+        let count = max(1, Int(ceil(width / tileWidth)))
+        let times = (0..<count).map { duration * (Double($0) + 0.5) / Double(count) }
+        stripLoadTask = Task { [weak self] in
+            let images = await provider(times, tileWidth * 2)  // 2x for scale
+            guard let self, !Task.isCancelled else { return }
+            let loaded = images.contains { $0 != nil }
+            if loaded { self.populateStrip(images: images, tileWidth: tileWidth) }
+            self.stripLoaded = loaded
+            self.stripLoadTask = nil
+            // Re-run the morph now that data exists, if still scrubbing.
+            if loaded && self.isScrubbing {
+                self.reapplyStripMorph()
+            }
+        }
+    }
+
+    /// Re-applies the strip-open morph after an async filmstrip load
+    /// completes mid-scrub. Rides the same single animate block as
+    /// `update(...)` so it stays on the one clock.
+    private func reapplyStripMorph() {
+        let width = trackBackground.bounds.width
+        trackHeightConstraint.constant = Metrics.stripHeight
+        UIView.animate(withDuration: 0.15) {
+            self.progressFill.alpha = 0
+            self.stripContainer.alpha = 1
+            self.layoutIfNeeded()
+        }
+        currentPositionGhost.isHidden = true
+        currentTimeLabel.isHidden = true
+        calloutLabel.isHidden = false
+        renderMarkers(lastMarkers, duration: duration, trackWidth: width, trackHeight: 4, bottomAligned: true)
+        layoutStripOverlay(progress: lastProgress, currentProgress: lastCurrentProgress, width: width)
+    }
+
+    private func populateStrip(images: [UIImage?], tileWidth: CGFloat) {
+        stripTiles.forEach { $0.removeFromSuperview() }
+        stripTiles.removeAll()
+
+        for (index, image) in images.enumerated() {
+            let tile = UIImageView(image: image)
+            tile.contentMode = .scaleAspectFill
+            tile.clipsToBounds = true
+            tile.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+            tile.frame = CGRect(x: CGFloat(index) * tileWidth, y: 0, width: tileWidth, height: Metrics.stripHeight)
+            stripContainer.insertSubview(tile, at: 0)
+            stripTiles.append(tile)
+        }
+        // Keep the playhead/live-position lines above the tiles.
+        stripContainer.bringSubviewToFront(playheadLine)
+        stripContainer.bringSubviewToFront(livePositionLine)
+    }
+
+    private func layoutStripOverlay(progress: Double, currentProgress: Double, width: CGFloat) {
+        let lineWidth: CGFloat = 2
+        let playheadX = width * CGFloat(progress)
+        playheadLine.frame = CGRect(x: playheadX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
+
+        let liveX = width * CGFloat(currentProgress)
+        livePositionLine.isHidden = false
+        livePositionLine.frame = CGRect(x: liveX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
+
+        calloutLabel.text = Self.formatTime(duration > 0 ? Double(progress) * duration : 0)
+        calloutLabel.sizeToFit()
+        let halfLabel = calloutLabel.bounds.width / 2
+        let clampedCenter = min(max(playheadX, halfLabel), max(halfLabel, width - halfLabel))
+        calloutLabel.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - calloutLabel.bounds.height / 2)
+    }
+
+    private func renderMarkers(_ markers: [PlexMarker], duration: TimeInterval, trackWidth: CGFloat, trackHeight: CGFloat, bottomAligned: Bool) {
         markersContainer.subviews.forEach { $0.removeFromSuperview() }
         guard duration > 0 else { return }
 
+        // Use the constraint's target height (already updated by the
+        // caller before this runs), not `trackBackground.bounds`, which
+        // still reflects the pre-morph size until `layoutIfNeeded()`
+        // executes inside the animate block.
+        let containerHeight = trackHeightConstraint.constant
         for marker in markers {
             let startProgress = max(0, marker.startTimeSeconds / duration)
             let endProgress = min(1, marker.endTimeSeconds / duration)
@@ -237,7 +422,8 @@ final class PlayerProgressBarView: UIView {
             markerView.backgroundColor = Self.color(for: marker).withAlphaComponent(0.85)
             let x = trackWidth * CGFloat(startProgress)
             let markerWidth = max(4, trackWidth * CGFloat(endProgress - startProgress))
-            markerView.frame = CGRect(x: x, y: 0, width: markerWidth, height: trackHeight)
+            let y = bottomAligned ? max(0, containerHeight - trackHeight) : 0
+            markerView.frame = CGRect(x: x, y: y, width: markerWidth, height: trackHeight)
             markersContainer.addSubview(markerView)
         }
     }

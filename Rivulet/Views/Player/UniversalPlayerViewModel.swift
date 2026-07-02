@@ -2356,6 +2356,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Filmstrip frames for the scrubber morph. Empty part → all nil.
+    func filmstripImages(times: [TimeInterval], maxPixelWidth: CGFloat) async -> [UIImage?] {
+        guard let partId = metadata.Media?.first?.Part?.first?.id else {
+            return times.map { _ in nil }
+        }
+        return await PlexThumbnailService.shared.filmstrip(
+            partId: partId, times: times, maxPixelWidth: maxPixelWidth,
+            serverURL: serverURL, authToken: authToken)
+    }
+
     /// Preload thumbnails when playback starts
     func preloadThumbnails() {
         // Debug: Log metadata structure
