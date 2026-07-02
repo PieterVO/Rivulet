@@ -18,7 +18,11 @@ class PlayerContainerViewController: UIViewController {
     // MARK: - Properties
 
     private var hostingController: UIHostingController<AnyView>?
-    private var transportBar: PlayerTransportBarView?
+    private var focusCard: PlayerFocusCardView?
+    private var progressBar: PlayerProgressBarView?
+    private var skipPill: SkipPillButton?
+    private var chromeScrim = ChromeScrimView()
+    private var activePopup: (any AnchoredPopupPresenting)?
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
     private var touchSurfaceTapGesture: UITapGestureRecognizer?
@@ -79,38 +83,44 @@ class PlayerContainerViewController: UIViewController {
         }
 
         if let vm = viewModel {
-            let bar = PlayerTransportBarView(viewModel: vm)
-            bar.onSkipTapped = { [weak vm] in
-                Task { await vm?.skipActiveMarker() }
+            chromeScrim.isUserInteractionEnabled = false
+
+            let card = PlayerFocusCardView()
+            let bar = PlayerProgressBarView()
+            let pill = SkipPillButton()
+            pill.isHidden = true
+            pill.addTarget(self, action: #selector(skipPillTapped), for: .primaryActionTriggered)
+
+            [chromeScrim, card, bar, pill].forEach {
+                view.addSubview($0)
+                $0.translatesAutoresizingMaskIntoConstraints = false
             }
-            view.addSubview(bar)
-            bar.translatesAutoresizingMaskIntoConstraints = false
+            view.bringSubviewToFront(card)
+
             NSLayoutConstraint.activate([
-                bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                bar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                chromeScrim.topAnchor.constraint(equalTo: view.topAnchor),
+                chromeScrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                chromeScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                chromeScrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+                // Focus card: left 96, vertically centered 520pt band (top/bottom 280 on 1080 canvas).
+                card.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 96),
+                card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+
+                // Scrubber: locked left 96 / right 96 / bottom 140 in every state.
+                bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 96),
+                bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -96),
+                bar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -140),
+
+                // Skip pill floats above the scrubber's right end.
+                pill.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+                pill.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -28),
             ])
-            self.transportBar = bar
+            focusCard = card
+            progressBar = bar
+            skipPill = pill
 
-            vm.$showControls
-                .receive(on: DispatchQueue.main)
-                .sink { [weak bar] show in
-                    UIView.animate(withDuration: 0.25) {
-                        bar?.alpha = show ? 1 : 0
-                    }
-                }
-                .store(in: &cancellables)
-
-            // Route focus into (and back out of) the transport bar's
-            // buttons when controls-focus mode toggles.
-            vm.$controlsFocusActive
-                .removeDuplicates()
-                .receive(on: DispatchQueue.main)
-                .sink { [weak self] _ in
-                    self?.setNeedsFocusUpdate()
-                    self?.updateFocusIfNeeded()
-                }
-                .store(in: &cancellables)
+            bindChrome(to: vm)
         }
 
         // Menu button is handled via pressesBegan (not gesture recognizer)
@@ -159,11 +169,11 @@ class PlayerContainerViewController: UIViewController {
     /// ignored by the focus system because the popup does not contain
     /// the currently focused view.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if let popup = transportBar?.activePopupView, popup.window != nil {
+        if let popup = activePopup as? UIView, popup.window != nil {
             return [popup]
         }
-        if viewModel?.controlsFocusActive == true, let bar = transportBar {
-            return [bar]
+        if viewModel?.controlsFocusActive == true, let card = focusCard {
+            return [card]
         }
         return super.preferredFocusEnvironments
     }
@@ -194,8 +204,8 @@ class PlayerContainerViewController: UIViewController {
                 vm.cancelScrub()
                 return
             }
-            if transportBar?.hasActivePopup == true {
-                transportBar?.dismissActivePopup()
+            if activePopup != nil {
+                activePopup?.dismiss()
                 return
             }
             if vm.controlsFocusActive {
@@ -316,8 +326,8 @@ class PlayerContainerViewController: UIViewController {
         // this is the container-level backstop so a popup can never be
         // orphaned by the .back chain (which doesn't know about popups).
         if vm.postVideoState == .hidden, !vm.isScrubbing,
-           transportBar?.hasActivePopup == true {
-            transportBar?.dismissActivePopup()
+           activePopup != nil {
+            activePopup?.dismiss()
             blockDismissTemporarily()
             return
         }
@@ -328,8 +338,8 @@ class PlayerContainerViewController: UIViewController {
                 dismissPlayer()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
-            } else if transportBar?.hasActivePopup == true {
-                transportBar?.dismissActivePopup()
+            } else if activePopup != nil {
+                activePopup?.dismiss()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {
@@ -538,5 +548,187 @@ class PlayerContainerViewController: UIViewController {
         blockDismissResetWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + InputConfig.blockDismissTimeout, execute: workItem)
     }
+
+    // MARK: - Chrome Bindings
+
+    private func bindChrome(to vm: UniversalPlayerViewModel) {
+        guard let card = focusCard, let bar = progressBar else { return }
+
+        // Static metadata (re-applied on episode advance via itemGeneration).
+        applyCardMetadata(vm: vm)
+
+        bar.filmstripProvider = { [weak vm] times, maxWidth in
+            await vm?.filmstripImages(times: times, maxPixelWidth: maxWidth) ?? times.map { _ in nil }
+        }
+
+        vm.$itemGeneration
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak vm] _ in
+                self?.progressBar?.resetFilmstrip()
+                if let vm { self?.applyCardMetadata(vm: vm) }
+            }
+            .store(in: &cancellables)
+
+        vm.$currentTime
+            .combineLatest(vm.$duration, vm.$isScrubbing, vm.$scrubTime)
+            .combineLatest(vm.$wheelScrubbing.removeDuplicates())
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak vm] combined, isWheelScrubbing in
+                let (currentTime, duration, isScrubbing, scrubTime) = combined
+                guard let self, let vm else { return }
+                self.progressBar?.update(
+                    currentTime: currentTime, duration: duration,
+                    isScrubbing: isScrubbing, scrubTime: scrubTime,
+                    scrubStepLabelText: vm.scrubStepLabel,
+                    scrubThumbnail: vm.scrubThumbnail,
+                    markers: vm.metadata.allMarkers,
+                    chapters: vm.metadata.Chapter ?? [],
+                    isWheelScrubbing: isWheelScrubbing
+                )
+                // Scrubbing hides the card and Up Next; scrubber stays.
+                self.setAuxChromeHidden(isScrubbing)
+            }
+            .store(in: &cancellables)
+
+        vm.$showControls
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] show in self?.setChromeHidden(!show, animated: true) }
+            .store(in: &cancellables)
+
+        // Ambient pause: the whole chrome yields to the clean backdrop.
+        vm.$pausePresentation
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak vm] presentation in
+                guard let vm else { return }
+                self?.setChromeHidden(presentation != .frame || !vm.showControls, animated: true)
+            }
+            .store(in: &cancellables)
+
+        vm.$playbackState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak card] state in card?.setPaused(state == .paused) }
+            .store(in: &cancellables)
+
+        vm.$showSkipButton
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak vm] show in
+                self?.skipPill?.isHidden = !show
+                self?.skipPill?.setTitle(vm?.skipButtonLabel, for: .normal)
+            }
+            .store(in: &cancellables)
+
+        vm.$subtitleTracks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak card] tracks in card?.setSubtitlesEnabled(!tracks.isEmpty) }
+            .store(in: &cancellables)
+
+        vm.$controlsFocusActive
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.setNeedsFocusUpdate()
+                self?.updateFocusIfNeeded()
+            }
+            .store(in: &cancellables)
+
+        // Card actions.
+        card.onPlayPause = { [weak vm] in vm?.togglePlayPause() }
+        card.onSkipBack = { [weak vm] in Task { await vm?.seekRelative(by: -15) } }
+        card.onReplayLongPress = { [weak vm] in vm?.replayWithCaptions() }
+        card.onNavigateDown = { [weak self, weak vm] in
+            // Down from the card enters seek mode at the current position
+            // (same entry the touchpad pan uses).
+            vm?.exitControlsFocus()
+            self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+        }
+        // Temporary popup anchors — replaced by in-card modes in Task 6.
+        card.onSubtitles = { [weak self, weak vm] in
+            guard let self, let vm else { return }
+            let popup = PlayerTrackPopupView(
+                header: "Subtitles", tracks: vm.subtitleTracks,
+                selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+                onSelect: { id in vm.selectSubtitleTrack(id: id) })
+            self.presentPopup(popup, anchoredTo: self.focusCard!.subtitlesButton)
+        }
+        card.onAudio = { [weak self, weak vm] in
+            guard let self, let vm else { return }
+            let popup = PlayerTrackPopupView(
+                header: "Audio", tracks: vm.audioTracks,
+                selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
+                onSelect: { id in if let id { vm.selectAudioTrack(id: id) } })
+            self.presentPopup(popup, anchoredTo: self.focusCard!.audioButton)
+        }
+        card.onInfo = { [weak self, weak vm] in
+            guard let self, let vm else { return }
+            let popup = PlayerInfoPopupView(
+                metadata: vm.metadata,
+                liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() })
+            self.presentPopup(popup, anchoredTo: self.focusCard!.infoButton)
+        }
+    }
+
+    /// Series line + title + meta row from the current item.
+    private func applyCardMetadata(vm: UniversalPlayerViewModel) {
+        let meta = vm.metadata
+        var metaParts: [String] = []
+        if let rating = meta.contentRating { metaParts.append(rating) }
+        if let ms = meta.duration { metaParts.append("\(ms / 60000) min") }
+        if let audio = meta.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio }),
+           let display = audio.displayTitle ?? audio.extendedDisplayTitle {
+            metaParts.append(display)
+        }
+        focusCard?.setTitle(vm.title, seriesLine: vm.subtitle,
+                            metaLine: metaParts.isEmpty ? nil : metaParts.joined(separator: " · "))
+    }
+
+    /// Whole-chrome visibility (controls hidden / ambient pause).
+    private func setChromeHidden(_ hidden: Bool, animated: Bool) {
+        let chrome: [UIView?] = [focusCard, progressBar, skipPill, chromeScrim]
+        let apply = {
+            chrome.compactMap { $0 }.forEach { $0.alpha = hidden ? 0 : 1 }
+        }
+        animated ? UIView.animate(withDuration: 0.25, animations: apply) : apply()
+    }
+
+    /// While scrubbing only the scrubber (and its strip) stays; the card,
+    /// pill, and scrim fade (mirrors the old bar's setChrome(hidden:)).
+    private func setAuxChromeHidden(_ hidden: Bool) {
+        UIView.animate(withDuration: 0.15) {
+            self.focusCard?.alpha = hidden ? 0 : 1
+            self.skipPill?.alpha = hidden ? 0 : 1
+        }
+    }
+
+    private func presentPopup<Popup: AnchoredPopupPresenting>(_ popup: Popup, anchoredTo anchor: UIView) {
+        activePopup?.dismiss()
+        var mutablePopup = popup
+        mutablePopup.onDismiss = { [weak self] in self?.activePopup = nil }
+        activePopup = mutablePopup
+        mutablePopup.present(in: view, anchoredTo: anchor)
+    }
+
+    @objc private func skipPillTapped() {
+        Task { await viewModel?.skipActiveMarker() }
+    }
+}
+
+/// 2a left-readability scrim: horizontal black gradient behind the card
+/// (rgba(0,0,0,.8) → .2 @46% → transparent @66%).
+final class ChromeScrimView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let gradient = layer as! CAGradientLayer
+        gradient.colors = [
+            UIColor.black.withAlphaComponent(0.8).cgColor,
+            UIColor.black.withAlphaComponent(0.2).cgColor,
+            UIColor.black.withAlphaComponent(0).cgColor,
+        ]
+        gradient.locations = [0, 0.46, 0.66]
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 

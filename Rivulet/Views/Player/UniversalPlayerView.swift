@@ -1047,6 +1047,22 @@ struct UniversalPlayerView: View {
                     .opacity(0.35)
                     .ignoresSafeArea()
             }
+
+            if let logo = viewModel.titleLogoImage {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Image(uiImage: logo)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 500, maxHeight: 130, alignment: .bottomLeading)
+                            .padding(.leading, 96)
+                            .padding(.bottom, 96)
+                        Spacer()
+                    }
+                }
+                .transition(.opacity)
+            }
         }
         .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
     }
