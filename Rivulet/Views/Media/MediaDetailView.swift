@@ -2405,10 +2405,10 @@ struct MediaDetailView: View {
         }
     }
 
-    /// Pre-compute and cache stream URL to reduce player startup latency
+    /// Warm the direct-play connection (TCP/TLS + first bytes) so Aether's
+    /// probe hits a hot session when playback starts.
     private func preWarmStreamURL(for metadata: PlexMetadata, serverURL: String, authToken: String) {
-        guard let ratingKey = metadata.ratingKey,
-              let partKey = metadata.Media?.first?.Part?.first?.key else { return }
+        guard let partKey = metadata.Media?.first?.Part?.first?.key else { return }
 
         // Build direct play URL for playback prewarming
         if let url = networkManager.buildPlaybackDirectPlayURL(
@@ -2423,7 +2423,6 @@ struct MediaDetailView: View {
                 "X-Plex-Device": PlexAPI.deviceName,
                 "X-Plex-Product": PlexAPI.productName
             ]
-            StreamURLCache.shared.set(ratingKey: ratingKey, url: url, headers: headers)
             Task(priority: .utility) {
                 await networkManager.warmDirectPlayStream(url: url, headers: headers)
             }

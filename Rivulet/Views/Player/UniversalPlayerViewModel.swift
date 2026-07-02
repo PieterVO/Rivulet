@@ -345,10 +345,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// AVPlayer used for all playback paths (direct, remuxed HLS, Plex HLS)
     @Published private(set) var player: AVPlayer?
 
-    /// Local remux server for MKV/DTS/DV content
-    private var remuxServer: LocalRemuxServer?
-    private var remuxSession: FFmpegRemuxSession?
-
     /// HLS manifest enricher — injects audio/subtitle track labels into the master playlist.
     /// Must be retained for the lifetime of the AVURLAsset.
     private var hlsManifestEnricher: HLSManifestEnricher?
@@ -357,14 +353,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var rateObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
-    private var keepUpObservation: NSKeyValueObservation?
     private var timeObserver: Any?
     // Non-isolated reference for cleanup in deinit
     private nonisolated(unsafe) var _playerForCleanup: AVPlayer?
     private nonisolated(unsafe) var _timeObserverForCleanup: Any?
-
-    /// Whether DV profile conversion (P7/P8.6 → P8.1) is needed
-    private var requiresProfileConversion = false
 
     /// The VOD player: AetherEngine, surfaced through a PlayerProtocol
     /// adapter. @Published to drive internal subscriptions that rebind the
@@ -493,22 +485,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Get container format for logging
         let container = metadata.Media?.first?.Part?.first?.container?.lowercased() ?? ""
 
-        // Identify DV stream (could be second video track in dual-layer profile 7)
-        let videoStreams = metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isVideo } ?? []
-        let dvStream = videoStreams.first { ($0.DOVIProfile != nil) || ($0.DOVIPresent == true) }
+        let dvProfile = metadata.Media?.first?.Part?.first?.Stream?
+            .first { $0.isVideo && (($0.DOVIProfile != nil) || ($0.DOVIPresent == true)) }?
+            .DOVIProfile
 
-        let dvProfile = dvStream?.DOVIProfile
-        let doviBLCompatID = dvStream?.DOVIBLCompatID
-        let requiresDVProfileConversion = hasDolbyVision &&
-            ((dvProfile == 7) || (dvProfile == 8 && doviBLCompatID == 6))
-
-        print("[PlayerSelect] settings: rivulet=true avDV=false avAll=false " +
-              "content: DV=\(hasDolbyVision) profile=\(dvProfile ?? -1) blCompat=\(doviBLCompatID ?? -1) " +
-              "container=\(container) airPlay=\(isAirPlayRoute) compatDV=\(!requiresDVProfileConversion)")
-
-        self.requiresProfileConversion = requiresDVProfileConversion
-
-        print("[PlayerSelect] → AVPlayer (primary)")
+        print("[PlayerSelect] content: DV=\(hasDolbyVision) profile=\(dvProfile ?? -1) " +
+              "container=\(container) airPlay=\(isAirPlayRoute) → Aether")
 
         setupPlayer()
 
@@ -572,11 +554,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             // The Aether engine self-manages background: it tears the video pipeline down on background
             // and reloads + restores play state on foreground. Pausing it here would run before the
             // engine captures its pre-background play state, clobbering it so it always returned paused.
-            // Let Aether own its lifecycle; this host pause covers the RPlayer/AVPlayer routes only.
+            // Let Aether own its lifecycle; this host pause covers the HLS/AVPlayer route only.
             if self.aetherPlayer != nil { return }
             if self.playbackState == .playing {
                 self.pausedDueToAppInactive = true
-                print("[Remux] App entering background — pausing")
+                print("[Player] App entering background — pausing")
                 Task { @MainActor in
                     self.pause()
                 }
@@ -599,8 +581,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func prepareStreamURL() async {
         let networkManager = PlexNetworkManager.shared
 
-        guard let ratingKey = metadata.ratingKey else { return }
-        let cachedDirectPlay = StreamURLCache.shared.get(ratingKey: ratingKey)
+        guard metadata.ratingKey != nil else { return }
 
         // Fetch full metadata if Media array is missing (needed for info overlay display)
         // This happens when starting playback from Continue Watching or other hubs with minimal metadata
@@ -608,16 +589,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             await fetchFullMetadataIfNeeded()
         }
 
-        // Aether does its own demux; the AVPlayer routes use the server's
-        // HLS transcode rather than RPlayer's local remux server.
-        let useLocalRemux = false
         let routingContext = ContentRoutingContext(
             metadata: metadata,
             serverURL: URL(string: serverURL)!,
             authToken: authToken,
-            requiresProfileConversion: requiresProfileConversion,
-            playbackPolicy: .directPlayFirst,
-            useLocalRemux: useLocalRemux
+            playbackPolicy: .directPlayFirst
         )
         let plan = ContentRouter.plan(for: routingContext)
         playbackPlan = plan
@@ -627,40 +603,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         AppHangContext.setPlaybackRoute(plan.primary.description)
 
         switch plan.primary {
-        case .avPlayerDirect(let url, let headers):
-            // AVPlayer direct — use the URL from the plan
-            if let cached = cachedDirectPlay {
-                streamURL = cached.url
-                streamHeaders = cached.headers
-                StreamURLCache.shared.remove(ratingKey: ratingKey)
-                Task(priority: .utility) {
-                    await networkManager.warmDirectPlayStream(url: cached.url, headers: cached.headers)
-                }
-            } else {
-                streamURL = url
-                streamHeaders = headers ?? rivuletDirectPlayHeaders()
-                Task(priority: .utility) {
-                    await networkManager.warmDirectPlayStream(url: url, headers: headers ?? [:])
-                }
-            }
-
-            if plan.fallbacks.contains(where: { if case .hls = $0 { return true } else { return false } }),
-               let preparedFallback = buildRivuletHLSURL(offset: startOffset) {
-                rivuletFallbackURL = preparedFallback.url
-                rivuletFallbackHeaders = preparedFallback.headers
-            }
-
-        case .localRemux(let url, let headers, _):
-            // Local remux — use the raw file URL from the plan
-            streamURL = url
-            streamHeaders = headers ?? rivuletDirectPlayHeaders()
-
-            if plan.fallbacks.contains(where: { if case .hls = $0 { return true } else { return false } }),
-               let preparedFallback = buildRivuletHLSURL(offset: startOffset) {
-                rivuletFallbackURL = preparedFallback.url
-                rivuletFallbackHeaders = preparedFallback.headers
-            }
-
         case .hls:
             if let result = buildRivuletHLSURL(offset: startOffset) {
                 streamURL = result.url
@@ -669,9 +611,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
 
         case .aether(let url, let headers):
-            // Aether takes the same direct-play URL as .avPlayerDirect.
-            // The Aether engine demuxes the source itself and serves
-            // HLS-fMP4 to AVPlayer over loopback.
+            // Aether takes the direct-play URL: the engine demuxes the
+            // source itself and serves HLS-fMP4 to AVPlayer over loopback.
             streamURL = url
             streamHeaders = headers ?? rivuletDirectPlayHeaders()
 
@@ -784,25 +725,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     let time = String(format: "%.1f", item?.currentTime().seconds ?? 0)
                     let loaded = item?.loadedTimeRanges.first?.timeRangeValue
                     let loadedEnd = loaded.map { String(format: "%.1f", CMTimeGetSeconds($0.start) + CMTimeGetSeconds($0.duration)) } ?? "?"
-                    print("[Remux] rate→0 (was playing) at \(time)s bufEmpty=\(bufEmpty) keepUp=\(keepUp) tcs=\(player.timeControlStatus.rawValue) loadedTo=\(loadedEnd)s")
+                    print("[Player] rate→0 (was playing) at \(time)s bufEmpty=\(bufEmpty) keepUp=\(keepUp) tcs=\(player.timeControlStatus.rawValue) loadedTo=\(loadedEnd)s")
                     self.updatePlaybackState(.paused)
-
-                    // With automaticallyWaitsToMinimizeStalling=false, AVPlayer pauses
-                    // on buffer underruns. Auto-resume after a short delay if buffer
-                    // has data. The keepUp KVO can't help here because keepUp stays
-                    // false while paused (chicken-and-egg).
-                    if self.remuxServer != nil {
-                        Task { @MainActor [weak self] in
-                            try? await Task.sleep(nanoseconds: 500_000_000)
-                            guard let self,
-                                  self.remuxServer != nil,
-                                  self.player?.rate == 0,
-                                  self.player?.currentItem?.isPlaybackBufferEmpty == false,
-                                  self.playbackState == .paused else { return }
-                            print("[Remux] Auto-resuming after buffer underrun (500ms delay)")
-                            self.player?.play()
-                        }
-                    }
                 }
             }
         }
@@ -815,16 +739,16 @@ final class UniversalPlayerViewModel: ObservableObject {
                 switch player.timeControlStatus {
                 case .waitingToPlayAtSpecifiedRate:
                     if self.playbackState != .buffering {
-                        print("[Remux] AVPlayer: waitingToPlay (reason=\(reason), rate=\(player.rate))")
+                        print("[Player] AVPlayer: waitingToPlay (reason=\(reason), rate=\(player.rate))")
                     }
                     self.updatePlaybackState(.buffering)
                 case .playing:
-                    print("[Remux] AVPlayer: playing (rate=\(player.rate))")
+                    print("[Player] AVPlayer: playing (rate=\(player.rate))")
                     if self.playbackState == .buffering {
                         self.updatePlaybackState(.playing)
                     }
                 case .paused:
-                    print("[Remux] AVPlayer: paused (rate=\(player.rate))")
+                    print("[Player] AVPlayer: paused (rate=\(player.rate))")
                     break  // Handled by rate observer
                 @unknown default:
                     break
@@ -902,24 +826,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // Buffer recovery for local remux. With automaticallyWaitsToMinimizeStalling=false,
-        // AVPlayer pauses (rate=0) on buffer underruns instead of waiting. We detect when
-        // the buffer refills and resume playback ourselves.
-        if let item = player.currentItem {
-            keepUpObservation = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-                Task { @MainActor [weak self] in
-                    guard let self, self.remuxServer != nil else { return }
-                    if item.isPlaybackLikelyToKeepUp,
-                       self.player?.rate == 0,
-                       self.player?.currentItem?.status == .readyToPlay,
-                       self.playbackState == .paused || self.playbackState == .buffering {
-                        print("[Remux] Buffer recovered (keepUp=true), resuming playback")
-                        self.player?.play()
-                    }
-                }
-            }
-        }
-
         // Time updates (every 0.5s)
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
         let observer = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
@@ -939,8 +845,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         rateObservation = nil
         timeControlObservation?.invalidate()
         timeControlObservation = nil
-        keepUpObservation?.invalidate()
-        keepUpObservation = nil
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
         if let timeObserver, let player {
@@ -1066,9 +970,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 metadata: metadata,
                 serverURL: URL(string: serverURL)!,
                 authToken: authToken,
-                requiresProfileConversion: requiresProfileConversion,
-                playbackPolicy: .directPlayFirst,
-                useLocalRemux: false
+                playbackPolicy: .directPlayFirst
             ))
             try await startWithFallback(plan: plan, startTime: startOffset)
 
@@ -1083,12 +985,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 let bufferEmpty = player?.currentItem?.isPlaybackBufferEmpty ?? true
                 let bufferFull = player?.currentItem?.isPlaybackBufferFull ?? false
                 let likelyKeepUp = player?.currentItem?.isPlaybackLikelyToKeepUp ?? false
-                print("[Remux] play() — status=\(itemStatus) bufferEmpty=\(bufferEmpty) bufferFull=\(bufferFull) likelyKeepUp=\(likelyKeepUp)")
-                if remuxServer != nil {
-                    player?.playImmediately(atRate: 1.0)
-                } else {
-                    player?.play()
-                }
+                print("[Player] play() — status=\(itemStatus) bufferEmpty=\(bufferEmpty) bufferFull=\(bufferFull) likelyKeepUp=\(likelyKeepUp)")
+                player?.play()
             }
 
             // Index for Siri Suggestions
@@ -1222,7 +1120,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Returns true when ready, false on timeout/failed/missing item.
     private func waitForCurrentItemReady(timeout: TimeInterval) async -> Bool {
         guard let item = player?.currentItem else {
-            print("[Remux] waitReady: no currentItem")
+            print("[Player] waitReady: no currentItem")
             return false
         }
 
@@ -1250,10 +1148,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             observation = item.observe(\.status, options: [.new]) { item, _ in
                 switch item.status {
                 case .readyToPlay:
-                    print("[Remux] waitReady: readyToPlay")
+                    print("[Player] waitReady: readyToPlay")
                     resume(with: true)
                 case .failed:
-                    print("[Remux] waitReady: FAILED — \(item.error?.localizedDescription ?? "unknown")")
+                    print("[Player] waitReady: FAILED — \(item.error?.localizedDescription ?? "unknown")")
                     resume(with: false)
                 default:
                     break
@@ -1264,7 +1162,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 guard !Task.isCancelled else { return }
                 let s = item.status.rawValue
-                print("[Remux] waitReady: TIMEOUT after \(Int(timeout))s — status=\(s) bufEmpty=\(item.isPlaybackBufferEmpty) keepUp=\(item.isPlaybackLikelyToKeepUp)")
+                print("[Player] waitReady: TIMEOUT after \(Int(timeout))s — status=\(s) bufEmpty=\(item.isPlaybackBufferEmpty) keepUp=\(item.isPlaybackLikelyToKeepUp)")
                 resume(with: false)
             }
         }
@@ -1272,58 +1170,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Load content using the appropriate path from the playback plan.
     ///
-    /// Three paths:
-    /// 1. **AVPlayer direct** — AVPlayer opens Plex URL directly (MP4/MOV + native audio)
-    /// 2. **Local remux** — FFmpegRemuxSession → LocalRemuxServer → AVPlayer (MKV, DTS, DV P7)
-    /// 3. **Plex HLS** — AVPlayer opens Plex HLS URL
+    /// Two paths:
+    /// 1. **Aether** — the engine demuxes the direct-play URL itself
+    /// 2. **Plex HLS** — AVPlayer opens the Plex transcode URL (primary
+    ///    when no direct-play URL exists; fallback after an Aether failure)
     private func startWithFallback(plan: PlaybackPlan, startTime: TimeInterval?) async throws {
         switch plan.primary {
-        case .avPlayerDirect(let url, let headers):
-            let directURL = streamURL ?? url
-            let directHeaders = streamHeaders.isEmpty ? (headers ?? rivuletDirectPlayHeaders()) : streamHeaders
-            do {
-                try loadAVPlayer(url: directURL, headers: directHeaders)
-            } catch {
-                guard planHasHLSFallback(plan) else { throw error }
-                let kind = classifyDirectPlayFailure(error)
-                try await attemptRivuletHLSFallback(
-                    resumeTime: startTime ?? 0,
-                    reason: "direct_startup_load_failed",
-                    failureKind: kind
-                )
-                return
-            }
-
-            if let startTime, startTime > 0 {
-                await player?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
-            }
-
-        case .localRemux(let url, let headers, _):
-            let remuxURL = streamURL ?? url
-            let remuxHeaders = streamHeaders.isEmpty ? (headers ?? rivuletDirectPlayHeaders()) : streamHeaders
-            do {
-                let remuxStart = Date()
-                // Prefetch init + target segment, then use EXT-X-START so AVPlayer
-                // goes directly to the resume position. All data is instant cache hits.
-                try await loadWithRemuxServer(sourceURL: remuxURL, headers: remuxHeaders, startTime: startTime)
-                let becameReady = await waitForCurrentItemReady(timeout: 8.0)
-                let readyMs = Int(Date().timeIntervalSince(remuxStart) * 1000)
-                if !becameReady {
-                    print("[Remux] TIMEOUT: not ready after \(readyMs)ms")
-                    throw PlayerError.loadFailed("Local remux did not become ready in time")
-                }
-                print("[Remux] Ready in \(readyMs)ms")
-            } catch {
-                guard planHasHLSFallback(plan) else { throw error }
-                let kind = classifyDirectPlayFailure(error)
-                try await attemptRivuletHLSFallback(
-                    resumeTime: startTime ?? 0,
-                    reason: "local_remux_startup_failed",
-                    failureKind: kind
-                )
-                return
-            }
-
         case .hls:
             if streamURL == nil, let builtHLS = buildRivuletHLSURL(offset: startTime) {
                 streamURL = builtHLS.url
@@ -1957,78 +1809,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         return item.copy() as! AVMetadataItem
     }
 
-    /// Create remux session + local server, then point AVPlayer at localhost HLS.
-    private func loadWithRemuxServer(sourceURL: URL, headers: [String: String]?, startTime: TimeInterval? = nil) async throws {
-        // Stop previous remux infrastructure
-        await stopRemuxServer()
-
-        let session = FFmpegRemuxSession()
-        self.remuxSession = session
-
-        let sessionInfo = try await session.open(url: sourceURL, headers: headers)
-        guard !sessionInfo.segments.isEmpty else {
-            throw PlayerError.loadFailed("No remux segments available")
-        }
-
-        // Pre-generate init + the first segment AVPlayer will request so it gets
-        // instant cache hits (Content-Length). With a start time, prefetch the target
-        // segment and use EXT-X-START so AVPlayer goes directly there.
-        let prefetchStart = Date()
-        let initData = try await session.generateInitSegment()
-        let targetSegIdx = startTime.map { max(0, Int($0 / sessionInfo.segments.first!.duration)) } ?? 0
-        let clampedIdx = min(targetSegIdx, sessionInfo.segments.count - 1)
-        let segData = try await session.generateSegment(index: clampedIdx)
-        let prefetchDuration = await session.lastSegmentActualDuration
-        let prefetchMs = Int(Date().timeIntervalSince(prefetchStart) * 1000)
-        print("[Remux] Prefetch: init + segment \(clampedIdx) in \(prefetchMs)ms (actualDur=\(String(format: "%.3f", prefetchDuration ?? 0))s)")
-
-        let server = LocalRemuxServer(
-            session: session,
-            sessionInfo: sessionInfo,
-            prebuiltInitSegment: initData,
-            prebuiltSegments: [clampedIdx: segData]
-        )
-        // Record the prefetched segment's actual duration
-        if let dur = prefetchDuration {
-            server.recordSegmentDuration(index: clampedIdx, duration: dur)
-        }
-        if let startTime, startTime > 0 {
-            server.startOffset = startTime
-        }
-        self.remuxServer = server
-
-        let localURL = try server.start()
-        print("[Remux] Server started: \(localURL), segments=\(sessionInfo.segments.count), target=seg\(clampedIdx)")
-
-        try loadAVPlayer(url: localURL, headers: nil)
-
-        // Disable AVPlayer's stall minimization — it deadlocks on locally-generated
-        // HLS because it can't evaluate the "network" throughput correctly.
-        // We handle buffer recovery ourselves via isPlaybackLikelyToKeepUp KVO.
-        player?.automaticallyWaitsToMinimizeStalling = false
-
-        // If the keyframe index wasn't available at open time (HTTP source),
-        // load it in the background. This triggers a seek to the MKV file tail
-        // to read the Cue index, then rebuilds the segment list with accurate
-        // durations. The server's playlist will reflect actual durations on
-        // AVPlayer's next re-fetch.
-        player?.currentItem?.preferredForwardBufferDuration = 6.0
-    }
-
-    /// Stop remux server and session.
-    private func stopRemuxServer() async {
-        remuxServer?.stop()
-        remuxServer = nil
-        if let session = remuxSession {
-            // Abort in-progress FFmpeg I/O immediately so the actor becomes
-            // available for cancel/close without waiting for generation to finish.
-            session.interruptFlag.pointee = 1
-            await session.cancel()
-            await session.close()
-        }
-        remuxSession = nil
-    }
-
     /// One-shot fallback path to Plex HLS.
     private func attemptRivuletHLSFallback(
         resumeTime: TimeInterval,
@@ -2069,7 +1849,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         aetherPlayer = nil
         teardownAVPlayerObservers()
         player?.pause()
-        await stopRemuxServer()
 
         streamURL = fallback.url
         streamHeaders = fallback.headers
@@ -2231,15 +2010,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         player?.replaceCurrentItem(with: nil)
         player = nil
         _playerForCleanup = nil
-        // Abort any in-progress FFmpeg I/O immediately (bypasses actor queue),
-        // then cancel/close the session asynchronously.
-        if let session = remuxSession {
-            session.interruptFlag.pointee = 1
-            Task { await session.cancel(); await session.close() }
-        }
-        remuxServer?.stop()
-        remuxServer = nil
-        remuxSession = nil
         hlsManifestEnricher = nil
         subtitleManager.clear()
 
@@ -2307,9 +2077,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         if let ap = aetherPlayer {
             ap.pause()
             return
-        }
-        if remuxServer != nil {
-            print("[Remux] activePlayer_pause() called")
         }
         player?.pause()
     }

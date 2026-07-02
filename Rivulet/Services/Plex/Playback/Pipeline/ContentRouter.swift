@@ -2,34 +2,30 @@
 //  ContentRouter.swift
 //  Rivulet
 //
-//  Decides the playback path for content:
-//    1. AVPlayer direct — MP4/MOV with native audio, no DV P7
-//    2. Local remux — DV P7, HLG in non-native containers, and local remux-enabled content
-//    3. Plex HLS — unsupported video codecs, live TV, or fallback
+//  Decides the playback path for VOD content. Aether is the only engine:
+//  whenever a direct-play URL exists the plan is Aether primary with a
+//  Plex HLS transcode fallback; otherwise HLS is primary. The router also
+//  owns the codec knowledge the HLS URL builder needs (which video codecs
+//  must be server-transcoded rather than remuxed).
 //
 
 import Foundation
 
 /// The ingestion path for a piece of content.
 enum PlaybackRoute: Sendable, CustomStringConvertible {
-    /// AVPlayer opens Plex URL directly — MP4/MOV with native audio
-    case avPlayerDirect(url: URL, headers: [String: String]?)
-
-    /// Local remux server — locally remuxed to HLS fMP4 for AVPlayer
-    case localRemux(url: URL, headers: [String: String]?, analysis: RemuxAnalysis)
-
-    /// HLS via server-side remux/transcode — unsupported video, live TV, or fallback
+    /// HLS via server-side remux/transcode — no direct-play URL, or
+    /// fallback after an Aether startup failure.
     case hls(url: URL, headers: [String: String]?)
 
     /// AetherEngine — FFmpeg demux + HLS-fMP4 remux + AVPlayer with
-    /// HDR10+ / HLG / EAC3+JOC Atmos stream-copy. The only VOD engine;
-    /// routed whenever a direct-play URL is available.
+    /// HDR10+ / HLG / EAC3+JOC Atmos stream-copy, and software decode
+    /// for codecs Apple TV has no hardware decoder for (AV1 / VP9 /
+    /// MPEG-2 / VC-1 / MPEG-4 Part 2). The only VOD engine; routed
+    /// whenever a direct-play URL is available.
     case aether(url: URL, headers: [String: String]?)
 
     var description: String {
         switch self {
-        case .avPlayerDirect: return "AVPlayerDirect"
-        case .localRemux: return "LocalRemux"
         case .hls: return "HLS"
         case .aether: return "Aether"
         }
@@ -72,60 +68,23 @@ struct ContentRoutingContext: Sendable {
     let serverURL: URL
     let authToken: String
 
-    /// Whether this is live TV content
-    var isLiveTV: Bool = false
-
     /// Force HLS even if direct play is possible (for fallback)
     var forceHLS: Bool = false
 
-    /// Whether DV profile conversion is needed
-    var requiresProfileConversion: Bool = false
-
     /// Preferred playback policy. Defaults to direct-play-first for VOD.
     var playbackPolicy: PlaybackPolicy = .default
-
-    /// Use local FFmpeg remux instead of Plex HLS for non-native containers.
-    /// When true, MKV/DTS/TrueHD content is remuxed locally to fMP4 HLS
-    /// and served to AVPlayer via LocalRemuxServer — zero server involvement.
-    var useLocalRemux: Bool = false
 }
 
-/// Analyzes media metadata to choose the optimal playback pipeline.
+/// Analyzes media metadata to choose the playback pipeline.
 struct ContentRouter {
 
-    // MARK: - Audio Codec Compatibility
+    // MARK: - Video Codec Compatibility
 
-    /// Audio codecs that Apple TV can decode natively via AudioToolbox.
-    /// Content with these codecs can use DirectPlay (FFmpeg demuxes, AudioToolbox decodes).
-    static let nativeAudioCodecs: Set<String> = [
-        "aac", "ac3", "eac3", "ec-3",     // Dolby formats
-        "flac",                             // Lossless
-        "alac",                             // Apple Lossless
-        "mp3", "mp2",                       // MPEG audio
-        "pcm", "pcm_s16le", "pcm_s24le",  // PCM variants
-    ]
-
-    /// Audio codecs that require server-side transcode UNLESS FFmpeg audio decoding is available.
-    /// When FFmpegAudioDecoder is linked, these are decoded client-side to PCM instead.
-    static let transcodeRequiredCodecs: Set<String> = [
-        "dts", "dca",                           // DTS Core
-        "dts-hd", "dtshd",                      // DTS-HD (MA and HRA)
-        "truehd", "mlp",                        // Dolby TrueHD / MLP
-    ]
-
-    /// Audio codecs that can be decoded client-side via FFmpegAudioDecoder.
-    /// These overlap with transcodeRequiredCodecs — when FFmpeg is available,
-    /// client-side decoding takes priority over HLS transcode.
-    static let clientDecodableCodecs: Set<String> = [
-        "dts", "dca",                           // DTS Core
-        "dts-hd", "dtshd",                      // DTS-HD (MA and HRA)
-        "truehd", "mlp",                        // Dolby TrueHD / MLP
-    ]
-
-    /// Video codecs Apple TV cannot decode natively at any tvOS version
-    /// (no hardware decoder, AVSampleBuffer rejects the format). Content
-    /// using these codecs must be server-side transcoded — direct-play
-    /// would fail with "Cannot Load Video".
+    /// Video codecs Apple TV cannot decode natively at any tvOS version.
+    /// Aether software-decodes these on its sample-buffer backend, so they
+    /// still route to Aether — but the HLS fallback must force a video
+    /// TRANSCODE (not just a remux) or the fallback would hand AVPlayer
+    /// the same undecodable stream.
     ///
     /// Stored normalized (lowercased, hyphens/underscores stripped); the
     /// `requiresTranscode(videoCodec:)` helper applies the same normalization
@@ -141,41 +100,20 @@ struct ContentRouter {
 
     // MARK: - Route Decision
 
-    /// Determine the primary playback route for the given content.
-    /// Maintained for compatibility with existing call sites.
-    static func route(for context: ContentRoutingContext) -> PlaybackRoute {
-        plan(for: context).primary
-    }
-
     /// Determine the playback startup/fallback plan for the given content.
     ///
-    /// Three paths:
-    /// 1. **AVPlayer direct** — MP4/MOV with native audio, no DV P7
-    /// 2. **Local remux** — DV P7, HLG in non-native containers, or local remux-enabled content
-    /// 3. **Plex HLS** — unsupported video codecs, live TV, or fallback
+    /// Two paths:
+    /// 1. **Aether** — whenever a direct-play URL exists (all containers
+    ///    and codecs; DV P7 plays as HDR10 base). Plex HLS as fallback.
+    /// 2. **Plex HLS** — no direct-play URL, or `forceHLS`.
     static func plan(for context: ContentRoutingContext) -> PlaybackPlan {
-        let audioCodec = primaryAudioCodec(from: context.metadata) ?? "unknown"
         let container = context.metadata.Media?.first?.container ?? "unknown"
         var reasoning: [String] = []
+        let hls = buildHLSRoute(context: context)
 
-        // Live TV always uses Plex HLS
-        if context.isLiveTV {
-            reasoning.append("live_tv_requires_hls")
-            let hls = buildHLSRoute(context: context)
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → HLS (live TV)")
-            return PlaybackPlan(
-                policy: context.playbackPolicy,
-                primary: hls,
-                fallbacks: [],
-                reasoning: reasoning
-            )
-        }
-
-        // Force HLS fallback
         if context.forceHLS {
             reasoning.append("force_hls_requested")
-            let hls = buildHLSRoute(context: context)
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → HLS (forced)")
+            playerDebugLog("[ContentRouter] \(container) → HLS (forced)")
             return PlaybackPlan(
                 policy: context.playbackPolicy,
                 primary: hls,
@@ -184,120 +122,30 @@ struct ContentRouter {
             )
         }
 
-        // NOTE: codecs Apple TV can't decode natively (AV1, VP9, MPEG-2,
-        // VC-1, MPEG-4 Part 2) are NOT pre-routed to a server transcode:
-        // AetherEngine software-decodes them on its sample-buffer backend.
-        // requiresVideoTranscode(metadata:) still forces video conversion
-        // on the HLS fallback if the Aether load fails.
-
-        // Analyze content for remux requirements
-        let analysis = RemuxContentAnalyzer.analyze(metadata: context.metadata)
-        let hlsFallback = buildHLSRoute(context: context)
-        let isHLG = Self.isHLGContent(metadata: context.metadata)
-
-        // Aether is the only VOD engine: route ALL VOD to Aether. Its
-        // FFmpeg backend demuxes every container/codec (SW-decoding
-        // AV1/MPEG-2/VC-1; DV P7 plays as HDR10 base, losing the DV layer).
-        // Only falls through if there is no direct-play URL.
         if let aetherRoute = buildAetherRoute(context: context) {
             reasoning.append("aether,all-content")
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → Aether")
+            playerDebugLog("[ContentRouter] \(container) → Aether")
             return PlaybackPlan(
                 policy: context.playbackPolicy,
                 primary: aetherRoute,
-                fallbacks: [hlsFallback],
+                fallbacks: [hls],
                 reasoning: reasoning
             )
         }
 
-        // FFmpeg not available — can't do remux, and AVPlayer direct only works for native containers
-        if !FFmpegDemuxer.isAvailable {
-            if !analysis.needsRemux, let direct = buildAVPlayerDirectRoute(context: context) {
-                reasoning.append("ffmpeg_unavailable_but_native_container")
-                playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → AVPlayerDirect (FFmpeg unavailable, native container)")
-                return PlaybackPlan(
-                    policy: context.playbackPolicy,
-                    primary: direct,
-                    fallbacks: [hlsFallback],
-                    reasoning: reasoning
-                )
-            }
-            reasoning.append("ffmpeg_unavailable")
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → HLS (FFmpeg unavailable)")
-            return PlaybackPlan(
-                policy: context.playbackPolicy,
-                primary: hlsFallback,
-                fallbacks: [],
-                reasoning: reasoning
-            )
-        }
-
-        // Path 1: AVPlayer direct — native container + native audio + no DV P7.
-        // HLG is intentionally allowed here because AVPlayer owns the render
-        // path and gets tvOS's HLG handling.
-        if !analysis.needsRemux, let direct = buildAVPlayerDirectRoute(context: context) {
-            reasoning.append(contentsOf: analysis.reasoning)
-            if isHLG {
-                reasoning.append("video_is_hlg_hdr_use_avplayer_direct")
-            }
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → AVPlayerDirect")
-            return PlaybackPlan(
-                policy: context.playbackPolicy,
-                primary: direct,
-                fallbacks: [hlsFallback],
-                reasoning: reasoning
-            )
-        }
-
-        // Path 2: Local remux — FFmpeg demuxes locally, remuxes to fMP4 HLS for AVPlayer.
-        // Used when: user enabled local remux AND content needs remux, DV P7 conversion
-        // is needed, or HLG needs AVPlayer rendering while avoiding a server transcode.
-        if analysis.needsRemux, context.useLocalRemux || analysis.needsDVConversion || isHLG {
-            if let remuxRoute = buildLocalRemuxRoute(context: context, analysis: analysis) {
-                reasoning.append(contentsOf: analysis.reasoning)
-                if analysis.needsDVConversion {
-                    reasoning.append("local_remux_dv_conversion")
-                } else if isHLG {
-                    reasoning.append("local_remux_hlg_avplayer_render_path")
-                } else {
-                    reasoning.append("local_remux_user_enabled")
-                }
-                let reason = analysis.needsDVConversion ? "DV P7 conversion" : (isHLG ? "HLG AVPlayer render path" : "local remux enabled")
-                playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → LocalRemux (\(reason))")
-                return PlaybackPlan(
-                    policy: context.playbackPolicy,
-                    primary: remuxRoute,
-                    fallbacks: [hlsFallback],
-                    reasoning: reasoning
-                )
-            }
-        }
-
-        // Path 3: Plex HLS — server remuxes MKV→fMP4, transcodes DTS/TrueHD, etc.
-        if analysis.needsRemux {
-            reasoning.append(contentsOf: analysis.reasoning)
-            reasoning.append("plex_server_remux")
-            playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → HLS (server remux)")
-            return PlaybackPlan(
-                policy: context.playbackPolicy,
-                primary: hlsFallback,
-                fallbacks: [],
-                reasoning: reasoning
-            )
-        }
-
-        // Path 4: Plex HLS fallback
-        reasoning.append("fallback_to_hls")
-        playerDebugLog("[ContentRouter] \(container) | audio=\(audioCodec) → HLS (fallback)")
+        // No direct-play URL (missing Media/Part metadata).
+        reasoning.append("no_direct_play_url_fallback_to_hls")
+        playerDebugLog("[ContentRouter] \(container) → HLS (no direct-play URL)")
         return PlaybackPlan(
             policy: context.playbackPolicy,
-            primary: hlsFallback,
+            primary: hls,
             fallbacks: [],
             reasoning: reasoning
         )
     }
 
-    /// Check if a specific audio codec requires server-side transcode.
+    /// Check if a specific video codec requires server-side transcode on
+    /// the HLS (AVPlayer) path.
     static func requiresTranscode(videoCodec: String) -> Bool {
         let normalized = videoCodec.lowercased()
             .replacingOccurrences(of: "-", with: "")
@@ -306,10 +154,7 @@ struct ContentRouter {
     }
 
     /// Convenience: does this metadata's video stream require a
-    /// server-side transcode? Returns true only for unsupported codecs
-    /// (MPEG-2 / VC-1 / VP9 / AV1 / MPEG-4 Part 2). HLG is not a codec
-    /// transcode requirement; it is routed to AVPlayer direct/local remux
-    /// so tvOS owns HDR presentation without involving the server.
+    /// server-side transcode when played over the HLS fallback?
     static func requiresVideoTranscode(metadata: PlexMetadata) -> Bool {
         if let codec = primaryVideoCodec(from: metadata), !codec.isEmpty,
            requiresTranscode(videoCodec: codec) {
@@ -318,64 +163,8 @@ struct ContentRouter {
         return false
     }
 
-    /// Whether the primary video stream is HLG HDR. AVSampleBufferDisplayLayer
-    /// on tvOS can decode these frames but does not get the same platform HLG
-    /// presentation behavior as AVPlayer, so HLG is forced onto AVPlayer's
-    /// direct/local-remux render path.
-    static func isHLGContent(metadata: PlexMetadata) -> Bool {
-        guard let stream = primaryVideoStream(from: metadata),
-              let trc = stream.colorTrc?.lowercased() else {
-            return false
-        }
-        return trc.contains("hlg") || trc.contains("arib-std-b67")
-    }
-
-    private static func primaryVideoStream(from metadata: PlexMetadata) -> PlexStream? {
-        metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isVideo })
-    }
-
-    static func requiresTranscode(audioCodec: String) -> Bool {
-        let normalized = audioCodec.lowercased()
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-        return transcodeRequiredCodecs.contains(where: { codec in
-            let normalizedCodec = codec.replacingOccurrences(of: "-", with: "")
-                .replacingOccurrences(of: "_", with: "")
-            return normalized == normalizedCodec || normalized.hasPrefix(normalizedCodec)
-        })
-    }
-
-    /// Check if the audio codec can be decoded client-side via FFmpegAudioDecoder.
-    static func isClientDecodable(audioCodec: String) -> Bool {
-        let normalized = audioCodec.lowercased()
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-        return clientDecodableCodecs.contains(where: { codec in
-            let normalizedCodec = codec.replacingOccurrences(of: "-", with: "")
-                .replacingOccurrences(of: "_", with: "")
-            return normalized == normalizedCodec || normalized.hasPrefix(normalizedCodec)
-        })
-    }
-
-    /// Check if the audio codec is natively supported.
-    static func isNativeAudioCodec(_ codec: String) -> Bool {
-        let lower = codec.lowercased()
-        if lower == "opus" || lower.hasPrefix("opus") {
-            if #available(tvOS 17.0, iOS 17.0, *) {
-                return true
-            }
-            return false
-        }
-        return nativeAudioCodecs.contains(lower) ||
-               nativeAudioCodecs.contains(where: { lower.hasPrefix($0) })
-    }
-
-    // MARK: - Private: Audio Analysis
-
-    /// Extract the primary audio codec from PlexMetadata.
-    /// Extract the primary video codec from PlexMetadata. Used by both
-    /// the unsupported-codec routing override and the URL builder's
-    /// forceVideoTranscode plumbing.
+    /// Extract the primary video codec from PlexMetadata. Used by the
+    /// HLS URL builder's forceVideoTranscode plumbing.
     static func primaryVideoCodec(from metadata: PlexMetadata) -> String? {
         if let media = metadata.Media?.first, let codec = media.videoCodec {
             return codec
@@ -387,24 +176,9 @@ struct ContentRouter {
         return nil
     }
 
-    private static func primaryAudioCodec(from metadata: PlexMetadata) -> String? {
-        // First try media-level audioCodec
-        if let media = metadata.Media?.first, let codec = media.audioCodec {
-            return codec
-        }
-
-        // Fall back to first audio stream's codec
-        if let part = metadata.Media?.first?.Part?.first,
-           let audioStream = part.Stream?.first(where: { $0.isAudio }) {
-            return audioStream.codec
-        }
-
-        return nil
-    }
-
     // MARK: - Private: Route Building
 
-    /// Build direct Plex URL for raw file access (used by both AVPlayer direct and local remux).
+    /// Build the direct Plex URL for raw file access.
     private static func buildDirectPlayURL(context: ContentRoutingContext) -> (url: URL, headers: [String: String])? {
         guard let media = context.metadata.Media?.first,
               let part = media.Part?.first else {
@@ -424,24 +198,11 @@ struct ContentRouter {
         return (url, headers)
     }
 
-    /// Build AVPlayer direct route — AVPlayer opens Plex URL directly.
-    private static func buildAVPlayerDirectRoute(context: ContentRoutingContext) -> PlaybackRoute? {
-        guard let (url, headers) = buildDirectPlayURL(context: context) else { return nil }
-        return .avPlayerDirect(url: url, headers: headers)
-    }
-
     /// Build Aether route — Aether demuxes the source itself and remuxes
-    /// to HLS-fMP4 over loopback for AVPlayer. Takes the same direct-play
-    /// URL as `.avPlayerDirect`.
+    /// to HLS-fMP4 over loopback for AVPlayer.
     private static func buildAetherRoute(context: ContentRoutingContext) -> PlaybackRoute? {
         guard let (url, headers) = buildDirectPlayURL(context: context) else { return nil }
         return .aether(url: url, headers: headers)
-    }
-
-    /// Build local remux route — raw file URL passed to FFmpegRemuxSession.
-    private static func buildLocalRemuxRoute(context: ContentRoutingContext, analysis: RemuxAnalysis) -> PlaybackRoute? {
-        guard let (url, headers) = buildDirectPlayURL(context: context) else { return nil }
-        return .localRemux(url: url, headers: headers, analysis: analysis)
     }
 
     private static func buildHLSRoute(context: ContentRoutingContext) -> PlaybackRoute {

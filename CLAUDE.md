@@ -2,14 +2,14 @@
 
 Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player transport bar) are **UIKit**; SwiftUI remains for thin navigation shells, Music, Live TV slots, Settings, and the shared `MediaDetailView` navigation destination.
 
-The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg demux + HLS-fMP4 remux + AVPlayer, with HDR10+ / HLG / EAC3+JOC Atmos). It is the only player: VOD **and** Live TV. AVPlayer is also driven directly for the `avPlayerDirect` / `localRemux` / `hls` routes (natively-playable MP4s, the local HLS-remux path, and HLS transcode fallback); AetherPlayer wraps its own AVPlayer for the `aether` route. `ContentRouter.plan(...)` picks the VOD route per item. (The former custom FFmpeg-to-AVSampleBuffer engine, "Rivulet Player" / RPlayer, has been removed — see git history if you need the old pipeline.)
+The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg demux + HLS-fMP4 remux + AVPlayer, with HDR10+ / HLG / EAC3+JOC Atmos, plus a software sample-buffer backend for AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). It is the only player: VOD **and** Live TV. Video MUST render through the engine surface (`AetherVideoSurfaceView` → `engine.bind(view:)`), never an AVPlayerLayer on `currentAVPlayer`. The only other path is `hls`: AVPlayer on a Plex server transcode, used when no direct-play URL exists or as the fallback after an Aether startup failure. `ContentRouter.plan(...)` picks aether vs hls per item. (RPlayer and the localRemux/avPlayerDirect routes have been removed — see git history.)
 
 ## Quick Reference
 
 - **Platform**: tvOS 26+ (Apple TV)
 - **Language**: Swift 6
 - **UI Framework**: UIKit for the primary surfaces (see above); SwiftUI for the rest
-- **Video Player**: AetherPlayer for VOD and Live TV; AVPlayer driven directly for `avPlayerDirect` / `localRemux` / `hls` routes. See `Docs/RIVULET_PLAYER.md` for routing.
+- **Video Player**: AetherPlayer for VOD and Live TV; AVPlayer only for the `hls` route (server transcode, primary-when-no-direct-URL or Aether fallback). See `Docs/RIVULET_PLAYER.md`.
 - **Design Guide**: See `Docs/DESIGN_GUIDE.md` for UI/UX patterns
 
 ## Project Structure
@@ -24,9 +24,6 @@ Rivulet/
 │   │   ├── (PlexNetworkManager, PlexAuthManager, PlexDataStore, …)
 │   │   └── Playback/   # AetherPlayer + routing/remux (see Docs/RIVULET_PLAYER.md)
 │   │       ├── Pipeline/     # ContentRouter (routing decisions)
-│   │       ├── Remux/        # LocalRemuxServer, FFmpegRemuxSession (localRemux path)
-│   │       ├── FFmpeg/       # FFmpegDemuxer, URLSessionAVIOSource, FFmpegAudioDecoder/Encoder
-│   │       ├── Dovi/         # DoviProfileConverter, HEVCNALParser, LibdoviWrapper (remux DV conversion)
 │   │       └── Subtitles/    # SubtitleManager, SubtitleParser, SubtitleOverlayView, SubtitleClockSyncController
 │   ├── LiveTV/         # PlexLiveTVProvider, IPTVProvider, LiveTVDataStore
 │   ├── IPTV/           # M3UParser, XMLTVParser, DispatcharrService
@@ -84,7 +81,7 @@ Uses standard SwiftUI focus primitives with `FocusMemory` for section-level rest
 
 ### Video Player Architecture
 
-**AetherPlayer** (an adapter around AetherEngine) is the only player, used for both VOD and Live TV. It conforms to `PlayerProtocol` and drives an internally-created `AVPlayer` (republished as `currentAVPlayer`). For VOD, the app also drives a plain `AVPlayer` directly on the `avPlayerDirect` / `localRemux` / `hls` routes. `ContentRouter.plan(...)` returns a `PlaybackPlan { primary, fallbacks }`; the view model picks the path per route case. Canonical reference: `Docs/RIVULET_PLAYER.md`.
+**AetherPlayer** (an adapter around AetherEngine) is the only player, used for both VOD and Live TV. It conforms to `PlayerProtocol`; video renders through the engine surface via `AetherVideoSurfaceView` (`engine.bind(view:)`), which hosts whichever layer the active backend uses. The app drives a plain `AVPlayer` only on the `hls` route (Plex server transcode). `ContentRouter.plan(...)` returns a `PlaybackPlan { primary, fallbacks }`. Canonical reference: `Docs/RIVULET_PLAYER.md`.
 
 ```
 UniversalPlayerView (SwiftUI) + PlayerContainerViewController (UIKit transport bar)
@@ -93,9 +90,8 @@ UniversalPlayerViewModel  ← state, markers, post-video, NowPlaying, route chan
         │
    ContentRouter.plan(...) → PlaybackPlan { primary, fallbacks }
         │
-        ├── .avPlayerDirect / .hls  → AVPlayer (direct / server HLS transcode)
-        ├── .localRemux             → AVPlayer over LocalRemuxServer (FFmpegRemuxSession, HLS-fMP4 on localhost)
-        └── .aether                 → AetherPlayer (AetherEngine: FFmpeg demux + HLS-fMP4 remux + AVPlayer)
+        ├── .aether → AetherPlayer, rendered via AetherVideoSurfaceView (direct-play URL exists; the default)
+        └── .hls    → AVPlayer on Plex server transcode (no direct-play URL, or fallback after Aether failure)
 
 Live TV: MultiStreamViewModel / StreamSlotView instantiate AetherPlayer() per grid slot,
          rendered via AetherSlotPlayerView (AVPlayerLayer). Up to 4 concurrent slots.
@@ -105,18 +101,14 @@ Key components:
 - **`UniversalPlayerView`** / **`UniversalPlayerViewModel`**: SwiftUI container + state. Handles markers, post-video, route changes, NowPlaying. The transport bar itself is UIKit (`Views/Player/UIKit/`).
 - **`AetherPlayer`**: `PlayerProtocol` adapter around AetherEngine. Exposes Combine publishers for state, audio/subtitle tracks, and `currentAVPlayer`. Handles HDR10+ / HLG / EAC3+JOC Atmos. `setMuted` persists across Aether's internal player swaps (used by the Live TV grid).
 - **`ContentRouter`**: routing decisions → `PlaybackPlan`.
-- **`LocalRemuxServer` + `FFmpegRemuxSession`**: the `localRemux` path — remuxes MKV / DV P7 / DTS / TrueHD to HLS-fMP4 on localhost for AVPlayer. Uses `DoviProfileConverter` for DV profile conversion.
-- **`FFmpegDemuxer`** (+ `URLSessionAVIOSource`, `HEVCNALParser`): container analysis / demux used by the router and remux path.
-- **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: text (SRT/ASS/VTT) and bitmap (PGS/DVB) subtitle rendering for the VOD paths that don't render subs natively.
+- **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: subtitle rendering for the `hls` route. On the aether route, subtitles come from the engine's cue publishers rendered by `AetherSubtitleOverlayView` (fed via `SubtitleModel`).
 
 **Playback States** (PlayerProtocol): `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
 
 #### Routing policy (VOD)
-1. `ContentRouter.plan(...)` returns `PlaybackPlan { primary, fallbacks }`. Route cases: `.avPlayerDirect`, `.localRemux`, `.hls`, `.aether`.
-2. `.avPlayerDirect` — natively-playable MP4 + native audio, opened directly by AVPlayer.
-3. `.localRemux` — MKV / DV P7 / DTS / TrueHD, served via `LocalRemuxServer` over HLS-fMP4 on localhost to AVPlayer.
-4. `.aether` — routed to AetherPlayer whenever a direct-play URL is available (AetherEngine handles demux + remux + HDR internally).
-5. `.hls` — server-side transcode; also the fallback after a startup failure on any other route.
+1. `ContentRouter.plan(...)` returns `PlaybackPlan { primary, fallbacks }`. Route cases: `.aether`, `.hls`.
+2. `.aether` — whenever a direct-play URL is available (AetherEngine handles demux + remux + HDR internally; software-decodes AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). DV P7 plays as HDR10 base.
+3. `.hls` — server-side transcode; primary when no direct-play URL exists, and the fallback after an Aether startup failure. `requiresVideoTranscode` codecs force a video transcode (not just remux) on this route.
 
 #### Live TV
 Routes through **AetherPlayer** per grid slot (`MultiStreamViewModel` / `StreamSlotView` instantiate `AetherPlayer()`, rendered via `AetherSlotPlayerView`). The grid supports up to 4 concurrent slots (opt-in past 2). HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
@@ -233,11 +225,8 @@ xcodebuild -scheme Rivulet -destination 'platform=tvOS,name=My Apple TV' build
 | Player (AetherEngine adapter) | `Services/Plex/Playback/AetherPlayer.swift` |
 | Live TV slot render surface | `Views/LiveTV/AetherSlotPlayerView.swift` |
 | Routing decisions | `Services/Plex/Playback/Pipeline/ContentRouter.swift` |
-| Local HLS remux server | `Services/Plex/Playback/Remux/LocalRemuxServer.swift` |
-| FFmpeg remux session | `Services/Plex/Playback/Remux/FFmpegRemuxSession.swift` |
-| Demuxer | `Services/Plex/Playback/FFmpeg/FFmpegDemuxer.swift` |
-| HTTP source for FFmpeg | `Services/Plex/Playback/FFmpeg/URLSessionAVIOSource.swift` |
-| DV profile conversion (remux) | `Services/Plex/Playback/Dovi/DoviProfileConverter.swift` |
+| Aether render surface | `Views/Player/Aether/AetherVideoSurfaceView.swift` |
+| Aether subtitle overlay | `Views/Player/Aether/AetherSubtitleOverlayView.swift` |
 | Subtitle pipeline | `Services/Plex/Playback/Subtitles/SubtitleManager.swift` |
 | Focus memory | `Services/Focus/FocusMemory.swift` |
 | Plex API | `Services/Plex/PlexNetworkManager.swift` |
@@ -301,16 +290,11 @@ Good code that adds the wrong thing is still a no. A verdict of MERGE requires b
 
 ## Player (AetherPlayer / AVPlayer) on tvOS
 
-VOD is served by AVPlayer (direct / HLS / localRemux) or AetherPlayer (`aether` route); Live TV runs on AetherPlayer per grid slot. AetherEngine does its own demux + HLS-fMP4 remux + HDR handling internally. Rivulet's remaining FFmpeg layer serves the `localRemux` path and container analysis for routing.
-
-### localRemux path
-- `LocalRemuxServer` + `FFmpegRemuxSession` remux MKV / DV P7 / DTS / TrueHD to HLS-fMP4 on localhost, which AVPlayer consumes.
-- `URLSessionAVIOSource` provides parallel ranged GETs for http(s) sources (FFmpeg's built-in HTTP is throughput-limited on tvOS, ~7 Mbps — insufficient for 4K).
-- `FFmpegDemuxer` (libavformat) does container analysis / demux for the router and remux path.
+VOD is served by AetherPlayer (`aether` route, the default) or AVPlayer (`hls` route: server transcode). Live TV runs on AetherPlayer per grid slot with `LoadOptions.isLive`. AetherEngine does its own demux + HLS-fMP4 remux + HDR handling internally; Rivulet has no app-level FFmpeg layer anymore (the packages are linked transitively through AetherEngine only).
 
 ### HDR / DV
-- Display switching uses `DisplayCriteriaManager` → `AVDisplayManager` (tvOS Match Content for frame rate + dynamic range).
-- DV profile conversion (P7 MEL, P8.6 → P8.1) for the remux path: `HEVCNALParser` extracts the RPU NAL (type 62), `LibdoviWrapper` rewrites the profile, parser injects it back. See `Services/Plex/Playback/Dovi/`. (AetherEngine handles DV on its own route.)
+- Aether drives `AVDisplayManager.preferredDisplayCriteria` itself (host `DisplayCriteriaManager` stands down on the aether route).
+- DV P5 / P8.1 play with Dolby Vision via dvh1+dvcC sample entries; DV P7 plays as HDR10 base (the localRemux P7→P8 conversion path was removed).
 
 ## Plex Discover API
 
@@ -352,9 +336,8 @@ Without these, Plex returns errors or empty responses and the demuxer fails to o
 | Error | Likely Cause |
 |-------|-------------|
 | `FFmpeg avformat_open_input failed` | Bad stream URL, network issue, missing transcode params, or Plex returned an HTML error page instead of a stream |
-| `Demuxer: no streams found` / `unsupported codec` | Wrong container or codec we don't route (check `FFmpegDemuxer` stream discovery) |
+| `Demuxer: no streams found` / `unsupported codec` | AetherEngine probe failure — check the engine's demux logs |
 | `HLS transcode session failed` | Incomplete transcode URL parameters |
 | `HTTP 500 on /hubs` | Plex server issue (not client-side) |
 | `NSURLErrorDomain -999 cancelled` | User navigated away, request timeout |
-| localRemux stalls at 4K but works at 1080p | FFmpeg HTTP protocol bottleneck; verify `URLSessionAVIOSource` is in use for http(s) |
 | Aether/AVPlayer startup fatal → auto HLS fallback | Expected: ContentRouter falls back to `.hls` once at current playback time |
