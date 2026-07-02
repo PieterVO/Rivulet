@@ -1227,9 +1227,11 @@ struct UniversalPlayerView: View {
                 inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
             }
         case .up:
-            // Cancel scrubbing on up
+            // Scrubbing: snap to the next/previous chapter boundary in the
+            // direction of travel. Controls visible: hand focus to the
+            // transport bar's buttons. Otherwise: surface the controls.
             if viewModel.isScrubbing {
-                inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
+                viewModel.chapterSnap()
             } else if viewModel.showControls {
                 viewModel.enterControlsFocus(from: .up)
             } else {

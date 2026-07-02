@@ -2365,6 +2365,24 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Chapter start times in seconds, derived from Plex chapter metadata.
+    var chapterStartTimes: [TimeInterval] {
+        (metadata.Chapter ?? []).compactMap { chapter in
+            chapter.startTimeOffset.map { TimeInterval($0) / 1000.0 }
+        }
+    }
+
+    /// Snap the scrub position to the next chapter boundary in the
+    /// direction of travel (shuttle direction; forward when idle).
+    func chapterSnap() {
+        guard isScrubbing else { return }
+        let forward = scrubSpeed >= 0
+        guard let target = ChapterNavigator.snapTarget(
+            from: scrubTime, chapterStarts: chapterStartTimes, forward: forward) else { return }
+        scrubTime = min(max(0, target), duration)
+        loadThumbnail(for: scrubTime)
+    }
+
     /// Filmstrip frames for the scrubber morph. Empty part → all nil.
     func filmstripImages(times: [TimeInterval], maxPixelWidth: CGFloat) async -> [UIImage?] {
         guard let partId = metadata.Media?.first?.Part?.first?.id else {

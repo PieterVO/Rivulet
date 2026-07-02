@@ -72,6 +72,13 @@ final class PlayerProgressBarView: UIView {
     private let livePositionLine = UIView()
     private let calloutLabel = UILabel()
 
+    // Chapter seam hairlines, drawn at each chapter start's x position
+    // while the strip is open. Rebuilt only when chapters/width change.
+    private var chapterSeams: [UIView] = []
+    private var lastChapters: [PlexChapter] = []
+    private var lastSeamsChapterIds: [Int?] = []
+    private var lastSeamWidth: CGFloat = 0
+
     /// Supplies filmstrip frames for `times` (evenly spaced across the
     /// track width), downsampled to `maxPixelWidth`. Wired by
     /// PlayerTransportBarView to `UniversalPlayerViewModel.filmstripImages`.
@@ -244,12 +251,14 @@ final class PlayerProgressBarView: UIView {
         scrubTime: TimeInterval,
         scrubStepLabelText: String?,
         scrubThumbnail: UIImage?,
-        markers: [PlexMarker]
+        markers: [PlexMarker],
+        chapters: [PlexChapter]
     ) {
         let wasScrubbing = self.isScrubbing
         self.isScrubbing = isScrubbing
         self.duration = duration
         self.lastMarkers = markers
+        self.lastChapters = chapters
 
         let displayTime = isScrubbing ? scrubTime : currentTime
         let progress: Double = duration > 0 ? min(1, max(0, displayTime / duration)) : 0
@@ -399,6 +408,15 @@ final class PlayerProgressBarView: UIView {
         stripTiles.forEach { $0.removeFromSuperview() }
         stripTiles.removeAll()
 
+        // Chapters change per item — clear cached seam state so the next
+        // scrub rebuilds seams from the new item's chapters rather than
+        // reusing stale x positions from the previous title.
+        chapterSeams.forEach { $0.removeFromSuperview() }
+        chapterSeams.removeAll()
+        lastChapters = []
+        lastSeamsChapterIds = []
+        lastSeamWidth = 0
+
         let wasStripOpen = stripContainer.alpha > 0
         guard wasStripOpen else { return }
 
@@ -443,11 +461,64 @@ final class PlayerProgressBarView: UIView {
         livePositionLine.isHidden = false
         livePositionLine.frame = CGRect(x: liveX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
 
-        calloutLabel.text = Self.formatTime(duration > 0 ? Double(progress) * duration : 0)
+        rebuildChapterSeamsIfNeeded(width: width)
+
+        let displayTime = duration > 0 ? Double(progress) * duration : 0
+        let chapterName = chapterName(at: displayTime)
+        if let chapterName {
+            calloutLabel.text = "\(Self.formatTime(displayTime)) · \(chapterName)"
+        } else {
+            calloutLabel.text = Self.formatTime(displayTime)
+        }
         calloutLabel.sizeToFit()
         let halfLabel = calloutLabel.bounds.width / 2
         let clampedCenter = min(max(playheadX, halfLabel), max(halfLabel, width - halfLabel))
         calloutLabel.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - calloutLabel.bounds.height / 2)
+    }
+
+    /// The chapter tag whose range contains `time`, if it has a non-empty name.
+    private func chapterName(at time: TimeInterval) -> String? {
+        for chapter in lastChapters {
+            guard let startMs = chapter.startTimeOffset else { continue }
+            let start = TimeInterval(startMs) / 1000.0
+            let end = chapter.endTimeOffset.map { TimeInterval($0) / 1000.0 } ?? duration
+            guard time >= start && time < end else { continue }
+            guard let tag = chapter.tag?.trimmingCharacters(in: .whitespacesAndNewlines), !tag.isEmpty else {
+                return nil
+            }
+            return tag
+        }
+        return nil
+    }
+
+    /// Rebuilds the chapter seam hairlines only when the chapter list or
+    /// track width has changed, so this is cheap to call on every strip
+    /// layout pass while scrubbing.
+    private func rebuildChapterSeamsIfNeeded(width: CGFloat) {
+        guard lastChapters.map(\.id) != lastSeamsChapterIds || width != lastSeamWidth else { return }
+        lastSeamsChapterIds = lastChapters.map(\.id)
+        lastSeamWidth = width
+
+        chapterSeams.forEach { $0.removeFromSuperview() }
+        chapterSeams.removeAll()
+
+        guard duration > 0 else { return }
+        let seamWidth: CGFloat = 1
+        for chapter in lastChapters {
+            guard let startMs = chapter.startTimeOffset else { continue }
+            let start = TimeInterval(startMs) / 1000.0
+            guard start > 0 else { continue }  // no seam at the very start of the strip
+            let x = width * CGFloat(min(1, max(0, start / duration)))
+            let seam = UIView()
+            seam.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+            seam.frame = CGRect(x: x - seamWidth / 2, y: 0, width: seamWidth, height: Metrics.stripHeight)
+            stripContainer.insertSubview(seam, at: 0)
+            chapterSeams.append(seam)
+        }
+        // Seams sit above the tiles but below the playhead/live lines.
+        chapterSeams.forEach { stripContainer.bringSubviewToFront($0) }
+        stripContainer.bringSubviewToFront(playheadLine)
+        stripContainer.bringSubviewToFront(livePositionLine)
     }
 
     private func renderMarkers(_ markers: [PlexMarker], duration: TimeInterval, trackWidth: CGFloat, trackHeight: CGFloat, bottomAligned: Bool) {

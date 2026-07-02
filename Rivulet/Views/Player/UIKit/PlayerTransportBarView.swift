@@ -196,7 +196,8 @@ final class PlayerTransportBarView: UIView {
                     scrubTime: scrubTime,
                     scrubStepLabelText: viewModel.scrubStepLabel,
                     scrubThumbnail: viewModel.scrubThumbnail,
-                    markers: viewModel.metadata.allMarkers
+                    markers: viewModel.metadata.allMarkers,
+                    chapters: viewModel.metadata.Chapter ?? []
                 )
                 self.setChrome(hidden: isScrubbing)
             }
