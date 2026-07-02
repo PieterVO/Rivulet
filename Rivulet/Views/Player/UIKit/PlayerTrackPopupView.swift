@@ -135,12 +135,32 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
         return rowButtons.isEmpty ? [self] : [rowButtons[0]]
     }
 
+    /// Real focus trap: preferredFocusEnvironments only steers the
+    /// initial landing; directional presses can still walk focus out to
+    /// the controls behind the popup. Fence them while presented.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        if window != nil, let next = context.nextFocusedView, !next.isDescendant(of: self) {
+            return false
+        }
+        return super.shouldUpdateFocus(in: context)
+    }
+
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .menu {
             dismiss()
             return
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    // The ended phase of the same Menu press must be swallowed too:
+    // if it bubbles, the system's default menu behavior invokes
+    // dismiss() on the player and a second unwind layer peels.
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .menu {
+            return
+        }
+        super.pressesEnded(presses, with: event)
     }
 }
 

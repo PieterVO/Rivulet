@@ -348,11 +348,31 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
     // presses via the inherited UIScrollView focus-scroll behavior.
     override var canBecomeFocused: Bool { true }
 
+    /// Same fence as PlayerTrackPopupView: keep focus inside while
+    /// presented (directional presses would otherwise walk it back to
+    /// the transport controls behind the popup).
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        if window != nil, let next = context.nextFocusedView, !next.isDescendant(of: self) {
+            return false
+        }
+        return super.shouldUpdateFocus(in: context)
+    }
+
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .menu {
             dismiss()
             return
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    // Swallow the ended phase of the consumed Menu press; letting it
+    // bubble triggers the system's default dismiss and peels a second
+    // unwind layer.
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .menu {
+            return
+        }
+        super.pressesEnded(presses, with: event)
     }
 }

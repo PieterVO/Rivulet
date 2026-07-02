@@ -258,7 +258,13 @@ class PlayerContainerViewController: UIViewController {
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
-            if press.type == .menu && isHandlingMenuPress {
+            if press.type == .menu {
+                // Menu is always handled at the began phase, either by a
+                // popup or by handleMenuButton. If focus moved mid-press
+                // (a popup closed itself), the ended phase arrives on a
+                // responder chain that never saw the began - letting it
+                // bubble triggers the system's default dismiss and peels
+                // an extra unwind layer (focus "goes to nil").
                 isHandlingMenuPress = false
                 return
             }

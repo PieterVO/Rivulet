@@ -380,8 +380,19 @@ final class RemoteInputHandler: ObservableObject {
         // playhead. Play/pause and back stay meaningful.
         if isControlsFocusCheck?() == true {
             switch action {
-            case .play, .pause, .playPause, .back:
-                break
+            case .play, .pause, .playPause:
+                // The keyboard's Enter mirrors Select (the same press is
+                // already delivered to the focused control as a UIPress);
+                // only real play/pause buttons pass through.
+                if source == .keyboard {
+                    return
+                }
+            case .back:
+                // Menu always reaches PlayerContainerViewController through
+                // the responder chain, which owns the unwind order (popup ->
+                // focus mode -> controls -> dismiss). The GameController /
+                // keyboard mirrors of the same press would double-peel.
+                return
             default:
                 return
             }
