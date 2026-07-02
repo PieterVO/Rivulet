@@ -68,9 +68,6 @@ struct ContentRoutingContext: Sendable {
     let serverURL: URL
     let authToken: String
 
-    /// Force HLS even if direct play is possible (for fallback)
-    var forceHLS: Bool = false
-
     /// Preferred playback policy. Defaults to direct-play-first for VOD.
     var playbackPolicy: PlaybackPolicy = .default
 }
@@ -105,22 +102,11 @@ struct ContentRouter {
     /// Two paths:
     /// 1. **Aether** — whenever a direct-play URL exists (all containers
     ///    and codecs; DV P7 plays as HDR10 base). Plex HLS as fallback.
-    /// 2. **Plex HLS** — no direct-play URL, or `forceHLS`.
+    /// 2. **Plex HLS** — no direct-play URL.
     static func plan(for context: ContentRoutingContext) -> PlaybackPlan {
         let container = context.metadata.Media?.first?.container ?? "unknown"
         var reasoning: [String] = []
         let hls = buildHLSRoute(context: context)
-
-        if context.forceHLS {
-            reasoning.append("force_hls_requested")
-            playerDebugLog("[ContentRouter] \(container) → HLS (forced)")
-            return PlaybackPlan(
-                policy: context.playbackPolicy,
-                primary: hls,
-                fallbacks: [],
-                reasoning: reasoning
-            )
-        }
 
         if let aetherRoute = buildAetherRoute(context: context) {
             reasoning.append("aether,all-content")
