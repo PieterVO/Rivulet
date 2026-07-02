@@ -110,14 +110,14 @@ final class PlayerFocusCardView: UIView {
         pausedLabel.textColor = UIColor.white.withAlphaComponent(0.75)
         pausedLabel.isHidden = true
 
-        seriesLabel.font = .systemFont(ofSize: 19, weight: .semibold)
+        seriesLabel.font = .systemFont(ofSize: 23, weight: .medium)
         seriesLabel.textColor = UIColor.white.withAlphaComponent(0.7)
 
         titleLabel.font = .systemFont(ofSize: 48, weight: .bold)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 0
 
-        metaLabel.font = .systemFont(ofSize: 19, weight: .regular)
+        metaLabel.font = .systemFont(ofSize: 21, weight: .medium)
         metaLabel.textColor = UIColor.white.withAlphaComponent(0.7)
 
         let metadataStack = UIStackView(arrangedSubviews: [pausedLabel, seriesLabel, titleLabel, metaLabel])
@@ -165,7 +165,7 @@ final class PlayerFocusCardView: UIView {
         subtitlesButton.onPress = { [weak self] in self?.onSubtitles?() }
         audioButton.onPress = { [weak self] in self?.onAudio?() }
         infoButton.onPress = { [weak self] in self?.onInfo?() }
-        skipBackButton.onLongPress = { [weak self] in self?.onReplayLongPress?() }
+        subtitlesButton.onLongPress = { [weak self] in self?.onReplayLongPress?() }
     }
 
     // MARK: - Content API
@@ -220,11 +220,6 @@ final class PlayerFocusCardView: UIView {
     /// left focus engine (right walks controls row, then wraps; up bounces
     /// to metadata); Down with focused button engages seek mode.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses where press.type == .menu {
-            // Dismiss card focus (let container handle menu routing)
-            // TODO(task-3): wired by PlayerContainerViewController dismissal routing
-            return
-        }
         // Right/left/up handled by focus engine; Down with control focused
         // (nothing below) routes to seek mode container handler.
         for press in presses where press.type == .downArrow {
@@ -244,6 +239,8 @@ final class PlayerPrimaryButton: UIControl {
     private let label = UILabel()
     private let iconView = UIImageView()
     private let row = UIStackView()
+
+    override var canBecomeFocused: Bool { true }
 
     init() {
         super.init(frame: .zero)
