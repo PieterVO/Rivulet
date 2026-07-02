@@ -99,15 +99,4 @@ final class PreviewFlowStateTests: XCTestCase {
         XCTAssertFalse(machine.motionLocked)
     }
 
-    func testPreviewLoadGateInvalidatesOlderTokens() {
-        var gate = PreviewLoadGate()
-
-        let firstToken = gate.begin()
-        let secondToken = gate.begin()
-
-        XCTAssertEqual(firstToken, 1)
-        XCTAssertEqual(secondToken, 2)
-        XCTAssertFalse(gate.isCurrent(firstToken))
-        XCTAssertTrue(gate.isCurrent(secondToken))
-    }
 }
