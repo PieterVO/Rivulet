@@ -65,6 +65,10 @@ final class PlayerTransportBarView: UIView {
 
     var hasActivePopup: Bool { activePopup != nil }
 
+    /// The presented popup view, for the container's focus routing
+    /// (PlayerContainerViewController.preferredFocusEnvironments).
+    var activePopupView: UIView? { activePopup }
+
     func dismissActivePopup() {
         activePopup?.dismiss()
     }

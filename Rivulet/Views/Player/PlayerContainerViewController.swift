@@ -151,12 +151,18 @@ class PlayerContainerViewController: UIViewController {
         return true
     }
 
-    /// While controls-focus mode is active, prefer the transport bar's
-    /// buttons (the bar itself remembers which one). Popups run their
-    /// own focus trap, so stand down while one is up.
+    /// Focus routing for the UIKit transport layer. An open popup owns
+    /// focus outright (its preferredFocusEnvironments pick the selected
+    /// row); otherwise controls-focus mode prefers the transport bar's
+    /// buttons (the bar itself remembers which one). The popup MUST be
+    /// routed from here: a focus request from the popup itself is
+    /// ignored by the focus system because the popup does not contain
+    /// the currently focused view.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if viewModel?.controlsFocusActive == true,
-           let bar = transportBar, !bar.hasActivePopup {
+        if let popup = transportBar?.activePopupView, popup.window != nil {
+            return [popup]
+        }
+        if viewModel?.controlsFocusActive == true, let bar = transportBar {
             return [bar]
         }
         return super.preferredFocusEnvironments
@@ -295,6 +301,17 @@ class PlayerContainerViewController: UIViewController {
         // Cancel intro skip countdown if active (highest priority)
         if vm.introSkipCountdownSeconds > 0 {
             vm.cancelIntroSkipCountdown()
+            blockDismissTemporarily()
+            return
+        }
+
+        // Close an open popup before anything else in the unwind chain.
+        // The popup consumes Menu itself when one of its rows is focused;
+        // this is the container-level backstop so a popup can never be
+        // orphaned by the .back chain (which doesn't know about popups).
+        if vm.postVideoState == .hidden, !vm.isScrubbing,
+           transportBar?.hasActivePopup == true {
+            transportBar?.dismissActivePopup()
             blockDismissTemporarily()
             return
         }

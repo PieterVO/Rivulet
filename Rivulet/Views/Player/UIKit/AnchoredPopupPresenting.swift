@@ -63,18 +63,29 @@ extension AnchoredPopupPresenting {
             self.transform = .identity
         }
         UIAccessibility.post(notification: .screenChanged, argument: self)
+        // Focus must be requested from an ancestor of BOTH the popup and
+        // the currently focused control - a request from the popup
+        // itself is ignored because it doesn't contain focus. The
+        // container's focus routing (PlayerContainerViewController.
+        // preferredFocusEnvironments) points at the active popup.
+        container.layoutIfNeeded()
         UIView.performWithoutAnimation {
-            self.setNeedsFocusUpdate()
-            self.updateFocusIfNeeded()
+            container.setNeedsFocusUpdate()
+            container.updateFocusIfNeeded()
         }
     }
 
     private func dismissAnchored() {
+        let host = superview
         onDismiss?()
         UIView.animate(withDuration: 0.15, animations: {
             self.alpha = 0
         }, completion: { _ in
             self.removeFromSuperview()
+            // Re-route focus back to the control that opened the popup
+            // (the transport bar remembers it).
+            host?.setNeedsFocusUpdate()
+            host?.updateFocusIfNeeded()
         })
     }
 }
