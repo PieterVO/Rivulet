@@ -1232,6 +1232,8 @@ struct UniversalPlayerView: View {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
             } else if viewModel.showControls {
                 viewModel.enterControlsFocus(from: .up)
+            } else {
+                inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
             }
         @unknown default:
             break
