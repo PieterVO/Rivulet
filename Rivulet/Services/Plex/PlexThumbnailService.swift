@@ -7,6 +7,7 @@
 
 import Foundation
 import UIKit
+import ImageIO
 
 /// Service for fetching video preview thumbnails from Plex
 @MainActor
@@ -56,6 +57,37 @@ final class PlexThumbnailService {
         }
 
         return nil
+    }
+
+    /// Images for a filmstrip: one per requested time, aligned with
+    /// `times`, nil where no BIF exists. Dedupes repeated frame indices
+    /// and decodes off the main actor.
+    func filmstrip(partId: Int, times: [TimeInterval], maxPixelWidth: CGFloat,
+                   serverURL: String, authToken: String) async -> [UIImage?] {
+        guard !times.isEmpty else { return [] }
+        // Reuse getThumbnail's load path to populate the cache.
+        if bifCache[partId] == nil {
+            _ = await getThumbnail(partId: partId, time: times[0],
+                                   serverURL: serverURL, authToken: authToken)
+        }
+        guard let bif = bifCache[partId] else { return times.map { _ in nil } }
+
+        let indices = times.map { bif.frameIndex(at: $0) }
+        let uniqueIndices = Set(indices.compactMap { $0 })
+        let payloads: [(Int, Data)] = uniqueIndices.map { ($0, bif.frames[$0].imageData) }
+        let width = maxPixelWidth
+
+        let decoded: [Int: UIImage] = await Task.detached(priority: .userInitiated) {
+            var result: [Int: UIImage] = [:]
+            for (index, payload) in payloads {
+                if let image = decodeBIFFrame(payload, maxPixelWidth: width) {
+                    result[index] = image
+                }
+            }
+            return result
+        }.value
+
+        return indices.map { $0.flatMap { decoded[$0] } }
     }
 
     /// Preload BIF data for a part
@@ -185,13 +217,13 @@ private class TrustingSessionDelegate: NSObject, URLSessionDelegate {
 // MARK: - BIF Data Structure
 
 /// Parsed BIF (Base Index Frames) file data
-struct BIFData {
+nonisolated struct BIFData: Sendable {
     let intervalMs: UInt32
     let frames: [BIFFrame]
 
     var frameCount: Int { frames.count }
 
-    struct BIFFrame {
+    struct BIFFrame: Sendable {
         let timestamp: UInt32  // Milliseconds
         let imageData: Data
     }
@@ -270,29 +302,35 @@ struct BIFData {
         self.frames = frames
     }
 
+    /// Nearest frame index for a playback time. O(1): Plex BIF timestamps
+    /// are frame numbers; real time = timestamp * intervalMs.
+    func frameIndex(at time: TimeInterval) -> Int? {
+        guard !frames.isEmpty else { return nil }
+        let interval = TimeInterval(intervalMs) / 1000.0
+        guard interval > 0 else { return 0 }
+        let idx = Int((time / interval).rounded())
+        return min(max(idx, 0), frames.count - 1)
+    }
+
     /// Get thumbnail for a specific time
     func thumbnail(at time: TimeInterval) -> UIImage? {
-        let timeMs = UInt32(time * 1000)
-
-        // Find the closest frame
-        // BIF timestamps must be multiplied by intervalMs to get real time
-        var bestFrame: BIFFrame?
-        var bestDiff = UInt32.max
-
-        for frame in frames {
-            // Calculate the real timestamp for this frame
-            let frameRealTimeMs = frame.timestamp * intervalMs
-            let diff = timeMs > frameRealTimeMs ? timeMs - frameRealTimeMs : frameRealTimeMs - timeMs
-            if diff < bestDiff {
-                bestDiff = diff
-                bestFrame = frame
-            }
-        }
-
-        guard let frame = bestFrame else {
-            return nil
-        }
-
-        return UIImage(data: frame.imageData)
+        guard let index = frameIndex(at: time) else { return nil }
+        return UIImage(data: frames[index].imageData)
     }
+}
+
+/// Downsampling JPEG decode, safe to call off-main (see the Swift 6
+/// decode-trap memory: nonisolated + Sendable, not Task.detached with
+/// captured MainActor state).
+nonisolated func decodeBIFFrame(_ data: Data, maxPixelWidth: CGFloat) -> UIImage? {
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixelWidth,
+        kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+          let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        return nil
+    }
+    return UIImage(cgImage: cgImage)
 }
