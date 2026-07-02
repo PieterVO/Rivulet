@@ -388,6 +388,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Metadata
 
     private(set) var metadata: PlexMetadata
+    /// Bumped whenever `metadata` is swapped to a different playable item
+    /// on this same view-model instance (e.g. `playNextEpisode()`), as
+    /// opposed to in-place field fills like `fetchFullMetadataIfNeeded()`
+    /// completing parent keys for the *same* item. UI that caches
+    /// per-item state (e.g. the progress bar's filmstrip tiles) should
+    /// observe this to know when to reset, since `metadata` itself isn't
+    /// `@Published` and its `ratingKey` is the only reliable identity
+    /// signal across a swap.
+    @Published private(set) var itemGeneration = 0
     var title: String { metadata.title ?? "Unknown" }
     var subtitle: String? {
         if metadata.type == "episode" {
@@ -3648,6 +3657,10 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Use preloaded metadata if available (has markers), otherwise use fetched next episode
         metadata = preloadedNextMetadata ?? next
+        // metadata isn't @Published (its ratingKey is the only identity
+        // signal), so bump this explicitly for anything that caches
+        // per-item state and needs to reset across the swap.
+        itemGeneration += 1
 
         // Reset start offset so next episode starts from beginning (not resume position)
         startOffset = nil

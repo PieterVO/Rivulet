@@ -109,6 +109,10 @@ final class PlayerProgressBarView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        stripLoadTask?.cancel()
+    }
+
     private func setupViews() {
         clipsToBounds = false
 
@@ -285,6 +289,15 @@ final class PlayerProgressBarView: UIView {
         renderMarkers(markers, duration: duration, trackWidth: width,
                       trackHeight: stripOpen ? 4 : trackHeight, bottomAligned: stripOpen)
 
+        // stripContainer's opaque tiles are a sibling of markersContainer
+        // inside trackBackground; when the strip is open it must sit
+        // behind the marker band (a 4pt strip pinned to the bottom edge)
+        // rather than covering it. At rest / thin-bar, stripContainer is
+        // fully transparent (alpha 0) so ordering there doesn't matter,
+        // but bring markersContainer back to front so it doesn't stay
+        // trapped behind stripContainer's view hierarchy once raised.
+        trackBackground.bringSubviewToFront(markersContainer)
+
         if stripOpen {
             layoutStripOverlay(progress: progress, currentProgress: currentProgress, width: width)
         }
@@ -367,7 +380,40 @@ final class PlayerProgressBarView: UIView {
         currentTimeLabel.isHidden = true
         calloutLabel.isHidden = false
         renderMarkers(lastMarkers, duration: duration, trackWidth: width, trackHeight: 4, bottomAligned: true)
+        trackBackground.bringSubviewToFront(markersContainer)
         layoutStripOverlay(progress: lastProgress, currentProgress: lastCurrentProgress, width: width)
+    }
+
+    /// Clears all cached filmstrip state so the next scrub re-fetches
+    /// frames from scratch. Must be called whenever the view model swaps
+    /// to a different playable item (e.g. auto-advancing to the next
+    /// episode) on this same, reused `PlayerProgressBarView` instance —
+    /// otherwise `stripLoaded` stays sticky and the old item's tiles are
+    /// shown instantly on the next scrub. Safe to call mid-scrub: if the
+    /// strip is currently open, it's closed back to the thin-bar rest
+    /// state first so nothing is left showing stale frames.
+    func resetFilmstrip() {
+        stripLoadTask?.cancel()
+        stripLoadTask = nil
+        stripLoaded = false
+        stripTiles.forEach { $0.removeFromSuperview() }
+        stripTiles.removeAll()
+
+        let wasStripOpen = stripContainer.alpha > 0
+        guard wasStripOpen else { return }
+
+        trackHeightConstraint.constant = Metrics.trackHeight
+        UIView.animate(withDuration: 0.15) {
+            self.stripContainer.alpha = 0
+            self.progressFill.alpha = 1
+            self.layoutIfNeeded()
+        }
+        currentPositionGhost.isHidden = !isScrubbing
+        currentTimeLabel.isHidden = !isScrubbing
+        calloutLabel.isHidden = true
+        livePositionLine.isHidden = true
+        renderMarkers(lastMarkers, duration: duration, trackWidth: trackBackground.bounds.width,
+                      trackHeight: Metrics.trackHeight, bottomAligned: false)
     }
 
     private func populateStrip(images: [UIImage?], tileWidth: CGFloat) {

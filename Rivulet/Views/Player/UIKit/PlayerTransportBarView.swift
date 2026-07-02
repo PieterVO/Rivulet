@@ -169,6 +169,21 @@ final class PlayerTransportBarView: UIView {
             await viewModel?.filmstripImages(times: times, maxPixelWidth: maxWidth) ?? times.map { _ in nil }
         }
 
+        // `metadata` itself isn't @Published (see UniversalPlayerViewModel),
+        // so the view model bumps `itemGeneration` whenever it swaps to a
+        // different playable item on this same instance (e.g. auto-advance
+        // via playNextEpisode()). Reset the filmstrip's cached tiles on
+        // every such swap so the next scrub doesn't show stale frames from
+        // the previous episode. dropFirst() skips the initial publish at
+        // subscription time (current item, nothing to reset).
+        viewModel.$itemGeneration
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.progressBar.resetFilmstrip()
+            }
+            .store(in: &cancellables)
+
         viewModel.$currentTime
             .combineLatest(viewModel.$duration, viewModel.$isScrubbing, viewModel.$scrubTime)
             .receive(on: DispatchQueue.main)
