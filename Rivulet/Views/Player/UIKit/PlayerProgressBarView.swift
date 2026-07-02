@@ -49,6 +49,46 @@ final class AccentGradientView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
+/// Played-side dim: black .5 → .08 across the played region of the strip.
+final class StripDimView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let g = layer as! CAGradientLayer
+        g.colors = [UIColor.black.withAlphaComponent(0.5).cgColor,
+                    UIColor.black.withAlphaComponent(0.08).cgColor]
+        g.startPoint = CGPoint(x: 0, y: 0.5)
+        g.endPoint = CGPoint(x: 1, y: 0.5)
+        isUserInteractionEnabled = false
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Uppercase pill "chip" label used for the scrub callout — a plain
+/// `UILabel` has no content insets, so this subclass pads `intrinsicContentSize`
+/// / `sizeThatFits` by `textInsets` and draws the text inset accordingly.
+/// `sizeToFit()` (used by the existing clamping code in `layoutStripOverlay`)
+/// keeps working unmodified against this larger, padded size.
+final class PaddedChipLabel: UILabel {
+    var textInsets = UIEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
+
+    override func drawText(in rect: CGRect) {
+        super.drawText(in: rect.inset(by: textInsets))
+    }
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(width: size.width + textInsets.left + textInsets.right,
+                      height: size.height + textInsets.top + textInsets.bottom)
+    }
+
+    override func sizeThatFits(_ size: CGSize) -> CGSize {
+        let fit = super.sizeThatFits(size)
+        return CGSize(width: fit.width + textInsets.left + textInsets.right,
+                      height: fit.height + textInsets.top + textInsets.bottom)
+    }
+}
+
 final class PlayerProgressBarView: UIView {
 
     // MARK: - Metrics (AVPlayerViewController-matched)
@@ -100,7 +140,20 @@ final class PlayerProgressBarView: UIView {
     private var stripTiles: [UIImageView] = []
     private let playheadLine = UIView()
     private let livePositionLine = UIView()
-    private let calloutLabel = UILabel()
+    private let calloutLabel = PaddedChipLabel()
+    private let dimOverlay = StripDimView()
+    /// 3pt playhead thread connecting the strip's playhead x down to the
+    /// track below. A sibling of `stripContainer` on `self` (not clipped
+    /// by the track), positioned in `self` coordinates.
+    private let playheadThread = UIView()
+
+    // Chapter-proportional segment geometry for the currently open strip
+    // (recomputed in `populateStrip`). Each segment gets its own rounded,
+    // clipping container so BIF tiles crop to chapter-width blocks with
+    // gaps between them; `nil` / empty means the pre-segment (or
+    // chapterless single-segment) rendering.
+    private var segmentLayout: ChapterSegmentLayout?
+    private var segmentContainers: [UIView] = []
 
     // Jog wheel indicator: shown beside the callout label only while a
     // circular clickpad rotation is actively driving the scrub
@@ -218,15 +271,35 @@ final class PlayerProgressBarView: UIView {
         stripContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         stripContainer.frame = trackBackground.bounds
 
+        // Played-side dim sits above the tiles but below the playhead/live
+        // lines, sized to the played width in `layoutStripOverlay(...)`.
+        dimOverlay.isHidden = true
+        stripContainer.addSubview(dimOverlay)
+
         playheadLine.backgroundColor = .white
         livePositionLine.backgroundColor = UIColor.white.withAlphaComponent(0.5)
         stripContainer.addSubview(playheadLine)
         stripContainer.addSubview(livePositionLine)
 
-        calloutLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .semibold)
+        // Chip: uppercase pill callout (time + "CH n · NAME"), restyled in
+        // place from the old plain-text callout label so its clamping
+        // logic in `layoutStripOverlay(...)` keeps working unmodified.
+        calloutLabel.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
         calloutLabel.textColor = .white
         calloutLabel.textAlignment = .center
+        calloutLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        calloutLabel.layer.cornerRadius = 8
+        calloutLabel.layer.cornerCurve = .continuous
+        calloutLabel.clipsToBounds = true
+        calloutLabel.textInsets = UIEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
         calloutLabel.isHidden = true
+
+        // Playhead thread: 3pt white vertical line from the strip's top
+        // down to the track below. A sibling of stripContainer on self
+        // (not clipped by the track), hidden until the strip is open.
+        playheadThread.backgroundColor = .white
+        playheadThread.alpha = 0.9
+        playheadThread.isHidden = true
 
         wheelRing.backgroundColor = .clear
         wheelRing.layer.borderWidth = Metrics.wheelRingBorderWidth
@@ -245,11 +318,13 @@ final class PlayerProgressBarView: UIView {
         [currentPositionGhost, progressFill, markersContainer, stripContainer].forEach {
             trackBackground.addSubview($0)
         }
-        // Handle views are frame-driven siblings of trackBackground (not
-        // children of it — the track clips its contents, which would
-        // clip the handle's shadow and its overhang past the track edges).
+        // Handle views, and the playhead thread, are frame-driven siblings
+        // of trackBackground (not children of it — the track clips its
+        // contents, which would clip the handle's shadow / the thread's
+        // drop below the track edge).
         addSubview(handleRing)
         addSubview(handleView)
+        addSubview(playheadThread)
 
         [trackBackground, thumbnailContainer, thumbnailImageView,
          currentTimeLabel, remainingTimeLabel, endsAtLabel, scrubStepLabel].forEach {
@@ -298,7 +373,19 @@ final class PlayerProgressBarView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         trackBackground.layer.cornerRadius = trackHeightConstraint.constant / 2
-        stripContainer.layer.cornerRadius = trackBackground.layer.cornerRadius
+        // With more than one chapter segment, each segment container owns
+        // its own rounding + clipping (see `populateStrip`), so
+        // stripContainer itself goes unclipped/square. With zero or one
+        // segment (no chapters), stripContainer keeps the old single
+        // rounded-rect behavior so there's no regression on chapterless
+        // titles.
+        if segmentContainers.count > 1 {
+            stripContainer.layer.cornerRadius = 0
+            stripContainer.clipsToBounds = false
+        } else {
+            stripContainer.layer.cornerRadius = trackBackground.layer.cornerRadius
+            stripContainer.clipsToBounds = true
+        }
     }
 
     // MARK: - Update
@@ -418,6 +505,8 @@ final class PlayerProgressBarView: UIView {
         }
 
         calloutLabel.isHidden = !stripOpen
+        dimOverlay.isHidden = !stripOpen
+        playheadThread.isHidden = !stripOpen
 
         let showWheelIndicator = stripOpen && isScrubbing && isWheelScrubbing
         wheelRing.isHidden = !showWheelIndicator
@@ -507,6 +596,13 @@ final class PlayerProgressBarView: UIView {
         stripTiles.forEach { $0.removeFromSuperview() }
         stripTiles.removeAll()
 
+        // Segment containers (and the tiles they parent) are per-item —
+        // clear them along with the layout so the next scrub rebuilds
+        // from the new item's chapters rather than reusing stale geometry.
+        segmentContainers.forEach { $0.removeFromSuperview() }
+        segmentContainers.removeAll()
+        segmentLayout = nil
+
         // Chapters change per item — clear cached seam state so the next
         // scrub rebuilds seams from the new item's chapters rather than
         // reusing stale x positions from the previous title.
@@ -530,52 +626,133 @@ final class PlayerProgressBarView: UIView {
         wheelRing.isHidden = true
         wheelDot.isHidden = true
         livePositionLine.isHidden = true
+        dimOverlay.isHidden = true
+        playheadThread.isHidden = true
         renderMarkers(lastMarkers, duration: duration, trackWidth: trackBackground.bounds.width,
                       trackHeight: Metrics.trackHeight, bottomAligned: false)
     }
 
+    /// Builds one full-width row of BIF tiles per chapter segment, each
+    /// parented inside that segment's own rounded, clipping container so
+    /// the tiles crop to chapter-proportional blocks with gaps between
+    /// them. Each container gets its own copy of the tile row offset by
+    /// `-segment.rect.minX`, so the container's `clipsToBounds` alone does
+    /// the cropping — the same tile image just repeats across containers,
+    /// but only the portion inside each container's bounds is visible.
     private func populateStrip(images: [UIImage?], tileWidth: CGFloat) {
         stripTiles.forEach { $0.removeFromSuperview() }
         stripTiles.removeAll()
+        segmentContainers.forEach { $0.removeFromSuperview() }
+        segmentContainers.removeAll()
 
-        for (index, image) in images.enumerated() {
-            let tile = UIImageView(image: image)
-            tile.contentMode = .scaleAspectFill
-            tile.clipsToBounds = true
-            tile.backgroundColor = UIColor.white.withAlphaComponent(0.08)
-            tile.frame = CGRect(x: CGFloat(index) * tileWidth, y: 0, width: tileWidth, height: Metrics.stripHeight)
-            stripContainer.insertSubview(tile, at: 0)
-            stripTiles.append(tile)
+        let width = trackBackground.bounds.width
+        let layout = ChapterSegmentLayout(chapters: lastChapters, duration: duration,
+                                           width: width, height: Metrics.stripHeight, gap: 6)
+        segmentLayout = layout
+
+        for segment in layout.segments {
+            let container = UIView()
+            container.layer.cornerRadius = 12
+            container.layer.cornerCurve = .continuous
+            container.clipsToBounds = true
+            container.frame = segment.rect
+            stripContainer.insertSubview(container, at: 0)
+            segmentContainers.append(container)
+
+            for (index, image) in images.enumerated() {
+                let tile = UIImageView(image: image)
+                tile.contentMode = .scaleAspectFill
+                tile.clipsToBounds = true
+                tile.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+                let tileX = CGFloat(index) * tileWidth
+                tile.frame = CGRect(x: tileX - segment.rect.minX, y: 0, width: tileWidth, height: Metrics.stripHeight)
+                container.addSubview(tile)
+                stripTiles.append(tile)
+            }
         }
-        // Keep the playhead/live-position lines above the tiles.
+
+        // Keep the dim overlay, playhead/live-position lines above the
+        // segment containers (and their tiles).
+        stripContainer.bringSubviewToFront(dimOverlay)
         stripContainer.bringSubviewToFront(playheadLine)
         stripContainer.bringSubviewToFront(livePositionLine)
+
+        // Segments changed identity — force the seam ticks to rebuild
+        // against the new layout on the next overlay pass.
+        lastSeamsChapterIds = []
+        lastSeamWidth = 0
+
+        setNeedsLayout()
     }
 
     private func layoutStripOverlay(progress: Double, currentProgress: Double, width: CGFloat) {
+        // The scrub-position → time mapping stays LINEAR (unchanged) —
+        // segments are a display treatment only. `segmentLayout.x(for:)`
+        // is used purely to position strip overlays (playhead/live lines,
+        // dim width, chip, thread) against the chapter-proportional
+        // segment geometry.
+        let displayTime = duration > 0 ? Double(progress) * duration : 0
+        let currentTime = duration > 0 ? Double(currentProgress) * duration : 0
+
         let lineWidth: CGFloat = 2
-        let playheadX = width * CGFloat(progress)
+        let playheadX = segmentLayout?.x(for: displayTime) ?? width * CGFloat(progress)
         playheadLine.frame = CGRect(x: playheadX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
 
-        let liveX = width * CGFloat(currentProgress)
+        let liveX = segmentLayout?.x(for: currentTime) ?? width * CGFloat(currentProgress)
         livePositionLine.isHidden = false
         livePositionLine.frame = CGRect(x: liveX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
 
+        // Played-side dim: black .5 → .08 gradient from the strip's start
+        // up to the playhead.
+        dimOverlay.isHidden = false
+        dimOverlay.frame = CGRect(x: 0, y: 0, width: max(0, playheadX), height: Metrics.stripHeight)
+
         rebuildChapterSeamsIfNeeded(width: width)
 
-        let displayTime = duration > 0 ? Double(progress) * duration : 0
-        let chapterName = chapterName(at: displayTime)
-        if let chapterName {
-            calloutLabel.text = "\(Self.formatTime(displayTime)) · \(chapterName)"
-        } else {
-            calloutLabel.text = Self.formatTime(displayTime)
-        }
+        // Chip: "MM:SS · CH n · NAME" (uppercase, kerned), or just the
+        // time when the playhead isn't inside a named chapter.
+        let chipText = "\(Self.formatTime(displayTime))\(chapterChipSuffix(at: displayTime))"
+        calloutLabel.attributedText = NSAttributedString(
+            string: chipText.uppercased(),
+            attributes: [.kern: 0.1 * 17]
+        )
         calloutLabel.sizeToFit()
         let halfLabel = calloutLabel.bounds.width / 2
         let clampedCenter = min(max(playheadX, halfLabel), max(halfLabel, width - halfLabel))
         calloutLabel.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - calloutLabel.bounds.height / 2)
 
+        // Playhead thread: 3pt white line from the strip's top down to the
+        // track below, anchored to the STRIP's playhead x (which can
+        // differ slightly from the thin-bar handle x below by design —
+        // segments distort x but the thread only ever connects the strip
+        // to the track directly beneath it).
+        playheadThread.isHidden = false
+        let threadDropBelow = trackBackground.frame.maxY - trackBackground.frame.minY
+        playheadThread.frame = CGRect(
+            x: playheadX - 1.5,
+            y: trackBackground.frame.minY,
+            width: 3,
+            height: Metrics.stripHeight + threadDropBelow
+        )
+
         layoutWheelIndicator(progress: progress, calloutCenter: calloutLabel.center, calloutHalfWidth: halfLabel, width: width)
+    }
+
+    /// " · CH n · NAME" for the chapter containing `time` (n = 1-based
+    /// ordinal, NAME uppercased), or "" when there's no chapter at that
+    /// time or the chapter has no name.
+    private func chapterChipSuffix(at time: TimeInterval) -> String {
+        for (index, chapter) in lastChapters.enumerated() {
+            guard let startMs = chapter.startTimeOffset else { continue }
+            let start = TimeInterval(startMs) / 1000.0
+            let end = chapter.endTimeOffset.map { TimeInterval($0) / 1000.0 } ?? duration
+            guard time >= start && time < end else { continue }
+            guard let tag = chapter.tag?.trimmingCharacters(in: .whitespacesAndNewlines), !tag.isEmpty else {
+                return ""
+            }
+            return " · CH \(index + 1) · \(tag.uppercased())"
+        }
+        return ""
     }
 
     /// Positions the 44pt ring + orbiting 6pt dot beside `calloutLabel`
@@ -621,24 +798,14 @@ final class PlayerProgressBarView: UIView {
         )
     }
 
-    /// The chapter tag whose range contains `time`, if it has a non-empty name.
-    private func chapterName(at time: TimeInterval) -> String? {
-        for chapter in lastChapters {
-            guard let startMs = chapter.startTimeOffset else { continue }
-            let start = TimeInterval(startMs) / 1000.0
-            let end = chapter.endTimeOffset.map { TimeInterval($0) / 1000.0 } ?? duration
-            guard time >= start && time < end else { continue }
-            guard let tag = chapter.tag?.trimmingCharacters(in: .whitespacesAndNewlines), !tag.isEmpty else {
-                return nil
-            }
-            return tag
-        }
-        return nil
-    }
-
-    /// Rebuilds the chapter seam hairlines only when the chapter list or
+    /// Rebuilds the chapter boundary ticks only when the chapter list or
     /// track width has changed, so this is cheap to call on every strip
-    /// layout pass while scrubbing.
+    /// layout pass while scrubbing. With segments, the gap between
+    /// adjacent segment containers already visually separates chapters;
+    /// the tick is a 2pt `white@0.22` hairline centered in that gap (i.e.
+    /// at the midpoint between one segment's trailing edge and the next
+    /// segment's leading edge). Skipped entirely when there's only one
+    /// segment — no chapters, no gaps, no ticks.
     private func rebuildChapterSeamsIfNeeded(width: CGFloat) {
         guard lastChapters.map(\.id) != lastSeamsChapterIds || width != lastSeamWidth else { return }
         lastSeamsChapterIds = lastChapters.map(\.id)
@@ -647,21 +814,23 @@ final class PlayerProgressBarView: UIView {
         chapterSeams.forEach { $0.removeFromSuperview() }
         chapterSeams.removeAll()
 
-        guard duration > 0 else { return }
-        let seamWidth: CGFloat = 1
-        for chapter in lastChapters {
-            guard let startMs = chapter.startTimeOffset else { continue }
-            let start = TimeInterval(startMs) / 1000.0
-            guard start > 0 else { continue }  // no seam at the very start of the strip
-            let x = width * CGFloat(min(1, max(0, start / duration)))
+        guard let layout = segmentLayout, layout.segments.count > 1 else { return }
+
+        let seamWidth: CGFloat = 2
+        for i in 0..<(layout.segments.count - 1) {
+            let trailingEdge = layout.segments[i].rect.maxX
+            let leadingEdge = layout.segments[i + 1].rect.minX
+            let x = (trailingEdge + leadingEdge) / 2
             let seam = UIView()
-            seam.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+            seam.backgroundColor = UIColor.white.withAlphaComponent(0.22)
             seam.frame = CGRect(x: x - seamWidth / 2, y: 0, width: seamWidth, height: Metrics.stripHeight)
             stripContainer.insertSubview(seam, at: 0)
             chapterSeams.append(seam)
         }
-        // Seams sit above the tiles but below the playhead/live lines.
+        // Seams sit above the segment containers/tiles but below the dim
+        // overlay and the playhead/live lines.
         chapterSeams.forEach { stripContainer.bringSubviewToFront($0) }
+        stripContainer.bringSubviewToFront(dimOverlay)
         stripContainer.bringSubviewToFront(playheadLine)
         stripContainer.bringSubviewToFront(livePositionLine)
     }
