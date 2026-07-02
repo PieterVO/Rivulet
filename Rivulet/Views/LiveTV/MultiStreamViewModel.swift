@@ -65,7 +65,10 @@ final class MultiStreamViewModel: ObservableObject {
         }
 
         func load(url: URL, headers: [String: String]?) async throws {
-            try await aetherPlayer.load(url: url, headers: headers, startTime: nil)
+            // isLive: engine auto-detection is off upstream; declaring it
+            // enables the live clock (live-edge tracking) and the engine's
+            // LiveReloadPolicy reconnect path for this slot.
+            try await aetherPlayer.load(url: url, headers: headers, startTime: nil, isLive: true)
         }
     }
 

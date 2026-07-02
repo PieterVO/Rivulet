@@ -376,6 +376,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     let subtitleManager = SubtitleManager()
     private let subtitleClockSync = SubtitleClockSyncController()
 
+    /// Cue store for the Aether route's subtitle overlay. Fed from
+    /// AetherPlayer's cue/clock publishers in bindAetherPublishers();
+    /// rendered by AetherSubtitleOverlayView in UniversalPlayerView.
+    /// (The AVPlayer routes render through subtitleManager instead.)
+    let aetherSubtitleModel = SubtitleModel()
+
     // MARK: - Metadata
 
     private(set) var metadata: PlexMetadata
@@ -1507,15 +1513,28 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Native Up Next (early resolve). AVContentProposal is forward-looking:
-        // AVKit presents the card when the playhead REACHES the proposal's
-        // contentTimeForTransition, so the proposal must be attached to
-        // currentItem BEFORE the playhead reaches the credits time. The VC sets
-        // the proposal off `$nextEpisode`, so we resolve nextEpisode EARLY here,
-        // as soon as Aether publishes a real AVPlayer (native route), not at the
-        // credits marker. Guarded to run once per episode; the publisher
-        // re-emits on every Aether AVPlayer swap, and the VC re-applies the
-        // cached proposal to the new item from its own currentAVPlayer sink.
+        // Subtitle overlay feed: Aether decodes cues (text and PGS/DVB
+        // bitmap) and publishes them; the host renders via
+        // AetherSubtitleOverlayView driven by this model. sourceTime shares
+        // the engine clock tick so cue lookup can't drift from playback.
+        player.$subtitleCues
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] cues in
+                self?.aetherSubtitleModel.update(cues: cues)
+            }
+            .store(in: &cancellables)
+
+        player.$sourceTime
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] t in
+                self?.aetherSubtitleModel.sourceTime = t
+            }
+            .store(in: &cancellables)
+
+        // Up Next early resolve. The playhead must know the next episode
+        // BEFORE the credits marker so the overlay can present without a
+        // fetch stall. Guarded to run once per episode; the publisher
+        // re-emits on every Aether AVPlayer swap.
         player.$currentAVPlayer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avp in
@@ -2042,7 +2061,12 @@ final class UniversalPlayerViewModel: ObservableObject {
             throw PlayerError.loadFailed("Unable to build HLS fallback URL")
         }
 
-        // Stop current player
+        // Stop current player. The Aether engine session must be torn down
+        // explicitly: leaving it running keeps its audio playing under the
+        // fallback AVPlayer and keeps the render surface claimed by a dead
+        // session (UniversalPlayerView switches surfaces on aetherPlayer == nil).
+        aetherPlayer?.stop()
+        aetherPlayer = nil
         teardownAVPlayerObservers()
         player?.pause()
         await stopRemuxServer()
@@ -2200,6 +2224,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Stop AetherPlayer if active
         aetherPlayer?.stop()
         aetherPlayer = nil
+        aetherSubtitleModel.update(cues: [])
 
         teardownAVPlayerObservers()
         player?.pause()

@@ -184,22 +184,11 @@ struct ContentRouter {
             )
         }
 
-        // Force a server-side transcode only when Apple TV has no decoder for
-        // the source video codec. HLG is handled below by forcing an AVPlayer
-        // render path, preferably direct or local-remuxed so the server stays
-        // out of conversion.
-        if Self.requiresVideoTranscode(metadata: context.metadata) {
-            let videoCodec = Self.primaryVideoCodec(from: context.metadata)?.lowercased() ?? "unknown"
-            reasoning.append("video_codec_requires_transcode_\(videoCodec)")
-            let hls = buildHLSRoute(context: context)
-            playerDebugLog("[ContentRouter] \(container) | video=\(videoCodec) audio=\(audioCodec) → HLS (codec requires transcode)")
-            return PlaybackPlan(
-                policy: context.playbackPolicy,
-                primary: hls,
-                fallbacks: [],
-                reasoning: reasoning
-            )
-        }
+        // NOTE: codecs Apple TV can't decode natively (AV1, VP9, MPEG-2,
+        // VC-1, MPEG-4 Part 2) are NOT pre-routed to a server transcode:
+        // AetherEngine software-decodes them on its sample-buffer backend.
+        // requiresVideoTranscode(metadata:) still forces video conversion
+        // on the HLS fallback if the Aether load fails.
 
         // Analyze content for remux requirements
         let analysis = RemuxContentAnalyzer.analyze(metadata: context.metadata)

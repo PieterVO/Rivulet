@@ -658,6 +658,10 @@ struct UniversalPlayerView: View {
     @State private var hasStartedPlayback = false
     @State private var lastReportedTime: TimeInterval = 0
 
+    /// Caption appearance for the Aether subtitle overlay. Refreshed on
+    /// CaptionAppearance.changedNotification so restyles apply live.
+    @State private var captionStyle: CaptionStyle = CaptionAppearance.current()
+
     /// Initialize with metadata (creates viewModel internally)
     @MainActor
     init(
@@ -814,7 +818,20 @@ struct UniversalPlayerView: View {
     @ViewBuilder
     private var playerContentLayer: some View {
         ZStack {
-            if viewModel.player != nil {
+            if viewModel.aetherPlayer != nil {
+                // Aether route: the engine decodes cues (text + PGS/DVB
+                // bitmap) and the host renders them from the shared model.
+                AetherSubtitleOverlayView(
+                    model: viewModel.aetherSubtitleModel,
+                    style: captionStyle,
+                    controlsVisible: viewModel.showControls
+                )
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .onReceive(NotificationCenter.default.publisher(for: CaptionAppearance.changedNotification)) { _ in
+                    captionStyle = CaptionAppearance.current()
+                }
+            } else if viewModel.player != nil {
                 SubtitleOverlayView(
                     subtitleManager: viewModel.subtitleManager,
                     bottomOffset: viewModel.showControls ? 140 : 60
@@ -898,7 +915,15 @@ struct UniversalPlayerView: View {
 
     @ViewBuilder
     private var playerLayer: some View {
-        if let player = viewModel.player, viewModel.streamURL != nil {
+        if let aether = viewModel.aetherPlayer {
+            // Aether route: host the engine's own render surface. It
+            // covers both backends (AVPlayerLayer / sample-buffer layer)
+            // and survives internal AVPlayer swaps without rebinding.
+            AetherVideoSurfaceView(player: aether)
+                .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
+                .offset(viewModel.videoFrameState.offset)
+                .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
+        } else if let player = viewModel.player, viewModel.streamURL != nil {
             AVPlayerLayerView(player: player)
                 .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
                 .offset(viewModel.videoFrameState.offset)

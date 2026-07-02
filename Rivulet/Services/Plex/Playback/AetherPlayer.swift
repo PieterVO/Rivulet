@@ -4,16 +4,18 @@
 //
 //  PlayerProtocol-conforming adapter around AetherEngine.
 //
-//  Rivulet's video player for VOD (RivuletPlayer handles Live TV). Aether
-//  routes its native path through AVPlayer, so the host binds this adapter's
-//  `currentAVPlayer` and gets the system transport bar / Now Playing /
-//  AirPlay 2 picker for free.
+//  Rivulet's only player: VOD and Live TV (one instance per grid slot).
+//  Video must be displayed through `bind(view:)` / AetherVideoSurfaceView —
+//  the engine attaches the active backend's layer itself (AVPlayerLayer on
+//  the native path, AVSampleBufferDisplayLayer on the software path).
+//  `currentAVPlayer` is still republished for non-render uses (mute
+//  reapplication, item-level metadata observation).
 //
 //  Aether handles HDR10+ dynamic metadata preservation, HLG signaling,
 //  EAC3+JOC Atmos stream-copy through MKV, and DV P5/P8.1 via dvh1+dvcC
-//  in HLS-fMP4 sample entries. It does NOT handle DV P7 (drops to HDR10
-//  base only) or Live TV (scaffold-level live path). Routing decisions
-//  live in ContentRouter; this adapter just bridges the engine surface.
+//  in HLS-fMP4 sample entries. DV P7 plays as HDR10 base only. Routing
+//  decisions live in ContentRouter; this adapter just bridges the engine
+//  surface.
 //
 
 import AVFoundation
@@ -238,7 +240,7 @@ final class AetherPlayer: PlayerProtocol {
     var durationPublisher: AnyPublisher<TimeInterval, Never> {
         engine.$duration.eraseToAnyPublisher()
     }
-    var bufferedTime: TimeInterval { 0 }
+    var bufferedTime: TimeInterval { engine.bufferedPosition }
     var playbackRate: Float {
         get { _playbackRate }
         set {
@@ -269,13 +271,26 @@ final class AetherPlayer: PlayerProtocol {
         )
     }
 
+    /// Live variant (separate from the PlayerProtocol requirement — a
+    /// defaulted extra parameter would break conformance).
+    func load(url: URL, headers: [String: String]?, startTime: TimeInterval?, isLive: Bool) async throws {
+        try await load(
+            url: url,
+            headers: headers,
+            startTime: startTime,
+            subtitleLanguageHintsByStreamIndex: [:],
+            isLive: isLive
+        )
+    }
+
     func load(
         url: URL,
         headers: [String: String]?,
         startTime: TimeInterval?,
         subtitleLanguageHintsByStreamIndex: [Int: String],
         preferredAudioLanguages: [String] = [],
-        preferredSubtitleLanguages: [String] = []
+        preferredSubtitleLanguages: [String] = [],
+        isLive: Bool = false
     ) async throws {
         // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
         // DTS-HD MA, MP3, Opus). FLAC encode is ~3x realtime on A15 vs
@@ -292,12 +307,18 @@ final class AetherPlayer: PlayerProtocol {
         // language-hint parameter. preferredSubtitleLanguages (below)
         // is the supported replacement for steering initial subtitle
         // selection.
+        // isLive: engine auto-detection is deliberately disabled upstream
+        // (VOD MKVs with broken duration headers are too common), so the
+        // host must declare live sources. Enables the engine's live path:
+        // clock live-edge tracking, LiveReloadPolicy reconnect, and
+        // seek(to:) becoming a no-op.
         let options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
             matchContentEnabled: true,
             panelIsInHDRMode: Self.panelIsInHDRMode(),
             audioBridgeMode: .lossless,
+            isLive: isLive,
             preferredAudioLanguages: preferredAudioLanguages,
             preferredSubtitleLanguages: preferredSubtitleLanguages
         )
@@ -326,10 +347,29 @@ final class AetherPlayer: PlayerProtocol {
     func pause() { engine.pause() }
     func stop() { engine.stop() }
 
+    // MARK: - Render surface
+
+    /// Attach the engine's render surface. The engine hosts whichever
+    /// CALayer the active backend uses and re-attaches it across internal
+    /// session swaps; binding a different view detaches the old one.
+    func bind(view: AetherPlayerView) {
+        engine.bind(view: view)
+    }
+
+    /// Detach a previously bound render surface. Idempotent.
+    func unbind(view: AetherPlayerView) {
+        engine.unbind(view: view)
+    }
+
     /// Mute/unmute the underlying AVPlayer. Persisted in `isMuted` so it's
     /// reapplied when Aether swaps its player across internal reloads.
     func setMuted(_ muted: Bool) {
         isMuted = muted
+        // engine.volume covers both backends (the software path has no
+        // AVPlayer) and is remembered across internal host swaps.
+        // currentAVPlayer.isMuted stays as well: it mutes the native path
+        // even mid-swap, before the engine re-applies desired volume.
+        engine.volume = muted ? 0 : 1
         currentAVPlayer?.isMuted = muted
     }
     func seek(to time: TimeInterval) async { await engine.seek(to: time) }

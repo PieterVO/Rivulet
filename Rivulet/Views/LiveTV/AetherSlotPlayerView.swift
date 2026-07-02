@@ -3,27 +3,22 @@
 //  Rivulet
 //
 //  Render surface for a single Live TV grid slot backed by AetherPlayer.
-//  AetherPlayer drives an internally-created AVPlayer (republished as
-//  `currentAVPlayer` and swapped on internal reloads), so the slot subscribes
-//  to that publisher and hosts the current player in an AVPlayerLayer. While
-//  the player is nil (pre-load / between reloads) the slot stays black.
+//  Hosts the engine's own render surface (AetherVideoSurfaceView), which
+//  covers both backends: AVPlayerLayer on the native loopback-HLS path and
+//  AVSampleBufferDisplayLayer on the software path (raw MPEG-2 broadcast
+//  streams from HDHomeRun tuners land there). The engine re-attaches the
+//  layer across internal reloads, so no per-swap rebinding is needed here.
 //
 
 import SwiftUI
-import AVFoundation
 
 struct AetherSlotPlayerView: View {
     let player: AetherPlayer
 
-    @State private var avPlayer: AVPlayer?
-
     var body: some View {
         ZStack {
             Color.black
-            if let avPlayer {
-                AVPlayerLayerView(player: avPlayer)
-            }
+            AetherVideoSurfaceView(player: player)
         }
-        .onReceive(player.$currentAVPlayer) { avPlayer = $0 }
     }
 }
