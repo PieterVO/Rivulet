@@ -83,9 +83,8 @@ struct StreamSlotView: View {
 
     @ViewBuilder
     private var playerView: some View {
-        if let url = streamURL {
-            let _ = url
-            SampleBufferDisplayView(player: slot.rivuletPlayer)
+        if streamURL != nil {
+            AetherSlotPlayerView(player: slot.aetherPlayer)
         }
     }
 
@@ -238,7 +237,7 @@ struct StreamSlotView: View {
                 groupTitle: "Entertainment",
                 isHD: true
             ),
-            rivuletPlayer: RivuletPlayer(),
+            aetherPlayer: AetherPlayer(),
             playbackState: .loading,
             isMuted: false
         ),

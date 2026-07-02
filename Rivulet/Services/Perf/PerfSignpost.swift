@@ -24,23 +24,12 @@ import Foundation
 import os.log
 import os.signpost
 
-/// Active home-screen implementation. Used to tag signposts so Instruments
-/// traces can be filtered. `@AppStorage`-backed via `HomeImplPreference`.
-enum HomeImpl: String, Sendable {
-    case swiftui
-    case uikit
-}
-
 /// Subsystem-scoped logger for perf signposts. Custom subsystem keeps perf
 /// events isolated from the app's normal logging firehose so Instruments
 /// templates can subscribe to just `com.rivulet.perf`.
 @MainActor
 enum PerfLog {
     static let log = OSLog(subsystem: "com.rivulet.perf", category: .pointsOfInterest)
-
-    /// Currently-active implementation. Set on home-view appear so per-cell
-    /// signposts (which can't easily plumb the value down) tag correctly.
-    static var activeImpl: HomeImpl = .uikit
 }
 
 /// Type-safe signpost names. Matches the reference table above.
@@ -67,8 +56,7 @@ enum Perf {
             .event,
             log: PerfLog.log,
             name: signpost.rawValue.staticString,
-            "impl=%{public}s msg=%{public}s",
-            PerfLog.activeImpl.rawValue,
+            "msg=%{public}s",
             message
         )
     }
@@ -84,8 +72,7 @@ enum Perf {
             log: PerfLog.log,
             name: signpost.rawValue.staticString,
             signpostID: id,
-            "impl=%{public}s msg=%{public}s",
-            PerfLog.activeImpl.rawValue,
+            "msg=%{public}s",
             message
         )
         return id
@@ -99,8 +86,7 @@ enum Perf {
             log: PerfLog.log,
             name: signpost.rawValue.staticString,
             signpostID: id,
-            "impl=%{public}s msg=%{public}s",
-            PerfLog.activeImpl.rawValue,
+            "msg=%{public}s",
             message
         )
     }

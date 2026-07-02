@@ -249,13 +249,8 @@ private struct AutoPlayLauncherModifier: ViewModifier {
 
                 // Create viewModel and present player. Mirrors the real user
                 // flow in TVSidebarView.presentPlayerForDeepLink so autoplay
-                // tests exercise the same RPlayer UI (UniversalPlayerView +
+                // exercises the same player UI (UniversalPlayerView +
                 // PlayerContainerViewController) that users actually see.
-                // Without this, autoplay presented NativePlayerViewController
-                // (AVPlayerViewController) which waits on viewModel.$player —
-                // but RPlayer never populates $player, so the screen sat on
-                // the loading indicator while RPlayer decoded in the
-                // background. See debugging notes 2026-04-11.
                 await MainActor.run {
                     let viewModel = UniversalPlayerViewModel(
                         metadata: metadata,

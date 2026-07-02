@@ -3025,6 +3025,36 @@ final class PlexHomeViewController: UIViewController {
         return []
     }
 
+    /// Pure async helper. Returns up to `cap` library items chosen by
+    /// interleaving Trending Movies + Trending TV from TMDB, filtered to items
+    /// the user already owns.
+    static func computeTMDBHero(cap: Int) async -> [PlexMetadata] {
+        let indexEmpty = await LibraryGUIDIndex.shared.isEmpty
+        async let movies = TMDBDiscoverService.shared.fetchSection(.movieTrending)
+        async let shows = TMDBDiscoverService.shared.fetchSection(.tvTrending)
+        let (m, s) = await (movies, shows)
+        homeUIKitLog.debug("[Hero] computeTMDBHero: trendingMovies=\(m.count, privacy: .public), trendingTV=\(s.count, privacy: .public), guidIndexEmpty=\(indexEmpty, privacy: .public)")
+
+        // Interleave [m0, s0, m1, s1, ...] preserving TMDB's trending order.
+        var interleaved: [TMDBListItem] = []
+        let count = max(m.count, s.count)
+        for i in 0..<count {
+            if i < m.count { interleaved.append(m[i]) }
+            if i < s.count { interleaved.append(s[i]) }
+        }
+
+        var matches: [PlexMetadata] = []
+        for item in interleaved {
+            if let plex = await LibraryGUIDIndex.shared.lookup(tmdbId: item.id, type: item.mediaType) {
+                matches.append(plex)
+                if matches.count >= cap { break }
+            }
+        }
+        let matchTitles = matches.map { "\($0.title ?? "?") [\($0.type ?? "?")]" }.joined(separator: ", ")
+        homeUIKitLog.debug("[Hero] computeTMDBHero: \(interleaved.count, privacy: .public) trending items -> \(matches.count, privacy: .public) matches (cap=\(cap, privacy: .public)): \(matchTitles, privacy: .public)")
+        return matches
+    }
+
     @MainActor
     private func upgradeHeroFromTMDB() async {
         guard showHomeHero else {
@@ -3044,7 +3074,7 @@ final class PlexHomeViewController: UIViewController {
         lastUpgradedIndexGeneration = generation
 
         homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB: starting (gen=\(generation, privacy: .public), current heroItems=\(self.heroItems.count, privacy: .public))")
-        let curated = await PlexHomeView.computeTMDBHero(cap: Self.heroItemCap)
+        let curated = await Self.computeTMDBHero(cap: Self.heroItemCap)
         guard curated.count >= Self.heroTMDBMinMatches else {
             homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public)); keeping hub-backed hero")
             // A later index generation may yield enough matches; allow re-run.
@@ -3595,15 +3625,8 @@ final class PlexHomeViewController: UIViewController {
         sourceIndexMap: [Int: Int]? = nil,
         sourceItemIDs: [String]? = nil
     ) {
-        let request = PreviewRequest(
-            items: items,
-            selectedIndex: selectedIndex,
-            sourceRowID: sourceRowID,
-            sourceItemID: sourceItemID
-        )
-
         // Capture the source cell's frame in window coordinates so the
-        // entry-morph (SwiftUI or UIKit) has something to interpolate from.
+        // entry-morph has something to interpolate from.
         var sourceFrames: [PreviewSourceTarget: CGRect] = [:]
         let sourceTarget = PreviewSourceTarget(rowID: sourceRowID, itemID: sourceItemID)
         if let inWindow = tileFrameInWindow(at: sourceIndexPath) {
@@ -3614,75 +3637,30 @@ final class PlexHomeViewController: UIViewController {
             itemIndexMap: sourceIndexMap
         )
 
-        // Flag-gated UIKit branch — when PreviewImplPreference is .uikit,
-        // present the new PreviewCarouselViewController instead of the
-        // SwiftUI PreviewOverlayHost. Default is currently .uikit during
-        // perf-spike active iteration (see HomeImplPreference.swift).
-        if PreviewImplPreference.current == .uikit {
-            suppressPreviewPresentationFocusMemory()
-            let carouselVC = PreviewCarouselViewController(
-                items: items,
-                selectedIndex: selectedIndex,
-                sourceFrame: sourceFrames[sourceTarget] ?? .zero,
-                sourceTarget: sourceTarget,
-                entrySnapshots: entrySnapshots,
-                sourceItemIDs: sourceItemIDs,
-                onPrepareDismiss: { [weak self] sourceTarget in
-                    self?.preparePreviewRestoreForPendingDismiss(sourceTarget)
-                },
-                onDismiss: { [weak self] sourceTarget in
-                    if let sourceTarget {
-                        self?.pendingPreviewRestore = sourceTarget
-                    }
-                    self?.applyPendingPreviewRestoreIfNeeded()
-                }
-            )
-            var topVC: UIViewController = self
-            while let presented = topVC.presentedViewController { topVC = presented }
-            // animated: false — the carousel's spring morph IS the
-            // transition. Modal transitions would compose on top.
-            topVC.present(carouselVC, animated: false) { [weak self] in
-                self?.resetVisibleFocusAppearance(except: nil)
-            }
-            return
-        }
-
-        let menuBridge = PreviewMenuBridge()
-
-        let previewContent = PreviewOverlayHost(
-            request: request,
-            sourceFrames: sourceFrames,
-            onDismiss: { [weak self] sourceTarget in
-                _ = menuBridge  // retain
-                self?.pendingPreviewRestore = sourceTarget
-                self?.dismissPresentedPreview()
+        suppressPreviewPresentationFocusMemory()
+        let carouselVC = PreviewCarouselViewController(
+            items: items,
+            selectedIndex: selectedIndex,
+            sourceFrame: sourceFrames[sourceTarget] ?? .zero,
+            sourceTarget: sourceTarget,
+            entrySnapshots: entrySnapshots,
+            sourceItemIDs: sourceItemIDs,
+            onPrepareDismiss: { [weak self] sourceTarget in
+                self?.preparePreviewRestoreForPendingDismiss(sourceTarget)
             },
-            menuBridge: menuBridge
+            onDismiss: { [weak self] sourceTarget in
+                if let sourceTarget {
+                    self?.pendingPreviewRestore = sourceTarget
+                }
+                self?.applyPendingPreviewRestoreIfNeeded()
+            }
         )
-
-        let contentWithRegistries = previewContent
-            .environment(MediaProviderRegistry.shared)
-            .environment(MusicProviderRegistry.shared)
-            .environment(MetadataSourceRegistry.shared)
-
-        let container = PreviewContainerViewController(
-            content: contentWithRegistries,
-            menuHandler: { menuBridge.triggerMenu() }
-        )
-        container.onDismiss = { [weak self] in
-            self?.applyPendingPreviewRestoreIfNeeded()
-        }
-
         var topVC: UIViewController = self
         while let presented = topVC.presentedViewController { topVC = presented }
-        topVC.present(container, animated: false)
-    }
-
-    private func dismissPresentedPreview() {
-        var topVC: UIViewController = self
-        while let presented = topVC.presentedViewController { topVC = presented }
-        if let preview = topVC as? PreviewContainerViewController {
-            preview.dismissPreview()
+        // animated: false — the carousel's spring morph IS the
+        // transition. Modal transitions would compose on top.
+        topVC.present(carouselVC, animated: false) { [weak self] in
+            self?.resetVisibleFocusAppearance(except: nil)
         }
     }
 

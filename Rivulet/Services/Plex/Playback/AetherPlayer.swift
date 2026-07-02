@@ -4,12 +4,10 @@
 //
 //  PlayerProtocol-conforming adapter around AetherEngine.
 //
-//  Rivulet's third selectable video player, alongside RivuletPlayer
-//  (custom FFmpeg+AVSampleBuffer) and AVPlayer (NativePlayerViewController
-//  on .avPlayerDirect / .localRemux / .hls routes). Aether routes its
-//  native path through AVPlayer too, so AetherPlayerViewController binds
-//  this adapter's `currentAVPlayer` and gets the system transport bar /
-//  Now Playing / AirPlay 2 picker for free.
+//  Rivulet's video player for VOD (RivuletPlayer handles Live TV). Aether
+//  routes its native path through AVPlayer, so the host binds this adapter's
+//  `currentAVPlayer` and gets the system transport bar / Now Playing /
+//  AirPlay 2 picker for free.
 //
 //  Aether handles HDR10+ dynamic metadata preservation, HLG signaling,
 //  EAC3+JOC Atmos stream-copy through MKV, and DV P5/P8.1 via dvh1+dvcC
@@ -34,10 +32,15 @@ final class AetherPlayer: PlayerProtocol {
     private let errorSubject = PassthroughSubject<PlayerError, Never>()
     private var cancellables = Set<AnyCancellable>()
 
-    /// Re-publishes AetherEngine.currentAVPlayer so AetherPlayerViewController
-    /// can rebind its .player on every internal Aether reload (audio-track
+    /// Re-publishes AetherEngine.currentAVPlayer so the host player view can
+    /// rebind its .player on every internal Aether reload (audio-track
     /// switch / background reopen). Documented at AetherEngine.swift:1225.
     @Published private(set) var currentAVPlayer: AVPlayer?
+
+    /// Mute state for the underlying AVPlayer. Tracked so it survives Aether's
+    /// internal player swaps (see the `$currentAVPlayer` sink). Used by the
+    /// Live TV grid, where non-focused slots play muted.
+    private(set) var isMuted = false
 
     /// Subtitle cues bridged from AetherEngine.SubtitleCue into Rivulet's
     /// nameable AetherSubtitleCue (carries text AND bitmap bodies). Converted
@@ -151,7 +154,12 @@ final class AetherPlayer: PlayerProtocol {
         engine.$currentAVPlayer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avp in
-                self?.currentAVPlayer = avp
+                guard let self else { return }
+                // Reapply mute across internal reloads — Aether swaps the
+                // AVPlayer on audio-track switch / background reopen, and the
+                // Live TV grid relies on per-slot muting persisting.
+                avp?.isMuted = self.isMuted
+                self.currentAVPlayer = avp
             }
             .store(in: &cancellables)
 
@@ -317,6 +325,13 @@ final class AetherPlayer: PlayerProtocol {
     func play() { engine.play() }
     func pause() { engine.pause() }
     func stop() { engine.stop() }
+
+    /// Mute/unmute the underlying AVPlayer. Persisted in `isMuted` so it's
+    /// reapplied when Aether swaps its player across internal reloads.
+    func setMuted(_ muted: Bool) {
+        isMuted = muted
+        currentAVPlayer?.isMuted = muted
+    }
     func seek(to time: TimeInterval) async { await engine.seek(to: time) }
 
     // MARK: - Tracks

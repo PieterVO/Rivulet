@@ -119,23 +119,9 @@ struct RivuletApp: App {
         // NowPlayingService disabled — AVPlayerViewController handles Now Playing natively.
         // NowPlayingService.shared.initialize()
 
-        // PERF SPIKE: emit AppLaunch event + start RSS sampler + frame
-        // hitch sampler so the perf-compare driver script can correlate
-        // launch time, memory, and scroll smoothness across SwiftUI vs
-        // UIKit home runs. Removable after the comparison is concluded.
+        // Emit the AppLaunch perf event so launch time, memory, and scroll
+        // smoothness can be correlated in Instruments traces.
         Task { @MainActor in
-            // Honor a launch-arg override for the home impl preference so
-            // the perf-compare driver can run trials without flipping the
-            // Settings toggle interactively. Format:
-            //   xcrun devicectl device process launch ... -- --home-impl=uikit
-            let args = CommandLine.arguments
-            if let arg = args.first(where: { $0.hasPrefix("--home-impl=") }) {
-                let value = String(arg.dropFirst("--home-impl=".count))
-                if HomeImpl(rawValue: value) != nil {
-                    UserDefaults.standard.set(value, forKey: HomeImplPreference.storageKey)
-                }
-            }
-
             Perf.event(.appLaunch, message: "init")
         }
     }

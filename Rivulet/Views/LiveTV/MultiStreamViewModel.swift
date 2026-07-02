@@ -24,7 +24,7 @@ final class MultiStreamViewModel: ObservableObject {
         let id = UUID()
         let channel: UnifiedChannel
 
-        let rivuletPlayer: RivuletPlayer
+        let aetherPlayer: AetherPlayer
 
         var playbackState: UniversalPlaybackState
         var currentProgram: UnifiedProgram?
@@ -33,46 +33,39 @@ final class MultiStreamViewModel: ObservableObject {
         // MARK: - Convenience Accessors
 
         var isPlaying: Bool {
-            rivuletPlayer.isPlaying
+            aetherPlayer.isPlaying
         }
 
         var playbackStatePublisher: AnyPublisher<UniversalPlaybackState, Never> {
-            rivuletPlayer.playbackStatePublisher
+            aetherPlayer.playbackStatePublisher
         }
 
         var currentTime: TimeInterval {
-            rivuletPlayer.currentTime
+            aetherPlayer.currentTime
         }
 
         var duration: TimeInterval {
-            rivuletPlayer.duration
+            aetherPlayer.duration
         }
 
         func play() {
-            rivuletPlayer.play()
+            aetherPlayer.play()
         }
 
         func pause() {
-            rivuletPlayer.pause()
+            aetherPlayer.pause()
         }
 
         func stop() {
-            rivuletPlayer.stop()
+            aetherPlayer.stop()
         }
 
         func setMuted(_ muted: Bool) {
-            rivuletPlayer.setMuted(muted)
+            aetherPlayer.setMuted(muted)
         }
 
         func load(url: URL, headers: [String: String]?) async throws {
-            if url.pathExtension.lowercased() == "m3u8" || url.absoluteString.localizedCaseInsensitiveContains(".m3u8") {
-                try await rivuletPlayer.load(url: url, headers: headers, startTime: nil)
-            } else {
-                try await rivuletPlayer.load(
-                    route: .avPlayerDirect(url: url, headers: headers),
-                    startTime: nil
-                )
-            }
+            try await aetherPlayer.load(url: url, headers: headers, startTime: nil)
         }
     }
 
@@ -200,7 +193,7 @@ final class MultiStreamViewModel: ObservableObject {
 
         var slot = StreamSlot(
             channel: channel,
-            rivuletPlayer: RivuletPlayer(),
+            aetherPlayer: AetherPlayer(),
             playbackState: .loading,
             isMuted: isMuted
         )
@@ -490,7 +483,7 @@ final class MultiStreamViewModel: ObservableObject {
 
         var newSlot = StreamSlot(
             channel: channel,
-            rivuletPlayer: RivuletPlayer(),
+            aetherPlayer: AetherPlayer(),
             playbackState: .loading,
             isMuted: isMuted
         )
@@ -613,7 +606,7 @@ final class MultiStreamViewModel: ObservableObject {
             guard let self,
                   let index = self.streams.firstIndex(where: { $0.id == focusedSlotId }) else { return }
 
-            await self.streams[index].rivuletPlayer.seekRelative(by: seconds)
+            await self.streams[index].aetherPlayer.seekRelative(by: seconds)
             // Ensure stream is playing after seek attempt.
             self.streams[index].play()
         }
@@ -681,7 +674,7 @@ final class MultiStreamViewModel: ObservableObject {
             guard let self,
                   let index = self.streams.firstIndex(where: { $0.id == scrubSlotID }) else { return }
 
-            await self.streams[index].rivuletPlayer.seek(to: targetTime)
+            await self.streams[index].aetherPlayer.seek(to: targetTime)
             self.streams[index].play()
         }
 

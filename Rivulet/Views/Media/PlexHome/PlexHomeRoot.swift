@@ -2,24 +2,17 @@
 //  PlexHomeRoot.swift
 //  Rivulet
 //
-//  Routing wrapper for the Plex Home screen. Switches between the SwiftUI
-//  `PlexHomeView` and the UIKit `PlexHomeUIKitBridge` based on the
-//  `homeImplementation` AppStorage toggle. The UIKit branch wraps its
-//  controller in a NavigationStack so tile taps still navigate via
-//  SwiftUI's stack to `MediaDetailView` / music routers.
-//
-//  Both renderers read the same `PlexDataStore`, observe the same hubs,
-//  and emit perf signposts tagged with `impl=swiftui|uikit` so Instruments
-//  traces can be compared apples-to-apples.
+//  SwiftUI shell for the Plex Home screen. Wraps the UIKit
+//  `PlexHomeViewController` (via `PlexHomeUIKitBridge`) in a
+//  NavigationStack so tile taps still navigate via SwiftUI's stack to
+//  `MediaDetailView` / music routers.
 //
 
 import SwiftUI
 
 struct PlexHomeRoot: View {
     var body: some View {
-        // Committed to the UIKit/TVUIKit home; the SwiftUI PlexHomeView is retired.
         UIKitHomeContainer()
-            .onAppear { Task { @MainActor in PerfLog.activeImpl = .uikit } }
     }
 }
 
