@@ -221,6 +221,12 @@ nonisolated struct BIFData: Sendable {
     let intervalMs: UInt32
     let frames: [BIFFrame]
 
+    /// `false` if the parser dropped one or more malformed frame entries
+    /// (see the extract loop in `init?(data:)`), meaning `frames[i]` is no
+    /// longer guaranteed to carry timestamp multiplier `i`. `frameIndex(at:)`
+    /// falls back to a binary search on real timestamp when this is false.
+    let timestampsAreContiguous: Bool
+
     var frameCount: Int { frames.count }
 
     struct BIFFrame: Sendable {
@@ -286,6 +292,7 @@ nonisolated struct BIFData: Sendable {
 
         // Extract frame data
         var frames: [BIFFrame] = []
+        var anyFrameDropped = false
         for i in 0..<frameInfos.count {
             let info = frameInfos[i]
             let nextOffset = (i + 1 < frameInfos.count) ? frameInfos[i + 1].offset : endOffset
@@ -293,23 +300,70 @@ nonisolated struct BIFData: Sendable {
             let start = Int(info.offset)
             let end = Int(nextOffset)
 
-            guard start < data.count, end <= data.count, start < end else { continue }
+            guard start < data.count, end <= data.count, start < end else {
+                anyFrameDropped = true
+                continue
+            }
 
             let frameData = data.subdata(in: start..<end)
             frames.append(BIFFrame(timestamp: info.timestamp, imageData: frameData))
         }
 
         self.frames = frames
+        self.timestampsAreContiguous = !anyFrameDropped
     }
 
-    /// Nearest frame index for a playback time. O(1): Plex BIF timestamps
-    /// are frame numbers; real time = timestamp * intervalMs.
+    /// Nearest frame index for a playback time.
+    ///
+    /// Fast path (O(1)): when the parser dropped no frames, Plex BIF
+    /// timestamps are dense frame numbers and `frames[i].timestamp == i`,
+    /// so the index can be computed directly from `time / interval`.
+    ///
+    /// Fallback path (O(log n)): if the parser silently dropped a
+    /// malformed frame entry (see `init?(data:)`), array position no
+    /// longer matches timestamp past the drop point. Binary-search
+    /// `frames` by real time (`timestamp * interval`) — frames remain
+    /// timestamp-sorted by construction even with gaps — so lookups stay
+    /// correct instead of reading whatever frame happens to sit at the
+    /// naively-computed array position.
     func frameIndex(at time: TimeInterval) -> Int? {
         guard !frames.isEmpty else { return nil }
         let interval = TimeInterval(intervalMs) / 1000.0
         guard interval > 0 else { return 0 }
-        let idx = Int((time / interval).rounded())
-        return min(max(idx, 0), frames.count - 1)
+
+        if timestampsAreContiguous {
+            let idx = Int((time / interval).rounded())
+            return min(max(idx, 0), frames.count - 1)
+        }
+
+        return nearestFrameIndexByBinarySearch(realTime: time, interval: interval)
+    }
+
+    /// Binary search over `frames` (timestamp-sorted) for the entry whose
+    /// real time (`timestamp * interval`) is nearest to `realTime`.
+    private func nearestFrameIndexByBinarySearch(realTime: TimeInterval, interval: TimeInterval) -> Int {
+        var low = 0
+        var high = frames.count - 1
+        while low < high {
+            let mid = (low + high) / 2
+            let midTime = TimeInterval(frames[mid].timestamp) * interval
+            if midTime < realTime {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        // `low` is the first frame whose real time is >= realTime (or the
+        // last frame if none qualify). Compare against its predecessor to
+        // find the true nearest neighbor.
+        if low > 0 {
+            let lowTime = TimeInterval(frames[low].timestamp) * interval
+            let prevTime = TimeInterval(frames[low - 1].timestamp) * interval
+            if abs(prevTime - realTime) <= abs(lowTime - realTime) {
+                return low - 1
+            }
+        }
+        return low
     }
 
     /// Get thumbnail for a specific time
