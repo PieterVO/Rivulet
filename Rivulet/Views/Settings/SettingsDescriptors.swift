@@ -154,21 +154,6 @@ enum SettingsDescriptorStore {
             iconColor: .purple,
             description: "When off, closing credits play uninterrupted and the player returns to Home at the end of the episode."
         ),
-        "avPlayerDV": SettingDescriptor(
-            icon: "sparkles.tv",
-            iconColor: .purple,
-            description: "Uses Apple's native player for Dolby Vision content, enabling true DV playback with proper TV mode switching. Press and hold to learn more."
-        ),
-        "avPlayerAll": SettingDescriptor(
-            icon: "play.rectangle",
-            iconColor: .blue,
-            description: "Uses Apple's native player for all content. Your Plex server will remux incompatible containers. Press and hold to learn more."
-        ),
-        "rivuletPlayer": SettingDescriptor(
-            icon: "waveform.badge.magnifyingglass",
-            iconColor: .orange,
-            description: "Experimental native player built on AVSampleBufferDisplayLayer and VideoToolbox. True direct play for all containers. Press and hold to learn more."
-        ),
 
         // MARK: Live TV
         "liveTVAboveLibraries": SettingDescriptor(
