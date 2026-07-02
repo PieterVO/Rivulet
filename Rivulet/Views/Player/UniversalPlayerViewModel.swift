@@ -2190,6 +2190,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// If subtitles are already on, this only jumps back; the active
     /// track is left alone (no revert-to-off later).
     func replayWithCaptions() {
+        guard duration > 0 else { return }
         let invokedAt = currentTime
         if let window = replayWindow {
             replayWindow = window.extended(to: invokedAt)

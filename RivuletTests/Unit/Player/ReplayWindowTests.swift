@@ -41,4 +41,14 @@ final class ReplayWindowTests: XCTestCase {
         // ...and reverts when passing the invocation point again.
         XCTAssertTrue(window.shouldRevert(currentTime: 100.5))
     }
+
+    func testReInvokeInsideWindowNeverShrinksIt() {
+        var window = ReplayWindowLogic(invokedAt: 100, priorSubtitleTrackId: nil)
+        window = window.observing(currentTime: 90)   // armed
+        // Re-invoke at 95 (inside the window, before the original point):
+        window = window.extended(to: 95)
+        // The revert point must remain 100, not shrink to 95.
+        XCTAssertFalse(window.shouldRevert(currentTime: 96))
+        XCTAssertTrue(window.shouldRevert(currentTime: 100.5))
+    }
 }

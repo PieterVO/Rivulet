@@ -57,7 +57,7 @@ struct ReplayWindowLogic {
     /// armed from the earlier pass below `invokedAt` (that's how the user
     /// got back here to re-invoke replay), so the extended window stays
     /// armed rather than re-requiring a fresh sub-invokedAt tick.
-    func extended(to invokedAt: TimeInterval) -> ReplayWindowLogic {
-        ReplayWindowLogic(invokedAt: invokedAt, priorSubtitleTrackId: priorSubtitleTrackId, armed: armed)
+    func extended(to newInvokedAt: TimeInterval) -> ReplayWindowLogic {
+        ReplayWindowLogic(invokedAt: max(invokedAt, newInvokedAt), priorSubtitleTrackId: priorSubtitleTrackId, armed: armed)
     }
 }
