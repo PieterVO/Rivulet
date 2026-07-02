@@ -622,6 +622,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                let preparedFallback = buildRivuletHLSURL(offset: startOffset) {
                 rivuletFallbackURL = preparedFallback.url
                 rivuletFallbackHeaders = preparedFallback.headers
+                // The [Plex HLS] / hls_fallback_build lines above come from
+                // THIS prebuild. No server session starts unless the URL is
+                // actually fetched after "[Fallback] ... → HLS".
+                print("[Player] Aether primary; HLS fallback URL prebuilt only (not playing)")
             }
         }
     }
