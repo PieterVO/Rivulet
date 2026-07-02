@@ -404,4 +404,65 @@ final class AetherPlayer: PlayerProtocol {
         // stop() is called when the view model swaps players, and a fresh
         // AetherPlayer() instance is created for the next session.
     }
+
+    // MARK: - Live stats (Info popup "tech sheet")
+
+    /// Truthful, engine-sourced snapshot for the Info popup's PLAYBACK
+    /// section. Every field is nil unless AetherEngine actually exposes it —
+    /// nothing here is synthesized or guessed.
+    ///
+    /// Engine inventory (checked against the AetherEngine package checkout,
+    /// Sources/AetherEngine/AetherEngine.swift and neighbors):
+    ///  - Buffer depth: `engine.bufferedPosition` (source-axis buffer
+    ///    frontier, forwards `clock.$bufferedPosition`) exists and is used.
+    ///  - Active backend: `engine.activeVideoDecoder` (@Published,
+    ///    internal(set)) is a human-readable label already assembled by the
+    ///    engine, e.g. "VideoToolbox HEVC (HW)", "dav1d AV1 (SW)",
+    ///    "libavcodec VP9 (SW)". Populated at load/probe time, cleared on
+    ///    stop. Used directly as `backend` (no re-labeling needed; the
+    ///    engine's own string already distinguishes HW/SW).
+    ///  - Audio bridge: `engine.activeAudioDecoder` (@Published,
+    ///    internal(set)) mirrors `HLSVideoEngine.audioPipelineDescription`,
+    ///    e.g. "Stream-copy (EAC3+JOC Atmos)", "TrueHD → FLAC bridge",
+    ///    "AC3 → EAC3 5.1 bridge", or the SW-path
+    ///    "libavcodec <codec> → CoreAudio" label. Used directly as
+    ///    `audioBridge`.
+    ///  - Throughput/bitrate counters: `engine.diagnostics.liveTelemetry`
+    ///    (LiveTelemetry: instantBitrateMbps, averageBitrateMbps,
+    ///    networkThroughputMbps, observedFps, droppedFrameCount, etc.) DO
+    ///    exist as a 1 Hz @MainActor snapshot, but are OUT OF SCOPE for this
+    ///    task's `AetherLiveStats` contract (buffer/backend/audioBridge
+    ///    only) — noted here for a future tech-sheet expansion, not wired.
+    ///  - No separate "renderer" or "audio bridge mode" enum is publicly
+    ///    readable as engine *state*; `AudioBridgeMode` (.surroundCompat /
+    ///    .lossless) is an input to LoadOptions, not an observable output,
+    ///    so it is NOT read back here — `activeAudioDecoder`'s resolved
+    ///    label is the truthful substitute.
+    func liveStats() -> AetherLiveStats {
+        AetherLiveStats(
+            bufferedSeconds: max(0, bufferedTime - currentTime),
+            backend: engine.activeVideoDecoder,
+            audioBridge: engine.activeAudioDecoder
+        )
+    }
+}
+
+/// Live engine snapshot for the Info popup's PLAYBACK section. Every field
+/// is nil unless AetherEngine truthfully exposes it for the active session —
+/// see the inventory comment on `AetherPlayer.liveStats()`.
+struct AetherLiveStats {
+    let bufferedSeconds: TimeInterval?
+    /// Engine's own human-readable decoder label, e.g. "VideoToolbox HEVC (HW)"
+    /// or "dav1d AV1 (SW)". nil while idle/no video track.
+    let backend: String?
+    /// Engine's own human-readable audio pipeline label, e.g.
+    /// "Stream-copy (EAC3+JOC Atmos)" or "TrueHD → FLAC bridge". nil while
+    /// idle/no audio track.
+    let audioBridge: String?
+
+    /// True when every field is nil — the popup omits the PLAYBACK section
+    /// entirely in that case rather than rendering an empty header.
+    var isEmpty: Bool {
+        bufferedSeconds == nil && backend == nil && audioBridge == nil
+    }
 }

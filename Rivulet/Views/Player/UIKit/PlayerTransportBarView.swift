@@ -304,7 +304,10 @@ final class PlayerTransportBarView: UIView {
 
         infoButton.onPress = { [weak self] in
             guard let self, let viewModel = self.viewModel else { return }
-            let popup = PlayerInfoPopupView(metadata: viewModel.metadata)
+            let popup = PlayerInfoPopupView(
+                metadata: viewModel.metadata,
+                liveStatsProvider: { [weak viewModel] in viewModel?.aetherPlayer?.liveStats() }
+            )
             self.presentPopup(popup, anchoredTo: self.infoButton)
         }
     }

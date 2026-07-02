@@ -12,15 +12,27 @@ import UIKit
 final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
 
     private let metadata: PlexMetadata
+    /// Supplies a fresh engine snapshot on demand. nil on the `hls` route
+    /// (no AetherPlayer) — in that case the PLAYBACK section is omitted
+    /// entirely rather than showing stale or synthesized numbers.
+    private let liveStatsProvider: (() -> AetherLiveStats?)?
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private let backgroundEffectView: UIVisualEffectView
 
+    /// Live PLAYBACK rows, updated in place every tick. nil when the
+    /// PLAYBACK section was omitted at populate() time.
+    private var bufferRow: UILabel?
+    private var backendRow: UILabel?
+    private var audioBridgeRow: UILabel?
+    private var liveTickTimer: Timer?
+
     var onDismiss: (() -> Void)?
     let presentedWidth: CGFloat = 480
 
-    init(metadata: PlexMetadata) {
+    init(metadata: PlexMetadata, liveStatsProvider: (() -> AetherLiveStats?)? = nil) {
         self.metadata = metadata
+        self.liveStatsProvider = liveStatsProvider
 
         if #available(tvOS 26.0, *) {
             backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
@@ -34,6 +46,50 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    // MARK: - Live tick lifecycle
+    //
+    // The popup is added/removed via AnchoredPopupPresenting's
+    // present()/dismiss(), and dismiss() always ends in removeFromSuperview()
+    // — so didMoveToWindow with window == nil is a reliable "popup is gone"
+    // signal for tearing the timer down. Starting in didMoveToWindow (rather
+    // than init) avoids ticking a timer for a view that's constructed but
+    // never actually presented.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            startLiveTick()
+        } else {
+            stopLiveTick()
+        }
+    }
+
+    private func startLiveTick() {
+        guard liveStatsProvider != nil, liveTickTimer == nil else { return }
+        liveTickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshLiveRows()
+            }
+        }
+    }
+
+    private func stopLiveTick() {
+        liveTickTimer?.invalidate()
+        liveTickTimer = nil
+    }
+
+    private func refreshLiveRows() {
+        guard let stats = liveStatsProvider?() else { return }
+        if let bufferRow, let seconds = stats.bufferedSeconds {
+            bufferRow.text = "Buffer: \(Self.formatBufferSeconds(seconds))"
+        }
+        if let backendRow, let backend = stats.backend {
+            backendRow.text = "Backend: \(backend)"
+        }
+        if let audioBridgeRow, let audioBridge = stats.audioBridge {
+            audioBridgeRow.text = "Audio Bridge: \(audioBridge)"
+        }
     }
 
     private func setupViews() {
@@ -89,6 +145,8 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
         if let title = metadata.title {
             stack.addArrangedSubview(bodyLabel(title, secondary: true))
         }
+
+        populatePlaybackSection()
 
         stack.addArrangedSubview(sectionLabel("VIDEO"))
         if let videoStream = primaryVideoStream {
@@ -178,6 +236,32 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
         }
     }
 
+    /// Live engine stats section, inserted first (ahead of the static Plex
+    /// metadata sections). Omitted entirely when there's no provider (the
+    /// `hls` route has no AetherPlayer) or the first snapshot is all-nil —
+    /// never rendered as an empty/placeholder header.
+    private func populatePlaybackSection() {
+        guard let stats = liveStatsProvider?(), !stats.isEmpty else { return }
+
+        stack.addArrangedSubview(sectionLabel("PLAYBACK"))
+
+        if let seconds = stats.bufferedSeconds {
+            let row = bodyLabel("Buffer: \(Self.formatBufferSeconds(seconds))", secondary: false)
+            stack.addArrangedSubview(row)
+            bufferRow = row
+        }
+        if let backend = stats.backend {
+            let row = bodyLabel("Backend: \(backend)", secondary: false)
+            stack.addArrangedSubview(row)
+            backendRow = row
+        }
+        if let audioBridge = stats.audioBridge {
+            let row = bodyLabel("Audio Bridge: \(audioBridge)", secondary: false)
+            stack.addArrangedSubview(row)
+            audioBridgeRow = row
+        }
+    }
+
     // MARK: - Row builders
 
     private func headerLabel(_ text: String) -> UILabel {
@@ -221,6 +305,13 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
     }
 
     // MARK: - Formatting
+
+    /// Whole seconds, clamped to never print negative (AetherPlayer.liveStats
+    /// already clamps at the source, but the display layer stays defensive).
+    private static func formatBufferSeconds(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds.rounded()))
+        return "\(whole)s"
+    }
 
     private static func formatBitrate(_ bitrate: Int) -> String {
         if bitrate >= 1_000_000 {
