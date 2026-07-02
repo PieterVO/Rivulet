@@ -14,6 +14,7 @@ final class TransportControlButton: UIControl {
 
     static let diameter: CGFloat = 64
 
+    private let diameter: CGFloat
     private let iconView = UIImageView()
     private let backgroundEffectView: UIVisualEffectView
 
@@ -29,7 +30,8 @@ final class TransportControlButton: UIControl {
     private var longPressTimer: Timer?
     private static let longPressThreshold: TimeInterval = 0.6
 
-    init(icon: UIImage?, accessibilityLabel: String) {
+    init(icon: UIImage?, accessibilityLabel: String, diameter: CGFloat = TransportControlButton.diameter) {
+        self.diameter = diameter
         if #available(tvOS 26.0, *) {
             backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
         } else {
@@ -45,7 +47,7 @@ final class TransportControlButton: UIControl {
         iconView.tintColor = .white
         iconView.contentMode = .center
 
-        backgroundEffectView.layer.cornerRadius = Self.diameter / 2
+        backgroundEffectView.layer.cornerRadius = self.diameter / 2
         backgroundEffectView.clipsToBounds = true
         backgroundEffectView.backgroundColor = UIColor.white.withAlphaComponent(0.1)
         backgroundEffectView.isUserInteractionEnabled = false
@@ -58,8 +60,8 @@ final class TransportControlButton: UIControl {
         }
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.diameter),
-            heightAnchor.constraint(equalToConstant: Self.diameter),
+            widthAnchor.constraint(equalToConstant: self.diameter),
+            heightAnchor.constraint(equalToConstant: self.diameter),
 
             backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
             backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
