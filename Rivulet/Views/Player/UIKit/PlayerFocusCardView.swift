@@ -195,6 +195,57 @@ final class PlayerFocusCardView: UIView {
         subtitlesButton.isHidden = !enabled
     }
 
+    // MARK: - In-card modes (Task 6)
+
+    enum Mode { case metadata, subtitleTracks, audioTracks, info, loading }
+    private(set) var mode: Mode = .metadata
+    private var panelContainer: UIView?
+
+    private func swapContent(to mode: Mode, panel: UIView?) {
+        self.mode = mode
+        let showMetadata = (mode == .metadata)
+        UIView.transition(with: self, duration: 0.2, options: .transitionCrossDissolve) {
+            self.metadataContainer.isHidden = !showMetadata
+            self.panelContainer?.removeFromSuperview()
+            self.panelContainer = panel
+            if let panel {
+                self.addSubview(panel)
+                panel.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    panel.topAnchor.constraint(equalTo: self.topAnchor, constant: Metrics.paddingV),
+                    panel.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: Metrics.paddingH),
+                    panel.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -Metrics.paddingH),
+                    panel.bottomAnchor.constraint(equalTo: self.bottomAnchor, constant: -Metrics.paddingV),
+                ])
+            }
+        }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    func returnToMetadata() {
+        guard mode != .metadata else { return }
+        swapContent(to: .metadata, panel: nil)
+    }
+
+    /// Swaps in a `CardTrackListView` for Subtitles/Audio. Selecting a row
+    /// (or "Off") applies the selection then returns the card to metadata.
+    func showTracks(header: String, tracks: [MediaTrack], selectedTrackId: Int?,
+                     showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
+        let list = CardTrackListView(header: header, tracks: tracks,
+                                     selectedTrackId: selectedTrackId, showsOffRow: showsOffRow,
+                                     onSelect: { [weak self] id in
+                                         onSelect(id)
+                                         self?.returnToMetadata()
+                                     })
+        swapContent(to: header == "Audio" ? .audioTracks : .subtitleTracks, panel: list)
+    }
+
+    /// Swaps in a `CardInfoView` info/tech sheet.
+    func showInfo(metadata: PlexMetadata, liveStatsProvider: (() -> AetherLiveStats?)?) {
+        swapContent(to: .info, panel: CardInfoView(metadata: metadata, liveStatsProvider: liveStatsProvider))
+    }
+
     // MARK: - Focus
 
     /// Landing point container routes controls-focus here; last
@@ -202,9 +253,8 @@ final class PlayerFocusCardView: UIView {
     private weak var lastFocusedControl: UIView?
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if let last = lastFocusedControl, !last.isHidden {
-            return [last]
-        }
+        if mode != .metadata, let panel = panelContainer { return [panel] }
+        if let last = lastFocusedControl, !last.isHidden { return [last] }
         return [resumeButton]
     }
 
@@ -215,18 +265,45 @@ final class PlayerFocusCardView: UIView {
         }
     }
 
+    /// Real focus trap while a panel is up: preferredFocusEnvironments only
+    /// steers the initial landing; directional presses can still walk focus
+    /// out to the controls row behind the panel. Fence them while presented
+    /// (same trap the popups fixed).
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        if mode != .metadata, window != nil,
+           let next = context.nextFocusedView, !next.isDescendant(of: self) {
+            return false
+        }
+        return super.shouldUpdateFocus(in: context)
+    }
+
     /// Nothing focusable sits below card, so Down press with card
     /// control focused delivered here (focus can't move). Right/left/up
     /// left focus engine (right walks controls row, then wraps; up bounces
-    /// to metadata); Down with focused button engages seek mode.
+    /// to metadata); Down with focused button engages seek mode. Menu
+    /// while a panel is up returns to metadata (card owns Menu itself).
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        // Right/left/up handled by focus engine; Down with control focused
-        // (nothing below) routes to seek mode container handler.
-        for press in presses where press.type == .downArrow {
-            onNavigateDown?()
-            return
+        for press in presses {
+            if press.type == .menu, mode != .metadata {
+                returnToMetadata()
+                return
+            }
+            if press.type == .downArrow, mode == .metadata {
+                onNavigateDown?()
+                return
+            }
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    // Swallow the ended phase of a consumed Menu press (same trap the
+    // popups fixed: letting it bubble peels a second unwind layer via the
+    // system dismiss).
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .menu {
+            return
+        }
+        super.pressesEnded(presses, with: event)
     }
 
 }
@@ -297,4 +374,523 @@ final class PlayerPrimaryButton: UIControl {
         super.pressesBegan(presses, with: event)
     }
 
+}
+
+// MARK: - CardTrackListView (Task 6 — ported from PlayerTrackPopupView)
+
+/// In-card track list panel for Subtitles/Audio. Ported from
+/// PlayerTrackPopupView: same row model, scroll+stack layout, and
+/// system-picker row focus treatment, minus the glass background and
+/// AnchoredPopupPresenting conformance/Menu handling — the card owns
+/// Menu and framing now.
+final class CardTrackListView: UIView {
+
+    struct Row {
+        let title: String
+        let subtitle: String?
+        let trackId: Int?
+        let isSelected: Bool
+    }
+
+    private let rows: [Row]
+    private let onSelect: (Int?) -> Void
+    private let scrollView = UIScrollView()
+    private let stack = UIStackView()
+    private var rowButtons: [CardTrackRowButton] = []
+
+    init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
+        var rows: [Row] = []
+        if showsOffRow {
+            rows.append(Row(title: "Off", subtitle: nil, trackId: nil, isSelected: selectedTrackId == nil))
+        }
+        rows.append(contentsOf: tracks.map { track in
+            Row(
+                title: track.name,
+                subtitle: [track.language, track.codec?.uppercased()].compactMap { $0 }.joined(separator: " • "),
+                trackId: track.id,
+                isSelected: track.id == selectedTrackId
+            )
+        })
+        self.rows = rows
+        self.onSelect = onSelect
+        super.init(frame: .zero)
+        setupViews(header: header)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupViews(header: String) {
+        let headerLabel = UILabel()
+        headerLabel.text = header
+        headerLabel.font = .systemFont(ofSize: 26, weight: .bold)
+        headerLabel.textColor = .white
+        addSubview(headerLabel)
+
+        stack.axis = .vertical
+        stack.spacing = 2
+        scrollView.addSubview(stack)
+        scrollView.clipsToBounds = true
+        addSubview(scrollView)
+
+        [headerLabel, scrollView, stack].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        // The scroll view grows with content up to a cap, so short lists
+        // hug their rows and long ones scroll.
+        let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
+        scrollHeight.priority = .defaultHigh
+
+        NSLayoutConstraint.activate([
+            headerLabel.topAnchor.constraint(equalTo: topAnchor),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrollHeight,
+
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+        ])
+
+        for row in rows {
+            let button = CardTrackRowButton(row: row)
+            button.onTap = { [weak self] in
+                self?.onSelect(row.trackId)
+            }
+            stack.addArrangedSubview(button)
+            rowButtons.append(button)
+        }
+    }
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let first = rowButtons.first(where: { $0.row.isSelected }) {
+            return [first]
+        }
+        return rowButtons.isEmpty ? [self] : [rowButtons[0]]
+    }
+}
+
+// MARK: - CardTrackRowButton (verbatim port of PopupRowButton)
+
+final class CardTrackRowButton: UIControl {
+
+    let row: CardTrackListView.Row
+    var onTap: (() -> Void)?
+    private let titleLabel = UILabel()
+    private let subtitleLabel = UILabel()
+    private let checkmarkView = UIImageView(image: UIImage(
+        systemName: "checkmark",
+        withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .bold)
+    ))
+    private let vStack = UIStackView()
+
+    init(row: CardTrackListView.Row) {
+        self.row = row
+        super.init(frame: .zero)
+
+        titleLabel.text = row.title
+        titleLabel.font = .systemFont(ofSize: 23, weight: .medium)
+        titleLabel.textColor = .white
+
+        subtitleLabel.text = row.subtitle
+        subtitleLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        subtitleLabel.isHidden = row.subtitle == nil || row.subtitle?.isEmpty == true
+
+        vStack.axis = .vertical
+        vStack.spacing = 2
+        vStack.isUserInteractionEnabled = false
+        vStack.addArrangedSubview(titleLabel)
+        vStack.addArrangedSubview(subtitleLabel)
+
+        // Leading checkmark column, reserved for every row so titles
+        // align whether or not a row is selected (system-picker layout).
+        checkmarkView.tintColor = .white
+        checkmarkView.isHidden = !row.isSelected
+        checkmarkView.contentMode = .center
+
+        addSubview(checkmarkView)
+        addSubview(vStack)
+
+        [vStack, checkmarkView].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        NSLayoutConstraint.activate([
+            checkmarkView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            checkmarkView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            checkmarkView.widthAnchor.constraint(equalToConstant: 26),
+
+            vStack.leadingAnchor.constraint(equalTo: checkmarkView.trailingAnchor, constant: 14),
+            vStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -18),
+            vStack.topAnchor.constraint(equalTo: topAnchor, constant: 13),
+            vStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -13),
+
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 60),
+        ])
+
+        layer.cornerRadius = 14
+        layer.cornerCurve = .continuous
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var canBecomeFocused: Bool { true }
+
+    // Select does not fire .primaryActionTriggered on a plain UIControl
+    // on tvOS; handle the press directly.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .select {
+            onTap?()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let isFocused = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations({
+            // System-picker focus treatment: white fill, black content.
+            self.backgroundColor = isFocused ? .white : .clear
+            self.titleLabel.textColor = isFocused ? .black : .white
+            self.subtitleLabel.textColor = isFocused
+                ? UIColor.black.withAlphaComponent(0.6)
+                : UIColor.white.withAlphaComponent(0.6)
+            self.checkmarkView.tintColor = isFocused ? .black : .white
+        }, completion: nil)
+    }
+}
+
+// MARK: - CardInfoView (Task 6 — ported from PlayerInfoPopupView)
+
+/// In-card info/tech sheet panel. Ported from PlayerInfoPopupView: same
+/// scroll+stack layout, populate() section builders, formatters, and the
+/// 1Hz live-tick lifecycle tied to window attach/detach — minus the glass
+/// background and AnchoredPopupPresenting conformance/Menu handling (the
+/// card owns Menu and framing now).
+final class CardInfoView: UIView {
+
+    private let metadata: PlexMetadata
+    /// Supplies a fresh engine snapshot on demand. nil on the `hls` route
+    /// (no AetherPlayer) — in that case the PLAYBACK section is omitted
+    /// entirely rather than showing stale or synthesized numbers.
+    private let liveStatsProvider: (() -> AetherLiveStats?)?
+    private let scrollView = UIScrollView()
+    private let stack = UIStackView()
+
+    /// Live PLAYBACK rows, updated in place every tick. nil when the
+    /// PLAYBACK section was omitted at populate() time.
+    private var bufferRow: UILabel?
+    private var backendRow: UILabel?
+    private var audioBridgeRow: UILabel?
+    private var liveTickTimer: Timer?
+
+    init(metadata: PlexMetadata, liveStatsProvider: (() -> AetherLiveStats?)? = nil) {
+        self.metadata = metadata
+        self.liveStatsProvider = liveStatsProvider
+        super.init(frame: .zero)
+        setupViews()
+        populate()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    // MARK: - Live tick lifecycle
+    //
+    // The panel is added/removed via PlayerFocusCardView.swapContent, which
+    // always ends in removeFromSuperview() for the outgoing panel — so
+    // didMoveToWindow with window == nil is a reliable "panel is gone"
+    // signal for tearing the timer down. Starting in didMoveToWindow
+    // (rather than init) avoids ticking a timer for a view that's
+    // constructed but never actually shown.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            startLiveTick()
+        } else {
+            stopLiveTick()
+        }
+    }
+
+    private func startLiveTick() {
+        guard liveStatsProvider != nil, liveTickTimer == nil else { return }
+        liveTickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshLiveRows()
+            }
+        }
+    }
+
+    private func stopLiveTick() {
+        liveTickTimer?.invalidate()
+        liveTickTimer = nil
+    }
+
+    private func refreshLiveRows() {
+        guard let stats = liveStatsProvider?() else { return }
+        if let bufferRow, let seconds = stats.bufferedSeconds {
+            bufferRow.text = "Buffer: \(Self.formatBufferSeconds(seconds))"
+        }
+        if let backendRow, let backend = stats.backend {
+            backendRow.text = "Backend: \(backend)"
+        }
+        if let audioBridgeRow, let audioBridge = stats.audioBridge {
+            audioBridgeRow.text = "Audio Bridge: \(audioBridge)"
+        }
+    }
+
+    private func setupViews() {
+        stack.axis = .vertical
+        stack.spacing = 16
+        stack.alignment = .leading
+        scrollView.addSubview(stack)
+        addSubview(scrollView)
+
+        [scrollView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            stack.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+        ])
+    }
+
+    // MARK: - Content
+
+    private var primaryVideoStream: PlexStream? {
+        metadata.Media?.first?.Part?.first?.Stream?.first { $0.isVideo }
+    }
+
+    private var audioStreams: [PlexStream] {
+        metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isAudio } ?? []
+    }
+
+    private var subtitleStreams: [PlexStream] {
+        metadata.Media?.first?.Part?.first?.Stream?.filter { $0.isSubtitle } ?? []
+    }
+
+    private func populate() {
+        stack.addArrangedSubview(headerLabel("Media Info"))
+        if let title = metadata.title {
+            stack.addArrangedSubview(bodyLabel(title, secondary: true))
+        }
+
+        populatePlaybackSection()
+
+        stack.addArrangedSubview(sectionLabel("VIDEO"))
+        if let videoStream = primaryVideoStream {
+            if let displayTitle = videoStream.displayTitle ?? videoStream.extendedDisplayTitle {
+                stack.addArrangedSubview(infoRow("Format", displayTitle))
+            }
+            if videoStream.isDolbyVision {
+                var dvInfo = "Profile \(videoStream.DOVIProfile ?? 0)"
+                if let compatID = videoStream.DOVIBLCompatID {
+                    dvInfo += " (CompatID \(compatID))"
+                }
+                stack.addArrangedSubview(infoRow("Dolby Vision", dvInfo))
+            } else if videoStream.isHDR {
+                stack.addArrangedSubview(infoRow("HDR", "HDR10"))
+            }
+            if let bitDepth = videoStream.bitDepth {
+                stack.addArrangedSubview(infoRow("Bit Depth", "\(bitDepth)-bit"))
+            }
+            if let colorSpace = videoStream.colorSpace {
+                stack.addArrangedSubview(infoRow("Color Space", colorSpace))
+            }
+        } else if let media = metadata.Media?.first {
+            if let codec = media.videoCodec {
+                stack.addArrangedSubview(infoRow("Codec", codec.uppercased()))
+            }
+            if let res = media.videoResolution {
+                stack.addArrangedSubview(infoRow("Resolution", res))
+            }
+        }
+        if let media = metadata.Media?.first {
+            if let width = media.width, let height = media.height {
+                stack.addArrangedSubview(infoRow("Dimensions", "\(width) × \(height)"))
+            }
+            if let frameRate = media.videoFrameRate {
+                stack.addArrangedSubview(infoRow("Frame Rate", frameRate))
+            }
+            if let bitrate = media.bitrate {
+                stack.addArrangedSubview(infoRow("Bitrate", Self.formatBitrate(bitrate)))
+            }
+        }
+
+        if !audioStreams.isEmpty {
+            stack.addArrangedSubview(sectionLabel("AUDIO"))
+            for (index, stream) in audioStreams.enumerated() {
+                let title = stream.displayTitle ?? stream.extendedDisplayTitle ?? "Track \(index + 1)"
+                var detail = title
+                if let bitrate = stream.bitrate {
+                    detail += " · \(Self.formatBitrate(bitrate))"
+                }
+                if let sampleRate = stream.samplingRate {
+                    detail += " · \(sampleRate / 1000) kHz"
+                }
+                stack.addArrangedSubview(bodyLabel(detail, secondary: false))
+            }
+        }
+
+        if !subtitleStreams.isEmpty {
+            stack.addArrangedSubview(sectionLabel("SUBTITLES"))
+            for stream in subtitleStreams {
+                var title = stream.extendedDisplayTitle ?? stream.displayTitle ?? "Unknown"
+                var badges: [String] = []
+                if stream.forced == true { badges.append("Forced") }
+                if stream.hearingImpaired == true { badges.append("SDH") }
+                if stream.default == true { badges.append("Default") }
+                if !badges.isEmpty {
+                    title += " (\(badges.joined(separator: ", ")))"
+                }
+                stack.addArrangedSubview(bodyLabel(title, secondary: false))
+            }
+        }
+
+        if let part = metadata.Media?.first?.Part?.first {
+            stack.addArrangedSubview(sectionLabel("FILE"))
+            if let file = part.file {
+                let filename = (file as NSString).lastPathComponent
+                stack.addArrangedSubview(infoRow("Name", filename))
+            }
+            if let container = part.container ?? metadata.Media?.first?.container {
+                stack.addArrangedSubview(infoRow("Container", container.uppercased()))
+            }
+            if let size = part.size {
+                stack.addArrangedSubview(infoRow("Size", Self.formatFileSize(Int64(size))))
+            }
+            if let duration = metadata.duration ?? part.duration {
+                stack.addArrangedSubview(infoRow("Duration", Self.formatDuration(duration)))
+            }
+        }
+    }
+
+    /// Live engine stats section, inserted first (ahead of the static Plex
+    /// metadata sections). Omitted entirely when there's no provider (the
+    /// `hls` route has no AetherPlayer) or the first snapshot is all-nil —
+    /// never rendered as an empty/placeholder header.
+    private func populatePlaybackSection() {
+        guard let stats = liveStatsProvider?(), !stats.isEmpty else { return }
+
+        stack.addArrangedSubview(sectionLabel("PLAYBACK"))
+
+        if let seconds = stats.bufferedSeconds {
+            let row = bodyLabel("Buffer: \(Self.formatBufferSeconds(seconds))", secondary: false)
+            stack.addArrangedSubview(row)
+            bufferRow = row
+        }
+        if let backend = stats.backend {
+            let row = bodyLabel("Backend: \(backend)", secondary: false)
+            stack.addArrangedSubview(row)
+            backendRow = row
+        }
+        if let audioBridge = stats.audioBridge {
+            let row = bodyLabel("Audio Bridge: \(audioBridge)", secondary: false)
+            stack.addArrangedSubview(row)
+            audioBridgeRow = row
+        }
+    }
+
+    // MARK: - Row builders
+
+    private func headerLabel(_ text: String) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 26, weight: .bold)
+        label.textColor = .white
+        return label
+    }
+
+    private func sectionLabel(_ text: String) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 14, weight: .bold)
+        label.textColor = UIColor.white.withAlphaComponent(0.5)
+        return label
+    }
+
+    private func bodyLabel(_ text: String, secondary: Bool) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 18, weight: .regular)
+        label.textColor = secondary ? UIColor.white.withAlphaComponent(0.6) : .white
+        label.numberOfLines = 0
+        return label
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> UILabel {
+        let row = UILabel()
+        row.numberOfLines = 0
+        let text = NSMutableAttributedString(
+            string: "\(label): ",
+            attributes: [.font: UIFont.systemFont(ofSize: 16, weight: .medium), .foregroundColor: UIColor.white.withAlphaComponent(0.6)]
+        )
+        text.append(NSAttributedString(
+            string: value,
+            attributes: [.font: UIFont.systemFont(ofSize: 18, weight: .regular), .foregroundColor: UIColor.white]
+        ))
+        row.attributedText = text
+        return row
+    }
+
+    // MARK: - Formatting
+
+    /// Whole seconds, clamped to never print negative (AetherPlayer.liveStats
+    /// already clamps at the source, but the display layer stays defensive).
+    private static func formatBufferSeconds(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds.rounded()))
+        return "\(whole)s"
+    }
+
+    private static func formatBitrate(_ bitrate: Int) -> String {
+        if bitrate >= 1_000_000 {
+            return String(format: "%.1f Mbps", Double(bitrate) / 1_000_000.0)
+        } else if bitrate >= 1000 {
+            return String(format: "%.0f kbps", Double(bitrate) / 1000.0)
+        } else {
+            return "\(bitrate) bps"
+        }
+    }
+
+    private static func formatFileSize(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB, .useMB, .useKB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+
+    private static func formatDuration(_ milliseconds: Int) -> String {
+        let totalSeconds = milliseconds / 1000
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%d:%02d", minutes, seconds)
+        }
+    }
+
+    // Info has no selectable rows, but the panel still needs to be a real
+    // focus target -- otherwise focus never lands inside it and up/down
+    // presses never scroll it. Scrolling is driven by up/down presses via
+    // the inherited UIScrollView focus-scroll behavior.
+    override var canBecomeFocused: Bool { true }
 }

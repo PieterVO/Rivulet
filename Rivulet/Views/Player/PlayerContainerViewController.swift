@@ -22,7 +22,6 @@ class PlayerContainerViewController: UIViewController {
     private var progressBar: PlayerProgressBarView?
     private var skipPill: SkipPillButton?
     private var chromeScrim = ChromeScrimView()
-    private var activePopup: (any AnchoredPopupPresenting)?
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
     private var touchSurfaceTapGesture: UITapGestureRecognizer?
@@ -161,17 +160,10 @@ class PlayerContainerViewController: UIViewController {
         return true
     }
 
-    /// Focus routing for the UIKit transport layer. An open popup owns
-    /// focus outright (its preferredFocusEnvironments pick the selected
-    /// row); otherwise controls-focus mode prefers the transport bar's
-    /// buttons (the bar itself remembers which one). The popup MUST be
-    /// routed from here: a focus request from the popup itself is
-    /// ignored by the focus system because the popup does not contain
-    /// the currently focused view.
+    /// Focus routing for the UIKit transport layer. Controls-focus mode
+    /// prefers the card (the card's own preferred-focus handles panel
+    /// landing when a track list / info sheet is up).
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if let popup = activePopup as? UIView, popup.window != nil {
-            return [popup]
-        }
         if viewModel?.controlsFocusActive == true, let card = focusCard {
             return [card]
         }
@@ -204,8 +196,8 @@ class PlayerContainerViewController: UIViewController {
                 vm.cancelScrub()
                 return
             }
-            if activePopup != nil {
-                activePopup?.dismiss()
+            if focusCard?.mode != .metadata {
+                focusCard?.returnToMetadata()
                 return
             }
             if vm.controlsFocusActive {
@@ -321,13 +313,14 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
-        // Close an open popup before anything else in the unwind chain.
-        // The popup consumes Menu itself when one of its rows is focused;
-        // this is the container-level backstop so a popup can never be
-        // orphaned by the .back chain (which doesn't know about popups).
+        // Return the card to metadata before anything else in the unwind
+        // chain. The card consumes Menu itself when a track row / info
+        // sheet is focused; this is the container-level backstop so a
+        // panel can never be orphaned by the .back chain (which doesn't
+        // know about card modes).
         if vm.postVideoState == .hidden, !vm.isScrubbing,
-           activePopup != nil {
-            activePopup?.dismiss()
+           focusCard?.mode != .metadata {
+            focusCard?.returnToMetadata()
             blockDismissTemporarily()
             return
         }
@@ -338,8 +331,8 @@ class PlayerContainerViewController: UIViewController {
                 dismissPlayer()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
-            } else if activePopup != nil {
-                activePopup?.dismiss()
+            } else if focusCard?.mode != .metadata {
+                focusCard?.returnToMetadata()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {
@@ -626,7 +619,10 @@ class PlayerContainerViewController: UIViewController {
         vm.$controlsFocusActive
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] active in
+                if !active {
+                    self?.focusCard?.returnToMetadata()
+                }
                 self?.setNeedsFocusUpdate()
                 self?.updateFocusIfNeeded()
             }
@@ -642,29 +638,24 @@ class PlayerContainerViewController: UIViewController {
             vm?.exitControlsFocus()
             self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
         }
-        // Temporary popup anchors — replaced by in-card modes in Task 6.
-        card.onSubtitles = { [weak self, weak vm] in
-            guard let self, let vm else { return }
-            let popup = PlayerTrackPopupView(
-                header: "Subtitles", tracks: vm.subtitleTracks,
-                selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
-                onSelect: { id in vm.selectSubtitleTrack(id: id) })
-            self.presentPopup(popup, anchoredTo: self.focusCard!.subtitlesButton)
+        // In-card modes: track lists and info/tech sheet swap the card's
+        // content in place (see PlayerFocusCardView.swapContent).
+        card.onSubtitles = { [weak card, weak vm] in
+            guard let card, let vm else { return }
+            card.showTracks(header: "Subtitles", tracks: vm.subtitleTracks,
+                            selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+                            onSelect: { id in vm.selectSubtitleTrack(id: id) })
         }
-        card.onAudio = { [weak self, weak vm] in
-            guard let self, let vm else { return }
-            let popup = PlayerTrackPopupView(
-                header: "Audio", tracks: vm.audioTracks,
-                selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
-                onSelect: { id in if let id { vm.selectAudioTrack(id: id) } })
-            self.presentPopup(popup, anchoredTo: self.focusCard!.audioButton)
+        card.onAudio = { [weak card, weak vm] in
+            guard let card, let vm else { return }
+            card.showTracks(header: "Audio", tracks: vm.audioTracks,
+                            selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
+                            onSelect: { id in if let id { vm.selectAudioTrack(id: id) } })
         }
-        card.onInfo = { [weak self, weak vm] in
-            guard let self, let vm else { return }
-            let popup = PlayerInfoPopupView(
-                metadata: vm.metadata,
-                liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() })
-            self.presentPopup(popup, anchoredTo: self.focusCard!.infoButton)
+        card.onInfo = { [weak card, weak vm] in
+            guard let card, let vm else { return }
+            card.showInfo(metadata: vm.metadata,
+                          liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() })
         }
     }
 
@@ -698,14 +689,6 @@ class PlayerContainerViewController: UIViewController {
             self.focusCard?.alpha = hidden ? 0 : 1
             self.skipPill?.alpha = hidden ? 0 : 1
         }
-    }
-
-    private func presentPopup<Popup: AnchoredPopupPresenting>(_ popup: Popup, anchoredTo anchor: UIView) {
-        activePopup?.dismiss()
-        var mutablePopup = popup
-        mutablePopup.onDismiss = { [weak self] in self?.activePopup = nil }
-        activePopup = mutablePopup
-        mutablePopup.present(in: view, anchoredTo: anchor)
     }
 
     @objc private func skipPillTapped() {
