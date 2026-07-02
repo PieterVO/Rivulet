@@ -342,7 +342,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var isCountdownPaused: Bool = false
     private var countdownTimer: Timer?
     @Published var scrubThumbnail: UIImage?
-    @Published private(set) var scrubSpeed: Int = 0  // -1, 0, or 1 (direction only)
+    @Published private(set) var scrubSpeed: Int = 0  // -3...3 shuttle level (0 = not shuttling); see ShuttleGrammar
     private var scrubStartTime: Date?  // When scrubbing started (for YouTube-style acceleration)
     @Published private(set) var audioTracks: [MediaTrack] = []
     @Published private(set) var subtitleTracks: [MediaTrack] = []
@@ -2184,56 +2184,28 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Scrubbing
 
-    /// Speed multipliers for each level (seconds per 100ms tick)
-    private static let scrubSpeeds: [Int: TimeInterval] = [
-        1: 1.0,    // 1x = 10 seconds per second
-        2: 2.0,    // 2x = 20 seconds per second
-        3: 4.0,    // 3x = 40 seconds per second
-        4: 8.0,    // 4x = 80 seconds per second
-        5: 15.0,   // 5x = 150 seconds per second
-        6: 30.0,   // 6x = 300 seconds per second (5 min/sec)
-        7: 45.0,   // 7x = 450 seconds per second (7.5 min/sec)
-        8: 60.0    // 8x = 600 seconds per second (10 min/sec)
-    ]
-
     /// Human-readable label for current scrub speed
     var scrubStepLabel: String? {
-        guard scrubSpeed != 0 else { return nil }
-        let magnitude = abs(scrubSpeed)
-        let arrow = scrubSpeed > 0 ? "▶▶" : "◀◀"
-        return "\(arrow) \(magnitude)×"
+        ShuttleGrammar.badge(forSpeed: scrubSpeed)
     }
 
-    /// Start or increase scrub speed in given direction
-    /// Each click increases speed up to 8x
+    /// Start or advance scrub speed in given direction via ShuttleGrammar:
+    /// click-and-hold enters at level 1 (2x), same-direction clicks bump up to
+    /// level 3 (6x) cap, opposite-direction clicks step down then cancel.
     /// - Parameter forward: true for forward, false for backward
     func scrubInDirection(forward: Bool) {
         hidePausedPoster()
-        let direction = forward ? 1 : -1
 
         if !isScrubbing {
             // Start scrubbing
             isScrubbing = true
             scrubTime = currentTime
-            scrubSpeed = direction  // Start at 1x
             controlsTimer?.invalidate()
             startScrubTimer()
             loadThumbnail(for: scrubTime)
-        } else if (scrubSpeed > 0) == forward {
-            // Same direction - increase speed up to 8x
-            let newSpeed = min(8, abs(scrubSpeed) + 1) * direction
-            scrubSpeed = newSpeed
-        } else {
-            // Opposite direction - decelerate first, then reverse
-            if abs(scrubSpeed) > 1 {
-                // Slow down by 1 level, keep same direction
-                let currentDirection = scrubSpeed > 0 ? 1 : -1
-                scrubSpeed = (abs(scrubSpeed) - 1) * currentDirection
-            } else {
-                // At 1x, switch to opposite direction at 1x
-                scrubSpeed = direction
-            }
         }
+        let newSpeed = ShuttleGrammar.step(current: scrubSpeed, clickForward: forward)
+        scrubSpeed = newSpeed
 
         // Immediate jump on each press
         let jumpAmount: TimeInterval = forward ? 10 : -10
@@ -2343,9 +2315,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func updateScrubFromTimer() {
         guard isScrubbing, scrubSpeed != 0 else { return }
 
-        let speedMagnitude = abs(scrubSpeed)
         let direction: TimeInterval = scrubSpeed > 0 ? 1 : -1
-        let secondsPerTick = Self.scrubSpeeds[speedMagnitude] ?? 1.0
+        let secondsPerTick = ShuttleGrammar.rate(forLevel: scrubSpeed)
 
         let newTime = scrubTime + (secondsPerTick * direction)
         scrubTime = max(0, min(duration, newTime))
