@@ -25,13 +25,37 @@
 
 import UIKit
 
+/// Horizontal accent gradient used for the progress fill. A
+/// `CAGradientLayer`-backed view resizes its layer automatically via
+/// `layerClass`, so it stays a drop-in frame-driven replacement for the
+/// plain white `progressFill` view laid out by `update(...)`'s animate block.
+final class AccentGradientView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let g = layer as! CAGradientLayer
+        g.colors = [
+            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
+            UIColor(red: 0xb9/255, green: 0xa3/255, blue: 0xff/255, alpha: 1).cgColor,
+            UIColor(red: 0xff/255, green: 0xce/255, blue: 0x93/255, alpha: 1).cgColor,
+            UIColor(red: 0x8f/255, green: 0xe9/255, blue: 0xd4/255, alpha: 1).cgColor,
+        ]
+        g.locations = [0, 0.45, 0.8, 1]
+        g.startPoint = CGPoint(x: 0, y: 0.5)
+        g.endPoint = CGPoint(x: 1, y: 0.5)
+        layer.cornerRadius = 5
+        clipsToBounds = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 final class PlayerProgressBarView: UIView {
 
     // MARK: - Metrics (AVPlayerViewController-matched)
 
     private enum Metrics {
-        static let trackHeight: CGFloat = 8
-        static let stripHeight: CGFloat = 100
+        static let trackHeight: CGFloat = 10
+        static let stripHeight: CGFloat = 120
         static let stripTileAspect: CGFloat = 16.0 / 9.0
         static let labelBandSpacing: CGFloat = 14
         static let thumbnailWidth: CGFloat = 320
@@ -60,7 +84,9 @@ final class PlayerProgressBarView: UIView {
 
     private let trackBackground = UIView()
     private let currentPositionGhost = UIView()
-    private let progressFill = UIView()
+    private let progressFill = AccentGradientView()
+    private let handleView = UIView()          // white core
+    private let handleRing = UIView()          // ring behind it
     private let markersContainer = UIView()
     private let currentTimeLabel = UILabel()
     private let remainingTimeLabel = UILabel()
@@ -110,8 +136,10 @@ final class PlayerProgressBarView: UIView {
     private var lastCurrentProgress: Double = 0
 
     private var trackHeightConstraint: NSLayoutConstraint!
-    private var currentTimeCenterXConstraint: NSLayoutConstraint!
     private var thumbnailCenterXConstraint: NSLayoutConstraint!
+
+    /// Loading placeholder mode; see `setSkeleton(_:)`.
+    private var isSkeleton = false
 
     private static let endsAtFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -135,7 +163,7 @@ final class PlayerProgressBarView: UIView {
     private func setupViews() {
         clipsToBounds = false
 
-        trackBackground.backgroundColor = UIColor.white.withAlphaComponent(0.3)
+        trackBackground.backgroundColor = UIColor.white.withAlphaComponent(0.16)
         trackBackground.layer.cornerCurve = .continuous
         trackBackground.clipsToBounds = true
 
@@ -143,13 +171,18 @@ final class PlayerProgressBarView: UIView {
         currentPositionGhost.backgroundColor = UIColor.white.withAlphaComponent(0.45)
         currentPositionGhost.isHidden = true
 
-        progressFill.backgroundColor = .white
+        handleRing.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+        handleView.backgroundColor = .white
+        handleView.layer.shadowColor = UIColor.black.cgColor
+        handleView.layer.shadowOpacity = 0.5
+        handleView.layer.shadowRadius = 16
+        handleView.layer.shadowOffset = CGSize(width: 0, height: 4)
 
-        currentTimeLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .semibold)
-        currentTimeLabel.textColor = .white
+        currentTimeLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
+        currentTimeLabel.textColor = UIColor.white.withAlphaComponent(0.82)
 
-        remainingTimeLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .medium)
-        remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+        remainingTimeLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .medium)
+        remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         remainingTimeLabel.textAlignment = .right
 
         endsAtLabel.font = .systemFont(ofSize: 17, weight: .medium)
@@ -212,6 +245,11 @@ final class PlayerProgressBarView: UIView {
         [currentPositionGhost, progressFill, markersContainer, stripContainer].forEach {
             trackBackground.addSubview($0)
         }
+        // Handle views are frame-driven siblings of trackBackground (not
+        // children of it — the track clips its contents, which would
+        // clip the handle's shadow and its overhang past the track edges).
+        addSubview(handleRing)
+        addSubview(handleView)
 
         [trackBackground, thumbnailContainer, thumbnailImageView,
          currentTimeLabel, remainingTimeLabel, endsAtLabel, scrubStepLabel].forEach {
@@ -219,7 +257,6 @@ final class PlayerProgressBarView: UIView {
         }
 
         trackHeightConstraint = trackBackground.heightAnchor.constraint(equalToConstant: Metrics.trackHeight)
-        currentTimeCenterXConstraint = currentTimeLabel.centerXAnchor.constraint(equalTo: leadingAnchor)
         thumbnailCenterXConstraint = thumbnailContainer.centerXAnchor.constraint(equalTo: leadingAnchor)
 
         NSLayoutConstraint.activate([
@@ -239,11 +276,11 @@ final class PlayerProgressBarView: UIView {
             thumbnailImageView.trailingAnchor.constraint(equalTo: thumbnailContainer.trailingAnchor),
             thumbnailImageView.bottomAnchor.constraint(equalTo: thumbnailContainer.bottomAnchor),
 
-            // Label band below the track. The scrub time follows the
-            // playhead (AVPlayerViewController behavior); remaining time
-            // is pinned below the right end, with "Ends at" to its left.
+            // Label band below the track. The elapsed time is pinned to
+            // the left (always visible); remaining time is pinned below
+            // the right end, with "Ends at" to its left.
             currentTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: Metrics.labelBandSpacing),
-            currentTimeCenterXConstraint,
+            currentTimeLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
 
             scrubStepLabel.centerYAnchor.constraint(equalTo: currentTimeLabel.centerYAnchor),
             scrubStepLabel.leadingAnchor.constraint(equalTo: currentTimeLabel.trailingAnchor, constant: 16),
@@ -277,6 +314,8 @@ final class PlayerProgressBarView: UIView {
         chapters: [PlexChapter],
         isWheelScrubbing: Bool = false
     ) {
+        guard !isSkeleton else { return }
+
         let wasScrubbing = self.isScrubbing
         self.isScrubbing = isScrubbing
         self.isWheelScrubbing = isWheelScrubbing
@@ -316,6 +355,23 @@ final class PlayerProgressBarView: UIView {
                     height: trackHeight
                 )
             }
+
+            // Handle: circle at rest, morphs to a tall rounded bar while
+            // scrubbing. Frame-driven, positioned at the fill edge and
+            // vertically centered on the track — a sibling of
+            // trackBackground so it isn't clipped by the track's own
+            // clipsToBounds.
+            let handleSize: CGSize = isScrubbing ? CGSize(width: 14, height: 46) : CGSize(width: 24, height: 24)
+            let ringInset: CGFloat = isScrubbing ? 5 : 6
+            let handleX = width * CGFloat(progress)
+            let trackMidY = self.trackBackground.frame.minY + trackHeight / 2
+            self.handleView.frame = CGRect(x: handleX - handleSize.width / 2, y: trackMidY - handleSize.height / 2,
+                                           width: handleSize.width, height: handleSize.height)
+            self.handleView.layer.cornerRadius = isScrubbing ? 8 : handleSize.width / 2
+            self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
+            self.handleRing.layer.cornerRadius = isScrubbing ? 8 + ringInset : self.handleRing.frame.width / 2
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(isScrubbing ? 0.16 : 0.14)
+
             self.layoutIfNeeded()
         }
 
@@ -335,18 +391,11 @@ final class PlayerProgressBarView: UIView {
             layoutStripOverlay(progress: progress, currentProgress: currentProgress, width: width)
         }
 
-        // The playhead-following time label appears only while scrubbing
-        // without the strip open (the callout replaces it once the strip
-        // is up); clamped so it never runs off the track ends or under
-        // the remaining-time label.
-        currentTimeLabel.isHidden = !isScrubbing || stripOpen
+        // The elapsed time label is static and left-pinned — always
+        // visible, showing the live/scrub position (no playhead-following
+        // or clamping needed; the callout above the strip covers the
+        // scrub-position readout while the strip is open).
         currentTimeLabel.text = Self.formatTime(displayTime)
-        currentTimeLabel.sizeToFit()
-        let halfLabel = currentTimeLabel.bounds.width / 2
-        let remainingWidth = remainingTimeLabel.intrinsicContentSize.width
-        let minCenter = halfLabel
-        let maxCenter = max(minCenter, width - remainingWidth - 24 - halfLabel)
-        currentTimeCenterXConstraint.constant = min(maxCenter, max(minCenter, width * CGFloat(progress)))
 
         remainingTimeLabel.text = "-\(Self.formatTime(max(0, duration - displayTime)))"
 
@@ -373,6 +422,29 @@ final class PlayerProgressBarView: UIView {
         let showWheelIndicator = stripOpen && isScrubbing && isWheelScrubbing
         wheelRing.isHidden = !showWheelIndicator
         wheelDot.isHidden = !showWheelIndicator
+    }
+
+    /// Loading placeholder: keeps the locked geometry and vertical rhythm
+    /// while playback starts. update(...) is a no-op while on.
+    func setSkeleton(_ on: Bool) {
+        guard on != isSkeleton else { return }
+        isSkeleton = on
+        trackBackground.backgroundColor = UIColor.white.withAlphaComponent(on ? 0.08 : 0.16)
+        progressFill.isHidden = on
+        handleView.isHidden = on
+        handleRing.isHidden = on
+        endsAtLabel.isHidden = on || duration <= 0
+        markersContainer.isHidden = on
+        let skeletonColor = UIColor.white.withAlphaComponent(0.22)
+        if on {
+            currentTimeLabel.text = "--:--"
+            remainingTimeLabel.text = "--:--"
+            currentTimeLabel.textColor = skeletonColor
+            remainingTimeLabel.textColor = skeletonColor
+        } else {
+            currentTimeLabel.textColor = UIColor.white.withAlphaComponent(0.82)
+            remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        }
     }
 
     /// Tracked purely so `update(...)` can detect the scrub-start/scrub-
@@ -414,7 +486,6 @@ final class PlayerProgressBarView: UIView {
             self.layoutIfNeeded()
         }
         currentPositionGhost.isHidden = true
-        currentTimeLabel.isHidden = true
         calloutLabel.isHidden = false
         renderMarkers(lastMarkers, duration: duration, trackWidth: width, trackHeight: 4, bottomAligned: true)
         trackBackground.bringSubviewToFront(markersContainer)
@@ -455,7 +526,6 @@ final class PlayerProgressBarView: UIView {
             self.layoutIfNeeded()
         }
         currentPositionGhost.isHidden = !isScrubbing
-        currentTimeLabel.isHidden = !isScrubbing
         calloutLabel.isHidden = true
         wheelRing.isHidden = true
         wheelDot.isHidden = true
