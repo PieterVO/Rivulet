@@ -287,7 +287,18 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var isBuffering = false
     @Published private(set) var errorMessage: String?
 
-    @Published var showControls = true
+    @Published var showControls = true {
+        didSet {
+            // Focus mode cannot outlive visible controls.
+            if !showControls { controlsFocusActive = false }
+        }
+    }
+
+    /// True while the focus engine is navigating the transport bar's
+    /// buttons (Subtitles/Audio/Info/Skip). While active, the SwiftUI
+    /// content layer is not focusable, directional input is left to the
+    /// focus engine, and controls do not auto-hide.
+    @Published var controlsFocusActive = false
     @Published var isScrubbing = false
     @Published var showPausedPoster = false
     @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
@@ -2833,7 +2844,28 @@ final class UniversalPlayerViewModel: ObservableObject {
         startControlsHideTimer()
     }
 
+    /// Enter transport-control focus mode: the SwiftUI content layer
+    /// stops being focusable, the focus engine lands on the transport
+    /// bar's buttons, and the auto-hide timer is suspended while the
+    /// user is navigating the controls. Menu exits back to playback.
+    func enterControlsFocus() {
+        guard showControls, !isScrubbing, postVideoState == .hidden else { return }
+        controlsTimer?.invalidate()
+        controlsTimer = nil
+        controlsFocusActive = true
+    }
+
+    /// Leave transport-control focus mode; controls stay visible and
+    /// the auto-hide timer restarts.
+    func exitControlsFocus() {
+        guard controlsFocusActive else { return }
+        controlsFocusActive = false
+        startControlsHideTimer()
+    }
+
     private func startControlsHideTimer() {
+        // Never auto-hide out from under focused transport controls.
+        guard !controlsFocusActive else { return }
         controlsTimer?.invalidate()
         controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
             guard let self else { return }

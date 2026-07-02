@@ -100,6 +100,17 @@ class PlayerContainerViewController: UIViewController {
                     }
                 }
                 .store(in: &cancellables)
+
+            // Route focus into (and back out of) the transport bar's
+            // buttons when controls-focus mode toggles.
+            vm.$controlsFocusActive
+                .removeDuplicates()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    self?.setNeedsFocusUpdate()
+                    self?.updateFocusIfNeeded()
+                }
+                .store(in: &cancellables)
         }
 
         // Menu button is handled via pressesBegan (not gesture recognizer)
@@ -140,6 +151,17 @@ class PlayerContainerViewController: UIViewController {
         return true
     }
 
+    /// While controls-focus mode is active, prefer the transport bar's
+    /// buttons (the bar itself remembers which one). Popups run their
+    /// own focus trap, so stand down while one is up.
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if viewModel?.controlsFocusActive == true,
+           let bar = transportBar, !bar.hasActivePopup {
+            return [bar]
+        }
+        return super.preferredFocusEnvironments
+    }
+
     /// Override dismiss to intercept system-triggered dismissals (e.g., from Menu button)
     /// and only allow dismissal when we've explicitly decided to dismiss.
     override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
@@ -168,6 +190,10 @@ class PlayerContainerViewController: UIViewController {
             }
             if transportBar?.hasActivePopup == true {
                 transportBar?.dismissActivePopup()
+                return
+            }
+            if vm.controlsFocusActive {
+                vm.exitControlsFocus()
                 return
             }
             if vm.showControls {
@@ -281,6 +307,8 @@ class PlayerContainerViewController: UIViewController {
                 vm.cancelScrub()
             } else if transportBar?.hasActivePopup == true {
                 transportBar?.dismissActivePopup()
+            } else if vm.controlsFocusActive {
+                vm.exitControlsFocus()
             } else if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
@@ -376,21 +404,21 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadLeftTap() {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
 
         inputCoordinator.handle(action: .stepSeek(forward: false), source: .irPress)
     }
 
     @objc private func handleDPadRightTap() {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
 
         inputCoordinator.handle(action: .stepSeek(forward: true), source: .irPress)
     }
 
     @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
 
         switch gesture.state {
         case .began:
@@ -410,7 +438,7 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadRightLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
 
         switch gesture.state {
         case .began:
@@ -431,8 +459,8 @@ class PlayerContainerViewController: UIViewController {
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
         guard let vm = viewModel else { return }
 
-        // Bail in error / post-video states regardless of mode.
-        if vm.playbackState.isFailed || vm.postVideoState != .hidden {
+        // Bail in error / post-video / controls-focus states regardless of mode.
+        if vm.playbackState.isFailed || vm.postVideoState != .hidden || vm.controlsFocusActive {
             return
         }
 

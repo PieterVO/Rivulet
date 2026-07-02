@@ -60,18 +60,23 @@ final class TransportControlButton: UIControl {
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
 
-        addTarget(self, action: #selector(handlePress), for: .primaryActionTriggered)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    @objc private func handlePress() {
-        onPress?()
-    }
-
     override var canBecomeFocused: Bool { true }
+
+    // Select does not fire .primaryActionTriggered on a plain UIControl
+    // on tvOS; handle the press directly.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .select {
+            onPress?()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)

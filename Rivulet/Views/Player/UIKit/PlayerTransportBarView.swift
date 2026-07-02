@@ -5,10 +5,15 @@
 //  Native UIKit transport bar styled after AVPlayerViewController
 //  (tvOS 15+): bottom scrim gradient, small metadata line above a large
 //  title at the lower left, thin scrubber, time remaining below the
-//  bar's right end, and a row of circular control buttons (Subtitles /
-//  Audio / Info) below the bar's left end. While scrubbing, the chrome
-//  fades out and only the scrubber + preview remain, matching the
-//  system player.
+//  bar's right end. The transport controls (Skip pill + Subtitles +
+//  Audio) sit above the bar's right end; Info sits below the bar's
+//  left end. While scrubbing, the chrome fades out and only the
+//  scrubber + preview remain, matching the system player.
+//
+//  Focus: buttons are reached via the view model's controlsFocusActive
+//  mode (PlayerContainerViewController routes focus here through
+//  preferredFocusEnvironments). The bar remembers the last focused
+//  control so focus returns there after a popup closes.
 //
 
 import UIKit
@@ -81,14 +86,17 @@ final class PlayerTransportBarView: UIView {
         skipButton.isHidden = true
         skipButton.addTarget(self, action: #selector(skipTapped), for: .primaryActionTriggered)
 
+        // Transport controls above the bar's right end (system-player
+        // placement); the skip pill collapses out of the stack when hidden.
         controlsRow.axis = .horizontal
         controlsRow.spacing = 20
+        controlsRow.alignment = .center
+        controlsRow.addArrangedSubview(skipButton)
         controlsRow.addArrangedSubview(subtitlesButton)
         controlsRow.addArrangedSubview(audioButton)
-        controlsRow.addArrangedSubview(infoButton)
 
         [gradientView, secondaryLabel, titleLabel, bufferingIndicator,
-         progressBar, skipButton, controlsRow].forEach {
+         progressBar, controlsRow, infoButton].forEach {
             addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -101,26 +109,47 @@ final class PlayerTransportBarView: UIView {
 
             secondaryLabel.topAnchor.constraint(equalTo: topAnchor, constant: 48),
             secondaryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
-            secondaryLabel.trailingAnchor.constraint(lessThanOrEqualTo: skipButton.leadingAnchor, constant: -24),
+            secondaryLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlsRow.leadingAnchor, constant: -24),
 
             titleLabel.topAnchor.constraint(equalTo: secondaryLabel.bottomAnchor, constant: 2),
             titleLabel.leadingAnchor.constraint(equalTo: secondaryLabel.leadingAnchor),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: skipButton.leadingAnchor, constant: -24),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlsRow.leadingAnchor, constant: -24),
 
             bufferingIndicator.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             bufferingIndicator.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 16),
 
-            skipButton.bottomAnchor.constraint(equalTo: progressBar.topAnchor, constant: -Metrics.titleBarGap),
-            skipButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.sideMargin),
+            controlsRow.bottomAnchor.constraint(equalTo: progressBar.topAnchor, constant: -Metrics.titleBarGap),
+            controlsRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.sideMargin),
 
             progressBar.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: Metrics.titleBarGap),
             progressBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
             progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.sideMargin),
 
-            controlsRow.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: Metrics.controlsRowGap),
-            controlsRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
-            controlsRow.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.bottomMargin),
+            infoButton.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: Metrics.controlsRowGap),
+            infoButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
+            infoButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.bottomMargin),
         ])
+    }
+
+    // MARK: - Focus
+
+    /// The control focus should land on when entering controls-focus
+    /// mode, or return to after a popup closes.
+    private weak var lastFocusedControl: UIView?
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let last = lastFocusedControl, !last.isHidden {
+            return [last]
+        }
+        return [subtitlesButton]
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if let next = context.nextFocusedView, next.isDescendant(of: self),
+           next is UIControl {
+            lastFocusedControl = next
+        }
     }
 
     private func bind() {
@@ -208,7 +237,7 @@ final class PlayerTransportBarView: UIView {
         guard hidden != chromeHidden else { return }
         chromeHidden = hidden
         UIView.animate(withDuration: 0.15) {
-            [self.titleLabel, self.secondaryLabel, self.controlsRow, self.skipButton].forEach {
+            [self.titleLabel, self.secondaryLabel, self.controlsRow, self.infoButton].forEach {
                 $0.alpha = hidden ? 0 : 1
             }
         }

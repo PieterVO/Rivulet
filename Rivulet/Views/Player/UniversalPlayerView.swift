@@ -44,6 +44,10 @@ final class RemoteInputHandler: ObservableObject {
     // Check if player is paused (taps start scrubbing when paused)
     var isPausedCheck: (() -> Bool)?
 
+    /// True while the transport bar's buttons own focus. Directional and
+    /// seek input then belongs to the focus engine, not this handler.
+    var isControlsFocusCheck: (() -> Bool)?
+
     var onAction: ((PlaybackInputAction, PlaybackInputSource) -> Void)?
 
     private var controllerObserver: NSObjectProtocol?
@@ -359,6 +363,17 @@ final class RemoteInputHandler: ObservableObject {
     }
 
     private func emit(_ action: PlaybackInputAction, source: PlaybackInputSource) {
+        // While the transport bar's buttons own focus, swallow seek and
+        // scrub input so d-pad presses move focus instead of the
+        // playhead. Play/pause and back stay meaningful.
+        if isControlsFocusCheck?() == true {
+            switch action {
+            case .play, .pause, .playPause, .back:
+                break
+            default:
+                return
+            }
+        }
         onAction?(action, source)
     }
 
@@ -636,6 +651,8 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 )
                 vm.cancelScrub()
                 onResetRemoteInput?()
+            } else if vm.controlsFocusActive {
+                vm.exitControlsFocus()
             } else if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
@@ -772,6 +789,9 @@ struct UniversalPlayerView: View {
             remoteInput.isPausedCheck = { [weak viewModel] in
                 viewModel?.playbackState == .paused
             }
+            remoteInput.isControlsFocusCheck = { [weak viewModel] in
+                viewModel?.controlsFocusActive ?? false
+            }
             remoteInput.onAction = { [inputCoordinator] action, source in
                 inputCoordinator.handle(action: action, source: source)
             }
@@ -886,7 +906,12 @@ struct UniversalPlayerView: View {
         }
         // Focusable when skip button is not focused, post-video is not showing, and not in error state
         // When in error state, let the dismiss button receive focus instead
-        .focusable(viewModel.postVideoState == .hidden && !viewModel.playbackState.isFailed)
+        // Not focusable while controlsFocusActive: releasing focus here
+        // is what lets the focus engine land on the UIKit transport
+        // bar's buttons (PlayerContainerViewController routes it there).
+        .focusable(viewModel.postVideoState == .hidden
+                   && !viewModel.playbackState.isFailed
+                   && !viewModel.controlsFocusActive)
         .contentShape(Rectangle())
         .onTapGesture {
             // Don't toggle controls if in error state
@@ -1191,11 +1216,16 @@ struct UniversalPlayerView: View {
         case .right:
             inputCoordinator.handle(action: .stepSeek(forward: true), source: .swiftUICommand)
         case .down:
-            // Surface controls, where the Info pill lives (cancels any active scrubbing)
+            // Scrubbing: cancel. Controls visible: hand focus to the
+            // transport bar's buttons (AVPlayerViewController model).
+            // Otherwise: surface the controls.
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
+            } else if viewModel.showControls {
+                viewModel.enterControlsFocus()
+            } else {
+                inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
             }
-            inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
         case .up:
             // Cancel scrubbing on up
             if viewModel.isScrubbing {

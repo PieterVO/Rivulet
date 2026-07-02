@@ -119,16 +119,13 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
 
         for row in rows {
             let button = PopupRowButton(row: row)
-            button.addTarget(self, action: #selector(rowTapped(_:)), for: .primaryActionTriggered)
+            button.onTap = { [weak self] in
+                self?.onSelect(row.trackId)
+                self?.dismiss()
+            }
             stack.addArrangedSubview(button)
             rowButtons.append(button)
         }
-    }
-
-    @objc private func rowTapped(_ sender: PopupRowButton) {
-        guard let index = rowButtons.firstIndex(of: sender) else { return }
-        onSelect(rows[index].trackId)
-        dismiss()
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -152,6 +149,7 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
 private final class PopupRowButton: UIControl {
 
     let row: PlayerTrackPopupView.Row
+    var onTap: (() -> Void)?
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let checkmarkView = UIImageView(image: UIImage(
@@ -211,6 +209,16 @@ private final class PopupRowButton: UIControl {
     }
 
     override var canBecomeFocused: Bool { true }
+
+    // Select does not fire .primaryActionTriggered on a plain UIControl
+    // on tvOS; handle the press directly.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .select {
+            onTap?()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
