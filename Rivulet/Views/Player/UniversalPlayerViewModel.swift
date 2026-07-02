@@ -2844,15 +2844,28 @@ final class UniversalPlayerViewModel: ObservableObject {
         startControlsHideTimer()
     }
 
+    enum ControlsFocusEntry { case up, down }
+
+    /// direction user entered controls-focus mode from. the
+    /// transport bar consults this to land focus on the matching
+    /// cluster (.up = subs/audio row above bar, .down = info button
+    /// below it), then clears it after landing.
+    @Published private(set) var controlsFocusEntry: ControlsFocusEntry?
+
     /// Enter transport-control focus mode: the SwiftUI content layer
     /// stops being focusable, the focus engine lands on the transport
     /// bar's buttons, and the auto-hide timer is suspended while the
     /// user is navigating the controls. Menu exits back to playback.
-    func enterControlsFocus() {
+    func enterControlsFocus(from direction: ControlsFocusEntry) {
         guard showControls, !isScrubbing, postVideoState == .hidden else { return }
         controlsTimer?.invalidate()
         controlsTimer = nil
+        controlsFocusEntry = direction
         controlsFocusActive = true
+    }
+
+    func clearControlsFocusEntry() {
+        controlsFocusEntry = nil
     }
 
     /// Leave transport-control focus mode; controls stay visible and
@@ -2860,6 +2873,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     func exitControlsFocus() {
         guard controlsFocusActive else { return }
         controlsFocusActive = false
+        controlsFocusEntry = nil
         startControlsHideTimer()
     }
 

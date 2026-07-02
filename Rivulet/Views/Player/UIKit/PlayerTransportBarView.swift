@@ -138,6 +138,14 @@ final class PlayerTransportBarView: UIView {
     private weak var lastFocusedControl: UIView?
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        switch viewModel?.controlsFocusEntry {
+        case .up:
+            return [subtitlesButton]
+        case .down:
+            return [infoButton]
+        case nil:
+            break
+        }
         if let last = lastFocusedControl, !last.isHidden {
             return [last]
         }
@@ -149,6 +157,8 @@ final class PlayerTransportBarView: UIView {
         if let next = context.nextFocusedView, next.isDescendant(of: self),
            next is UIControl {
             lastFocusedControl = next
+            // Entry direction served its purpose once focus lands.
+            viewModel?.clearControlsFocusEntry()
         }
     }
 

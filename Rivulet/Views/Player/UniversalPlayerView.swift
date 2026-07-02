@@ -1222,7 +1222,7 @@ struct UniversalPlayerView: View {
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
             } else if viewModel.showControls {
-                viewModel.enterControlsFocus()
+                viewModel.enterControlsFocus(from: .down)
             } else {
                 inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
             }
@@ -1230,6 +1230,8 @@ struct UniversalPlayerView: View {
             // Cancel scrubbing on up
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
+            } else if viewModel.showControls {
+                viewModel.enterControlsFocus(from: .up)
             }
         @unknown default:
             break
