@@ -238,6 +238,13 @@ final class RemoteInputHandler: ObservableObject {
                     return
                 }
 
+                // Don't capture clicks while the transport bar's buttons own
+                // focus - Select belongs to the focused control (the same
+                // click also arrives as a .select press), not play/pause.
+                if self.isControlsFocusCheck?() == true {
+                    return
+                }
+
                 if pressed {
                     self.isButtonDown = true
                     // Use tracked dpad direction (captured before click disrupted sensing)
@@ -268,7 +275,12 @@ final class RemoteInputHandler: ObservableObject {
         extended.buttonA.pressedChangedHandler = { [weak self] _, _, pressed in
             guard pressed else { return }
             Task { @MainActor [weak self] in
-                self?.emit(.playPause, source: .extendedGamepad)
+                guard let self else { return }
+                // Select belongs to the focused transport-bar control while
+                // controls-focus mode is active (buttonA also routes to the
+                // focus engine as a .select press).
+                if self.isControlsFocusCheck?() == true { return }
+                self.emit(.playPause, source: .extendedGamepad)
             }
         }
 

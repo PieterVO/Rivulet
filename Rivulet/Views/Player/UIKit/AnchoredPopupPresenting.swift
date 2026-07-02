@@ -29,15 +29,38 @@ extension AnchoredPopupPresenting {
         container.addSubview(self)
         translatesAutoresizingMaskIntoConstraints = false
 
+        // System-player feel: the panel hangs directly over the button
+        // that opened it - horizontally centered on the anchor, clamped
+        // so it never leaves the screen, with a tight gap so the two
+        // read as connected.
         let anchorFrame = anchor.convert(anchor.bounds, to: container)
+        let margin: CGFloat = 60
+        let gap: CGFloat = 12
+        let halfWidth = width / 2
+        let minCenterX = margin + halfWidth
+        let maxCenterX = container.bounds.width - margin - halfWidth
+        let centerX = min(max(anchorFrame.midX, minCenterX), max(minCenterX, maxCenterX))
+
         NSLayoutConstraint.activate([
-            bottomAnchor.constraint(equalTo: container.topAnchor, constant: anchorFrame.minY - 16),
-            leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: anchorFrame.minX),
+            bottomAnchor.constraint(equalTo: container.topAnchor, constant: anchorFrame.minY - gap),
+            leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: centerX - halfWidth),
             widthAnchor.constraint(equalToConstant: width),
+            // Tall track lists compress (their scroll views scroll)
+            // rather than growing past the top of the screen.
+            topAnchor.constraint(greaterThanOrEqualTo: container.topAnchor, constant: margin),
         ])
 
-        UIView.animate(withDuration: 0.2) {
+        // Grow out of the button: start slightly shrunk toward the
+        // anchor and settle to identity alongside the fade.
+        transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            .translatedBy(x: 0, y: 12)
+        UIView.animate(withDuration: 0.25,
+                       delay: 0,
+                       usingSpringWithDamping: 0.85,
+                       initialSpringVelocity: 0,
+                       options: [.allowUserInteraction]) {
             self.alpha = 1
+            self.transform = .identity
         }
         UIAccessibility.post(notification: .screenChanged, argument: self)
         UIView.performWithoutAnimation {
