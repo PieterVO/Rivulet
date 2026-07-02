@@ -2285,6 +2285,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// track is left alone (no revert-to-off later).
     func replayWithCaptions() {
         guard duration > 0 else { return }
+        guard !isScrubbing else { return }
         let invokedAt = currentTime
         if let window = replayWindow {
             replayWindow = window.extended(to: invokedAt)
@@ -2429,6 +2430,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             scrubSpeed = 0
             scrubStartTime = nil  // No time-based acceleration for wheel
             controlsTimer?.invalidate()
+        } else if scrubSpeed != 0 {
+            // A wheel tick arrived mid-shuttle. Cancel the timer-driven shuttle
+            // and hand control to the wheel delta alone, same as
+            // startSwipeScrubbing neutralizes speed for passive scrub.
+            stopScrubTimer()
+            scrubSpeed = 0
+            scrubStartTime = nil
         }
 
         scrubTime = max(0, min(duration, scrubTime + seekDelta))

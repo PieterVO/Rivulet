@@ -561,7 +561,27 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
 
         case .seekRelative(let seconds):
             guard vm.postVideoState == .hidden else { return }
-            if vm.isScrubbing {
+            if vm.isScrubbing && vm.scrubSpeed != 0 {
+                // Active shuttle: a plain click bumps/steps-down the
+                // multiplier via ShuttleGrammar, same grammar as a
+                // long-press nudge. See F1 in final-branch-review.md —
+                // clicks must be able to reach the bump, not just holds.
+                let wasScrubbing = vm.isScrubbing
+                let speedBefore = vm.scrubSpeed
+                vm.scrubInDirection(forward: seconds > 0)
+                let speedAfter = vm.scrubSpeed
+                PlaybackInputTelemetry.shared.recordScrubTransition(
+                    surface: .vod,
+                    transition: transitionForScrubNudge(
+                        wasScrubbing: wasScrubbing,
+                        speedBefore: speedBefore,
+                        speedAfter: speedAfter
+                    ),
+                    source: source,
+                    speedBefore: speedBefore,
+                    speedAfter: speedAfter
+                )
+            } else if vm.isScrubbing {
                 vm.updateSwipeScrubPosition(by: seconds)
             } else {
                 Task { await vm.seekRelative(by: seconds) }
