@@ -2196,6 +2196,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     func scrubInDirection(forward: Bool) {
         hidePausedPoster()
 
+        let newSpeed = ShuttleGrammar.step(current: isScrubbing ? scrubSpeed : 0, clickForward: forward)
+        if newSpeed == 0 {
+            cancelScrub()
+            return
+        }
+
         if !isScrubbing {
             // Start scrubbing
             isScrubbing = true
@@ -2204,7 +2210,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             startScrubTimer()
             loadThumbnail(for: scrubTime)
         }
-        let newSpeed = ShuttleGrammar.step(current: scrubSpeed, clickForward: forward)
         scrubSpeed = newSpeed
 
         // Immediate jump on each press
@@ -2316,7 +2321,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard isScrubbing, scrubSpeed != 0 else { return }
 
         let direction: TimeInterval = scrubSpeed > 0 ? 1 : -1
-        let secondsPerTick = ShuttleGrammar.rate(forLevel: scrubSpeed)
+        // ShuttleGrammar.rate(forLevel:) is content-seconds per REAL-second;
+        // scale by the timer's actual firing interval to get the per-tick advance.
+        let secondsPerSecond = ShuttleGrammar.rate(forLevel: scrubSpeed)
+        let secondsPerTick = secondsPerSecond * scrubUpdateInterval
 
         let newTime = scrubTime + (secondsPerTick * direction)
         scrubTime = max(0, min(duration, newTime))
