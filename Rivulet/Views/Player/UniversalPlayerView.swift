@@ -570,6 +570,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
 
         case .seekAbsolute(let time):
             guard vm.postVideoState == .hidden else { return }
+            vm.clearReplayWindow()
             Task { await vm.seek(to: time) }
             vm.showControlsTemporarily()
 

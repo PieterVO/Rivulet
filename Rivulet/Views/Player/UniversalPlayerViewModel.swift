@@ -348,6 +348,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var subtitleTracks: [MediaTrack] = []
     @Published private(set) var currentAudioTrackId: Int?
     @Published private(set) var currentSubtitleTrackId: Int?
+    /// Active "What did they say?" replay window, if the user is currently
+    /// inside one. Cleared (without reverting) by any user-initiated
+    /// absolute seek, manual subtitle-track change, or stopPlayback.
+    private var replayWindow: ReplayWindowLogic?
     private var compatibilityNoticeTimer: Timer?
     private nonisolated(unsafe) var userActivity: NSUserActivity?
 
@@ -857,6 +861,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 guard let self else { return }
                 self.currentTime = time.seconds
                 self.checkMarkers(at: time.seconds)
+                self.tickReplayWindow(at: time.seconds)
             }
         }
         timeObserver = observer
@@ -1372,6 +1377,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // or 0.25s (software host), both finer than checkMarkers' ~0.5s
                 // assumption, so no throttle change is needed.
                 self?.checkMarkers(at: time)
+                self?.tickReplayWindow(at: time)
             }
             .store(in: &cancellables)
 
@@ -2020,6 +2026,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         aetherStallWatchdogTask?.cancel()
         aetherStallWatchdogTask = nil
         subtitleClockSync.stop()
+        clearReplayWindow()
 
         // Clear the active playback route from the App Hang scope (RIVULET-41).
         AppHangContext.setPlaybackRoute(nil)
@@ -2176,6 +2183,54 @@ final class UniversalPlayerViewModel: ObservableObject {
         showSeekIndicator(seconds >= 0 ? .forward(intSeconds) : .backward(intSeconds))
     }
 
+    /// "What did they say?" — jump back 15s with subtitles temporarily on,
+    /// auto-reverting once playback passes the point this was invoked
+    /// from. A repeat invocation while already inside a window extends
+    /// the revert point rather than layering a second window on top.
+    /// If subtitles are already on, this only jumps back; the active
+    /// track is left alone (no revert-to-off later).
+    func replayWithCaptions() {
+        let invokedAt = currentTime
+        if let window = replayWindow {
+            replayWindow = window.extended(to: invokedAt)
+        } else {
+            replayWindow = ReplayWindowLogic(invokedAt: invokedAt, priorSubtitleTrackId: currentSubtitleTrackId)
+            if currentSubtitleTrackId == nil, let track = preferredReplaySubtitleTrack() {
+                selectSubtitleTrackWithoutSaving(id: track.id)
+            }
+        }
+        Task { await seek(to: max(0, invokedAt - 15)) }
+    }
+
+    /// First non-forced subtitle track, or the first track if all are
+    /// forced (better to show something than nothing when the user asks
+    /// "what did they say?").
+    private func preferredReplaySubtitleTrack() -> MediaTrack? {
+        subtitleTracks.first { !$0.isForced } ?? subtitleTracks.first
+    }
+
+    /// Called from both the AVPlayer and Aether periodic time-observer
+    /// sites alongside `checkMarkers(at:)`. Reverts the active replay
+    /// window once playback passes its invocation point.
+    private func tickReplayWindow(at time: TimeInterval) {
+        guard let window = replayWindow, window.shouldRevert(currentTime: time) else { return }
+        replayWindow = nil
+        if window.priorSubtitleTrackId == nil {
+            selectSubtitleTrackWithoutSaving(id: nil)
+        }
+    }
+
+    /// Clears any active replay window without reverting subtitles — used
+    /// wherever the user (or the system) moves playback or subtitle state
+    /// out from under the window: manual scrubs, absolute seeks, manual
+    /// subtitle picks, and stopPlayback. The in-progress choice wins.
+    /// Internal (not private): the `.seekAbsolute` input-action handler in
+    /// `UniversalPlayerView` calls this directly for user-initiated absolute
+    /// seeks (remote-scrub, Now Playing widget) that bypass `commitScrub()`.
+    func clearReplayWindow() {
+        replayWindow = nil
+    }
+
     /// Show seek indicator briefly (1.5 seconds)
     private func showSeekIndicator(_ indicator: SeekIndicator) {
         seekIndicatorTimer?.invalidate()
@@ -2293,6 +2348,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     func commitScrub() async {
         stopScrubTimer()
         if isScrubbing {
+            clearReplayWindow()
             await seek(to: scrubTime)
             isScrubbing = false
             scrubSpeed = 0
@@ -2449,6 +2505,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func selectSubtitleTrack(id: Int?) {
+        // User picked a track manually: their choice wins over any active
+        // replay window (no later revert-to-prior-track).
+        clearReplayWindow()
+
         // Delegate the actual pipeline switch to the auto-selection helper,
         // then persist the user's explicit choice as the saved preference so
         // future playback sessions restore it.
@@ -2463,6 +2523,9 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func selectAetherSubtitleTrackFromNativePicker(aetherTrackId: Int?) {
         guard let ap = aetherPlayer else { return }
+        // User picked a track manually via the native picker: their choice
+        // wins over any active replay window (no later revert).
+        clearReplayWindow()
         ap.selectSubtitleTrack(id: aetherTrackId)
 
         if let aetherTrackId,

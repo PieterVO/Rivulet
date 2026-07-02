@@ -5,10 +5,11 @@
 //  Native UIKit transport bar styled after AVPlayerViewController
 //  (tvOS 15+): bottom scrim gradient, small metadata line above a large
 //  title at the lower left, thin scrubber, time remaining below the
-//  bar's right end. The transport controls (Skip pill + Subtitles +
-//  Audio) sit above the bar's right end; Info sits below the bar's
-//  left end. While scrubbing, the chrome fades out and only the
-//  scrubber + preview remain, matching the system player.
+//  bar's right end. The transport controls (Skip pill, "What did they
+//  say?" replay, Subtitles, Audio, reserved Browse slot) sit above the
+//  bar's right end; Info sits below the bar's left end. While scrubbing,
+//  the chrome fades out and only the scrubber + preview remain, matching
+//  the system player.
 //
 //  Focus: buttons are reached via the view model's controlsFocusActive
 //  mode (PlayerContainerViewController routes focus here through
@@ -38,10 +39,17 @@ final class PlayerTransportBarView: UIView {
     let progressBar = PlayerProgressBarView()
     private let skipButton = SkipPillButton()
 
+    let replayButton = TransportControlButton(
+        icon: UIImage(systemName: "gobackward.15"), accessibilityLabel: "What did they say?")
     let subtitlesButton = TransportControlButton(
         icon: UIImage(systemName: "captions.bubble"), accessibilityLabel: "Subtitles")
     let audioButton = TransportControlButton(
         icon: UIImage(systemName: "waveform"), accessibilityLabel: "Audio")
+    /// Reserved slot for the episode-wheel browse feature (deferred). Hidden
+    /// until the wheel ships; keeps the row's layout and focus order stable
+    /// for when it does.
+    let browseButton = TransportControlButton(
+        icon: UIImage(systemName: "list.and.film"), accessibilityLabel: "Browse")
     let infoButton = TransportControlButton(
         icon: UIImage(systemName: "info"), accessibilityLabel: "Info")
     private let controlsRow = UIStackView()
@@ -92,8 +100,11 @@ final class PlayerTransportBarView: UIView {
         controlsRow.spacing = 20
         controlsRow.alignment = .center
         controlsRow.addArrangedSubview(skipButton)
+        controlsRow.addArrangedSubview(replayButton)
         controlsRow.addArrangedSubview(subtitlesButton)
         controlsRow.addArrangedSubview(audioButton)
+        controlsRow.addArrangedSubview(browseButton)
+        browseButton.isHidden = true
 
         [gradientView, secondaryLabel, titleLabel, bufferingIndicator,
          progressBar, controlsRow, infoButton].forEach {
@@ -226,6 +237,13 @@ final class PlayerTransportBarView: UIView {
         secondaryLabel.text = viewModel.subtitle
         secondaryLabel.isHidden = viewModel.subtitle == nil
 
+        replayButton.onPress = { [weak self] in self?.viewModel?.replayWithCaptions() }
+        replayButton.isHidden = viewModel.subtitleTracks.isEmpty
+        viewModel.$subtitleTracks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] tracks in self?.replayButton.isHidden = tracks.isEmpty }
+            .store(in: &cancellables)
+
         subtitlesButton.onPress = { [weak self] in
             guard let self, let viewModel = self.viewModel else { return }
             let popup = PlayerTrackPopupView(
@@ -237,6 +255,7 @@ final class PlayerTransportBarView: UIView {
             )
             self.presentPopup(popup, anchoredTo: self.subtitlesButton)
         }
+        subtitlesButton.onLongPress = { [weak self] in self?.viewModel?.replayWithCaptions() }
 
         audioButton.onPress = { [weak self] in
             guard let self, let viewModel = self.viewModel else { return }
