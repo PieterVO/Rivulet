@@ -2213,7 +2213,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// sites alongside `checkMarkers(at:)`. Reverts the active replay
     /// window once playback passes its invocation point.
     private func tickReplayWindow(at time: TimeInterval) {
-        guard let window = replayWindow, window.shouldRevert(currentTime: time) else { return }
+        guard let existing = replayWindow else { return }
+        // Arm first: the window's backward seek happens asynchronously in a
+        // Task, so a stale tick can land at/after invokedAt before the seek
+        // actually takes effect. Only a tick observed below invokedAt proves
+        // the seek landed; only then can a later pass back over invokedAt
+        // count as a real revert trigger.
+        let window = existing.observing(currentTime: time)
+        replayWindow = window
+        guard window.shouldRevert(currentTime: time) else { return }
         replayWindow = nil
         if window.priorSubtitleTrackId == nil {
             selectSubtitleTrackWithoutSaving(id: nil)
@@ -3315,6 +3323,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         let target = duration > 0
             ? max(0, min(marker.endTimeSeconds, duration - skipEpsilon))
             : max(0, marker.endTimeSeconds)
+
+        // Marker skip (manual or auto) is a user-initiated seek that bypasses
+        // commitScrub/.seekAbsolute: clear any active replay window so a
+        // stale invocation point can't spuriously revert subtitles later,
+        // disconnected from where playback actually landed post-skip.
+        clearReplayWindow()
         await seek(to: target)
 
         // Hide button
@@ -3754,6 +3768,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         hasSkippedIntro = false
         skippedCreditsIds.removeAll()
         skippedCommercialIds.removeAll()
+
+        // Clear any replay window left open from the previous episode — its
+        // invokedAt is a timestamp on episode N's timeline, meaningless (and
+        // dangerously coincidental) on episode N+1's, and would otherwise
+        // silently revert subtitles mid-scene with no relationship to any
+        // action the user took in the new episode.
+        clearReplayWindow()
 
         // Reset intro skip countdown state
         introSkipCountdownTimer?.invalidate()
