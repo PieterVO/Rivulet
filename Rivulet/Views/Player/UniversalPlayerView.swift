@@ -1083,7 +1083,9 @@ struct UniversalPlayerView: View {
                     .ignoresSafeArea()
             }
 
-            // Gradient overlay for readability
+            // Gradient overlay for readability. The UIKit focus card owns
+            // the loading identity (spinner, title, skeleton bars) — this
+            // view is now just the full-bleed backdrop it renders above.
             LinearGradient(
                 colors: [
                     .black.opacity(0.9),
@@ -1095,109 +1097,6 @@ struct UniversalPlayerView: View {
                 endPoint: .trailing
             )
             .ignoresSafeArea()
-
-            // Content
-            HStack(alignment: .center, spacing: 0) {
-                // Left side - metadata
-                VStack(alignment: .leading, spacing: 16) {
-                    // Show title (for episodes)
-                    if let grandparentTitle = viewModel.metadata.grandparentTitle {
-                        Text(grandparentTitle)
-                            .font(.title2)
-                            .fontWeight(.medium)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-
-                    // Main title
-                    Text(viewModel.title)
-                        .font(.system(size: 56, weight: .bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-
-                    // Season/Episode info
-                    if let seasonNum = viewModel.metadata.parentIndex,
-                       let episodeNum = viewModel.metadata.index {
-                        Text("Season \(seasonNum), Episode \(episodeNum)")
-                            .font(.title3)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-
-                    // Year and duration
-                    HStack(spacing: 16) {
-                        if let year = viewModel.metadata.year {
-                            Text(String(year))
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-                        if let duration = viewModel.metadata.duration {
-                            Text(formatDuration(duration))
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-                        if let rating = viewModel.metadata.contentRating {
-                            Text(rating)
-                                .foregroundStyle(.white.opacity(0.6))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .strokeBorder(.white.opacity(0.3), lineWidth: 1)
-                                )
-                        }
-                    }
-                    .font(.body)
-
-                    // Description - prefer tagline (short), fallback to summary (long, ellipsed).
-                    // Apply the same spoiler-blur policy as MediaDetailView's hero summary:
-                    // movies + episodes are spoiler-prone; the summary blurs when the item
-                    // hasn't been watched. Tagline is marketing copy and stays sharp.
-                    let isUnwatched = (viewModel.metadata.viewCount ?? 0) == 0
-                    let summaryIsSpoilerProne = (viewModel.metadata.type == "movie" || viewModel.metadata.type == "episode")
-                    let shouldBlurSummary = hideSpoilersForUnwatched && isUnwatched && summaryIsSpoilerProne
-                    if let tagline = viewModel.metadata.tagline, !tagline.isEmpty {
-                        Text(tagline)
-                            .font(.system(size: 32, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(3)
-                            .padding(.top, 24)
-                    } else if let summary = viewModel.metadata.summary, !summary.isEmpty {
-                        Text(summary)
-                            .font(.system(size: 28))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(6)
-                            .padding(.top, 24)
-                            .blur(radius: shouldBlurSummary ? 12 : 0)
-                    }
-
-                    Spacer(minLength: 120)  // Leave room above scrubber
-
-                    // Loading indicator (only show when actually loading, not when paused)
-                    if viewModel.pausePresentation == .frame {
-                        HStack(spacing: 12) {
-                            ProgressView()
-                                .tint(.white)
-                            Text("Loading...")
-                                .font(.callout)
-                                .foregroundStyle(.white.opacity(0.7))
-                        }
-                    }
-                }
-                .frame(maxWidth: 700, alignment: .leading)
-                .padding(.leading, 80)
-                .padding(.vertical, 60)
-
-                Spacer()
-
-                // Right side - poster/thumbnail (passed from detail view - instant display)
-                if let thumbImage = viewModel.loadingThumbImage {
-                    let isLandscape = thumbImage.size.width > thumbImage.size.height
-                    Image(uiImage: thumbImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: isLandscape ? 700 : nil, maxHeight: 500)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 10)
-                        .padding(.trailing, 80)
-                }
-            }
         }
     }
 

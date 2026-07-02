@@ -600,7 +600,14 @@ class PlayerContainerViewController: UIViewController {
 
         vm.$playbackState
             .receive(on: DispatchQueue.main)
-            .sink { [weak card] state in card?.setPaused(state == .paused) }
+            .sink { [weak self, weak card, weak vm] state in
+                card?.setPaused(state == .paused)
+                guard let self, let vm else { return }
+                let loading = state == .loading || state == .idle
+                self.focusCard?.setLoading(loading, seriesLine: vm.subtitle, title: vm.title)
+                self.progressBar?.setSkeleton(loading)
+                self.skipPill?.isHidden = loading || !vm.showSkipButton
+            }
             .store(in: &cancellables)
 
         vm.$showSkipButton

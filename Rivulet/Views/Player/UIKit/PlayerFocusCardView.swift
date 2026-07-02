@@ -246,6 +246,20 @@ final class PlayerFocusCardView: UIView {
         swapContent(to: .info, panel: CardInfoView(metadata: metadata, liveStatsProvider: liveStatsProvider))
     }
 
+    /// Swaps in a `CardLoadingView` (spinner + skeleton) while playback
+    /// starts, or returns to metadata once loading clears. Not focusable —
+    /// `controlsFocusActive` is false while loading so the container never
+    /// routes focus into the card.
+    func setLoading(_ loading: Bool, seriesLine: String?, title: String) {
+        if loading {
+            tintView.backgroundColor = UIColor(red: 16/255, green: 18/255, blue: 24/255, alpha: 0.40)
+            swapContent(to: .loading, panel: CardLoadingView(seriesLine: seriesLine, title: title))
+        } else if mode == .loading {
+            tintView.backgroundColor = UIColor(red: 16/255, green: 18/255, blue: 24/255, alpha: 0.42)
+            returnToMetadata()
+        }
+    }
+
     // MARK: - Focus
 
     /// Landing point container routes controls-focus here; last
@@ -893,4 +907,125 @@ final class CardInfoView: UIView {
     // presses never scroll it. Scrolling is driven by up/down presses via
     // the inherited UIScrollView focus-scroll behavior.
     override var canBecomeFocused: Bool { true }
+}
+
+// MARK: - IrisSpinnerView (Task 7)
+
+/// 64pt conic accent-gradient ring, masked to an 8pt stroke, spinning
+/// 1.4s/rev. Animation is re-added on window attach (CAAnimations die
+/// on removal).
+final class IrisSpinnerView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let g = layer as! CAGradientLayer
+        g.type = .conic
+        g.colors = [
+            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
+            UIColor(red: 0xb9/255, green: 0xa3/255, blue: 0xff/255, alpha: 1).cgColor,
+            UIColor(red: 0xff/255, green: 0xce/255, blue: 0x93/255, alpha: 1).cgColor,
+            UIColor(red: 0x8f/255, green: 0xe9/255, blue: 0xd4/255, alpha: 1).cgColor,
+            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 0).cgColor,
+        ]
+        g.startPoint = CGPoint(x: 0.5, y: 0.5)
+        g.endPoint = CGPoint(x: 0.5, y: 0)
+
+        let ring = CAShapeLayer()
+        ring.path = UIBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).cgPath
+        ring.fillColor = UIColor.clear.cgColor
+        ring.strokeColor = UIColor.white.cgColor
+        ring.lineWidth = 8
+        ring.lineCap = .round
+        layer.mask = ring
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var intrinsicContentSize: CGSize { CGSize(width: 64, height: 64) }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0
+        spin.toValue = 2 * Double.pi
+        spin.duration = 1.4
+        spin.repeatCount = .infinity
+        layer.add(spin, forKey: "spin")
+    }
+}
+
+// MARK: - CardLoadingView (Task 7)
+
+/// In-card loading panel: spinner + "Loading · <series>" row, title, and
+/// two skeleton bars standing in for the meta row / controls row while
+/// playback starts (or an episode advance swaps content). Not focusable —
+/// see `PlayerFocusCardView.setLoading`.
+final class CardLoadingView: UIView {
+
+    init(seriesLine: String?, title: String) {
+        super.init(frame: .zero)
+
+        let spinner = IrisSpinnerView()
+
+        let loadingLabel = UILabel()
+        let seriesText = seriesLine.map { " · \($0)" } ?? ""
+        loadingLabel.text = "Loading\(seriesText)"
+        loadingLabel.font = .systemFont(ofSize: 23, weight: .medium)
+        loadingLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        loadingLabel.numberOfLines = 1
+
+        let spinnerRow = UIStackView(arrangedSubviews: [spinner, loadingLabel])
+        spinnerRow.axis = .horizontal
+        spinnerRow.spacing = 20
+        spinnerRow.alignment = .center
+
+        let titleLabel = UILabel()
+        titleLabel.numberOfLines = 2
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.05
+        titleLabel.attributedText = NSAttributedString(string: title, attributes: [
+            .font: UIFont.systemFont(ofSize: 48, weight: .bold),
+            .foregroundColor: UIColor.white,
+            .kern: 48 * -0.015,
+            .paragraphStyle: paragraph,
+        ])
+
+        let barTall = skeletonBar(widthMultiplier: 0.6, alpha: 0.08)
+        let barShort = skeletonBar(widthMultiplier: 0.4, alpha: 0.06)
+
+        let stack = UIStackView(arrangedSubviews: [spinnerRow, titleLabel, barTall, barShort])
+        stack.axis = .vertical
+        stack.spacing = 18
+        stack.alignment = .fill
+        stack.setCustomSpacing(28, after: spinnerRow)
+
+        addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func skeletonBar(widthMultiplier: CGFloat, alpha: CGFloat) -> UIView {
+        let bar = UIView()
+        bar.backgroundColor = UIColor.white.withAlphaComponent(alpha)
+        bar.layer.cornerRadius = 6
+        bar.layer.cornerCurve = .continuous
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        // Widths are relative to the panel itself (self), not the arranged
+        // stack, since a UIStackView's arranged subviews don't have a fixed
+        // width to anchor against directly.
+        bar.widthAnchor.constraint(equalTo: widthAnchor, multiplier: widthMultiplier).isActive = true
+        return bar
+    }
+
+    // Not focusable: while loading, controlsFocusActive is false so the
+    // container never routes focus here.
+    override var canBecomeFocused: Bool { false }
 }
