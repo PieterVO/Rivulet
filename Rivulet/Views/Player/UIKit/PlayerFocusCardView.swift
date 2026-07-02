@@ -267,7 +267,7 @@ final class PlayerFocusCardView: UIView {
     private weak var lastFocusedControl: UIView?
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if mode != .metadata, let panel = panelContainer { return [panel] }
+        if mode != .metadata, mode != .loading, let panel = panelContainer { return [panel] }
         if let last = lastFocusedControl, !last.isHidden { return [last] }
         return [resumeButton]
     }
@@ -284,7 +284,7 @@ final class PlayerFocusCardView: UIView {
     /// out to the controls row behind the panel. Fence them while presented
     /// (same trap the popups fixed).
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
-        if mode != .metadata, window != nil,
+        if mode != .metadata, mode != .loading, window != nil,
            let next = context.nextFocusedView, !next.isDescendant(of: self) {
             return false
         }
