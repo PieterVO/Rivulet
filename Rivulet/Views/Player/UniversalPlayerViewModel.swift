@@ -301,6 +301,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var controlsFocusActive = false
     @Published var isScrubbing = false
 
+    /// True while iPod-style circular clickpad rotation is actively
+    /// driving the scrub (see `handleWheelRotation(_:)`). Distinct from
+    /// `isScrubbing`, which also covers swipe/click-step scrubbing — this
+    /// flag is only for the wheel-specific ring indicator in
+    /// `PlayerProgressBarView`. Cleared 0.8s after the last rotation tick,
+    /// or immediately on `commitScrub()` / `cancelScrub()`.
+    @Published private(set) var wheelScrubbing = false
+
     /// The three tiers of the paused ambient presentation: `.frame` is the
     /// live video frame (no overlay); `.ambient` shows the full-res
     /// crossfaded backdrop + title logo after `pausedPosterDelay` seconds
@@ -453,6 +461,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var controlsTimer: Timer?
     private let controlsHideDelay: TimeInterval = 5
     private var scrubTimer: Timer?
+    private var wheelScrubbingTimer: Timer?
+    private let wheelScrubbingIdleDelay: TimeInterval = 0.8
     private var appBecameActiveObserver: Any?
     private var appBackgroundObserver: Any?
     private var pausedDueToAppInactive: Bool = false
@@ -2142,6 +2152,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         controlsTimer?.invalidate()
+        wheelScrubbingTimer?.invalidate()
+        wheelScrubbingTimer = nil
+        wheelScrubbing = false
         hideCompatibilityNotice()
 
         // Reset display criteria to default (allows TV to return to normal mode)
@@ -2420,6 +2433,27 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         scrubTime = max(0, min(duration, scrubTime + seekDelta))
         loadThumbnail(for: scrubTime)
+
+        wheelScrubbing = true
+        startWheelScrubbingIdleTimer()
+    }
+
+    /// Resets the 0.8s idle timer that clears `wheelScrubbing` after
+    /// rotation ticks stop arriving. A single Timer is reused (reset on
+    /// each call) rather than accumulating one per rotation event.
+    private func startWheelScrubbingIdleTimer() {
+        wheelScrubbingTimer?.invalidate()
+        wheelScrubbingTimer = Timer.scheduledTimer(withTimeInterval: wheelScrubbingIdleDelay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.wheelScrubbing = false
+            }
+        }
+    }
+
+    private func stopWheelScrubbingTimer() {
+        wheelScrubbingTimer?.invalidate()
+        wheelScrubbingTimer = nil
+        wheelScrubbing = false
     }
 
     func updateScrubPosition(_ time: TimeInterval) {
@@ -2437,6 +2471,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func commitScrub() async {
         stopScrubTimer()
+        stopWheelScrubbingTimer()
         if isScrubbing {
             clearReplayWindow()
             await seek(to: scrubTime)
@@ -2449,6 +2484,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func cancelScrub() {
         stopScrubTimer()
+        stopWheelScrubbingTimer()
         isScrubbing = false
         scrubSpeed = 0
         scrubStartTime = nil
@@ -3986,6 +4022,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         controlsTimer?.invalidate()
         scrubTimer?.invalidate()
+        wheelScrubbingTimer?.invalidate()
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
         introSkipCountdownTimer?.invalidate()

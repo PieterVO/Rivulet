@@ -38,6 +38,10 @@ final class PlayerProgressBarView: UIView {
         static let thumbnailHeight: CGFloat = 180
         static let thumbnailGap: CGFloat = 20
         static let endsAtGap: CGFloat = 24
+        static let wheelRingDiameter: CGFloat = 44
+        static let wheelRingBorderWidth: CGFloat = 3
+        static let wheelDotDiameter: CGFloat = 6
+        static let wheelRingGap: CGFloat = 16
     }
 
     // MARK: - Marker coloring
@@ -71,6 +75,14 @@ final class PlayerProgressBarView: UIView {
     private let playheadLine = UIView()
     private let livePositionLine = UIView()
     private let calloutLabel = UILabel()
+
+    // Jog wheel indicator: shown beside the callout label only while a
+    // circular clickpad rotation is actively driving the scrub
+    // (`isWheelScrubbing`). Frame-driven like calloutLabel, positioned in
+    // `layoutStripOverlay(...)`.
+    private let wheelRing = UIView()
+    private let wheelDot = UIView()
+    private var isWheelScrubbing = false
 
     // Chapter seam hairlines, drawn at each chapter start's x position
     // while the strip is open. Rebuilt only when chapters/width change.
@@ -183,8 +195,18 @@ final class PlayerProgressBarView: UIView {
         calloutLabel.textAlignment = .center
         calloutLabel.isHidden = true
 
+        wheelRing.backgroundColor = .clear
+        wheelRing.layer.borderWidth = Metrics.wheelRingBorderWidth
+        wheelRing.layer.borderColor = UIColor.white.withAlphaComponent(0.3).cgColor
+        wheelRing.layer.cornerRadius = Metrics.wheelRingDiameter / 2
+        wheelRing.isHidden = true
+
+        wheelDot.backgroundColor = .white
+        wheelDot.layer.cornerRadius = Metrics.wheelDotDiameter / 2
+        wheelDot.isHidden = true
+
         [trackBackground, thumbnailContainer, currentTimeLabel, remainingTimeLabel,
-         endsAtLabel, scrubStepLabel, calloutLabel].forEach {
+         endsAtLabel, scrubStepLabel, calloutLabel, wheelRing, wheelDot].forEach {
             addSubview($0)
         }
         [currentPositionGhost, progressFill, markersContainer, stripContainer].forEach {
@@ -252,10 +274,12 @@ final class PlayerProgressBarView: UIView {
         scrubStepLabelText: String?,
         scrubThumbnail: UIImage?,
         markers: [PlexMarker],
-        chapters: [PlexChapter]
+        chapters: [PlexChapter],
+        isWheelScrubbing: Bool = false
     ) {
         let wasScrubbing = self.isScrubbing
         self.isScrubbing = isScrubbing
+        self.isWheelScrubbing = isWheelScrubbing
         self.duration = duration
         self.lastMarkers = markers
         self.lastChapters = chapters
@@ -345,6 +369,10 @@ final class PlayerProgressBarView: UIView {
         }
 
         calloutLabel.isHidden = !stripOpen
+
+        let showWheelIndicator = stripOpen && isScrubbing && isWheelScrubbing
+        wheelRing.isHidden = !showWheelIndicator
+        wheelDot.isHidden = !showWheelIndicator
     }
 
     /// Tracked purely so `update(...)` can detect the scrub-start/scrub-
@@ -429,6 +457,8 @@ final class PlayerProgressBarView: UIView {
         currentPositionGhost.isHidden = !isScrubbing
         currentTimeLabel.isHidden = !isScrubbing
         calloutLabel.isHidden = true
+        wheelRing.isHidden = true
+        wheelDot.isHidden = true
         livePositionLine.isHidden = true
         renderMarkers(lastMarkers, duration: duration, trackWidth: trackBackground.bounds.width,
                       trackHeight: Metrics.trackHeight, bottomAligned: false)
@@ -474,6 +504,51 @@ final class PlayerProgressBarView: UIView {
         let halfLabel = calloutLabel.bounds.width / 2
         let clampedCenter = min(max(playheadX, halfLabel), max(halfLabel, width - halfLabel))
         calloutLabel.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - calloutLabel.bounds.height / 2)
+
+        layoutWheelIndicator(progress: progress, calloutCenter: calloutLabel.center, calloutHalfWidth: halfLabel, width: width)
+    }
+
+    /// Positions the 44pt ring + orbiting 6pt dot beside `calloutLabel`
+    /// while a circular clickpad rotation is driving the scrub. The ring
+    /// sits to the right of the callout (or the left, clamped inside the
+    /// track bounds, if the callout is pinned to the right edge). The dot
+    /// orbits the ring center at `angle = progress * 4 * .pi` — two full
+    /// laps across the track — so it visibly advances with scrub
+    /// progress rather than just sitting at a fixed rest position.
+    private func layoutWheelIndicator(progress: Double, calloutCenter: CGPoint, calloutHalfWidth: CGFloat, width: CGFloat) {
+        guard isWheelScrubbing else { return }
+
+        let ringRadius = Metrics.wheelRingDiameter / 2
+        let preferredCenterX = calloutCenter.x + calloutHalfWidth + Metrics.wheelRingGap + ringRadius
+        let ringCenterX: CGFloat
+        if preferredCenterX + ringRadius > width {
+            // Callout is pinned near the right edge; place the ring on
+            // its left side instead so it stays on-screen.
+            ringCenterX = calloutCenter.x - calloutHalfWidth - Metrics.wheelRingGap - ringRadius
+        } else {
+            ringCenterX = preferredCenterX
+        }
+        let ringCenter = CGPoint(x: ringCenterX, y: calloutCenter.y)
+
+        wheelRing.frame = CGRect(
+            x: ringCenter.x - ringRadius,
+            y: ringCenter.y - ringRadius,
+            width: Metrics.wheelRingDiameter,
+            height: Metrics.wheelRingDiameter
+        )
+
+        let angle = CGFloat(progress) * 4 * .pi
+        let dotRadius = Metrics.wheelDotDiameter / 2
+        let dotCenter = CGPoint(
+            x: ringCenter.x + sin(angle) * ringRadius,
+            y: ringCenter.y - cos(angle) * ringRadius
+        )
+        wheelDot.frame = CGRect(
+            x: dotCenter.x - dotRadius,
+            y: dotCenter.y - dotRadius,
+            width: Metrics.wheelDotDiameter,
+            height: Metrics.wheelDotDiameter
+        )
     }
 
     /// The chapter tag whose range contains `time`, if it has a non-empty name.

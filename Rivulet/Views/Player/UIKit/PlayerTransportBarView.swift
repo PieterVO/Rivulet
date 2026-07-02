@@ -211,8 +211,10 @@ final class PlayerTransportBarView: UIView {
 
         viewModel.$currentTime
             .combineLatest(viewModel.$duration, viewModel.$isScrubbing, viewModel.$scrubTime)
+            .combineLatest(viewModel.$wheelScrubbing.removeDuplicates())
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] currentTime, duration, isScrubbing, scrubTime in
+            .sink { [weak self] combined, isWheelScrubbing in
+                let (currentTime, duration, isScrubbing, scrubTime) = combined
                 guard let self, let viewModel = self.viewModel else { return }
                 self.progressBar.update(
                     currentTime: currentTime,
@@ -222,7 +224,8 @@ final class PlayerTransportBarView: UIView {
                     scrubStepLabelText: viewModel.scrubStepLabel,
                     scrubThumbnail: viewModel.scrubThumbnail,
                     markers: viewModel.metadata.allMarkers,
-                    chapters: viewModel.metadata.Chapter ?? []
+                    chapters: viewModel.metadata.Chapter ?? [],
+                    isWheelScrubbing: isWheelScrubbing
                 )
                 self.setChrome(hidden: isScrubbing)
             }
