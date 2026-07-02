@@ -300,7 +300,42 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// focus engine, and controls do not auto-hide.
     @Published var controlsFocusActive = false
     @Published var isScrubbing = false
-    @Published var showPausedPoster = false
+
+    /// The three tiers of the paused ambient presentation: `.frame` is the
+    /// live video frame (no overlay); `.ambient` shows the full-res
+    /// crossfaded backdrop + title logo after `pausedPosterDelay` seconds
+    /// paused; `.dimmed` adds a deeper black overlay after
+    /// `pausedPosterDimDelay` seconds paused (OLED burn-in guard).
+    enum PausePresentation: Equatable {
+        case frame
+        case ambient
+        case dimmed
+    }
+    @Published private(set) var pausePresentation: PausePresentation = .frame
+
+    /// Kept for existing call sites; true in either ambient tier.
+    var showPausedPoster: Bool { pausePresentation != .frame }
+
+    /// Full-resolution backdrop for the ambient pause state: raw Plex art
+    /// path with token, NOT the `/photo/:/transcode` downscale that
+    /// `PlexNetworkManager.buildThumbnailURL` applies (the TV renders it at
+    /// native size, full-bleed).
+    var ambientBackdropURL: URL? {
+        guard let art = metadata.art,
+              var components = URLComponents(string: "\(serverURL)\(art)") else { return nil }
+        components.queryItems = (components.queryItems ?? []) + [
+            URLQueryItem(name: "X-Plex-Token", value: authToken)
+        ]
+        return components.url
+    }
+
+    /// Title logo (clearArt) for the transport bar, resolved once per item:
+    /// prefer the Plex-provided clearLogo image, falling back to TMDB's
+    /// images API via the shared cache (same precedence the home hero and
+    /// media detail chrome use).
+    @Published private(set) var titleLogoImage: UIImage?
+    private var titleLogoResolveTask: Task<Void, Never>?
+
     @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
     @Published var compatibilityNotice: String?
 
@@ -425,6 +460,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var seekIndicatorTimer: Timer?
     private var pausedPosterTimer: Timer?
     private let pausedPosterDelay: TimeInterval = 5.0
+    private var pausedPosterDimTimer: Timer?
+    private let pausedPosterDimDelay: TimeInterval = 120.0
     private var aetherStallWatchdogTask: Task<Void, Never>?
     private let aetherStallRecoveryDelay: TimeInterval = 20
     private let aetherStallFailureDelay: TimeInterval = 20
@@ -967,6 +1004,9 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Fetch season/show poster for Now Playing artwork (episodes)
         await fetchSeasonPosterIfNeeded()
+
+        // Resolve the title logo for the ambient-pause transport bar swap.
+        fetchTitleLogoIfNeeded()
 
         // Aether is the only VOD engine; ContentRouter.plan() emits the
         // .aether route (or an AVPlayer fallback route) and
@@ -1689,6 +1729,45 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Resolve the title logo for the transport bar's ambient-pause swap:
+    /// prefer the Plex-provided clearLogo image (same precedence as the
+    /// home hero and media detail chrome), falling back to TMDB's images
+    /// API via `TMDBLogoCache` when Plex doesn't carry one. Cancels any
+    /// in-flight resolve from a previous item so an episode swap can't
+    /// stomp the new item's result with a stale one.
+    private func fetchTitleLogoIfNeeded() {
+        titleLogoResolveTask?.cancel()
+        titleLogoImage = nil
+
+        if let logoPath = metadata.clearLogoPath,
+           let url = URL(string: "\(serverURL)\(logoPath)?X-Plex-Token=\(authToken)") {
+            titleLogoResolveTask = Task { [weak self] in
+                guard let image = await ImageCacheManager.shared.image(for: url) else { return }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self, !Task.isCancelled else { return }
+                    self.titleLogoImage = image
+                }
+            }
+            return
+        }
+
+        // TMDB-mapped items (or episodes, which carry no logo of their own —
+        // fall back to the parent show's tmdbId) resolve via the shared cache.
+        guard let tmdbID = metadata.tmdbId ?? metadata.parentShowTmdbId ?? metadata.showTmdbId else { return }
+        let type: TMDBMediaType = metadata.type == "movie" ? .movie : .tv
+        titleLogoResolveTask = Task { [weak self] in
+            guard let url = await TMDBLogoCache.shared.logoURL(tmdbId: tmdbID, type: type) else { return }
+            guard !Task.isCancelled else { return }
+            guard let image = await ImageCacheManager.shared.image(for: url) else { return }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, !Task.isCancelled else { return }
+                self.titleLogoImage = image
+            }
+        }
+    }
+
     /// Build a human-readable audio description from metadata.
     private func buildAudioDescription() -> String {
         let codec = metadata.Media?.first?.audioCodec?.uppercased() ?? ""
@@ -2025,6 +2104,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         streamPreparationTask = nil
         aetherStallWatchdogTask?.cancel()
         aetherStallWatchdogTask = nil
+        titleLogoResolveTask?.cancel()
+        titleLogoResolveTask = nil
         subtitleClockSync.stop()
         clearReplayWindow()
 
@@ -2999,26 +3080,40 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Paused Poster Timer
 
-    /// Start timer to show poster after being paused for 5 seconds
+    /// Start timers for the ambient pause presentation: `.ambient` after
+    /// `pausedPosterDelay` seconds paused, `.dimmed` after
+    /// `pausedPosterDimDelay` seconds paused.
     private func startPausedPosterTimer() {
         pausedPosterTimer?.invalidate()
         pausedPosterTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.playbackState == .paused else { return }
                 withAnimation(.easeIn(duration: 1.0)) {
-                    self.showPausedPoster = true
+                    self.pausePresentation = .ambient
+                }
+            }
+        }
+
+        pausedPosterDimTimer?.invalidate()
+        pausedPosterDimTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDimDelay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.playbackState == .paused else { return }
+                withAnimation(.easeInOut(duration: 1.0)) {
+                    self.pausePresentation = .dimmed
                 }
             }
         }
     }
 
-    /// Cancel paused poster timer and hide the poster
+    /// Cancel both ambient-pause timers and drop back to the live frame.
     private func cancelPausedPosterTimer() {
         pausedPosterTimer?.invalidate()
         pausedPosterTimer = nil
-        if showPausedPoster {
+        pausedPosterDimTimer?.invalidate()
+        pausedPosterDimTimer = nil
+        if pausePresentation != .frame {
             withAnimation(.easeOut(duration: 0.5)) {
-                showPausedPoster = false
+                pausePresentation = .frame
             }
         }
     }
@@ -3757,6 +3852,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // signal), so bump this explicitly for anything that caches
         // per-item state and needs to reset across the swap.
         itemGeneration += 1
+
+        // Re-resolve the title logo for the new episode.
+        fetchTitleLogoIfNeeded()
 
         // Reset start offset so next episode starts from beginning (not resume position)
         startOffset = nil

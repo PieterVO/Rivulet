@@ -754,7 +754,7 @@ struct UniversalPlayerView: View {
         .animation(.easeInOut(duration: 1.0), value: viewModel.playbackState)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
-        .animation(.easeInOut(duration: 0.5), value: viewModel.showPausedPoster)
+        .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
         .onPlayPauseCommand {
             handleSelectCommand()
         }
@@ -861,14 +861,26 @@ struct UniversalPlayerView: View {
             }
 
             // Loading State or Paused Poster (shows after 5s pause)
-            if viewModel.playbackState == .loading || viewModel.playbackState == .idle || viewModel.showPausedPoster {
-                loadingView
-                    .transition(
-                        .asymmetric(
-                            insertion: .opacity.animation(.easeIn(duration: 1.0)),
-                            removal: .opacity.animation(.easeOut(duration: 0.5))
+            if viewModel.playbackState == .loading || viewModel.playbackState == .idle || viewModel.pausePresentation != .frame {
+                if viewModel.pausePresentation != .frame, let ambientURL = viewModel.ambientBackdropURL {
+                    // Ambient pause moment: full-resolution backdrop crossfade,
+                    // deeper dim once the second (2 minute) tier kicks in.
+                    ambientBackdropView(url: ambientURL)
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.animation(.easeIn(duration: 1.0)),
+                                removal: .opacity.animation(.easeOut(duration: 0.5))
+                            )
                         )
-                    )
+                } else {
+                    loadingView
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.animation(.easeIn(duration: 1.0)),
+                                removal: .opacity.animation(.easeOut(duration: 0.5))
+                            )
+                        )
+                }
             }
 
             // Buffering Indicator
@@ -955,6 +967,40 @@ struct UniversalPlayerView: View {
                 .offset(viewModel.videoFrameState.offset)
                 .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
         }
+    }
+
+    // MARK: - Ambient Pause Backdrop
+
+    /// Full-resolution backdrop for the ambient pause moment: full-bleed
+    /// crossfade of the raw Plex art (native size, not the 400x600
+    /// photo-transcode `loadingArtImage`/`loadingThumbImage` use), with a
+    /// deeper dim overlay once `pausePresentation` reaches `.dimmed`
+    /// (OLED burn-in guard after 2 minutes paused).
+    @ViewBuilder
+    private func ambientBackdropView(url: URL) -> some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            CachedAsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .empty, .failure:
+                    Color.black
+                }
+            }
+            .ignoresSafeArea()
+
+            if viewModel.pausePresentation == .dimmed {
+                Color.black
+                    .opacity(0.35)
+                    .ignoresSafeArea()
+            }
+        }
+        .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
     }
 
     // MARK: - Loading View
@@ -1060,7 +1106,7 @@ struct UniversalPlayerView: View {
                     Spacer(minLength: 120)  // Leave room above scrubber
 
                     // Loading indicator (only show when actually loading, not when paused)
-                    if !viewModel.showPausedPoster {
+                    if viewModel.pausePresentation == .frame {
                         HStack(spacing: 12) {
                             ProgressView()
                                 .tint(.white)

@@ -35,6 +35,11 @@ final class PlayerTransportBarView: UIView {
     private let gradientView = TransportScrimView()
     private let titleLabel = UILabel()
     private let secondaryLabel = UILabel()
+    /// Title logo shown in place of `titleLabel` during the ambient pause
+    /// moment (Task 7): same leading edge and baseline as the text title,
+    /// swapped in only when both a logo image is resolved and the pause
+    /// presentation has left `.frame`.
+    private let logoImageView = UIImageView()
     private let bufferingIndicator = UIActivityIndicatorView(style: .medium)
     let progressBar = PlayerProgressBarView()
     private let skipButton = SkipPillButton()
@@ -88,6 +93,9 @@ final class PlayerTransportBarView: UIView {
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
 
+        logoImageView.contentMode = .scaleAspectFit
+        logoImageView.isHidden = true
+
         bufferingIndicator.color = .white
         bufferingIndicator.hidesWhenStopped = true
 
@@ -106,7 +114,7 @@ final class PlayerTransportBarView: UIView {
         controlsRow.addArrangedSubview(browseButton)
         browseButton.isHidden = true
 
-        [gradientView, secondaryLabel, titleLabel, bufferingIndicator,
+        [gradientView, secondaryLabel, titleLabel, logoImageView, bufferingIndicator,
          progressBar, controlsRow, infoButton].forEach {
             addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -125,6 +133,12 @@ final class PlayerTransportBarView: UIView {
             titleLabel.topAnchor.constraint(equalTo: secondaryLabel.bottomAnchor, constant: 2),
             titleLabel.leadingAnchor.constraint(equalTo: secondaryLabel.leadingAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlsRow.leadingAnchor, constant: -24),
+
+            logoImageView.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            logoImageView.bottomAnchor.constraint(equalTo: titleLabel.bottomAnchor),
+            logoImageView.heightAnchor.constraint(equalToConstant: 68),
+            logoImageView.widthAnchor.constraint(lessThanOrEqualToConstant: 500),
+            logoImageView.trailingAnchor.constraint(lessThanOrEqualTo: controlsRow.leadingAnchor, constant: -24),
 
             bufferingIndicator.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             bufferingIndicator.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 16),
@@ -237,6 +251,22 @@ final class PlayerTransportBarView: UIView {
         secondaryLabel.text = viewModel.subtitle
         secondaryLabel.isHidden = viewModel.subtitle == nil
 
+        // Ambient pause moment (Task 7): swap the text title for the
+        // title logo once paused long enough, but only when a logo
+        // actually resolved — a title with no logo keeps its text.
+        viewModel.$pausePresentation
+            .combineLatest(viewModel.$titleLogoImage)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] presentation, logo in
+                guard let self else { return }
+                let useLogo = presentation != .frame && logo != nil
+                self.logoImageView.image = logo
+                self.logoImageView.isHidden = !useLogo
+                self.titleLabel.isHidden = useLogo
+                self.secondaryLabel.isHidden = useLogo || self.viewModel?.subtitle == nil
+            }
+            .store(in: &cancellables)
+
         replayButton.onPress = { [weak self] in self?.viewModel?.replayWithCaptions() }
         replayButton.isHidden = viewModel.subtitleTracks.isEmpty
         viewModel.$subtitleTracks
@@ -286,7 +316,7 @@ final class PlayerTransportBarView: UIView {
         guard hidden != chromeHidden else { return }
         chromeHidden = hidden
         UIView.animate(withDuration: 0.15) {
-            [self.titleLabel, self.secondaryLabel, self.controlsRow, self.infoButton].forEach {
+            [self.titleLabel, self.secondaryLabel, self.logoImageView, self.controlsRow, self.infoButton].forEach {
                 $0.alpha = hidden ? 0 : 1
             }
         }
