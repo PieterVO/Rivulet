@@ -192,7 +192,7 @@ final class PlayerProgressBarView: UIView {
         }
 
         [trackBackground, thumbnailContainer, thumbnailImageView,
-         currentTimeLabel, remainingTimeLabel, endsAtLabel, scrubStepLabel, calloutLabel].forEach {
+         currentTimeLabel, remainingTimeLabel, endsAtLabel, scrubStepLabel].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
 
