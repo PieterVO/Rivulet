@@ -561,11 +561,16 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
 
         case .seekRelative(let seconds):
             guard vm.postVideoState == .hidden else { return }
-            if vm.isScrubbing && vm.scrubSpeed != 0 {
+            if vm.isScrubbing && vm.scrubSpeed != 0 && source != .mpRemoteCommand {
                 // Active shuttle: a plain click bumps/steps-down the
                 // multiplier via ShuttleGrammar, same grammar as a
                 // long-press nudge. See F1 in final-branch-review.md —
                 // clicks must be able to reach the bump, not just holds.
+                // Excluded for .mpRemoteCommand: MPRemoteCommand skipForward/
+                // skipBackward also emit .seekRelative(±N) (NowPlayingService),
+                // and an external skip arriving mid-shuttle should keep its
+                // nudge-by-N magnitude rather than bump the multiplier. See R1
+                // in final-branch-review.md.
                 let wasScrubbing = vm.isScrubbing
                 let speedBefore = vm.scrubSpeed
                 vm.scrubInDirection(forward: seconds > 0)

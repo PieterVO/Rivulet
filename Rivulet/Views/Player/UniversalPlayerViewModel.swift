@@ -2364,6 +2364,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     func scrubInDirection(forward: Bool) {
         hidePausedPoster()
 
+        let speedBefore = scrubSpeed
         let newSpeed = ShuttleGrammar.step(current: isScrubbing ? scrubSpeed : 0, clickForward: forward)
         if newSpeed == 0 {
             cancelScrub()
@@ -2375,8 +2376,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             isScrubbing = true
             scrubTime = currentTime
             controlsTimer?.invalidate()
-            startScrubTimer()
             loadThumbnail(for: scrubTime)
+        }
+        // Restart the shuttle timer on any 0 -> nonzero transition, not just
+        // fresh-entry. A wheel tick mid-shuttle can zero scrubSpeed and stop
+        // the timer while leaving isScrubbing true; without this, a later
+        // hold re-enters shuttle with a live badge but a frozen playhead.
+        // startScrubTimer() invalidates before rescheduling, so calling it
+        // when already running is safe.
+        if speedBefore == 0 && newSpeed != 0 {
+            startScrubTimer()
         }
         scrubSpeed = newSpeed
 
