@@ -32,7 +32,7 @@ enum SentryBridge {
         #endif
     }
 
-    static func configureScope(_ configure: (Scope) -> Void) {
+    static func configureScope(_ configure: @escaping (Scope) -> Void) {
         #if !DEBUG
         SentrySDK.configureScope(configure)
         #endif
