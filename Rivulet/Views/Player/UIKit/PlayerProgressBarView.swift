@@ -2,14 +2,32 @@
 //  PlayerProgressBarView.swift
 //  Rivulet
 //
-//  UIKit transport progress bar: scrub track, marker highlights, playhead,
-//  time labels, and scrub thumbnail preview. Ports TransportProgressBar
-//  (formerly private inside PlayerControlsOverlay.swift) to native UIKit.
+//  Transport scrubber styled after AVPlayerViewController (tvOS 15+):
+//  a thin rounded white bar with no knob — the fill edge is the playhead.
+//  While scrubbing the bar thickens slightly, the scrub time follows the
+//  playhead below the bar, a ghost fill marks the actual playback
+//  position, and a thumbnail preview floats above. Time remaining sits
+//  below the right end. Plex markers (intro/credits) tint their range.
+//
+//  The view's own height covers only the track + label band; the
+//  thumbnail overhangs above it (clipsToBounds = false) so the transport
+//  bar doesn't reserve blank space when not scrubbing.
 //
 
 import UIKit
 
 final class PlayerProgressBarView: UIView {
+
+    // MARK: - Metrics (AVPlayerViewController-matched)
+
+    private enum Metrics {
+        static let trackHeight: CGFloat = 8
+        static let trackHeightScrubbing: CGFloat = 12
+        static let labelBandSpacing: CGFloat = 14
+        static let thumbnailWidth: CGFloat = 320
+        static let thumbnailHeight: CGFloat = 180
+        static let thumbnailGap: CGFloat = 20
+    }
 
     // MARK: - Marker coloring
 
@@ -26,9 +44,8 @@ final class PlayerProgressBarView: UIView {
     // MARK: - Subviews
 
     private let trackBackground = UIView()
-    private let currentProgressFill = UIView()
-    private let scrubProgressFill = UIView()
-    private let playheadView = UIView()
+    private let currentPositionGhost = UIView()
+    private let progressFill = UIView()
     private let markersContainer = UIView()
     private let currentTimeLabel = UILabel()
     private let remainingTimeLabel = UILabel()
@@ -37,9 +54,7 @@ final class PlayerProgressBarView: UIView {
     private let thumbnailContainer = UIView()
 
     private var trackHeightConstraint: NSLayoutConstraint!
-    private var playheadWidthConstraint: NSLayoutConstraint!
-    private var playheadHeightConstraint: NSLayoutConstraint!
-    private var playheadLeadingConstraint: NSLayoutConstraint!
+    private var currentTimeCenterXConstraint: NSLayoutConstraint!
     private var thumbnailCenterXConstraint: NSLayoutConstraint!
 
     override init(frame: CGRect) {
@@ -52,25 +67,22 @@ final class PlayerProgressBarView: UIView {
     }
 
     private func setupViews() {
+        clipsToBounds = false
+
         trackBackground.backgroundColor = UIColor.white.withAlphaComponent(0.3)
-        trackBackground.layer.cornerRadius = 3
         trackBackground.layer.cornerCurve = .continuous
+        trackBackground.clipsToBounds = true
 
-        currentProgressFill.backgroundColor = UIColor.white.withAlphaComponent(0.5)
-        currentProgressFill.isHidden = true
+        // Actual playback position while previewing elsewhere.
+        currentPositionGhost.backgroundColor = UIColor.white.withAlphaComponent(0.45)
+        currentPositionGhost.isHidden = true
 
-        scrubProgressFill.backgroundColor = .white
+        progressFill.backgroundColor = .white
 
-        playheadView.backgroundColor = .white
-        playheadView.layer.shadowColor = UIColor.black.cgColor
-        playheadView.layer.shadowOpacity = 0.3
-        playheadView.layer.shadowRadius = 4
-        playheadView.layer.shadowOffset = CGSize(width: 0, height: 2)
-
-        currentTimeLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .medium)
+        currentTimeLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .semibold)
         currentTimeLabel.textColor = .white
 
-        remainingTimeLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .regular)
+        remainingTimeLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .medium)
         remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.7)
         remainingTimeLabel.textAlignment = .right
 
@@ -78,39 +90,49 @@ final class PlayerProgressBarView: UIView {
         scrubStepLabel.textColor = UIColor.white.withAlphaComponent(0.8)
         scrubStepLabel.isHidden = true
 
-        thumbnailImageView.contentMode = .scaleAspectFit
-        thumbnailImageView.layer.cornerRadius = 8
-        thumbnailImageView.layer.cornerCurve = .continuous
+        thumbnailImageView.contentMode = .scaleAspectFill
         thumbnailImageView.clipsToBounds = true
-        thumbnailImageView.layer.borderColor = UIColor.white.withAlphaComponent(0.3).cgColor
-        thumbnailImageView.layer.borderWidth = 1
 
         thumbnailContainer.isHidden = true
+        thumbnailContainer.layer.cornerRadius = 12
+        thumbnailContainer.layer.cornerCurve = .continuous
+        thumbnailContainer.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        thumbnailContainer.layer.borderWidth = 1
+        thumbnailContainer.layer.shadowColor = UIColor.black.cgColor
+        thumbnailContainer.layer.shadowOpacity = 0.4
+        thumbnailContainer.layer.shadowRadius = 16
+        thumbnailContainer.layer.shadowOffset = CGSize(width: 0, height: 6)
+        thumbnailContainer.clipsToBounds = false
+        thumbnailImageView.layer.cornerRadius = 12
+        thumbnailImageView.layer.cornerCurve = .continuous
         thumbnailContainer.addSubview(thumbnailImageView)
 
-        [trackBackground, currentProgressFill, scrubProgressFill, markersContainer, playheadView].forEach {
+        [trackBackground, thumbnailContainer, currentTimeLabel, remainingTimeLabel, scrubStepLabel].forEach {
             addSubview($0)
         }
-        addSubview(thumbnailContainer)
-        addSubview(currentTimeLabel)
-        addSubview(remainingTimeLabel)
-        addSubview(scrubStepLabel)
+        [currentPositionGhost, progressFill, markersContainer].forEach {
+            trackBackground.addSubview($0)
+        }
 
-        [trackBackground, currentProgressFill, scrubProgressFill, markersContainer, playheadView,
-         thumbnailContainer, thumbnailImageView, currentTimeLabel, remainingTimeLabel, scrubStepLabel].forEach {
+        [trackBackground, thumbnailContainer, thumbnailImageView,
+         currentTimeLabel, remainingTimeLabel, scrubStepLabel].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
 
-        trackHeightConstraint = trackBackground.heightAnchor.constraint(equalToConstant: 6)
-        playheadWidthConstraint = playheadView.widthAnchor.constraint(equalToConstant: 16)
-        playheadHeightConstraint = playheadView.heightAnchor.constraint(equalToConstant: 16)
-        playheadLeadingConstraint = playheadView.leadingAnchor.constraint(equalTo: trackBackground.leadingAnchor)
+        trackHeightConstraint = trackBackground.heightAnchor.constraint(equalToConstant: Metrics.trackHeight)
+        currentTimeCenterXConstraint = currentTimeLabel.centerXAnchor.constraint(equalTo: leadingAnchor)
         thumbnailCenterXConstraint = thumbnailContainer.centerXAnchor.constraint(equalTo: leadingAnchor)
 
         NSLayoutConstraint.activate([
-            thumbnailContainer.bottomAnchor.constraint(equalTo: trackBackground.topAnchor, constant: -12),
-            thumbnailContainer.widthAnchor.constraint(equalToConstant: 240),
-            thumbnailContainer.heightAnchor.constraint(equalToConstant: 135),
+            trackBackground.topAnchor.constraint(equalTo: topAnchor),
+            trackBackground.leadingAnchor.constraint(equalTo: leadingAnchor),
+            trackBackground.trailingAnchor.constraint(equalTo: trailingAnchor),
+            trackHeightConstraint,
+
+            // Thumbnail overhangs above the view; no reserved space.
+            thumbnailContainer.bottomAnchor.constraint(equalTo: trackBackground.topAnchor, constant: -Metrics.thumbnailGap),
+            thumbnailContainer.widthAnchor.constraint(equalToConstant: Metrics.thumbnailWidth),
+            thumbnailContainer.heightAnchor.constraint(equalToConstant: Metrics.thumbnailHeight),
             thumbnailCenterXConstraint,
 
             thumbnailImageView.topAnchor.constraint(equalTo: thumbnailContainer.topAnchor),
@@ -118,45 +140,25 @@ final class PlayerProgressBarView: UIView {
             thumbnailImageView.trailingAnchor.constraint(equalTo: thumbnailContainer.trailingAnchor),
             thumbnailImageView.bottomAnchor.constraint(equalTo: thumbnailContainer.bottomAnchor),
 
-            trackBackground.topAnchor.constraint(equalTo: topAnchor, constant: 155),
-            trackBackground.leadingAnchor.constraint(equalTo: leadingAnchor),
-            trackBackground.trailingAnchor.constraint(equalTo: trailingAnchor),
-            trackHeightConstraint,
-
-            currentProgressFill.leadingAnchor.constraint(equalTo: trackBackground.leadingAnchor),
-            currentProgressFill.topAnchor.constraint(equalTo: trackBackground.topAnchor),
-            currentProgressFill.bottomAnchor.constraint(equalTo: trackBackground.bottomAnchor),
-
-            scrubProgressFill.leadingAnchor.constraint(equalTo: trackBackground.leadingAnchor),
-            scrubProgressFill.topAnchor.constraint(equalTo: trackBackground.topAnchor),
-            scrubProgressFill.bottomAnchor.constraint(equalTo: trackBackground.bottomAnchor),
-
-            markersContainer.leadingAnchor.constraint(equalTo: trackBackground.leadingAnchor),
-            markersContainer.trailingAnchor.constraint(equalTo: trackBackground.trailingAnchor),
-            markersContainer.topAnchor.constraint(equalTo: trackBackground.topAnchor),
-            markersContainer.bottomAnchor.constraint(equalTo: trackBackground.bottomAnchor),
-
-            playheadLeadingConstraint,
-            playheadView.centerYAnchor.constraint(equalTo: trackBackground.centerYAnchor),
-            playheadWidthConstraint,
-            playheadHeightConstraint,
-
-            currentTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: 8),
-            currentTimeLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            // Label band below the track. The scrub time follows the
+            // playhead (AVPlayerViewController behavior); remaining time
+            // is pinned below the right end.
+            currentTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: Metrics.labelBandSpacing),
+            currentTimeCenterXConstraint,
 
             scrubStepLabel.centerYAnchor.constraint(equalTo: currentTimeLabel.centerYAnchor),
             scrubStepLabel.leadingAnchor.constraint(equalTo: currentTimeLabel.trailingAnchor, constant: 16),
 
-            remainingTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: 8),
+            remainingTimeLabel.topAnchor.constraint(equalTo: trackBackground.bottomAnchor, constant: Metrics.labelBandSpacing),
             remainingTimeLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
 
-        playheadView.layer.cornerRadius = 8
+            bottomAnchor.constraint(equalTo: currentTimeLabel.bottomAnchor),
+        ])
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        playheadView.layer.cornerRadius = playheadWidthConstraint.constant / 2
+        trackBackground.layer.cornerRadius = trackHeightConstraint.constant / 2
     }
 
     // MARK: - Update
@@ -173,37 +175,39 @@ final class PlayerProgressBarView: UIView {
         let displayTime = isScrubbing ? scrubTime : currentTime
         let progress: Double = duration > 0 ? min(1, max(0, displayTime / duration)) : 0
 
-        currentProgressFill.isHidden = !isScrubbing
-        if isScrubbing {
-            let currentProgress: Double = duration > 0 ? min(1, max(0, currentTime / duration)) : 0
-            currentProgressFill.frame = CGRect(
-                x: 0, y: 0,
-                width: trackBackground.bounds.width * currentProgress,
-                height: trackBackground.bounds.height
-            )
-        }
-
-        scrubProgressFill.backgroundColor = isScrubbing ? .systemBlue : .white
-        playheadView.backgroundColor = isScrubbing ? .systemBlue : .white
-
         let width = trackBackground.bounds.width
-        scrubProgressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackBackground.bounds.height)
+        let trackHeight = isScrubbing ? Metrics.trackHeightScrubbing : Metrics.trackHeight
 
-        let diameter: CGFloat = isScrubbing ? 24 : 16
-        playheadWidthConstraint.constant = diameter
-        playheadHeightConstraint.constant = diameter
-        let maxLeading = width - diameter
-        playheadLeadingConstraint.constant = max(0, min(maxLeading, width * progress - diameter / 2))
-        trackHeightConstraint.constant = isScrubbing ? 10 : 6
+        currentPositionGhost.isHidden = !isScrubbing
+        let currentProgress: Double = duration > 0 ? min(1, max(0, currentTime / duration)) : 0
+        trackHeightConstraint.constant = trackHeight
 
         UIView.animate(withDuration: 0.15) {
+            self.progressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackHeight)
+            if isScrubbing {
+                self.currentPositionGhost.frame = CGRect(
+                    x: 0, y: 0,
+                    width: width * currentProgress,
+                    height: trackHeight
+                )
+            }
             self.layoutIfNeeded()
         }
 
-        renderMarkers(markers, duration: duration, trackWidth: width, trackHeight: trackBackground.bounds.height)
+        renderMarkers(markers, duration: duration, trackWidth: width, trackHeight: trackHeight)
 
+        // The playhead-following time label appears only while scrubbing
+        // (the control buttons own that band otherwise), clamped so it
+        // never runs off the track ends or under the remaining-time label.
+        currentTimeLabel.isHidden = !isScrubbing
         currentTimeLabel.text = Self.formatTime(displayTime)
-        currentTimeLabel.textColor = isScrubbing ? .systemBlue : .white
+        currentTimeLabel.sizeToFit()
+        let halfLabel = currentTimeLabel.bounds.width / 2
+        let remainingWidth = remainingTimeLabel.intrinsicContentSize.width
+        let minCenter = halfLabel
+        let maxCenter = max(minCenter, width - remainingWidth - 24 - halfLabel)
+        currentTimeCenterXConstraint.constant = min(maxCenter, max(minCenter, width * CGFloat(progress)))
+
         remainingTimeLabel.text = "-\(Self.formatTime(max(0, duration - displayTime)))"
 
         scrubStepLabel.isHidden = !isScrubbing || scrubStepLabelText == nil
@@ -212,7 +216,11 @@ final class PlayerProgressBarView: UIView {
         thumbnailContainer.isHidden = !(isScrubbing && scrubThumbnail != nil)
         thumbnailImageView.image = scrubThumbnail
         if isScrubbing {
-            thumbnailCenterXConstraint.constant = width * CGFloat(progress)
+            // Clamp the thumbnail inside the track bounds like
+            // AVPlayerViewController does at the extremes.
+            let halfThumb = Metrics.thumbnailWidth / 2
+            let clampedCenter = min(max(width * CGFloat(progress), halfThumb), max(halfThumb, width - halfThumb))
+            thumbnailCenterXConstraint.constant = clampedCenter
         }
     }
 
@@ -227,7 +235,6 @@ final class PlayerProgressBarView: UIView {
 
             let markerView = UIView()
             markerView.backgroundColor = Self.color(for: marker).withAlphaComponent(0.85)
-            markerView.layer.cornerRadius = 2
             let x = trackWidth * CGFloat(startProgress)
             let markerWidth = max(4, trackWidth * CGFloat(endProgress - startProgress))
             markerView.frame = CGRect(x: x, y: 0, width: markerWidth, height: trackHeight)

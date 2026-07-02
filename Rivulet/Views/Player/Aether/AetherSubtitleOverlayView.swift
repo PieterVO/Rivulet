@@ -8,7 +8,8 @@
 //
 //  controlsVisible insets (matched to SubtitleOverlayView on the AVPlayer
 //  routes, so subtitles sit at the same height on every route):
-//    true  -> 140 pt bottom padding (clears the UIKit transport bar)
+//    true  -> 220 pt bottom padding (clears the UIKit transport bar's
+//             scrubber + control-button band)
 //    false -> 60 pt bottom padding (minimal clear of screen edge)
 //
 
@@ -27,7 +28,7 @@ struct AetherSubtitleOverlayView: View {
     var controlsVisible: Bool
 
     // Bottom padding constants (pts).
-    private static let controlsVisiblePadding: CGFloat = 140
+    private static let controlsVisiblePadding: CGFloat = 220
     private static let defaultPadding: CGFloat = 60
 
     var body: some View {

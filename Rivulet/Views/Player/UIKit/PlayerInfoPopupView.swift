@@ -37,7 +37,7 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
     }
 
     private func setupViews() {
-        backgroundEffectView.layer.cornerRadius = 20
+        backgroundEffectView.layer.cornerRadius = 24
         backgroundEffectView.layer.cornerCurve = .continuous
         backgroundEffectView.clipsToBounds = true
         addSubview(backgroundEffectView)
@@ -183,7 +183,7 @@ final class PlayerInfoPopupView: UIView, AnchoredPopupPresenting {
     private func headerLabel(_ text: String) -> UILabel {
         let label = UILabel()
         label.text = text
-        label.font = .systemFont(ofSize: 28, weight: .bold)
+        label.font = .systemFont(ofSize: 26, weight: .bold)
         label.textColor = .white
         return label
     }

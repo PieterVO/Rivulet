@@ -2,9 +2,13 @@
 //  PlayerTransportBarView.swift
 //  Rivulet
 //
-//  Native UIKit transport bar: title, progress bar, skip button. Pill
-//  row (subtitles/audio/info) is added in a later task. Replaces
-//  PlayerControlsOverlay's transport-bar half (SwiftUI) for every route.
+//  Native UIKit transport bar styled after AVPlayerViewController
+//  (tvOS 15+): bottom scrim gradient, small metadata line above a large
+//  title at the lower left, thin scrubber, time remaining below the
+//  bar's right end, and a row of circular control buttons (Subtitles /
+//  Audio / Info) below the bar's left end. While scrubbing, the chrome
+//  fades out and only the scrubber + preview remain, matching the
+//  system player.
 //
 
 import UIKit
@@ -12,20 +16,30 @@ import Combine
 
 final class PlayerTransportBarView: UIView {
 
+    private enum Metrics {
+        static let sideMargin: CGFloat = 90
+        static let bottomMargin: CGFloat = 60
+        static let titleBarGap: CGFloat = 28
+        static let controlsRowGap: CGFloat = 24
+    }
+
     private weak var viewModel: UniversalPlayerViewModel?
     private var cancellables = Set<AnyCancellable>()
 
+    private let gradientView = TransportScrimView()
     private let titleLabel = UILabel()
-    private let subtitleLabel = UILabel()
+    private let secondaryLabel = UILabel()
     private let bufferingIndicator = UIActivityIndicatorView(style: .medium)
     let progressBar = PlayerProgressBarView()
-    private let skipButton = UIButton(type: .system)
-    private let backgroundEffectView: UIVisualEffectView
+    private let skipButton = SkipPillButton()
 
-    let subtitlesPill = PlayerPillButton(icon: UIImage(systemName: "captions.bubble"), title: "Subtitles")
-    let audioPill = PlayerPillButton(icon: UIImage(systemName: "speaker.wave.3"), title: "Audio")
-    let infoPill = PlayerPillButton(icon: UIImage(systemName: "info.circle"), title: "Info")
-    private let pillStack = UIStackView()
+    let subtitlesButton = TransportControlButton(
+        icon: UIImage(systemName: "captions.bubble"), accessibilityLabel: "Subtitles")
+    let audioButton = TransportControlButton(
+        icon: UIImage(systemName: "waveform"), accessibilityLabel: "Audio")
+    let infoButton = TransportControlButton(
+        icon: UIImage(systemName: "info"), accessibilityLabel: "Info")
+    private let controlsRow = UIStackView()
 
     private var activePopup: (any AnchoredPopupPresenting)?
 
@@ -39,11 +53,6 @@ final class PlayerTransportBarView: UIView {
 
     init(viewModel: UniversalPlayerViewModel) {
         self.viewModel = viewModel
-        if #available(tvOS 26.0, *) {
-            backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-        } else {
-            backgroundEffectView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-        }
         super.init(frame: .zero)
         setupViews()
         bind()
@@ -54,68 +63,63 @@ final class PlayerTransportBarView: UIView {
     }
 
     private func setupViews() {
-        addSubview(backgroundEffectView)
+        addSubview(gradientView)
 
-        titleLabel.font = .systemFont(ofSize: 28, weight: .semibold)
+        // AVPlayerViewController order: small metadata line above the
+        // large title (e.g. "Severance S1E2" over the episode title).
+        secondaryLabel.font = .systemFont(ofSize: 23, weight: .medium)
+        secondaryLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+        secondaryLabel.numberOfLines = 1
+
+        titleLabel.font = .systemFont(ofSize: 38, weight: .bold)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
-
-        subtitleLabel.font = .systemFont(ofSize: 20, weight: .regular)
-        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        subtitleLabel.numberOfLines = 1
 
         bufferingIndicator.color = .white
         bufferingIndicator.hidesWhenStopped = true
 
-        skipButton.setTitleColor(.white, for: .normal)
-        skipButton.titleLabel?.font = .systemFont(ofSize: 20, weight: .semibold)
-        skipButton.backgroundColor = UIColor.white.withAlphaComponent(0.15)
-        skipButton.layer.cornerRadius = 12
-        skipButton.layer.cornerCurve = .continuous
-        skipButton.contentEdgeInsets = UIEdgeInsets(top: 10, left: 20, bottom: 10, right: 20)
         skipButton.isHidden = true
         skipButton.addTarget(self, action: #selector(skipTapped), for: .primaryActionTriggered)
 
-        [titleLabel, subtitleLabel, bufferingIndicator, progressBar, skipButton].forEach { addSubview($0) }
+        controlsRow.axis = .horizontal
+        controlsRow.spacing = 20
+        controlsRow.addArrangedSubview(subtitlesButton)
+        controlsRow.addArrangedSubview(audioButton)
+        controlsRow.addArrangedSubview(infoButton)
 
-        [backgroundEffectView, titleLabel, subtitleLabel, bufferingIndicator, progressBar, skipButton].forEach {
+        [gradientView, secondaryLabel, titleLabel, bufferingIndicator,
+         progressBar, skipButton, controlsRow].forEach {
+            addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
 
-        pillStack.axis = .horizontal
-        pillStack.spacing = 16
-        pillStack.addArrangedSubview(subtitlesPill)
-        pillStack.addArrangedSubview(audioPill)
-        pillStack.addArrangedSubview(infoPill)
-        addSubview(pillStack)
-        pillStack.translatesAutoresizingMaskIntoConstraints = false
-
         NSLayoutConstraint.activate([
-            backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
-            backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            gradientView.topAnchor.constraint(equalTo: topAnchor),
+            gradientView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            gradientView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            gradientView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 32),
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80),
+            secondaryLabel.topAnchor.constraint(equalTo: topAnchor, constant: 48),
+            secondaryLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
+            secondaryLabel.trailingAnchor.constraint(lessThanOrEqualTo: skipButton.leadingAnchor, constant: -24),
+
+            titleLabel.topAnchor.constraint(equalTo: secondaryLabel.bottomAnchor, constant: 2),
+            titleLabel.leadingAnchor.constraint(equalTo: secondaryLabel.leadingAnchor),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: skipButton.leadingAnchor, constant: -24),
 
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
-            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-
             bufferingIndicator.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            bufferingIndicator.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 12),
+            bufferingIndicator.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 16),
 
-            skipButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            skipButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -80),
+            skipButton.bottomAnchor.constraint(equalTo: progressBar.topAnchor, constant: -Metrics.titleBarGap),
+            skipButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.sideMargin),
 
-            pillStack.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            pillStack.trailingAnchor.constraint(equalTo: skipButton.leadingAnchor, constant: -24),
+            progressBar.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: Metrics.titleBarGap),
+            progressBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
+            progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.sideMargin),
 
-            progressBar.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 24),
-            progressBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 80),
-            progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -80),
-            progressBar.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -32),
+            controlsRow.topAnchor.constraint(equalTo: progressBar.bottomAnchor, constant: Metrics.controlsRowGap),
+            controlsRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideMargin),
+            controlsRow.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.bottomMargin),
         ])
     }
 
@@ -136,6 +140,7 @@ final class PlayerTransportBarView: UIView {
                     scrubThumbnail: viewModel.scrubThumbnail,
                     markers: viewModel.metadata.allMarkers
                 )
+                self.setChrome(hidden: isScrubbing)
             }
             .store(in: &cancellables)
 
@@ -159,23 +164,25 @@ final class PlayerTransportBarView: UIView {
             .store(in: &cancellables)
 
         titleLabel.text = viewModel.title
-        subtitleLabel.text = viewModel.subtitle
-        subtitleLabel.isHidden = viewModel.subtitle == nil
+        secondaryLabel.text = viewModel.subtitle
+        secondaryLabel.isHidden = viewModel.subtitle == nil
 
-        subtitlesPill.onPress = { [weak self] in
+        subtitlesButton.onPress = { [weak self] in
             guard let self, let viewModel = self.viewModel else { return }
             let popup = PlayerTrackPopupView(
+                header: "Subtitles",
                 tracks: viewModel.subtitleTracks,
                 selectedTrackId: viewModel.currentSubtitleTrackId,
                 showsOffRow: true,
                 onSelect: { id in viewModel.selectSubtitleTrack(id: id) }
             )
-            self.presentPopup(popup, anchoredTo: self.subtitlesPill)
+            self.presentPopup(popup, anchoredTo: self.subtitlesButton)
         }
 
-        audioPill.onPress = { [weak self] in
+        audioButton.onPress = { [weak self] in
             guard let self, let viewModel = self.viewModel else { return }
             let popup = PlayerTrackPopupView(
+                header: "Audio",
                 tracks: viewModel.audioTracks,
                 selectedTrackId: viewModel.currentAudioTrackId,
                 showsOffRow: false,
@@ -184,26 +191,121 @@ final class PlayerTransportBarView: UIView {
                     viewModel.selectAudioTrack(id: id)
                 }
             )
-            self.presentPopup(popup, anchoredTo: self.audioPill)
+            self.presentPopup(popup, anchoredTo: self.audioButton)
         }
 
-        infoPill.onPress = { [weak self] in
+        infoButton.onPress = { [weak self] in
             guard let self, let viewModel = self.viewModel else { return }
             let popup = PlayerInfoPopupView(metadata: viewModel.metadata)
-            self.presentPopup(popup, anchoredTo: self.infoPill)
+            self.presentPopup(popup, anchoredTo: self.infoButton)
         }
     }
 
-    private func presentPopup<Popup: AnchoredPopupPresenting>(_ popup: Popup, anchoredTo pill: PlayerPillButton) {
+    /// AVPlayerViewController fades the title and controls while
+    /// scrubbing so only the scrubber, time, and preview remain.
+    private var chromeHidden = false
+    private func setChrome(hidden: Bool) {
+        guard hidden != chromeHidden else { return }
+        chromeHidden = hidden
+        UIView.animate(withDuration: 0.15) {
+            [self.titleLabel, self.secondaryLabel, self.controlsRow, self.skipButton].forEach {
+                $0.alpha = hidden ? 0 : 1
+            }
+        }
+    }
+
+    private func presentPopup<Popup: AnchoredPopupPresenting>(_ popup: Popup, anchoredTo anchor: UIView) {
         guard let container = superview else { return }
         activePopup?.dismiss()
         var mutablePopup = popup
         mutablePopup.onDismiss = { [weak self] in self?.activePopup = nil }
         activePopup = mutablePopup
-        mutablePopup.present(in: container, anchoredTo: pill)
+        mutablePopup.present(in: container, anchoredTo: anchor)
     }
 
     @objc private func skipTapped() {
         onSkipTapped?()
+    }
+}
+
+// MARK: - Scrim
+
+/// Bottom scrim gradient (clear → black) matching the system player's
+/// transport backdrop. A UIView-backed gradient so it rides any
+/// animation clock the bar itself is on.
+private final class TransportScrimView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        let gradient = layer as! CAGradientLayer
+        gradient.colors = [
+            UIColor.black.withAlphaComponent(0).cgColor,
+            UIColor.black.withAlphaComponent(0.45).cgColor,
+            UIColor.black.withAlphaComponent(0.8).cgColor,
+        ]
+        gradient.locations = [0, 0.45, 1]
+        isUserInteractionEnabled = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+// MARK: - Skip pill
+
+/// "Skip Intro" / "Skip Credits" capsule above the bar's right end,
+/// matching the system-player pill: translucent glass at rest, white
+/// fill with black text when focused.
+private final class SkipPillButton: UIButton {
+
+    private let effectView: UIVisualEffectView
+
+    init() {
+        if #available(tvOS 26.0, *) {
+            effectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        } else {
+            effectView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+        }
+        super.init(frame: .zero)
+
+        effectView.isUserInteractionEnabled = false
+        effectView.clipsToBounds = true
+        effectView.backgroundColor = UIColor.white.withAlphaComponent(0.1)
+        insertSubview(effectView, at: 0)
+        effectView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            effectView.topAnchor.constraint(equalTo: topAnchor),
+            effectView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            effectView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            effectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        setTitleColor(.white, for: .normal)
+        titleLabel?.font = .systemFont(ofSize: 22, weight: .semibold)
+        contentEdgeInsets = UIEdgeInsets(top: 12, left: 26, bottom: 12, right: 26)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.cornerRadius = bounds.height / 2
+        layer.cornerCurve = .continuous
+        effectView.layer.cornerRadius = bounds.height / 2
+        effectView.layer.cornerCurve = .continuous
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let isFocused = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations({
+            self.transform = isFocused ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity
+            self.effectView.backgroundColor = isFocused ? .white : UIColor.white.withAlphaComponent(0.1)
+            self.setTitleColor(isFocused ? .black : .white, for: .normal)
+        }, completion: nil)
     }
 }

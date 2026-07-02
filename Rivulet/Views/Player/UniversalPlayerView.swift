@@ -834,7 +834,7 @@ struct UniversalPlayerView: View {
             } else if viewModel.player != nil {
                 SubtitleOverlayView(
                     subtitleManager: viewModel.subtitleManager,
-                    bottomOffset: viewModel.showControls ? 140 : 60
+                    bottomOffset: viewModel.showControls ? 220 : 60
                 )
                 .ignoresSafeArea()
             }

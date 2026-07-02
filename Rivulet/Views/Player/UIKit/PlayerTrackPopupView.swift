@@ -2,14 +2,16 @@
 //  PlayerTrackPopupView.swift
 //  Rivulet
 //
-//  Focus-trapped anchored popup list for track selection (subtitles,
-//  audio). Positioned above the pill button that opened it. tvOS has no
-//  native anchored-popover API (confirmed: no UIPopoverPresentationController
-//  on tvOS) -- this is a fully custom positioned view, styled to mimic
-//  AVPlayerViewController's transport-bar picker as closely as possible.
+//  Focus-trapped anchored popup for track selection (Subtitles / Audio),
+//  styled after AVPlayerViewController's picker: a bold header, rows
+//  with a leading checkmark column, and the system player's signature
+//  focus treatment — the focused row fills white with black text.
+//  Positioned above the control button that opened it. tvOS has no
+//  native anchored-popover API (no UIPopoverPresentationController), so
+//  this is a fully custom positioned view.
 //
 //  Focus is trapped to this view's rows via preferredFocusEnvironments;
-//  no direct pill-to-pill navigation while open (must back out first).
+//  no direct button-to-button navigation while open (must back out first).
 //
 
 import UIKit
@@ -23,16 +25,18 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
         let isSelected: Bool
     }
 
+    private let header: String
     private let rows: [Row]
     private let onSelect: (Int?) -> Void
+    private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private let backgroundEffectView: UIVisualEffectView
     private var rowButtons: [PopupRowButton] = []
 
     var onDismiss: (() -> Void)?
-    let presentedWidth: CGFloat = 360
+    let presentedWidth: CGFloat = 420
 
-    init(tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
+    init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
         if showsOffRow {
             rows.append(Row(title: "Off", subtitle: nil, trackId: nil, isSelected: selectedTrackId == nil))
@@ -45,6 +49,7 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
                 isSelected: track.id == selectedTrackId
             )
         })
+        self.header = header
         self.rows = rows
         self.onSelect = onSelect
 
@@ -62,26 +67,54 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
     }
 
     private func setupViews() {
-        backgroundEffectView.layer.cornerRadius = 16
+        backgroundEffectView.layer.cornerRadius = 24
         backgroundEffectView.layer.cornerCurve = .continuous
         backgroundEffectView.clipsToBounds = true
         addSubview(backgroundEffectView)
 
-        stack.axis = .vertical
-        stack.spacing = 4
-        addSubview(stack)
+        let headerLabel = UILabel()
+        headerLabel.text = header
+        headerLabel.font = .systemFont(ofSize: 26, weight: .bold)
+        headerLabel.textColor = .white
+        addSubview(headerLabel)
 
-        [backgroundEffectView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        stack.axis = .vertical
+        stack.spacing = 2
+        scrollView.addSubview(stack)
+        scrollView.clipsToBounds = true
+        addSubview(scrollView)
+
+        [backgroundEffectView, headerLabel, scrollView, stack].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+
+        // The scroll view grows with content up to a cap, so short lists
+        // hug their rows and long ones scroll.
+        let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
+        scrollHeight.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
             backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
             backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
             backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor, constant: 28),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 32),
+            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
+
+            scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -20),
+            scrollHeight,
+            scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: 560),
+
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
         ])
 
         for row in rows {
@@ -97,7 +130,6 @@ final class PlayerTrackPopupView: UIView, AnchoredPopupPresenting {
         onSelect(rows[index].trackId)
         dismiss()
     }
-
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let first = rowButtons.first(where: { $0.row.isSelected }) {
@@ -122,7 +154,10 @@ private final class PopupRowButton: UIControl {
     let row: PlayerTrackPopupView.Row
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
-    private let checkmarkView = UIImageView(image: UIImage(systemName: "checkmark"))
+    private let checkmarkView = UIImageView(image: UIImage(
+        systemName: "checkmark",
+        withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .bold)
+    ))
     private let vStack = UIStackView()
 
     init(row: PlayerTrackPopupView.Row) {
@@ -130,11 +165,11 @@ private final class PopupRowButton: UIControl {
         super.init(frame: .zero)
 
         titleLabel.text = row.title
-        titleLabel.font = .systemFont(ofSize: 20, weight: row.isSelected ? .semibold : .regular)
+        titleLabel.font = .systemFont(ofSize: 23, weight: .medium)
         titleLabel.textColor = .white
 
         subtitleLabel.text = row.subtitle
-        subtitleLabel.font = .systemFont(ofSize: 16, weight: .regular)
+        subtitleLabel.font = .systemFont(ofSize: 17, weight: .regular)
         subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         subtitleLabel.isHidden = row.subtitle == nil || row.subtitle?.isEmpty == true
 
@@ -144,28 +179,30 @@ private final class PopupRowButton: UIControl {
         vStack.addArrangedSubview(titleLabel)
         vStack.addArrangedSubview(subtitleLabel)
 
-        checkmarkView.tintColor = .systemBlue
+        // Leading checkmark column, reserved for every row so titles
+        // align whether or not a row is selected (system-picker layout).
+        checkmarkView.tintColor = .white
         checkmarkView.isHidden = !row.isSelected
-        checkmarkView.contentMode = .scaleAspectFit
+        checkmarkView.contentMode = .center
 
-        addSubview(vStack)
         addSubview(checkmarkView)
+        addSubview(vStack)
 
         [vStack, checkmarkView].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         NSLayoutConstraint.activate([
-            vStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            vStack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            vStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-
+            checkmarkView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             checkmarkView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            checkmarkView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            checkmarkView.widthAnchor.constraint(equalToConstant: 20),
-            checkmarkView.heightAnchor.constraint(equalToConstant: 20),
+            checkmarkView.widthAnchor.constraint(equalToConstant: 26),
 
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 56),
+            vStack.leadingAnchor.constraint(equalTo: checkmarkView.trailingAnchor, constant: 14),
+            vStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -18),
+            vStack.topAnchor.constraint(equalTo: topAnchor, constant: 13),
+            vStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -13),
+
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 60),
         ])
 
-        layer.cornerRadius = 12
+        layer.cornerRadius = 14
         layer.cornerCurve = .continuous
     }
 
@@ -179,11 +216,13 @@ private final class PopupRowButton: UIControl {
         super.didUpdateFocus(in: context, with: coordinator)
         let isFocused = context.nextFocusedView === self
         coordinator.addCoordinatedAnimations({
-            let animator = UIViewPropertyAnimator(duration: 0.15, timingParameters: UISpringTimingParameters(dampingRatio: 0.9))
-            animator.addAnimations {
-                self.backgroundColor = UIColor.white.withAlphaComponent(isFocused ? 0.2 : 0)
-            }
-            animator.startAnimation()
+            // System-picker focus treatment: white fill, black content.
+            self.backgroundColor = isFocused ? .white : .clear
+            self.titleLabel.textColor = isFocused ? .black : .white
+            self.subtitleLabel.textColor = isFocused
+                ? UIColor.black.withAlphaComponent(0.6)
+                : UIColor.white.withAlphaComponent(0.6)
+            self.checkmarkView.tintColor = isFocused ? .black : .white
         }, completion: nil)
     }
 }
