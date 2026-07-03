@@ -194,6 +194,11 @@ final class PlayerProgressBarView: UIView {
     /// Loading placeholder mode; see `setSkeleton(_:)`.
     private var isSkeleton = false
 
+    /// Paused presentation: the accent fill dims while paused (2a spec).
+    /// Stored and folded into update()'s alpha computation; applied
+    /// immediately here because time ticks stop while the player is paused.
+    private var isPausedDim = false
+
     private static let endsAtFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -432,7 +437,7 @@ final class PlayerProgressBarView: UIView {
         trackHeightConstraint.constant = trackHeight
 
         UIView.animate(withDuration: 0.15) {
-            self.progressFill.alpha = stripOpen ? 0 : 1
+            self.progressFill.alpha = stripOpen ? 0 : (self.isPausedDim ? 0.55 : 1)
             self.stripContainer.alpha = stripOpen ? 1 : 0
             self.progressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackHeight)
             if isScrubbing && !stripOpen {
@@ -533,6 +538,21 @@ final class PlayerProgressBarView: UIView {
         } else {
             currentTimeLabel.textColor = UIColor.white.withAlphaComponent(0.82)
             remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        }
+    }
+
+    /// Paused presentation: the accent fill dims while paused (2a spec).
+    /// Applied immediately here (not via `update(...)`) because time ticks
+    /// stop while the player is paused, so no later `update(...)` would
+    /// pick up the change. The immediate setter only runs when the strip is
+    /// closed and no skeleton, so it never races the morph block or the
+    /// skeleton's own fill handling (one-clock rule).
+    func setPausedDim(_ dimmed: Bool) {
+        guard dimmed != isPausedDim else { return }
+        isPausedDim = dimmed
+        guard !isSkeleton, !isScrubbing else { return }
+        UIView.animate(withDuration: 0.25) {
+            self.progressFill.alpha = dimmed ? 0.55 : 1
         }
     }
 

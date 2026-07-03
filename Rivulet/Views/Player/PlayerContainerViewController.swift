@@ -589,23 +589,21 @@ class PlayerContainerViewController: UIViewController {
                     chapters: vm.metadata.Chapter ?? [],
                     isWheelScrubbing: isWheelScrubbing
                 )
-                // Scrubbing hides the card and Up Next; scrubber stays.
-                self.setAuxChromeHidden(isScrubbing)
+                // Scrubbing hides the skip pill and Up Next; scrubber and
+                // card stay (design mock state 2).
+                self.applyChromeVisibility()
             }
             .store(in: &cancellables)
 
         vm.$showControls
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] show in self?.setChromeHidden(!show, animated: true) }
+            .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
         // Ambient pause: the whole chrome yields to the clean backdrop.
         vm.$pausePresentation
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak vm] presentation in
-                guard let vm else { return }
-                self?.setChromeHidden(presentation != .frame || !vm.showControls, animated: true)
-            }
+            .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
         vm.$playbackState
@@ -616,7 +614,11 @@ class PlayerContainerViewController: UIViewController {
                 let loading = state == .loading || state == .idle
                 self.focusCard?.setLoading(loading, seriesLine: vm.subtitle, title: vm.title)
                 self.progressBar?.setSkeleton(loading)
+                self.progressBar?.setPausedDim(state == .paused)
                 self.skipPill?.isHidden = loading || !vm.showSkipButton
+                // Loading hides the Up Next panel; a mid-stream route-change
+                // reload must re-hide it even while showControls stays true.
+                self.applyChromeVisibility()
             }
             .store(in: &cancellables)
 
@@ -707,25 +709,42 @@ class PlayerContainerViewController: UIViewController {
                             metaLine: metaParts.isEmpty ? nil : metaParts.joined(separator: " · "))
     }
 
-    /// Whole-chrome visibility (controls hidden / ambient pause). The Up
-    /// Next panel fades with the rest via alpha; its `isHidden` stays
-    /// data-driven (empty episodes list for movies/shuffle keeps it gone).
-    private func setChromeHidden(_ hidden: Bool, animated: Bool) {
-        let chrome: [UIView?] = [focusCard, progressBar, skipPill, upNextPanel, chromeScrim]
-        let apply = {
-            chrome.compactMap { $0 }.forEach { $0.alpha = hidden ? 0 : 1 }
-        }
-        animated ? UIView.animate(withDuration: 0.25, animations: apply) : apply()
-    }
+    /// Single writer for all chrome alphas. Every visibility rule lives
+    /// here so no two sinks can fight over the same view's alpha (the old
+    /// setChromeHidden / setAuxChromeHidden split let the ~0.5s time-sink
+    /// re-reveal card/pill/panel over hidden controls). Called from the
+    /// showControls, pausePresentation, playbackState, and time sinks; the
+    /// guard-on-change makes per-tick calls free.
+    ///
+    /// Rules:
+    /// - chromeVisible: controls up AND the frame is live (not ambient
+    ///   pause). `|| isScrubbing` keeps the scrubber + scrim + card up
+    ///   during a scrub even on the one off-device path (MPRemoteCommand
+    ///   scrubNudge) that can begin a scrub without showControls being set.
+    ///   The focus card stays visible while scrubbing (design mock state 2).
+    /// - auxVisible: chrome visible AND not scrubbing — scrubbing hides the
+    ///   skip pill and Up Next panel while the scrubber + card stay.
+    /// - panelVisible: aux visible AND not loading — the Up Next panel is
+    ///   hidden while the loading card is up (spec: Loading hides it).
+    ///   The panel's `isHidden` stays data-driven from the upNextEpisodes
+    ///   sink; alpha is this applier's channel.
+    private func applyChromeVisibility() {
+        guard let vm = viewModel else { return }
+        let chromeVisible = (vm.showControls || vm.isScrubbing) && vm.pausePresentation == .frame
+        let auxVisible = chromeVisible && !vm.isScrubbing
+        let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
+        let panelVisible = auxVisible && !isLoading
 
-    /// While scrubbing only the scrubber (and its strip) stays; the card,
-    /// pill, Up Next panel, and scrim fade (mirrors the old bar's
-    /// setChrome(hidden:)).
-    private func setAuxChromeHidden(_ hidden: Bool) {
-        UIView.animate(withDuration: 0.15) {
-            self.focusCard?.alpha = hidden ? 0 : 1
-            self.skipPill?.alpha = hidden ? 0 : 1
-            self.upNextPanel?.alpha = hidden ? 0 : 1
+        let targets: [(UIView?, CGFloat)] = [
+            (chromeScrim, chromeVisible ? 1 : 0),
+            (progressBar, chromeVisible ? 1 : 0),
+            (focusCard, chromeVisible ? 1 : 0),
+            (skipPill, auxVisible ? 1 : 0),
+            (upNextPanel, panelVisible ? 1 : 0),
+        ]
+        guard targets.contains(where: { view, alpha in view.map { abs($0.alpha - alpha) > 0.01 } == true }) else { return }
+        UIView.animate(withDuration: 0.25) {
+            for (view, alpha) in targets { view?.alpha = alpha }
         }
     }
 
