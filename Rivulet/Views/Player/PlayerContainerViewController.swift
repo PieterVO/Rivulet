@@ -21,6 +21,7 @@ class PlayerContainerViewController: UIViewController {
     private var focusCard: PlayerFocusCardView?
     private var progressBar: PlayerProgressBarView?
     private var skipPill: SkipPillButton?
+    private var upNextPanel: PlayerUpNextPanelView?
     private var chromeScrim = ChromeScrimView()
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
@@ -90,11 +91,15 @@ class PlayerContainerViewController: UIViewController {
             pill.isHidden = true
             pill.addTarget(self, action: #selector(skipPillTapped), for: .primaryActionTriggered)
 
-            [chromeScrim, card, bar, pill].forEach {
+            let panel = PlayerUpNextPanelView()
+            panel.isHidden = true
+
+            [chromeScrim, card, bar, pill, panel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
             view.bringSubviewToFront(card)
+            view.bringSubviewToFront(panel)
 
             NSLayoutConstraint.activate([
                 chromeScrim.topAnchor.constraint(equalTo: view.topAnchor),
@@ -114,10 +119,15 @@ class PlayerContainerViewController: UIViewController {
                 // Skip pill floats above the scrubber's right end.
                 pill.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
                 pill.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -28),
+
+                // Up Next panel: right edge, vertically centered.
+                panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -80),
+                panel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             ])
             focusCard = card
             progressBar = bar
             skipPill = pill
+            upNextPanel = panel
 
             bindChrome(to: vm)
         }
@@ -623,6 +633,23 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak card] tracks in card?.setSubtitlesEnabled(!tracks.isEmpty) }
             .store(in: &cancellables)
 
+        vm.$upNextEpisodes
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak vm] episodes in
+                guard let self, let vm else { return }
+                self.upNextPanel?.setEpisodes(episodes,
+                                              currentRatingKey: vm.metadata.ratingKey,
+                                              seasonNumber: vm.metadata.parentIndex,
+                                              serverURL: vm.serverURL, authToken: vm.authToken)
+                self.upNextPanel?.isHidden = episodes.isEmpty
+            }
+            .store(in: &cancellables)
+
+        upNextPanel?.onSelectEpisode = { [weak vm] episode in
+            vm?.exitControlsFocus()
+            Task { await vm?.playEpisode(episode) }
+        }
+
         vm.$controlsFocusActive
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -680,9 +707,11 @@ class PlayerContainerViewController: UIViewController {
                             metaLine: metaParts.isEmpty ? nil : metaParts.joined(separator: " · "))
     }
 
-    /// Whole-chrome visibility (controls hidden / ambient pause).
+    /// Whole-chrome visibility (controls hidden / ambient pause). The Up
+    /// Next panel fades with the rest via alpha; its `isHidden` stays
+    /// data-driven (empty episodes list for movies/shuffle keeps it gone).
     private func setChromeHidden(_ hidden: Bool, animated: Bool) {
-        let chrome: [UIView?] = [focusCard, progressBar, skipPill, chromeScrim]
+        let chrome: [UIView?] = [focusCard, progressBar, skipPill, upNextPanel, chromeScrim]
         let apply = {
             chrome.compactMap { $0 }.forEach { $0.alpha = hidden ? 0 : 1 }
         }
@@ -690,11 +719,13 @@ class PlayerContainerViewController: UIViewController {
     }
 
     /// While scrubbing only the scrubber (and its strip) stays; the card,
-    /// pill, and scrim fade (mirrors the old bar's setChrome(hidden:)).
+    /// pill, Up Next panel, and scrim fade (mirrors the old bar's
+    /// setChrome(hidden:)).
     private func setAuxChromeHidden(_ hidden: Bool) {
         UIView.animate(withDuration: 0.15) {
             self.focusCard?.alpha = hidden ? 0 : 1
             self.skipPill?.alpha = hidden ? 0 : 1
+            self.upNextPanel?.alpha = hidden ? 0 : 1
         }
     }
 
