@@ -854,12 +854,15 @@ final class IrisSpinnerView: UIView {
     override init(frame: CGRect) {
         super.init(frame: CGRect(x: 0, y: 0, width: 64, height: 64))
         gradientLayer.type = .conic
+        // Cyclic: ends on the same blue it starts with, so the ring has no
+        // seam — rotation reads as the colors flowing around, not as a
+        // spinner head chasing its tail.
         gradientLayer.colors = [
             UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
             UIColor(red: 0xb9/255, green: 0xa3/255, blue: 0xff/255, alpha: 1).cgColor,
             UIColor(red: 0xff/255, green: 0xce/255, blue: 0x93/255, alpha: 1).cgColor,
             UIColor(red: 0x8f/255, green: 0xe9/255, blue: 0xd4/255, alpha: 1).cgColor,
-            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 0).cgColor,
+            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
         ]
         gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
         gradientLayer.endPoint = CGPoint(x: 0.5, y: 0)
