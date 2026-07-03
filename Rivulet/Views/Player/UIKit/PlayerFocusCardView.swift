@@ -854,16 +854,7 @@ final class IrisSpinnerView: UIView {
     override init(frame: CGRect) {
         super.init(frame: CGRect(x: 0, y: 0, width: 64, height: 64))
         gradientLayer.type = .conic
-        // Cyclic: ends on the same blue it starts with, so the ring has no
-        // seam — rotation reads as the colors flowing around, not as a
-        // spinner head chasing its tail.
-        gradientLayer.colors = [
-            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
-            UIColor(red: 0xb9/255, green: 0xa3/255, blue: 0xff/255, alpha: 1).cgColor,
-            UIColor(red: 0xff/255, green: 0xce/255, blue: 0x93/255, alpha: 1).cgColor,
-            UIColor(red: 0x8f/255, green: 0xe9/255, blue: 0xd4/255, alpha: 1).cgColor,
-            UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
-        ]
+        gradientLayer.colors = Self.basePalette
         gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
         gradientLayer.endPoint = CGPoint(x: 0.5, y: 0)
         layer.addSublayer(gradientLayer)
@@ -884,6 +875,24 @@ final class IrisSpinnerView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: CGSize { CGSize(width: 64, height: 64) }
+
+    // Both palettes are cyclic (first == last) so the conic ring never
+    // shows a seam; the shimmer animates between them while the rotation
+    // carries the colors around.
+    private static let basePalette: [CGColor] = [
+        UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
+        UIColor(red: 0xb9/255, green: 0xa3/255, blue: 0xff/255, alpha: 1).cgColor,
+        UIColor(red: 0xff/255, green: 0xce/255, blue: 0x93/255, alpha: 1).cgColor,
+        UIColor(red: 0x8f/255, green: 0xe9/255, blue: 0xd4/255, alpha: 1).cgColor,
+        UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
+    ]
+    private static let brightPalette: [CGColor] = [
+        UIColor(red: 0x9c/255, green: 0xc8/255, blue: 0xff/255, alpha: 1).cgColor,
+        UIColor(red: 0xcb/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
+        UIColor(red: 0xff/255, green: 0xdc/255, blue: 0xae/255, alpha: 1).cgColor,
+        UIColor(red: 0xa8/255, green: 0xf0/255, blue: 0xde/255, alpha: 1).cgColor,
+        UIColor(red: 0x9c/255, green: 0xc8/255, blue: 0xff/255, alpha: 1).cgColor,
+    ]
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -914,6 +923,18 @@ final class IrisSpinnerView: UIView {
         spin.duration = 1.4
         spin.repeatCount = .infinity
         gradientLayer.add(spin, forKey: "spin")
+
+        // Sparkle: the stops breathe brighter and back on their own clock
+        // (deliberately not a multiple of the spin period, so the shimmer
+        // never syncs with the rotation).
+        let shimmer = CABasicAnimation(keyPath: "colors")
+        shimmer.fromValue = Self.basePalette
+        shimmer.toValue = Self.brightPalette
+        shimmer.duration = 2.3
+        shimmer.autoreverses = true
+        shimmer.repeatCount = .infinity
+        shimmer.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        gradientLayer.add(shimmer, forKey: "shimmer")
     }
 }
 
