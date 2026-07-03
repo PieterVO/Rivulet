@@ -360,13 +360,10 @@ final class PersonDetailViewController: UIViewController {
             guard index < entries.count else { return }
             self.onSelectItem?(entries[index].item)
         }
-        cell.contextMenuProvider = { _ in
-            // Watchlist menu deferred: no reusable UIKit UIMenu builder exists
-            // for add/remove-watchlist on a MediaItem (the home VC's builders are
-            // private and tied to TMDBListItem / PlexWatchlistItem + instance
-            // state). Building one here is out of scope for this task.
-            nil
-        }
+        // No tile menu on filmography shelves: no reusable watchlist action
+        // builder exists for a bare MediaItem (the home VC's builders are
+        // private and tied to TMDBListItem / PlexWatchlistItem + instance
+        // state). ShelfRowCell.onLongPressItem stays unset here.
         cell.onOffsetChanged = { [weak self] offset in
             self?.shelfOffsets[section] = offset
         }

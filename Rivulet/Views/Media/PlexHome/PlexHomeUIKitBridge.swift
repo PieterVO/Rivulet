@@ -3,9 +3,9 @@
 //  Rivulet
 //
 //  SwiftUI bridge to host `PlexHomeViewController` (UIKit/TVUIKit home).
-//  Forwards tile selections back to SwiftUI bindings so the surrounding
-//  NavigationStack pushes `MediaDetailView` / music routers like the
-//  SwiftUI home does.
+//  Forwards music selections back to a SwiftUI binding so the surrounding
+//  NavigationStack pushes the music routers. All other navigation is
+//  handled inside the UIKit controller itself.
 //
 
 import SwiftUI
@@ -16,7 +16,6 @@ struct PlexHomeUIKitBridge: UIViewControllerRepresentable {
     /// the lifetime of the hosted controller — library call sites must `.id`
     /// the container by library key so a key change rebuilds the VC.
     var mode: HomeMode = .home
-    @Binding var selectedItem: MediaItem?
     @Binding var selectedMusicItem: PlexMetadata?
     /// Search mode only: the live `.searchable` query text, pushed into the
     /// controller on every SwiftUI update; and a monotonically-increasing
@@ -28,17 +27,15 @@ struct PlexHomeUIKitBridge: UIViewControllerRepresentable {
     var searchQueryBinding: Binding<String>? = nil
 
     final class Coordinator {
-        var selectedItem: Binding<MediaItem?>
         var selectedMusicItem: Binding<PlexMetadata?>
         var lastSearchSubmitCount = 0
-        init(selectedItem: Binding<MediaItem?>, selectedMusicItem: Binding<PlexMetadata?>) {
-            self.selectedItem = selectedItem
+        init(selectedMusicItem: Binding<PlexMetadata?>) {
             self.selectedMusicItem = selectedMusicItem
         }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(selectedItem: $selectedItem, selectedMusicItem: $selectedMusicItem)
+        Coordinator(selectedMusicItem: $selectedMusicItem)
     }
 
     /// The single shared HOME controller. SwiftUI identity churn during
@@ -76,9 +73,6 @@ struct PlexHomeUIKitBridge: UIViewControllerRepresentable {
             vc = PlexHomeViewController(mode: mode)
         }
 
-        vc.onSelectItem = { item in
-            context.coordinator.selectedItem.wrappedValue = item
-        }
         vc.onSelectMusic = { meta in
             context.coordinator.selectedMusicItem.wrappedValue = meta
         }
@@ -87,9 +81,6 @@ struct PlexHomeUIKitBridge: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: PlexHomeViewController, context: Context) {
         // Refresh the callbacks to capture the latest bindings.
-        uiViewController.onSelectItem = { item in
-            context.coordinator.selectedItem.wrappedValue = item
-        }
         uiViewController.onSelectMusic = { meta in
             context.coordinator.selectedMusicItem.wrappedValue = meta
         }

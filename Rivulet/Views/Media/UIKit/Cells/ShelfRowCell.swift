@@ -62,7 +62,10 @@ final class ShelfRowCell: UICollectionViewCell {
     var cellProvider: ((UICollectionView, IndexPath) -> UICollectionViewCell)?
     var onSelect: ((Int) -> Void)?
     var onWillDisplayItem: ((Int) -> Void)?
-    var contextMenuProvider: ((Int) -> UIMenu?)?
+    /// Select long-press on a tile (the tile action menu). Driven by our own
+    /// recognizer — the system context-menu path never engages on tvOS 26
+    /// (see TileMenuPopupViewController's header).
+    var onLongPressItem: ((Int) -> Void)?
     /// Reports resting offsets so the owner can restore them across reuse.
     var onOffsetChanged: ((CGFloat) -> Void)?
 
@@ -160,6 +163,9 @@ final class ShelfRowCell: UICollectionViewCell {
         rowCollectionView.clipsToBounds = false
         clipsToBounds = false
         contentView.clipsToBounds = false
+
+        rowCollectionView.addGestureRecognizer(
+            TileLongPress.makeRecognizer(target: self, action: #selector(handleTileLongPress(_:))))
 
         rowCollectionView.register(PosterCell.self, forCellWithReuseIdentifier: PosterCell.reuseID)
         rowCollectionView.register(ContinueWatchingCell.self, forCellWithReuseIdentifier: ContinueWatchingCell.reuseID)
@@ -485,15 +491,12 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
         onWillDisplayItem?(indexPath.item)
     }
 
-    func collectionView(_ collectionView: UICollectionView,
-                        contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
-                        point: CGPoint) -> UIContextMenuConfiguration? {
-        guard let indexPath = indexPaths.first, indexPath.item < realCount else { return nil }
-        guard let provider = contextMenuProvider else { return nil }
-        let index = indexPath.item
-        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
-            provider(index)
-        }
+    /// Select long-press → tile action menu, from the focused tile.
+    @objc private func handleTileLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        guard let indexPath = TileLongPress.focusedCell(in: rowCollectionView),
+              indexPath.item < realCount else { return }
+        onLongPressItem?(indexPath.item)
     }
 
     /// The one driver of horizontal scroll: shift the window only as far as

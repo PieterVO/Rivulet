@@ -18,9 +18,9 @@
 //        * Section N+2: Personalized Recommendations (`PosterCell`)
 //
 //  Navigation:
-//    - Detail navigation hands `MediaItem` back to SwiftUI via the
-//      `onSelectItem` callback so the existing NavigationStack pushes
-//      `MediaDetailView`.
+//    - Detail navigation is UIKit-native: standalone expanded detail /
+//      episode detail page presented from this controller. Only music
+//      selections hand back to SwiftUI (`onSelectMusic`).
 //    - Preview carousel is presented as `PreviewContainerViewController`
 //      (a UIKit overFullScreen modal hosting SwiftUI `PreviewOverlayHost`)
 //      from this controller — mirrors the SwiftUI flow.
@@ -376,7 +376,6 @@ struct HomeSectionData {
 final class PlexHomeViewController: UIViewController {
 
     // Callbacks back into the SwiftUI shell.
-    var onSelectItem: ((MediaItem) -> Void)?
     var onSelectMusic: ((PlexMetadata) -> Void)?
     /// Search mode: the controller changed the query itself (a recents pill
     /// was tapped) — the shell mirrors it into the `.searchable` field.
@@ -1792,6 +1791,12 @@ final class PlexHomeViewController: UIViewController {
         // in FocusScrollControlledCollectionView.)
         collectionView.isScrollEnabled = false
 
+        // Select long-press on a grid tile → tile action menu. Our own
+        // recognizer: the system context-menu path never engages on tvOS 26
+        // (see TileMenuPopupViewController's header).
+        collectionView.addGestureRecognizer(
+            TileLongPress.makeRecognizer(target: self, action: #selector(handleGridLongPress(_:))))
+
         collectionView.register(HubHeaderView.self,
                                 forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
                                 withReuseIdentifier: HubHeaderView.reuseID)
@@ -2518,8 +2523,8 @@ final class PlexHomeViewController: UIViewController {
         cell.onWillDisplayItem = { [weak self] itemIndex in
             self?.shelfWillDisplay(sectionID: sectionID, itemIndex: itemIndex)
         }
-        cell.contextMenuProvider = { [weak self] itemIndex in
-            self?.shelfContextMenu(sectionID: sectionID, itemIndex: itemIndex)
+        cell.onLongPressItem = { [weak self] itemIndex in
+            self?.presentShelfTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         }
         cell.onOffsetChanged = { [weak self] offset in
             self?.shelfOffsets[sectionID] = offset
@@ -2642,60 +2647,87 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    private func shelfContextMenu(sectionID: HomeSectionID, itemIndex: Int) -> UIMenu? {
-        guard let section = shelfSection(id: sectionID) else { return nil }
+    /// Select long-press on a shelf tile → the tile action menu popup.
+    /// Same per-section routing the context-menu delegate used before the
+    /// system path died on tvOS 26 (see TileMenuPopupViewController).
+    private func presentShelfTileMenu(sectionID: HomeSectionID, itemIndex: Int) {
+        guard let section = shelfSection(id: sectionID) else { return }
         switch section.kind {
         case .continueWatching, .recentlyAdded, .recommendations:
-            guard itemIndex < section.items.count else { return nil }
-            return buildContextMenu(for: section.items[itemIndex],
-                                    isContinueWatching: section.kind == .continueWatching)
+            guard itemIndex < section.items.count else { return }
+            let item = section.items[itemIndex]
+            presentTileMenu(sections: tileMenuSections(for: item,
+                                                       isContinueWatching: section.kind == .continueWatching))
         case .discoverList:
-            return buildDiscoverContextMenu(sectionID: sectionID, itemIndex: itemIndex)
+            presentDiscoverTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .searchGrid:
-            guard itemIndex < section.items.count else { return nil }
+            guard itemIndex < section.items.count else { return }
             // Music results (artist/album/track) route to the music surfaces;
             // the Plex watched/watchlist menu doesn't apply to them.
             if let meta = searchGroupMetas[sectionID]?[safe: itemIndex],
                ["artist", "album", "track"].contains(meta.type ?? "") {
-                return nil
+                return
             }
-            return buildContextMenu(for: section.items[itemIndex], isContinueWatching: false)
+            let item = section.items[itemIndex]
+            presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: false))
         case .watchlist:
-            return buildWatchlistContextMenu(sectionID: sectionID, itemIndex: itemIndex)
+            presentWatchlistTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .hero, .grid, .recommendationsLoading, .recommendationsError, .sortHeader,
              .searchPrompt, .searchState:
-            return nil  // hero / state cells don't get menus
+            return  // hero / state cells don't get menus
         }
+    }
+
+    /// The focused tile's VISUAL frame in window coordinates — the menu
+    /// anchor. The cell frame doesn't include the lockup's focus float
+    /// (TVPosterView scales its content internally, not the view), so the
+    /// frame is grown by the focus scale to match what's on screen.
+    private func focusedTileFrame() -> CGRect? {
+        var view = UIScreen.main.focusedView
+        while let current = view, !(current is UICollectionViewCell) { view = current.superview }
+        guard let cell = view as? UICollectionViewCell else { return nil }
+        let frame = cell.convert(cell.bounds, to: nil)
+        let focusScale: CGFloat = 1.1
+        return frame.insetBy(dx: -frame.width * (focusScale - 1) / 2,
+                             dy: -frame.height * (focusScale - 1) / 2)
+    }
+
+    private func presentTileMenu(sections: [[TileMenuAction]]) {
+        guard sections.contains(where: { !$0.isEmpty }), presentedViewController == nil else { return }
+        // animated: false — the popup runs its own grow-from-the-tile
+        // entrance/exit (see TileMenuPopupViewController).
+        present(TileMenuPopupViewController(sections: sections,
+                                            sourceFrame: focusedTileFrame()), animated: false)
     }
 
     /// Discover tile menu — mirror of SwiftUI `TMDBContextMenu`: Details when
     /// the item is library-matched, watchlist add/remove for everything.
-    private func buildDiscoverContextMenu(sectionID: HomeSectionID, itemIndex: Int) -> UIMenu? {
+    private func presentDiscoverTileMenu(sectionID: HomeSectionID, itemIndex: Int) {
         guard let tmdbItems = discoverListItems[sectionID],
-              itemIndex < tmdbItems.count else { return nil }
+              itemIndex < tmdbItems.count else { return }
         let item = tmdbItems[itemIndex]
-        var actions: [UIAction] = []
+        var actions: [TileMenuAction] = []
 
         if discoverModel.inLibraryTMDBIds.contains(item.id) {
-            actions.append(UIAction(title: "Details", image: UIImage(systemName: "info.circle")) { [weak self] _ in
+            actions.append(TileMenuAction(title: "Details", systemImage: "info.circle") { [weak self] in
                 guard let self else { return }
                 Task { @MainActor in
                     guard let metadata = await self.discoverModel.libraryMatch(for: item),
                           let serverURL = self.authManager.selectedServerURL,
                           let token = self.authManager.selectedServerToken else { return }
                     let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
-                    self.onSelectItem?(PlexMediaMapper.item(metadata, providerID: providerID, serverURL: serverURL, authToken: token))
+                    self.selectMediaItem(PlexMediaMapper.item(metadata, providerID: providerID, serverURL: serverURL, authToken: token))
                 }
             })
         }
 
         let guid = "tmdb://\(item.id)"
         if watchlistService.contains(guid: guid) {
-            actions.append(UIAction(title: "Remove from Watchlist", image: UIImage(systemName: "bookmark.slash")) { [weak self] _ in
+            actions.append(TileMenuAction(title: "Remove from Watchlist", systemImage: "bookmark.slash") { [weak self] in
                 Task { await self?.watchlistService.remove(guid: guid) }
             })
         } else {
-            actions.append(UIAction(title: "Add to Watchlist", image: UIImage(systemName: "bookmark")) { [weak self] _ in
+            actions.append(TileMenuAction(title: "Add to Watchlist", systemImage: "bookmark") { [weak self] in
                 let watchType: PlexWatchlistItem.WatchlistType = item.mediaType == .movie ? .movie : .show
                 let yearInt: Int? = {
                     guard let raw = item.releaseDate?.prefix(4), !raw.isEmpty else { return nil }
@@ -2716,20 +2748,20 @@ final class PlexHomeViewController: UIViewController {
             })
         }
 
-        return UIMenu(children: actions)
+        presentTileMenu(sections: [actions])
     }
 
     /// Watchlist tile menu. Items are `PlexWatchlistItem`s (not `MediaItem`s),
     /// so this doesn't reuse the watched/unwatched menu: jump to details (same
     /// as tapping the tile) and remove from the watchlist.
-    private func buildWatchlistContextMenu(sectionID: HomeSectionID, itemIndex: Int) -> UIMenu? {
-        guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id == sectionID }) else { return nil }
+    private func presentWatchlistTileMenu(sectionID: HomeSectionID, itemIndex: Int) {
+        guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id == sectionID }) else { return }
         let section = sectionsSnapshot[sectionIndex]
-        guard itemIndex < section.watchlistItems.count else { return nil }
+        guard itemIndex < section.watchlistItems.count else { return }
         let item = section.watchlistItems[itemIndex]
         let guid = item.primaryGUID ?? item.id
 
-        let info = UIAction(title: "More Info", image: UIImage(systemName: "info.circle")) { [weak self] _ in
+        let info = TileMenuAction(title: "More Info", systemImage: "info.circle") { [weak self] in
             guard let self else { return }
             Task {
                 await self.openWatchlistPreview(section: section,
@@ -2737,12 +2769,12 @@ final class PlexHomeViewController: UIViewController {
                                                 indexPath: IndexPath(item: itemIndex, section: sectionIndex))
             }
         }
-        let remove = UIAction(title: "Remove from Watchlist",
-                              image: UIImage(systemName: "bookmark.slash"),
-                              attributes: .destructive) { [weak self] _ in
+        let remove = TileMenuAction(title: "Remove from Watchlist",
+                                    systemImage: "bookmark.slash",
+                                    destructive: true) { [weak self] in
             Task { await self?.watchlistService.remove(guid: guid) }
         }
-        return UIMenu(children: [info, remove])
+        presentTileMenu(sections: [[info, remove]])
     }
 
     /// Latch the ambient wash to the screen's first featured item once
@@ -3316,35 +3348,36 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    private func selectPlexItem(_ meta: PlexMetadata) {
-        switch meta.type {
-        case "artist", "album":
-            onSelectMusic?(meta)
-        case "track":
-            playMusicTrack(meta)
-        default:
-            guard let serverURL = authManager.selectedServerURL,
-                  let token = authManager.selectedServerToken else { return }
-            let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
-            let item = PlexMediaMapper.item(meta, providerID: providerID, serverURL: serverURL, authToken: token)
-            onSelectItem?(item)
+
+    /// Navigate to detail for a MediaItem (tile-menu "More Info" /
+    /// "Go to …") — always the UIKit surfaces: episodes get the episode
+    /// detail page, everything else the standalone expanded detail (the
+    /// same page a hero Info press opens). The SwiftUI detail stack is not
+    /// used from the tile menu.
+    private func selectMediaItem(_ item: MediaItem) {
+        if item.kind == .episode {
+            let page = MediaItemDetailPageViewController(
+                item: item,
+                seriesTitle: nil,
+                onPlay: { [weak self] episode in self?.playItem(episode) })
+            present(page, animated: true)
+        } else {
+            presentStandaloneExpandedDetail(item)
         }
     }
 
-    /// Navigate to detail for a MediaItem (context-menu "More Info" /
-    /// "Go to …"). The home rows that vend a context menu (Continue Watching,
-    /// Recently Added, Recommendations, grid) are movie/show/episode content
-    /// routed through the SwiftUI detail stack via `onSelectItem` — exactly
-    /// what the preview-carousel tap path already does for the same items.
-    private func selectMediaItem(_ item: MediaItem) {
-        // Search has no SwiftUI detail destination — its results open the new
-        // UIKit detail surfaces only (context-menu "More Info"/"Go to" lands
-        // on the standalone expanded detail, same as a hero Info press).
-        if case .search = mode {
-            presentStandaloneExpandedDetail(item)
-            return
+    /// Tile-menu "Go to Show": fetch the show and open its expanded detail
+    /// (season pills + episode rail live there).
+    private func presentShowDetail(ratingKey: String) {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+        Task { @MainActor in
+            guard let meta = try? await PlexNetworkManager.shared.getMetadata(
+                serverURL: serverURL, authToken: token, ratingKey: ratingKey) else { return }
+            let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
+            presentStandaloneExpandedDetail(
+                PlexMediaMapper.item(meta, providerID: providerID, serverURL: serverURL, authToken: token))
         }
-        onSelectItem?(item)
     }
 
     /// Open the new UIKit detail page (`MediaItemDetailPageViewController`) for a
@@ -4085,163 +4118,144 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
     }
 
-    /// Long-press / hold on a tile surfaces a UIMenu. Mirrors
-    /// `MediaItemContextMenu` (`MediaItemContextMenu.swift:30`) and the
-    /// CW-specific override in `ContinueWatchingContextMenuModifier`
-    /// (`PlexHomeView.swift:1037`). tvOS 17+ uses the `Items` (plural)
-    /// signature — we just use the first index since we don't support
-    /// multi-selection on the home.
-    func collectionView(_ collectionView: UICollectionView,
-                        contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
-                        point: CGPoint) -> UIContextMenuConfiguration? {
-        guard let indexPath = indexPaths.first else { return nil }
-        return gridMenuConfiguration(forItemAt: indexPath)
-    }
-
-    private func gridMenuConfiguration(forItemAt indexPath: IndexPath) -> UIContextMenuConfiguration? {
-        guard indexPath.section < sectionsSnapshot.count else { return nil }
-        // Skeleton placeholder doesn't get a context menu.
+    /// Select long-press on a library-grid tile → the tile action menu.
+    /// Mirrors `MediaItemContextMenu` (`MediaItemContextMenu.swift:30`).
+    /// Shelf-row tiles have their own recognizer (ShelfRowCell); this one
+    /// only serves `.grid` sections, whose tiles are outer-collection cells.
+    @objc private func handleGridLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        guard let indexPath = TileLongPress.focusedCell(in: collectionView),
+              indexPath.section < sectionsSnapshot.count else { return }
+        // Skeleton placeholder doesn't get a menu.
         if let itemID = dataSource.itemIdentifier(for: indexPath),
            itemID.itemID == HomeItemID.skeletonSentinel {
-            return nil
+            return
         }
         let section = sectionsSnapshot[indexPath.section]
-        switch section.kind {
-        case .hero, .watchlist, .recommendationsLoading, .recommendationsError, .sortHeader,
-             .searchPrompt, .searchState:
-            return nil  // hero / watchlist / state / sort-header cells don't get menus
-        case .continueWatching, .recentlyAdded, .recommendations, .discoverList, .searchGrid:
-            return nil  // shelf rows vend tile menus from their own delegate (shelfContextMenu)
-        case .grid:
-            guard indexPath.item < section.items.count else { return nil }
-            let item = section.items[indexPath.item]
-            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-                self?.buildContextMenu(for: item, isContinueWatching: false)
-            }
-        }
+        guard case .grid = section.kind, indexPath.item < section.items.count else { return }
+        let item = section.items[indexPath.item]
+        presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: false))
     }
 
-    // MARK: - Context-menu builder
+    // MARK: - Tile menu builder
 
-    /// Build the UIMenu for a cell. Mirrors SwiftUI MediaItemContextMenu's
-    /// action set, including the conditional Mark-as-Watched / Unwatched
-    /// branching and the CW-specific Remove + Go-to-Episode override.
-    private func buildContextMenu(for item: MediaItem, isContinueWatching: Bool) -> UIMenu {
+    /// Build the tile menu action groups for a cell — one sub-array per
+    /// divider-separated group, mirroring SwiftUI MediaItemContextMenu's
+    /// action set and `Divider()` placement, including the conditional
+    /// Mark-as-Watched / Unwatched branching and the CW-specific
+    /// Remove + Go-to-Episode override.
+    private func tileMenuSections(for item: MediaItem, isContinueWatching: Bool) -> [[TileMenuAction]] {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
               !item.ref.itemID.isEmpty
-        else { return UIMenu(children: []) }
+        else { return [] }
         let ratingKey = item.ref.itemID
 
         let network = PlexNetworkManager.shared
-        var actions: [UIMenuElement] = []
 
         if isContinueWatching {
             // SwiftUI ContinueWatchingContextMenuModifier (PlexHomeView.swift:1037)
-            // has its own action ordering: Watch from Beginning, Go to
-            // Episode, Mark as Watched, Remove from Continue Watching,
-            // Refresh Metadata.
-            actions.append(UIAction(title: "Watch from Beginning",
-                                    image: UIImage(systemName: "arrow.counterclockwise")) { [weak self] _ in
-                self?.playItem(item, fromBeginning: true)
-            })
-            actions.append(UIAction(title: "Go to Episode",
-                                    image: UIImage(systemName: "info.circle")) { [weak self] _ in
-                self?.selectMediaItem(item)
-            })
-
-            let markWatched = UIAction(title: "Mark as Watched",
-                                       image: UIImage(systemName: "rectangle.badge.checkmark")) { [weak self] _ in
-                self?.performMenuAction(optimisticWatched: true) {
-                    try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                }
-            }
-            let removeFromCW = UIAction(title: "Remove from Continue Watching",
-                                        image: UIImage(systemName: "trash"),
-                                        attributes: [.destructive]) { [weak self] _ in
-                self?.performMenuAction {
-                    try await network.removeFromContinueWatching(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                }
-            }
-            actions.append(contentsOf: [
-                UIMenu(options: .displayInline, children: [markWatched]),
-                UIMenu(options: .displayInline, children: [removeFromCW])
-            ])
-
-            actions.append(UIMenu(options: .displayInline, children: [
-                UIAction(title: "Refresh Metadata",
-                         image: UIImage(systemName: "arrow.clockwise")) { _ in
-                    Task {
-                        try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                    }
-                }
-            ]))
-            return UIMenu(children: actions)
+            // ordering: [Watch from Beginning, More Info] | [Mark as Watched,
+            // Remove from Continue Watching] | [Refresh Metadata].
+            return [
+                [
+                    TileMenuAction(title: "Watch from Beginning",
+                                   systemImage: "arrow.counterclockwise") { [weak self] in
+                        self?.playItem(item, fromBeginning: true)
+                    },
+                    // Content-aware: CW mixes episodes and movies.
+                    TileMenuAction(title: item.kind == .episode ? "Go to Episode" : "More Info",
+                                   systemImage: "info.circle") { [weak self] in
+                        self?.selectMediaItem(item)
+                    },
+                ],
+                [
+                    TileMenuAction(title: "Mark as Watched",
+                                   systemImage: "rectangle.badge.checkmark") { [weak self] in
+                        self?.performMenuAction(optimisticWatched: true) {
+                            try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                        }
+                    },
+                    TileMenuAction(title: "Remove from Continue Watching",
+                                   systemImage: "trash",
+                                   destructive: true) { [weak self] in
+                        self?.performMenuAction {
+                            try await network.removeFromContinueWatching(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                        }
+                    },
+                ],
+                [
+                    TileMenuAction(title: "Refresh Metadata",
+                                   systemImage: "arrow.clockwise") {
+                        Task {
+                            try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                        }
+                    },
+                ],
+            ]
         }
 
-        // Generic media-item menu (Recently Added, Recommendations).
+        // Generic media-item menu (Recently Added, Recommendations):
+        // [Watch from Beginning] | [watched state + episode navigation] |
+        // [More Info, Refresh Metadata].
 
         // Watch from Beginning. SwiftUI fires markUnwatched here to clear
         // viewOffset — odd action name vs. behavior, but we match exactly.
-        actions.append(UIAction(title: "Watch from Beginning",
-                                image: UIImage(systemName: "play.fill")) { [weak self] _ in
-            self?.performMenuAction(optimisticWatched: false) {
-                try await network.markUnwatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-            }
-        })
+        let first = [
+            TileMenuAction(title: "Watch from Beginning",
+                           systemImage: "play.fill") { [weak self] in
+                self?.performMenuAction(optimisticWatched: false) {
+                    try await network.markUnwatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                }
+            },
+        ]
 
         // Mark as Watched / Unwatched — conditional on view state.
         // isWatched mirrors the old `viewCount > 0`; watchProgress != nil
         // mirrors the in-progress branch.
+        var middle: [TileMenuAction] = []
         let isWatched = item.isWatched
         if !isWatched || item.watchProgress != nil {
-            actions.append(UIAction(title: "Mark as Watched",
-                                    image: UIImage(systemName: "eye.fill")) { [weak self] _ in
+            middle.append(TileMenuAction(title: "Mark as Watched",
+                                         systemImage: "eye.fill") { [weak self] in
                 self?.performMenuAction(optimisticWatched: true) {
                     try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                 }
             })
         }
         if isWatched {
-            actions.append(UIAction(title: "Mark as Unwatched",
-                                    image: UIImage(systemName: "eye.slash.fill")) { [weak self] _ in
+            middle.append(TileMenuAction(title: "Mark as Unwatched",
+                                         systemImage: "eye.slash.fill") { [weak self] in
                 self?.performMenuAction(optimisticWatched: false) {
                     try await network.markUnwatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                 }
             })
         }
 
-        // Episode-only Go to navigation.
-        if item.kind == .episode {
-            if item.parentRef?.itemID != nil {
-                actions.append(UIAction(title: "Go to Season",
-                                        image: UIImage(systemName: "list.number")) { [weak self] _ in
-                    self?.selectMediaItem(item)  // detail view handles per-type routing
-                })
-            }
-            if item.grandparentRef?.itemID != nil {
-                actions.append(UIAction(title: "Go to Show",
-                                        image: UIImage(systemName: "tv")) { [weak self] _ in
-                    self?.selectMediaItem(item)
-                })
-            }
+        // Episode-only: jump to the show's detail (season pills + episode
+        // rail live there — a separate "Go to Season" entry would open the
+        // same page, so the old SwiftUI menu's two entries fold into one).
+        if item.kind == .episode, let showKey = item.grandparentRef?.itemID {
+            middle.append(TileMenuAction(title: "Go to Show",
+                                         systemImage: "tv") { [weak self] in
+                self?.presentShowDetail(ratingKey: showKey)
+            })
         }
 
-        // More Info (navigate to detail view).
-        actions.append(UIAction(title: "More Info",
-                                image: UIImage(systemName: "info.circle")) { [weak self] _ in
-            self?.selectMediaItem(item)
-        })
+        let last = [
+            TileMenuAction(title: "More Info",
+                           systemImage: "info.circle") { [weak self] in
+                self?.selectMediaItem(item)
+            },
+            TileMenuAction(title: "Refresh Metadata",
+                           systemImage: "arrow.clockwise") {
+                Task {
+                    try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                }
+            },
+        ]
 
-        // Refresh Metadata (always last).
-        actions.append(UIAction(title: "Refresh Metadata",
-                                image: UIImage(systemName: "arrow.clockwise")) { _ in
-            Task {
-                try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-            }
-        })
-
-        return UIMenu(children: actions)
+        return [first, middle, last]
     }
 
     /// Performs a context-menu action with optional optimistic-watched

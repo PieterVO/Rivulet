@@ -409,7 +409,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     self.onShowRelatedDetails?(self.relatedItems[idx])
                 }
                 cell.onWillDisplayItem = nil
-                cell.contextMenuProvider = nil
+                cell.onLongPressItem = nil
                 cell.onOffsetChanged = nil
                 // Self-align to the screen's rowLeading (robust to the
                 // below-fold's state-dependent translation), and draw the

@@ -4,8 +4,8 @@
 //
 //  SwiftUI shell for the Plex Home screen. Wraps the UIKit
 //  `PlexHomeViewController` (via `PlexHomeUIKitBridge`) in a
-//  NavigationStack so tile taps still navigate via SwiftUI's stack to
-//  `MediaDetailView` / music routers.
+//  NavigationStack so music selections still navigate via SwiftUI's stack
+//  to the music routers. Everything else navigates inside UIKit.
 //
 
 import SwiftUI
@@ -16,32 +16,27 @@ struct PlexHomeRoot: View {
     }
 }
 
-/// SwiftUI shell that owns the NavigationStack + selection bindings for
-/// the UIKit home. The UIKit controller forwards selections via callbacks
-/// which flip the bindings here, and the stack pushes the matching
-/// destination view exactly like the SwiftUI home does.
+/// SwiftUI shell that owns the NavigationStack + music-selection binding
+/// for the UIKit home. Media detail navigation happens inside the UIKit
+/// controller; only music selections flip the binding here and push the
+/// music routers.
 ///
 /// Also mirrors the SwiftUI home's `nestedNavigationState.isNested` plumb:
 /// the sidebar reads this flag to hide its tab bar while a detail view is
-/// on top, so the UIKit home must update it the same way the SwiftUI home
-/// does (`onChange(of: selectedItem)` in `PlexHomeView`).
+/// on top.
 struct UIKitHomeContainer: View {
     /// Surface to render — .home (default) or .library(key:title:). Library
     /// call sites pass their key/title and `.id(key)` the container so each
     /// library gets a fresh controller.
     var mode: HomeMode = .home
-    @State private var selectedItem: MediaItem?
     @State private var selectedMusicItem: PlexMetadata?
     @Environment(\.nestedNavigationState) private var nestedNavState
 
     var body: some View {
         NavigationStack {
-            PlexHomeUIKitBridge(mode: mode, selectedItem: $selectedItem, selectedMusicItem: $selectedMusicItem)
+            PlexHomeUIKitBridge(mode: mode, selectedMusicItem: $selectedMusicItem)
                 .ignoresSafeArea()
                 .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(item: $selectedItem) { item in
-                    MediaDetailView(item: item)
-                }
                 .navigationDestination(item: $selectedMusicItem) { meta in
                     switch meta.type {
                     case "artist": MusicSearchDetailRouter(plexMeta: meta, kind: .artist)
@@ -50,11 +45,8 @@ struct UIKitHomeContainer: View {
                     }
                 }
         }
-        .onChange(of: selectedItem) { _, newValue in
-            nestedNavState.isNested = newValue != nil || selectedMusicItem != nil
-        }
         .onChange(of: selectedMusicItem) { _, newValue in
-            nestedNavState.isNested = newValue != nil || selectedItem != nil
+            nestedNavState.isNested = newValue != nil
         }
     }
 }
@@ -71,7 +63,6 @@ struct UIKitHomeContainer: View {
 struct UIKitSearchContainer: View {
     @State private var query = ""
     @State private var submitCount = 0
-    @State private var selectedItem: MediaItem?
     @State private var selectedMusicItem: PlexMetadata?
     @Environment(\.nestedNavigationState) private var nestedNavState
 
@@ -79,7 +70,6 @@ struct UIKitSearchContainer: View {
         NavigationStack {
             PlexHomeUIKitBridge(
                 mode: .search,
-                selectedItem: $selectedItem,
                 selectedMusicItem: $selectedMusicItem,
                 searchQuery: query,
                 searchSubmitCount: submitCount,
