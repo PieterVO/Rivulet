@@ -869,6 +869,14 @@ final class IrisSpinnerView: UIView {
         ringMask.strokeColor = UIColor.white.cgColor
         ringMask.lineWidth = 8
         layer.mask = ringMask
+
+        // Self-constrained: stack rows stretch un-sized arranged views to
+        // absorb spare width, which turned the ring into an ellipse.
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 64),
+            heightAnchor.constraint(equalToConstant: 64),
+        ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -881,10 +889,15 @@ final class IrisSpinnerView: UIView {
         // its corners never sweep inside the ring as it turns.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let side = bounds.width * 1.5
+        // Draw from a centered square so the ring stays circular even if
+        // some future layout hands this view a non-square frame.
+        let diameter = min(bounds.width, bounds.height)
+        let square = CGRect(x: bounds.midX - diameter / 2, y: bounds.midY - diameter / 2,
+                            width: diameter, height: diameter)
+        let side = diameter * 1.5
         gradientLayer.bounds = CGRect(x: 0, y: 0, width: side, height: side)
         gradientLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
-        ringMask.path = UIBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).cgPath
+        ringMask.path = UIBezierPath(ovalIn: square.insetBy(dx: 4, dy: 4)).cgPath
         ringMask.frame = bounds
         CATransaction.commit()
     }
