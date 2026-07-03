@@ -18,7 +18,6 @@ final class PlayerFocusCardView: UIView {
 
     // MARK: - Callbacks (wired by PlayerContainerViewController)
 
-    var onPlayPause: (() -> Void)?
     var onSkipBack: (() -> Void)?
     var onSubtitles: (() -> Void)?
     var onAudio: (() -> Void)?
@@ -39,7 +38,6 @@ final class PlayerFocusCardView: UIView {
     private let seriesLabel = UILabel()
     private let titleLabel = UILabel()
     private let metaLabel = UILabel()
-    let resumeButton = PlayerPrimaryButton()
     let skipBackButton = TransportControlButton(
         icon: UIImage(systemName: "gobackward.15"), accessibilityLabel: "Skip back 15 seconds",
         diameter: Metrics.roundButtonDiameter)
@@ -144,9 +142,9 @@ final class PlayerFocusCardView: UIView {
         controlsRow.distribution = .fill
         controlsRow.translatesAutoresizingMaskIntoConstraints = false
 
-        resumeButton.translatesAutoresizingMaskIntoConstraints = false
-
-        controlsRow.addArrangedSubview(resumeButton)
+        // No play/pause control: that's the remote's job (system-player
+        // parity), and a permanently-white pill read as focused-when-not —
+        // white fill is the focus signifier on tvOS. Removed 2026-07-03.
         controlsRow.addArrangedSubview(skipBackButton)
         controlsRow.addArrangedSubview(subtitlesButton)
         controlsRow.addArrangedSubview(audioButton)
@@ -160,7 +158,6 @@ final class PlayerFocusCardView: UIView {
             controlsRow.bottomAnchor.constraint(equalTo: metadataContainer.bottomAnchor),
         ])
 
-        resumeButton.onPress = { [weak self] in self?.onPlayPause?() }
         skipBackButton.onPress = { [weak self] in self?.onSkipBack?() }
         subtitlesButton.onPress = { [weak self] in self?.onSubtitles?() }
         audioButton.onPress = { [weak self] in self?.onAudio?() }
@@ -187,8 +184,6 @@ final class PlayerFocusCardView: UIView {
 
     func setPaused(_ paused: Bool) {
         pausedLabel.isHidden = !paused
-        resumeButton.setTitle(paused ? "Resume" : "Pause",
-            icon: UIImage(systemName: paused ? "play.fill" : "pause.fill"))
     }
 
     func setSubtitlesEnabled(_ enabled: Bool) {
@@ -269,7 +264,7 @@ final class PlayerFocusCardView: UIView {
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if mode != .metadata, mode != .loading, let panel = panelContainer { return [panel] }
         if let last = lastFocusedControl, !last.isHidden { return [last] }
-        return [resumeButton]
+        return [skipBackButton]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
@@ -318,74 +313,6 @@ final class PlayerFocusCardView: UIView {
             return
         }
         super.pressesEnded(presses, with: event)
-    }
-
-}
-
-// MARK: - PlayerPrimaryButton
-
-final class PlayerPrimaryButton: UIControl {
-
-    var onPress: (() -> Void)?
-    private let label = UILabel()
-    private let iconView = UIImageView()
-    private let row = UIStackView()
-
-    override var canBecomeFocused: Bool { true }
-
-    init() {
-        super.init(frame: .zero)
-        backgroundColor = .white
-        layer.cornerCurve = .continuous
-        layer.shadowColor = UIColor(red: 180/255, green: 205/255, blue: 1.0, alpha: 1).cgColor
-        layer.shadowOpacity = 0.28
-        layer.shadowRadius = 20
-        layer.shadowOffset = .zero
-
-        label.font = .systemFont(ofSize: 25, weight: .bold)
-        label.textColor = UIColor(red: 6/255, green: 7/255, blue: 11/255, alpha: 1)
-        iconView.tintColor = UIColor(red: 6/255, green: 7/255, blue: 11/255, alpha: 1)
-        iconView.contentMode = .center
-
-        row.axis = .horizontal
-        row.spacing = 12
-        row.alignment = .center
-        row.isUserInteractionEnabled = false
-        row.addArrangedSubview(iconView)
-        row.addArrangedSubview(label)
-
-        addSubview(row)
-        row.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 72),
-            row.centerXAnchor.constraint(equalTo: centerXAnchor),
-            row.centerYAnchor.constraint(equalTo: centerYAnchor),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 34),
-            trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: 34),
-        ])
-        setTitle("Resume", icon: UIImage(systemName: "play.fill"))
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) not been implemented") }
-
-    func setTitle(_ title: String, icon: UIImage?) {
-        label.text = title
-        let config = UIImage.SymbolConfiguration(pointSize: 21, weight: .bold)
-        iconView.image = icon?.applyingSymbolConfiguration(config)
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        layer.cornerRadius = bounds.height / 2
-    }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses {
-            guard press.type == .select else { continue }
-            onPress?()
-            return
-        }
-        super.pressesBegan(presses, with: event)
     }
 
 }

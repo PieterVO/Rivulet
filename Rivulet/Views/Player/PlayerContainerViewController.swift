@@ -664,8 +664,7 @@ class PlayerContainerViewController: UIViewController {
             }
             .store(in: &cancellables)
 
-        // Card actions.
-        card.onPlayPause = { [weak vm] in vm?.togglePlayPause() }
+        // Card actions. (No play/pause control — the remote owns that.)
         card.onSkipBack = { [weak vm] in Task { await vm?.seekRelative(by: -15) } }
         card.onReplayLongPress = { [weak vm] in vm?.replayWithCaptions() }
         card.onNavigateDown = { [weak self, weak vm] in
@@ -723,7 +722,9 @@ class PlayerContainerViewController: UIViewController {
     ///   scrubNudge) that can begin a scrub without showControls being set.
     ///   The focus card stays visible while scrubbing (design mock state 2).
     /// - auxVisible: chrome visible AND not scrubbing — scrubbing hides the
-    ///   skip pill and Up Next panel while the scrubber + card stay.
+    ///   card, skip pill, and Up Next panel so focus reads unambiguously on
+    ///   the scrubber (user call 2026-07-03, reverting the card-stays mock
+    ///   reading after trying it on screen).
     /// - panelVisible: aux visible AND not loading — the Up Next panel is
     ///   hidden while the loading card is up (spec: Loading hides it).
     ///   The panel's `isHidden` stays data-driven from the upNextEpisodes
@@ -738,7 +739,7 @@ class PlayerContainerViewController: UIViewController {
         let targets: [(UIView?, CGFloat)] = [
             (chromeScrim, chromeVisible ? 1 : 0),
             (progressBar, chromeVisible ? 1 : 0),
-            (focusCard, chromeVisible ? 1 : 0),
+            (focusCard, auxVisible ? 1 : 0),
             (skipPill, auxVisible ? 1 : 0),
             (upNextPanel, panelVisible ? 1 : 0),
         ]
