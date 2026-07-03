@@ -380,6 +380,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// it runs once per episode even though currentAVPlayer re-emits on every
     /// Aether internal AVPlayer swap. Reset on episode change in playNextEpisode().
     private var nextEpisodeResolvedEarly = false
+    /// Current season's episodes (sorted by index) for the Up Next panel. When
+    /// the current episode is a season finale, the next season's opener is
+    /// appended so the panel can still show an up-next row. Populated by
+    /// `loadUpNextEpisodes()`, hooked off `resolveNextEpisodeEarlyIfNeeded()`;
+    /// cleared on episode swap in `playNextEpisode()`.
+    @Published private(set) var upNextEpisodes: [PlexMetadata] = []
     @Published private(set) var recommendations: [PlexMetadata] = []
     @Published var countdownSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
@@ -3563,6 +3569,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard let next else { return }
         nextEpisode = next
         Task { await preloadNextEpisode() }
+        Task { await loadUpNextEpisodes() }
     }
 
     /// Called by `processMarkers` at the first-credits boundary (or at the
@@ -3676,6 +3683,40 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         } catch {
             print("🎬 [Metadata] Failed to fetch full metadata: \(error)")
+        }
+    }
+
+    /// Load the current season's episode list for the Up Next panel, sorted
+    /// by index. When the current episode is the season finale, appends the
+    /// next season's opener (via `fetchNextEpisode()`) so the panel still has
+    /// an up-next row to show. No-ops (clears to []) for non-episode content
+    /// or on any fetch failure.
+    func loadUpNextEpisodes() async {
+        guard metadata.type == "episode" else {
+            upNextEpisodes = []
+            return
+        }
+        if metadata.parentRatingKey == nil || metadata.index == nil {
+            await fetchFullMetadataIfNeeded()
+        }
+        guard let seasonKey = metadata.parentRatingKey else {
+            upNextEpisodes = []
+            return
+        }
+        do {
+            var episodes = try await PlexNetworkManager.shared.getChildren(
+                serverURL: serverURL, authToken: authToken, ratingKey: seasonKey)
+                .filter { $0.index != nil }
+                .sorted { ($0.index ?? 0) < ($1.index ?? 0) }
+            // Season finale: surface next season's opener as the up-next row.
+            if episodes.last?.ratingKey == metadata.ratingKey,
+               let next = await fetchNextEpisode(),
+               next.parentRatingKey != metadata.parentRatingKey {
+                episodes.append(next)
+            }
+            upNextEpisodes = episodes
+        } catch {
+            upNextEpisodes = []
         }
     }
 
@@ -3880,6 +3921,23 @@ final class UniversalPlayerViewModel: ObservableObject {
         isCountdownPaused = true
     }
 
+    /// Play a specific episode from the Up Next panel. Reuses the full
+    /// playNextEpisode() reset path (filmstrip/replay/marker/generation reset)
+    /// by substituting the target as the resolved next episode. Note this
+    /// still marks the CURRENT episode watched — same semantics as advancing
+    /// normally, even when jumping ahead or back within the season.
+    func playEpisode(_ episode: PlexMetadata) async {
+        guard episode.ratingKey != metadata.ratingKey else { return }
+        // Any in-flight preload was for the previously-resolved `nextEpisode`,
+        // not this target — discard it so playNextEpisode() doesn't splice in
+        // the wrong episode's metadata/stream URL.
+        preloadedNextMetadata = nil
+        preloadedNextStreamURL = nil
+        preloadedNextStreamHeaders = [:]
+        nextEpisode = episode
+        await playNextEpisode()
+    }
+
     /// Play the next episode
     func playNextEpisode() async {
         guard let next = nextEpisode else { return }
@@ -3905,6 +3963,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // signal), so bump this explicitly for anything that caches
         // per-item state and needs to reset across the swap.
         itemGeneration += 1
+        // Clear stale Up Next rows from the outgoing episode's season; the
+        // resolve-early hook repopulates them for the new episode.
+        upNextEpisodes = []
 
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
