@@ -838,37 +838,56 @@ final class CardInfoView: UIView {
 
 // MARK: - IrisSpinnerView (Task 7)
 
-/// 64pt conic accent-gradient ring, masked to an 8pt stroke, spinning
-/// 1.4s/rev. Animation is re-added on window attach (CAAnimations die
-/// on removal).
+/// 64pt accent ring with the conic gradient flowing around it, 1.4s/rev.
+/// The ring mask is static on the view's layer; only the gradient — an
+/// oversized sublayer — rotates beneath it, so the colors sweep around a
+/// stationary ring (flow, not motion). Rotating the view's own layer is
+/// what broke before: Auto Layout owns that layer's frame, and setting
+/// frame during a transform animation (undefined) drifted the position,
+/// making the whole ring orbit. Animation is re-added on window attach
+/// (CAAnimations die on removal).
 final class IrisSpinnerView: UIView {
-    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    private let gradientLayer = CAGradientLayer()
+    private let ringMask = CAShapeLayer()
 
     override init(frame: CGRect) {
         super.init(frame: CGRect(x: 0, y: 0, width: 64, height: 64))
-        let g = layer as! CAGradientLayer
-        g.type = .conic
-        g.colors = [
+        gradientLayer.type = .conic
+        gradientLayer.colors = [
             UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 1).cgColor,
             UIColor(red: 0xb9/255, green: 0xa3/255, blue: 0xff/255, alpha: 1).cgColor,
             UIColor(red: 0xff/255, green: 0xce/255, blue: 0x93/255, alpha: 1).cgColor,
             UIColor(red: 0x8f/255, green: 0xe9/255, blue: 0xd4/255, alpha: 1).cgColor,
             UIColor(red: 0x7f/255, green: 0xb8/255, blue: 0xff/255, alpha: 0).cgColor,
         ]
-        g.startPoint = CGPoint(x: 0.5, y: 0.5)
-        g.endPoint = CGPoint(x: 0.5, y: 0)
+        gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
+        gradientLayer.endPoint = CGPoint(x: 0.5, y: 0)
+        layer.addSublayer(gradientLayer)
 
-        let ring = CAShapeLayer()
-        ring.path = UIBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).cgPath
-        ring.fillColor = UIColor.clear.cgColor
-        ring.strokeColor = UIColor.white.cgColor
-        ring.lineWidth = 8
-        ring.lineCap = .round
-        layer.mask = ring
+        ringMask.fillColor = UIColor.clear.cgColor
+        ringMask.strokeColor = UIColor.white.cgColor
+        ringMask.lineWidth = 8
+        layer.mask = ringMask
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: CGSize { CGSize(width: 64, height: 64) }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // bounds+position (never frame) — frame is undefined while the
+        // rotation transform animates. The gradient outsizes the view so
+        // its corners never sweep inside the ring as it turns.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let side = bounds.width * 1.5
+        gradientLayer.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        gradientLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        ringMask.path = UIBezierPath(ovalIn: bounds.insetBy(dx: 4, dy: 4)).cgPath
+        ringMask.frame = bounds
+        CATransaction.commit()
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -878,7 +897,7 @@ final class IrisSpinnerView: UIView {
         spin.toValue = 2 * Double.pi
         spin.duration = 1.4
         spin.repeatCount = .infinity
-        layer.add(spin, forKey: "spin")
+        gradientLayer.add(spin, forKey: "spin")
     }
 }
 

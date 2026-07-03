@@ -22,6 +22,7 @@ class PlayerContainerViewController: UIViewController {
     private var progressBar: PlayerProgressBarView?
     private var skipPill: SkipPillButton?
     private var upNextPanel: PlayerUpNextPanelView?
+    private var cardPanelFocusGuide: UIFocusGuide?
     private var chromeScrim = ChromeScrimView()
     private var cancellables = Set<AnyCancellable>()
     private var panGestureRecognizer: UIPanGestureRecognizer?
@@ -129,6 +130,25 @@ class PlayerContainerViewController: UIViewController {
             skipPill = pill
             upNextPanel = panel
 
+            // Focus bridge between the card and the Up Next panel. The
+            // card's controls hug the card's bottom while the collapsed
+            // panel row sits at centerY — no vertical overlap, so the
+            // focus engine's directional beam never finds the other side.
+            // The guide spans the gap at the card's full height; its
+            // target flips in didUpdateFocus (toward the panel normally,
+            // back to the card while focus is inside the panel) so lower
+            // expanded rows can still exit leftward.
+            let guide = UIFocusGuide()
+            view.addLayoutGuide(guide)
+            guide.preferredFocusEnvironments = [panel]
+            NSLayoutConstraint.activate([
+                guide.leadingAnchor.constraint(equalTo: card.trailingAnchor),
+                guide.trailingAnchor.constraint(equalTo: panel.leadingAnchor),
+                guide.topAnchor.constraint(equalTo: card.topAnchor),
+                guide.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            ])
+            cardPanelFocusGuide = guide
+
             bindChrome(to: vm)
         }
 
@@ -173,6 +193,19 @@ class PlayerContainerViewController: UIViewController {
     /// Focus routing for the UIKit transport layer. Controls-focus mode
     /// prefers the card (the card's own preferred-focus handles panel
     /// landing when a track list / info sheet is up).
+    /// Keeps the card↔panel focus guide pointing away from wherever focus
+    /// currently is, so it always bridges toward the other side and can
+    /// never bounce focus back into the panel it just left.
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        guard let guide = cardPanelFocusGuide, let panel = upNextPanel, let card = focusCard else { return }
+        if let next = context.nextFocusedView, next.isDescendant(of: panel) {
+            guide.preferredFocusEnvironments = [card]
+        } else {
+            guide.preferredFocusEnvironments = [panel]
+        }
+    }
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if viewModel?.controlsFocusActive == true, let card = focusCard {
             return [card]
@@ -644,6 +677,9 @@ class PlayerContainerViewController: UIViewController {
                                               seasonNumber: vm.metadata.parentIndex,
                                               serverURL: vm.serverURL, authToken: vm.authToken)
                 self.upNextPanel?.isHidden = episodes.isEmpty
+                // Re-derive the focus guide's enabled state now that the
+                // panel's data-driven visibility changed.
+                self.applyChromeVisibility()
             }
             .store(in: &cancellables)
 
@@ -743,6 +779,11 @@ class PlayerContainerViewController: UIViewController {
             (skipPill, auxVisible ? 1 : 0),
             (upNextPanel, panelVisible ? 1 : 0),
         ]
+        // The card↔panel focus guide only bridges when there is actually
+        // a visible panel to bridge to — otherwise a rightward move would
+        // dead-end into a redirect at an invisible target.
+        cardPanelFocusGuide?.isEnabled = panelVisible && upNextPanel?.isHidden == false
+
         guard targets.contains(where: { view, alpha in view.map { abs($0.alpha - alpha) > 0.01 } == true }) else { return }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
