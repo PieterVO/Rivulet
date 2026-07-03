@@ -855,6 +855,7 @@ final class IrisSpinnerView: UIView {
         super.init(frame: CGRect(x: 0, y: 0, width: 64, height: 64))
         gradientLayer.type = .conic
         gradientLayer.colors = Self.basePalette
+        gradientLayer.locations = [0, 0.25, 0.5, 0.75, 1]
         gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
         gradientLayer.endPoint = CGPoint(x: 0.5, y: 0)
         layer.addSublayer(gradientLayer)
@@ -935,6 +936,24 @@ final class IrisSpinnerView: UIView {
         shimmer.repeatCount = .infinity
         shimmer.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         gradientLayer.add(shimmer, forKey: "shimmer")
+
+        // Slosh: the interior color bands stretch and compress like
+        // currents while they circulate. Endpoints stay pinned at 0/1 so
+        // the cyclic seam never opens. Third offset period (no common
+        // multiple with 1.4s spin or 2.3s shimmer) keeps the motion from
+        // ever visibly repeating.
+        let slosh = CAKeyframeAnimation(keyPath: "locations")
+        slosh.values = [
+            [0, 0.25, 0.5, 0.75, 1],
+            [0, 0.33, 0.52, 0.68, 1],
+            [0, 0.21, 0.45, 0.79, 1],
+            [0, 0.28, 0.56, 0.71, 1],
+            [0, 0.25, 0.5, 0.75, 1],
+        ]
+        slosh.duration = 3.7
+        slosh.repeatCount = .infinity
+        slosh.timingFunctions = Array(repeating: CAMediaTimingFunction(name: .easeInEaseOut), count: 4)
+        gradientLayer.add(slosh, forKey: "slosh")
     }
 }
 
