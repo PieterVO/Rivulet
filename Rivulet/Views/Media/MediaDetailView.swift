@@ -57,7 +57,6 @@ struct MediaDetailView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.previewMenuBridge) private var menuBridge
     @Environment(MediaProviderRegistry.self) private var providerRegistry
     @Environment(MetadataSourceRegistry.self) private var metadataRegistry
     @StateObject private var authManager = PlexAuthManager.shared
@@ -457,33 +456,6 @@ struct MediaDetailView: View {
                   episode.parentRef?.itemID != selectedSeason?.ref.itemID,
                   let newSeason = seasons.first(where: { $0.ref.itemID == episode.parentRef?.itemID }) else { return }
             selectedSeason = newSeason
-        }
-        .onAppear {
-            guard isExpandedPreviewFlow, let bridge = menuBridge else { return }
-            bridge.interceptHandler = { [self] in
-                if navigateToSeason != nil {
-                    navigateToSeason = nil
-                    return true
-                } else if navigateToShow != nil {
-                    navigateToShow = nil
-                    return true
-                } else if navigateToEpisode != nil {
-                    navigateToEpisode = nil
-                    return true
-                } else if scrollProgress > 0 || focusedEpisodeId != nil {
-                    scrollToTopTrigger.toggle()
-                    focusedEpisodeId = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        focusedActionButton = "play"
-                    }
-                    return true
-                }
-                return false
-            }
-        }
-        .onDisappear {
-            guard isExpandedPreviewFlow else { return }
-            menuBridge?.interceptHandler = nil
         }
         .onChange(of: showPlayer) { _, shouldShow in
             if shouldShow {
