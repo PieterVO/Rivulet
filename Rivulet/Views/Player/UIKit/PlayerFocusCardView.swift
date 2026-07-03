@@ -1012,17 +1012,28 @@ final class CardLoadingView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func skeletonBar(widthMultiplier: CGFloat, alpha: CGFloat) -> UIView {
+        // The bar lives inside a plain container: the stack's .fill
+        // alignment stretches the container to full width while the bar
+        // keeps its fractional width, leading-pinned. Constraining the bar
+        // against `self` here crashed — cross-view constraints need a
+        // common ancestor at activation, and the bar only joins the card's
+        // hierarchy after init adds the stack. Container + bar are already
+        // one subtree, so these activate safely.
+        let container = UIView()
         let bar = UIView()
         bar.backgroundColor = UIColor.white.withAlphaComponent(alpha)
         bar.layer.cornerRadius = 6
         bar.layer.cornerCurve = .continuous
+        container.addSubview(bar)
         bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        // Widths are relative to the panel itself (self), not the arranged
-        // stack, since a UIStackView's arranged subviews don't have a fixed
-        // width to anchor against directly.
-        bar.widthAnchor.constraint(equalTo: widthAnchor, multiplier: widthMultiplier).isActive = true
-        return bar
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: container.topAnchor),
+            bar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bar.heightAnchor.constraint(equalToConstant: 22),
+            bar.widthAnchor.constraint(equalTo: container.widthAnchor, multiplier: widthMultiplier),
+        ])
+        return container
     }
 
     // Not focusable: while loading, controlsFocusActive is false so the
