@@ -942,12 +942,15 @@ final class IrisSpinnerView: UIView {
         // the cyclic seam never opens. Third offset period (no common
         // multiple with 1.4s spin or 2.3s shimmer) keeps the motion from
         // ever visibly repeating.
+        // Amplitude matters here: the ring rotates a full turn every 1.4s,
+        // so boundary swings need to be large (up to ~0.15 of the circle,
+        // bands moving in opposition) to stay visible over the spin.
         let slosh = CAKeyframeAnimation(keyPath: "locations")
         slosh.values = [
             [0, 0.25, 0.5, 0.75, 1],
-            [0, 0.33, 0.52, 0.68, 1],
-            [0, 0.21, 0.45, 0.79, 1],
-            [0, 0.28, 0.56, 0.71, 1],
+            [0, 0.40, 0.55, 0.62, 1],
+            [0, 0.15, 0.42, 0.85, 1],
+            [0, 0.32, 0.65, 0.72, 1],
             [0, 0.25, 0.5, 0.75, 1],
         ]
         slosh.duration = 3.7
