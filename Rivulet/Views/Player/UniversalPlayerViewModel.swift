@@ -3692,6 +3692,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// an up-next row to show. No-ops (clears to []) for non-episode content
     /// or on any fetch failure.
     func loadUpNextEpisodes() async {
+        let generation = itemGeneration
         guard metadata.type == "episode" else {
             upNextEpisodes = []
             return
@@ -3708,14 +3709,19 @@ final class UniversalPlayerViewModel: ObservableObject {
                 serverURL: serverURL, authToken: authToken, ratingKey: seasonKey)
                 .filter { $0.index != nil }
                 .sorted { ($0.index ?? 0) < ($1.index ?? 0) }
-            // Season finale: surface next season's opener as the up-next row.
-            if episodes.last?.ratingKey == metadata.ratingKey,
+            // Season finale: surface the next season's opener as the up-next row.
+            // Skipped during shuffle play — fetchNextEpisode() advances the shuffle
+            // queue index as a side effect, and the panel shows season order anyway.
+            if !isShufflePlay,
+               episodes.last?.ratingKey == metadata.ratingKey,
                let next = await fetchNextEpisode(),
                next.parentRatingKey != metadata.parentRatingKey {
                 episodes.append(next)
             }
+            guard generation == itemGeneration else { return }
             upNextEpisodes = episodes
         } catch {
+            guard generation == itemGeneration else { return }
             upNextEpisodes = []
         }
     }

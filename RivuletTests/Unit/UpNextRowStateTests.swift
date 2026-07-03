@@ -57,4 +57,11 @@ final class UpNextRowStateTests: XCTestCase {
         XCTAssertEqual(UpNextRowState.state(for: eps[0], in: eps, currentRatingKey: nil), .watched)
         XCTAssertEqual(UpNextRowState.state(for: eps[1], in: eps, currentRatingKey: nil), .future)
     }
+
+    func test_watchedEpisodeAfterCurrent_isStillUpNextOrFuture() {
+        // A rewatch mid-season: episodes ahead of the playhead show their
+        // queue position, not their watched history.
+        let eps = [episode(key: "5", index: 5), episode(key: "6", index: 6, viewCount: 1)]
+        XCTAssertEqual(UpNextRowState.state(for: eps[1], in: eps, currentRatingKey: "5"), .upNext)
+    }
 }
