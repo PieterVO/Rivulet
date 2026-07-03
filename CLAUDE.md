@@ -1,6 +1,6 @@
 # Rivulet - Claude Context
 
-Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player transport bar) are **UIKit**; SwiftUI remains for thin navigation shells, Music, Live TV slots, Settings, and the shared `MediaDetailView` navigation destination.
+Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player chrome) are **UIKit**; SwiftUI remains for thin navigation shells, Music, Live TV slots, Settings, and the shared `MediaDetailView` navigation destination.
 
 The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg demux + HLS-fMP4 remux + AVPlayer, with HDR10+ / HLG / EAC3+JOC Atmos, plus a software sample-buffer backend for AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). It is the only player: VOD **and** Live TV. Video MUST render through the engine surface (`AetherVideoSurfaceView` → `engine.bind(view:)`), never an AVPlayerLayer on `currentAVPlayer`. The only other path is `hls`: AVPlayer on a Plex server transcode, used when no direct-play URL exists or as the fallback after an Aether startup failure. `ContentRouter.plan(...)` picks aether vs hls per item. (RPlayer and the localRemux/avPlayerDirect routes have been removed — see git history.)
 
@@ -34,7 +34,7 @@ Rivulet/
 │   │                   #   AVPlayerLayerView, TrackSelectionSheet, PlayerPresenter
 │   │   ├── Aether/     # AetherSubtitleCue (bridge type)
 │   │   ├── Subtitles/  # SubtitleModel-era types removed; see Services/…/Subtitles
-│   │   ├── UIKit/      # PlayerTransportBarView, PlayerProgressBarView, pills, popups (canonical transport UI)
+│   │   ├── UIKit/      # PlayerFocusCardView, PlayerProgressBarView, PlayerUpNextPanelView, pills (canonical player chrome)
 │   │   └── PostVideo/  # Post-playback summary overlays
 │   ├── Media/          # MediaDetailView (SwiftUI detail, still the nav destination),
 │   │                   #   PreviewContext, PreviewMenuBridge, HeroBackdropSupport, SharedMediaComponents,
@@ -84,7 +84,7 @@ Uses standard SwiftUI focus primitives with `FocusMemory` for section-level rest
 **AetherPlayer** (an adapter around AetherEngine) is the only player, used for both VOD and Live TV. It conforms to `PlayerProtocol`; video renders through the engine surface via `AetherVideoSurfaceView` (`engine.bind(view:)`), which hosts whichever layer the active backend uses. The app drives a plain `AVPlayer` only on the `hls` route (Plex server transcode). `ContentRouter.plan(...)` returns a `PlaybackPlan { primary, fallbacks }`. Canonical reference: `Docs/RIVULET_PLAYER.md`.
 
 ```
-UniversalPlayerView (SwiftUI) + PlayerContainerViewController (UIKit transport bar)
+UniversalPlayerView (SwiftUI) + PlayerContainerViewController (UIKit chrome)
         │
 UniversalPlayerViewModel  ← state, markers, post-video, NowPlaying, route changes
         │
@@ -98,7 +98,7 @@ Live TV: MultiStreamViewModel / StreamSlotView instantiate AetherPlayer() per gr
 ```
 
 Key components:
-- **`UniversalPlayerView`** / **`UniversalPlayerViewModel`**: SwiftUI container + state. Handles markers, post-video, route changes, NowPlaying. The transport bar itself is UIKit (`Views/Player/UIKit/`).
+- **`UniversalPlayerView`** / **`UniversalPlayerViewModel`**: SwiftUI container + state. Handles markers, post-video, route changes, NowPlaying. The player chrome itself is UIKit (`Views/Player/UIKit/`).
 - **`AetherPlayer`**: `PlayerProtocol` adapter around AetherEngine. Exposes Combine publishers for state, audio/subtitle tracks, and `currentAVPlayer`. Handles HDR10+ / HLG / EAC3+JOC Atmos. `setMuted` persists across Aether's internal player swaps (used by the Live TV grid).
 - **`ContentRouter`**: routing decisions → `PlaybackPlan`.
 - **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: subtitle rendering for the `hls` route. On the aether route, subtitles come from the engine's cue publishers rendered by `AetherSubtitleOverlayView` (fed via `SubtitleModel`).
@@ -220,8 +220,9 @@ xcodebuild -scheme Rivulet -destination 'platform=tvOS,name=My Apple TV' build
 |---------|------|
 | Player container (SwiftUI) | `Views/Player/UniversalPlayerView.swift` |
 | Player view model | `Views/Player/UniversalPlayerViewModel.swift` |
-| Player container (UIKit transport bar) | `Views/Player/PlayerContainerViewController.swift` |
-| Transport bar UI (UIKit) | `Views/Player/UIKit/PlayerTransportBarView.swift` |
+| Player container (UIKit chrome) | `Views/Player/PlayerContainerViewController.swift` |
+| Focus card UI (UIKit) | `Views/Player/UIKit/PlayerFocusCardView.swift` |
+| Up Next panel (UIKit) | `Views/Player/UIKit/PlayerUpNextPanelView.swift` |
 | Player (AetherEngine adapter) | `Services/Plex/Playback/AetherPlayer.swift` |
 | Live TV slot render surface | `Views/LiveTV/AetherSlotPlayerView.swift` |
 | Routing decisions | `Services/Plex/Playback/Pipeline/ContentRouter.swift` |

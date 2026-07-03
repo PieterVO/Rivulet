@@ -172,7 +172,7 @@ final class PlayerProgressBarView: UIView {
 
     /// Supplies filmstrip frames for `times` (evenly spaced across the
     /// track width), downsampled to `maxPixelWidth`. Wired by
-    /// PlayerTransportBarView to `UniversalPlayerViewModel.filmstripImages`.
+    /// PlayerContainerViewController to `UniversalPlayerViewModel.filmstripImages`.
     var filmstripProvider: (([TimeInterval], CGFloat) async -> [UIImage?])?
 
     private var stripLoadTask: Task<Void, Never>?

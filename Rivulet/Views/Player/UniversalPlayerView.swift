@@ -1100,16 +1100,6 @@ struct UniversalPlayerView: View {
         }
     }
 
-    private func formatDuration(_ milliseconds: Int) -> String {
-        let totalMinutes = milliseconds / 60000
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        }
-        return "\(minutes)m"
-    }
-
     // MARK: - Buffering Indicator
 
     private var bufferingIndicator: some View {
