@@ -676,13 +676,33 @@ class PlayerContainerViewController: UIViewController {
         scrubberProxy?.onFocusChange = { [weak bar] focused in
             bar?.setFocusEmphasis(focused)
         }
-        scrubberProxy?.onActivate = { [weak self, weak vm] _ in
-            // Same seek-entry path the touchpad pan uses: exit controls-focus
-            // mode and enter scrub at the current position. Left/right
-            // nudges after entry are handled by the existing seek input
-            // path (handleDPadLeft/RightTap/LongPress), not by the proxy.
-            vm?.exitControlsFocus()
-            self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+        scrubberProxy?.onActivate = { [weak self, weak vm] pressType in
+            guard let vm else { return }
+            // The proxy is the ONLY thing that ever sees this press: the
+            // container's own DPad tap/long-press gesture recognizers are
+            // attached higher up the responder chain and would normally
+            // get first crack, but every one of their handlers guards on
+            // `!controlsFocusActive` — true here, since the proxy is only
+            // focusable while controls-focus mode is active — so they
+            // silently no-op for this exact press. Route it to the same
+            // effect those handlers would have had, rather than a
+            // direction-blind `.scrubRelative(seconds: 0)` that used to
+            // waste this press on merely exiting controls-focus mode with
+            // no shuttle ever starting (a held FF/RW from a focused rail
+            // button needed a second, separate press to actually seek).
+            vm.exitControlsFocus()
+            switch pressType {
+            case .leftArrow:
+                vm.scrubInDirection(forward: false)
+                vm.showControlsTemporarily()
+            case .rightArrow:
+                vm.scrubInDirection(forward: true)
+                vm.showControlsTemporarily()
+            default:
+                // .select: same seek-entry path the touchpad pan uses —
+                // enter scrub at the current position, no direction yet.
+                self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+            }
         }
 
         vm.$itemGeneration
