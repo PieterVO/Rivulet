@@ -34,7 +34,7 @@ Rivulet/
 │   │                   #   AVPlayerLayerView, TrackSelectionSheet, PlayerPresenter
 │   │   ├── Aether/     # AetherSubtitleCue (bridge type)
 │   │   ├── Subtitles/  # SubtitleModel-era types removed; see Services/…/Subtitles
-│   │   ├── UIKit/      # PlayerFocusCardView, PlayerProgressBarView, PlayerUpNextPanelView, pills (canonical player chrome)
+│   │   ├── UIKit/      # PlayerRailView, PlayerRailPanelView, PlayerProgressBarView, UpNextListView, pills (canonical player chrome)
 │   │   └── PostVideo/  # Post-playback summary overlays
 │   ├── Media/          # MediaDetailView (SwiftUI detail, still the nav destination),
 │   │                   #   PreviewContext, PreviewMenuBridge, HeroBackdropSupport, SharedMediaComponents,
@@ -221,7 +221,8 @@ xcodebuild -scheme Rivulet -destination 'platform=tvOS,name=My Apple TV' build
 | Player container (SwiftUI) | `Views/Player/UniversalPlayerView.swift` |
 | Player view model | `Views/Player/UniversalPlayerViewModel.swift` |
 | Player container (UIKit chrome) | `Views/Player/PlayerContainerViewController.swift` |
-| Focus card UI (UIKit) | `Views/Player/UIKit/PlayerFocusCardView.swift` |
+| Player rail UI (UIKit) | `Views/Player/UIKit/PlayerRailView.swift` |
+| Rail panel (UIKit) | `Views/Player/UIKit/PlayerRailPanelView.swift` |
 | Up Next panel (UIKit) | `Views/Player/UIKit/PlayerUpNextPanelView.swift` |
 | Player (AetherEngine adapter) | `Services/Plex/Playback/AetherPlayer.swift` |
 | Live TV slot render surface | `Views/LiveTV/AetherSlotPlayerView.swift` |
