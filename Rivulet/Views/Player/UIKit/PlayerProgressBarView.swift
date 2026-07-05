@@ -867,6 +867,10 @@ final class PlayerProgressBarView: UIView {
         let barHeight = Metrics.stripHeight + 28
         playheadBar.isHidden = false
         playheadBar.frame = CGRect(x: playheadX - 4, y: barTop, width: 8, height: barHeight)
+        // Explicit shadowPath: without it CA rasterizes the glow offscreen on
+        // every frame the bar moves (60fps while scrubbing).
+        playheadBar.layer.shadowPath = UIBezierPath(
+            roundedRect: playheadBar.bounds, cornerRadius: 6).cgPath
         playheadBarBacking.isHidden = false
         playheadBarBacking.frame = CGRect(x: playheadX - 8, y: barTop, width: 16, height: barHeight)
 
