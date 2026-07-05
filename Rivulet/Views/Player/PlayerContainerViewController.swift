@@ -18,13 +18,26 @@ class PlayerContainerViewController: UIViewController {
     // MARK: - Properties
 
     private var hostingController: UIHostingController<AnyView>?
-    private var focusCard: PlayerFocusCardView?
+    private var rail: PlayerRailView?
     private var progressBar: PlayerProgressBarView?
+    private var progressBarLeading: NSLayoutConstraint?
+    private var progressBarTrailing: NSLayoutConstraint?
     private var skipPill: SkipPillButton?
-    private var upNextPanel: PlayerUpNextPanelView?
-    private var cardPanelFocusGuide: UIFocusGuide?
+    private var pausedDimView: UIView?
+    private var pauseIndicator: UIStackView?
+    private var pauseTimeLabel: UILabel?
+    private var loadingSpinner: IrisSpinnerView?
+    private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
     private var cancellables = Set<AnyCancellable>()
+    /// Snapshot of the last `$upNextEpisodes` emission — Task 6's panel
+    /// reads this when it comes online; Task 3 only derives the rail
+    /// button's availability from it.
+    private var upNextEpisodesCache: [PlexMetadata] = []
+    /// Tracks the previous `isScrubbing` value so the scrubber-inset
+    /// animation runs only on the true→false / false→true edge, not on
+    /// every tick of the combined time sink.
+    private var wasScrubbing = false
     private var panGestureRecognizer: UIPanGestureRecognizer?
     private var touchSurfaceTapGesture: UITapGestureRecognizer?
 
@@ -86,21 +99,71 @@ class PlayerContainerViewController: UIViewController {
         if let vm = viewModel {
             chromeScrim.isUserInteractionEnabled = false
 
-            let card = PlayerFocusCardView()
+            // Full-frame pause dim sits just above the video, below every
+            // other chrome layer (z-order bottom-up: scrim, dim, rail,
+            // progress bar, skip pill, pause indicator, spinner+label).
+            let dim = UIView()
+            dim.backgroundColor = UIColor.black.withAlphaComponent(0.28)
+            dim.alpha = 0
+            dim.isUserInteractionEnabled = false
+
+            let railView = PlayerRailView()
             let bar = PlayerProgressBarView()
             let pill = SkipPillButton()
             pill.isHidden = true
             pill.addTarget(self, action: #selector(skipPillTapped), for: .primaryActionTriggered)
 
-            let panel = PlayerUpNextPanelView()
-            panel.isHidden = true
+            // Top-left pause indicator: two bars + "Paused · Xm left".
+            let barsStack = UIStackView()
+            barsStack.axis = .horizontal
+            barsStack.spacing = 6
+            barsStack.alignment = .center
+            for _ in 0..<2 {
+                let bar = UIView()
+                bar.backgroundColor = .white
+                bar.layer.cornerRadius = 2
+                bar.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    bar.widthAnchor.constraint(equalToConstant: 7),
+                    bar.heightAnchor.constraint(equalToConstant: 24),
+                ])
+                barsStack.addArrangedSubview(bar)
+            }
+            let timeLabel = UILabel()
+            timeLabel.font = .systemFont(ofSize: 22, weight: .medium)
+            timeLabel.textColor = UIColor.white.withAlphaComponent(0.6)
 
-            [chromeScrim, card, bar, pill, panel].forEach {
+            let indicator = UIStackView(arrangedSubviews: [barsStack, timeLabel])
+            indicator.axis = .horizontal
+            indicator.spacing = 12
+            indicator.alignment = .center
+            indicator.alpha = 0
+
+            // Centered loading spinner + label.
+            let spinner = IrisSpinnerView(diameter: 110, stroke: 9)
+            let spinnerLabel = UILabel()
+            spinnerLabel.font = .systemFont(ofSize: 22, weight: .medium)
+            spinnerLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+            spinner.isHidden = true
+            spinnerLabel.isHidden = true
+
+            [chromeScrim, dim, railView, bar, pill, indicator, spinner, spinnerLabel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
-            view.bringSubviewToFront(card)
-            view.bringSubviewToFront(panel)
+            // Z-order bottom-up, explicit (subview-add order above already
+            // matches, but state this is intentional, not incidental).
+            view.bringSubviewToFront(chromeScrim)
+            view.bringSubviewToFront(dim)
+            view.bringSubviewToFront(railView)
+            view.bringSubviewToFront(bar)
+            view.bringSubviewToFront(pill)
+            view.bringSubviewToFront(indicator)
+            view.bringSubviewToFront(spinner)
+            view.bringSubviewToFront(spinnerLabel)
+
+            let leading = bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 132)
+            let trailing = bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -132)
 
             NSLayoutConstraint.activate([
                 chromeScrim.topAnchor.constraint(equalTo: view.topAnchor),
@@ -108,46 +171,51 @@ class PlayerContainerViewController: UIViewController {
                 chromeScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 chromeScrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-                // Focus card: left 96, vertically centered 520pt band (top/bottom 280 on 1080 canvas).
-                card.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 96),
-                card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+                dim.topAnchor.constraint(equalTo: view.topAnchor),
+                dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-                // Scrubber: locked left 96 / right 96 / bottom 140 in every state.
-                bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 96),
-                bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -96),
-                bar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -140),
+                // Rail: left/right 96, pinned to the bottom.
+                railView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 96),
+                railView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -96),
+                railView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -64),
+                railView.heightAnchor.constraint(equalToConstant: PlayerRailView.railHeight),
+
+                // Scrubber lives in the rail's lower region — a container
+                // sibling overlaid on the rail, not a rail child (its
+                // morph/behavior layer is untouched by this task).
+                // Leading/trailing inset 132 at rest, 96 while scrubbing.
+                leading,
+                trailing,
+                bar.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -34),
 
                 // Skip pill floats above the scrubber's right end.
                 pill.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
                 pill.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -28),
 
-                // Up Next panel: right edge, vertically centered.
-                panel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -80),
-                panel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+                // Pause indicator: top 44 / leading 64.
+                indicator.topAnchor.constraint(equalTo: view.topAnchor, constant: 44),
+                indicator.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 64),
+
+                // Loading spinner centered horizontally; vertical position
+                // 42% down from the top. Label sits below it.
+                spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                NSLayoutConstraint(item: spinner, attribute: .centerY, relatedBy: .equal,
+                                    toItem: view, attribute: .bottom, multiplier: 0.42, constant: 0),
+                spinnerLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 28),
+                spinnerLabel.centerXAnchor.constraint(equalTo: spinner.centerXAnchor),
             ])
-            focusCard = card
+            progressBarLeading = leading
+            progressBarTrailing = trailing
+            rail = railView
             progressBar = bar
             skipPill = pill
-            upNextPanel = panel
-
-            // Focus bridge between the card and the Up Next panel. The
-            // card's controls hug the card's bottom while the collapsed
-            // panel row sits at centerY — no vertical overlap, so the
-            // focus engine's directional beam never finds the other side.
-            // The guide spans the gap at the card's full height; its
-            // target flips in didUpdateFocus (toward the panel normally,
-            // back to the card while focus is inside the panel) so lower
-            // expanded rows can still exit leftward.
-            let guide = UIFocusGuide()
-            view.addLayoutGuide(guide)
-            guide.preferredFocusEnvironments = [panel]
-            NSLayoutConstraint.activate([
-                guide.leadingAnchor.constraint(equalTo: card.trailingAnchor),
-                guide.trailingAnchor.constraint(equalTo: panel.leadingAnchor),
-                guide.topAnchor.constraint(equalTo: card.topAnchor),
-                guide.bottomAnchor.constraint(equalTo: card.bottomAnchor),
-            ])
-            cardPanelFocusGuide = guide
+            pausedDimView = dim
+            pauseIndicator = indicator
+            pauseTimeLabel = timeLabel
+            loadingSpinner = spinner
+            loadingLabel = spinnerLabel
 
             bindChrome(to: vm)
         }
@@ -191,24 +259,11 @@ class PlayerContainerViewController: UIViewController {
     }
 
     /// Focus routing for the UIKit transport layer. Controls-focus mode
-    /// prefers the card (the card's own preferred-focus handles panel
-    /// landing when a track list / info sheet is up).
-    /// Keeps the card↔panel focus guide pointing away from wherever focus
-    /// currently is, so it always bridges toward the other side and can
-    /// never bounce focus back into the panel it just left.
-    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
-        super.didUpdateFocus(in: context, with: coordinator)
-        guard let guide = cardPanelFocusGuide, let panel = upNextPanel, let card = focusCard else { return }
-        if let next = context.nextFocusedView, next.isDescendant(of: panel) {
-            guide.preferredFocusEnvironments = [card]
-        } else {
-            guide.preferredFocusEnvironments = [panel]
-        }
-    }
-
+    /// prefers the rail (its own preferred-focus handles which button
+    /// lands, remembering the last-focused control).
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if viewModel?.controlsFocusActive == true, let card = focusCard {
-            return [card]
+        if viewModel?.controlsFocusActive == true, let rail {
+            return [rail]
         }
         return super.preferredFocusEnvironments
     }
@@ -237,10 +292,6 @@ class PlayerContainerViewController: UIViewController {
             }
             if vm.isScrubbing {
                 vm.cancelScrub()
-                return
-            }
-            if focusCard?.mode != .metadata {
-                focusCard?.returnToMetadata()
                 return
             }
             if vm.controlsFocusActive {
@@ -356,26 +407,12 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
-        // Return the card to metadata before anything else in the unwind
-        // chain. The card consumes Menu itself when a track row / info
-        // sheet is focused; this is the container-level backstop so a
-        // panel can never be orphaned by the .back chain (which doesn't
-        // know about card modes).
-        if vm.postVideoState == .hidden, !vm.isScrubbing,
-           focusCard?.mode != .metadata {
-            focusCard?.returnToMetadata()
-            blockDismissTemporarily()
-            return
-        }
-
         if inputCoordinator.target == nil {
             if vm.postVideoState != .hidden {
                 vm.dismissPostVideo()
                 dismissPlayer()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
-            } else if focusCard?.mode != .metadata {
-                focusCard?.returnToMetadata()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {
@@ -588,10 +625,10 @@ class PlayerContainerViewController: UIViewController {
     // MARK: - Chrome Bindings
 
     private func bindChrome(to vm: UniversalPlayerViewModel) {
-        guard let card = focusCard, let bar = progressBar else { return }
+        guard let rail, let bar = progressBar else { return }
 
         // Static metadata (re-applied on episode advance via itemGeneration).
-        applyCardMetadata(vm: vm)
+        applyRailMetadata(vm: vm)
 
         bar.filmstripProvider = { [weak vm] times, maxWidth in
             await vm?.filmstripImages(times: times, maxPixelWidth: maxWidth) ?? times.map { _ in nil }
@@ -602,7 +639,7 @@ class PlayerContainerViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self, weak vm] _ in
                 self?.progressBar?.resetFilmstrip()
-                if let vm { self?.applyCardMetadata(vm: vm) }
+                if let vm { self?.applyRailMetadata(vm: vm) }
             }
             .store(in: &cancellables)
 
@@ -622,8 +659,19 @@ class PlayerContainerViewController: UIViewController {
                     chapters: vm.metadata.Chapter ?? [],
                     isWheelScrubbing: isWheelScrubbing
                 )
-                // Scrubbing hides the skip pill and Up Next; scrubber and
-                // card stay (design mock state 2).
+                // Scrubbing insets the scrubber to the rail's narrower
+                // width (96 vs. 132 at rest); animate only on the edge so
+                // steady-state ticks stay free.
+                if isScrubbing != self.wasScrubbing {
+                    self.wasScrubbing = isScrubbing
+                    self.progressBarLeading?.constant = isScrubbing ? 96 : 132
+                    self.progressBarTrailing?.constant = isScrubbing ? -96 : -132
+                    UIView.animate(withDuration: 0.15) {
+                        self.view.layoutIfNeeded()
+                    }
+                }
+                // Scrubbing hides the rail and skip pill; scrubber and
+                // scrim stay (design mock state 2).
                 self.applyChromeVisibility()
             }
             .store(in: &cancellables)
@@ -641,16 +689,25 @@ class PlayerContainerViewController: UIViewController {
 
         vm.$playbackState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak card, weak vm] state in
-                card?.setPaused(state == .paused)
+            .sink { [weak self, weak vm] state in
                 guard let self, let vm else { return }
                 let loading = state == .loading || state == .idle
-                self.focusCard?.setLoading(loading, seriesLine: vm.subtitle, title: vm.title)
+                self.rail?.setLoading(loading)
                 self.progressBar?.setSkeleton(loading)
                 self.progressBar?.setPausedDim(state == .paused)
                 self.skipPill?.isHidden = loading || !vm.showSkipButton
-                // Loading hides the Up Next panel; a mid-stream route-change
-                // reload must re-hide it even while showControls stays true.
+
+                self.loadingSpinner?.isHidden = !loading
+                self.loadingLabel?.isHidden = !loading
+                if loading {
+                    self.loadingLabel?.attributedText = self.loadingLabelText(for: vm)
+                }
+
+                if state == .paused, vm.duration > 0 {
+                    let minutesLeft = Int(max(0, vm.duration - vm.currentTime) / 60)
+                    self.pauseTimeLabel?.text = "Paused · \(minutesLeft)m left"
+                }
+
                 self.applyChromeVisibility()
             }
             .store(in: &cancellables)
@@ -665,83 +722,77 @@ class PlayerContainerViewController: UIViewController {
 
         vm.$subtitleTracks
             .receive(on: DispatchQueue.main)
-            .sink { [weak card] tracks in card?.setSubtitlesEnabled(!tracks.isEmpty) }
+            .sink { [weak rail] tracks in
+                // Port of the old card binding: same enabled-look, applied
+                // to the rail's subtitles button now.
+                rail?.subtitlesButton.alpha = tracks.isEmpty ? 0.4 : 1
+            }
             .store(in: &cancellables)
 
         vm.$upNextEpisodes
             .receive(on: DispatchQueue.main)
             .sink { [weak self, weak vm] episodes in
                 guard let self, let vm else { return }
-                self.upNextPanel?.setEpisodes(episodes,
-                                              currentRatingKey: vm.metadata.ratingKey,
-                                              seasonNumber: vm.metadata.parentIndex,
-                                              serverURL: vm.serverURL, authToken: vm.authToken)
-                self.upNextPanel?.isHidden = episodes.isEmpty
-                // Re-derive the focus guide's enabled state now that the
-                // panel's data-driven visibility changed.
-                self.applyChromeVisibility()
+                self.upNextEpisodesCache = episodes
+                self.rail?.setUpNextAvailable(!episodes.isEmpty && vm.metadata.type == "episode")
             }
             .store(in: &cancellables)
-
-        upNextPanel?.onSelectEpisode = { [weak vm] episode in
-            vm?.exitControlsFocus()
-            Task { await vm?.playEpisode(episode) }
-        }
 
         vm.$controlsFocusActive
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] active in
-                if !active {
-                    self?.focusCard?.returnToMetadata()
-                }
+            .sink { [weak self] _ in
                 self?.setNeedsFocusUpdate()
                 self?.updateFocusIfNeeded()
             }
             .store(in: &cancellables)
 
-        // Card actions. (No play/pause control — the remote owns that.)
-        card.onSkipBack = { [weak vm] in Task { await vm?.seekRelative(by: -15) } }
-        card.onReplayLongPress = { [weak vm] in vm?.replayWithCaptions() }
-        card.onNavigateDown = { [weak self, weak vm] in
-            // Down from the card enters seek mode at the current position
+        // Rail actions. (No play/pause control — the remote owns that.)
+        rail.onSkipBack = { [weak vm] in Task { await vm?.seekRelative(by: -15) } }
+        rail.onReplayLongPress = { [weak vm] in vm?.replayWithCaptions() }
+        rail.onNavigateDown = { [weak self, weak vm] in
+            // Down from the rail enters seek mode at the current position
             // (same entry the touchpad pan uses).
             vm?.exitControlsFocus()
             self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
         }
-        // In-card modes: track lists and info/tech sheet swap the card's
-        // content in place (see PlayerFocusCardView.swapContent).
-        card.onSubtitles = { [weak card, weak vm] in
-            guard let card, let vm else { return }
-            card.showTracks(header: "Subtitles", tracks: vm.subtitleTracks,
-                            selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
-                            onSelect: { id in vm.selectSubtitleTrack(id: id) })
-        }
-        card.onAudio = { [weak card, weak vm] in
-            guard let card, let vm else { return }
-            card.showTracks(header: "Audio", tracks: vm.audioTracks,
-                            selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
-                            onSelect: { id in if let id { vm.selectAudioTrack(id: id) } })
-        }
-        card.onInfo = { [weak card, weak vm] in
-            guard let card, let vm else { return }
-            card.showInfo(metadata: vm.metadata,
-                          liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() })
-        }
+        rail.onSubtitles = {} // wired in Task 5
+        rail.onAudio = {} // wired in Task 5
+        rail.onInfo = {} // wired in Task 5
+        rail.onUpNext = {} // wired in Task 6
     }
 
-    /// Series line + title + meta row from the current item.
-    private func applyCardMetadata(vm: UniversalPlayerViewModel) {
+    /// Eyebrow + title + meta row from the current item, ported from the
+    /// 2a card's identical composition.
+    private func applyRailMetadata(vm: UniversalPlayerViewModel) {
         let meta = vm.metadata
-        var metaParts: [String] = []
-        if let rating = meta.contentRating { metaParts.append(rating) }
-        if let ms = meta.duration { metaParts.append("\(ms / 60000) min") }
-        if let audio = meta.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio }),
-           let display = audio.displayTitle ?? audio.extendedDisplayTitle {
-            metaParts.append(display)
+        rail?.setTitle(vm.title, eyebrow: vm.subtitle)
+
+        let runtime = meta.duration.map { "\($0 / 60000) min" }
+        let audio = meta.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio })
+            .flatMap { $0.displayTitle ?? $0.extendedDisplayTitle }
+        rail?.setMeta(rating: meta.contentRating, runtime: runtime, audio: audio)
+    }
+
+    /// Loading label text: quality read ported from `CardInfoView`'s video
+    /// section (same `isDolbyVision` / `isHDR` / `videoResolution` reads),
+    /// uppercased with the rail's loading-label kerning; falls back to a
+    /// plain "LOADING" when no stream/media info is available yet.
+    private func loadingLabelText(for vm: UniversalPlayerViewModel) -> NSAttributedString {
+        let meta = vm.metadata
+        let videoStream = meta.Media?.first?.Part?.first?.Stream?.first { $0.isVideo }
+        var text = "LOADING"
+        if let videoStream {
+            if videoStream.isDolbyVision {
+                text = "DOLBY VISION"
+            } else if videoStream.isHDR {
+                text = "HDR10"
+            }
         }
-        focusCard?.setTitle(vm.title, seriesLine: vm.subtitle,
-                            metaLine: metaParts.isEmpty ? nil : metaParts.joined(separator: " · "))
+        if meta.Media?.first?.videoResolution?.lowercased() == "4k" {
+            text = "4K \(text)"
+        }
+        return NSAttributedString(string: text, attributes: [.kern: 22 * 0.14])
     }
 
     /// Single writer for all chrome alphas. Every visibility rule lives
@@ -753,37 +804,35 @@ class PlayerContainerViewController: UIViewController {
     ///
     /// Rules:
     /// - chromeVisible: controls up AND the frame is live (not ambient
-    ///   pause). `|| isScrubbing` keeps the scrubber + scrim + card up
-    ///   during a scrub even on the one off-device path (MPRemoteCommand
+    ///   pause). `|| isScrubbing` keeps the scrubber + scrim up during a
+    ///   scrub even on the one off-device path (MPRemoteCommand
     ///   scrubNudge) that can begin a scrub without showControls being set.
-    ///   The focus card stays visible while scrubbing (design mock state 2).
-    /// - auxVisible: chrome visible AND not scrubbing — scrubbing hides the
-    ///   card, skip pill, and Up Next panel so focus reads unambiguously on
-    ///   the scrubber (user call 2026-07-03, reverting the card-stays mock
-    ///   reading after trying it on screen).
-    /// - panelVisible: aux visible AND not loading — the Up Next panel is
-    ///   hidden while the loading card is up (spec: Loading hides it).
-    ///   The panel's `isHidden` stays data-driven from the upNextEpisodes
-    ///   sink; alpha is this applier's channel.
+    /// - railVisible: chrome visible AND not scrubbing — scrubbing hides
+    ///   the rail and skip pill so focus reads unambiguously on the
+    ///   scrubber (user call 2026-07-03).
+    /// - paused: playback paused AND the frame is live (not ambient) —
+    ///   drives the top-left pause indicator and the full-frame dim.
+    /// - loading: spinner + label show whenever loading/idle AND not
+    ///   ambient; they use `isHidden` from the state sink too so they
+    ///   never intercept focus while alpha is mid-fade.
     private func applyChromeVisibility() {
         guard let vm = viewModel else { return }
-        let chromeVisible = (vm.showControls || vm.isScrubbing) && vm.pausePresentation == .frame
-        let auxVisible = chromeVisible && !vm.isScrubbing
+        let ambient = vm.pausePresentation != .frame
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
-        let panelVisible = auxVisible && !isLoading
+        let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
+        let railVisible = chromeVisible && !vm.isScrubbing
+        let paused = vm.playbackState == .paused && !ambient
 
         let targets: [(UIView?, CGFloat)] = [
             (chromeScrim, chromeVisible ? 1 : 0),
             (progressBar, chromeVisible ? 1 : 0),
-            (focusCard, auxVisible ? 1 : 0),
-            (skipPill, auxVisible ? 1 : 0),
-            (upNextPanel, panelVisible ? 1 : 0),
+            (rail, railVisible ? 1 : 0),
+            (skipPill, railVisible && !isLoading ? 1 : 0),
+            (pauseIndicator, paused ? 1 : 0),
+            (pausedDimView, paused ? 1 : 0),
+            (loadingSpinner, isLoading && !ambient ? 1 : 0),
+            (loadingLabel, isLoading && !ambient ? 1 : 0),
         ]
-        // The card↔panel focus guide only bridges when there is actually
-        // a visible panel to bridge to — otherwise a rightward move would
-        // dead-end into a redirect at an invisible target.
-        cardPanelFocusGuide?.isEnabled = panelVisible && upNextPanel?.isHidden == false
-
         guard targets.contains(where: { view, alpha in view.map { abs($0.alpha - alpha) > 0.01 } == true }) else { return }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
