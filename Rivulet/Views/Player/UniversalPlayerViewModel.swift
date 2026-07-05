@@ -2391,8 +2391,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     /// Start or advance scrub speed in given direction via ShuttleGrammar:
-    /// click-and-hold enters at level 1 (15x), same-direction clicks bump up to
-    /// level 3 (240x) cap, opposite-direction clicks step down then cancel.
+    /// click-and-hold enters at level 1, same-direction clicks bump up to the
+    /// level 3 cap, opposite-direction clicks step down then cancel. Badges
+    /// show the human ladder (2x/4x/6x); real rates are 15x/60x/240x.
     /// - Parameter forward: true for forward, false for backward
     func scrubInDirection(forward: Bool) {
         hidePausedPoster()

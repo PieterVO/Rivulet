@@ -2,9 +2,10 @@
 //  ShuttleGrammar.swift
 //  Rivulet
 //
-//  Pure FF/RW shuttle grammar: click-and-hold enters shuttle at level 1 (15x),
-//  clicks in the same direction bump level 1 (15x) -> level 3 (240x) cap, clicks
-//  in the opposite direction step down and cancel below level 1.
+//  Pure FF/RW shuttle grammar: click-and-hold enters shuttle at level 1,
+//  clicks in the same direction bump up to the level 3 cap, clicks in the
+//  opposite direction step down and cancel below level 1. Badges show the
+//  human ladder (2x/4x/6x); actual cruise rates are 15x/60x/240x realtime.
 //
 
 import Foundation
@@ -12,8 +13,11 @@ import Foundation
 nonisolated enum ShuttleGrammar {
     static let maxLevel = 3
 
-    /// Multipliers shown to the user per level (index 0 unused).
-    static let multipliers: [Int] = [0, 15, 60, 240]
+    /// Badge numbers shown to the user per level (index 0 unused).
+    /// Deliberately NOT the literal rates below — the badge speaks the
+    /// familiar DVR shuttle ladder (2x/4x/6x = level, not multiple);
+    /// a literal "240x" reads as a bug, not a speed.
+    static let multipliers: [Int] = [0, 2, 4, 6]
 
     /// Content-seconds per real-second at each level. DVR-style ladder
     /// (each level 4x the previous): near-realtime multiples read as a

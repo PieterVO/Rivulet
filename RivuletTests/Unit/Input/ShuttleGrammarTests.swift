@@ -51,11 +51,11 @@ final class ShuttleGrammarTests: XCTestCase {
         XCTAssertEqual(ShuttleGrammar.rate(forLevel: -3), 240)
 
         XCTAssertNil(ShuttleGrammar.badge(forSpeed: 0))
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 1), "▶ 15x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 2), "▶ 60x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 3), "▶ 240x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -1), "◀ 15x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -2), "◀ 60x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -3), "◀ 240x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 1), "▶ 2x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 2), "▶ 4x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 3), "▶ 6x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -1), "◀ 2x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -2), "◀ 4x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -3), "◀ 6x")
     }
 }
