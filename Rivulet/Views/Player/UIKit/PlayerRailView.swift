@@ -43,7 +43,6 @@ final class PlayerRailView: UIView {
     var onInfo: (() -> Void)?
     var onUpNext: (() -> Void)?
     var onReplayLongPress: (() -> Void)?
-    var onNavigateDown: (() -> Void)?
 
     private let backgroundEffectView: UIVisualEffectView
     private let tintView = UIView()
@@ -197,15 +196,5 @@ final class PlayerRailView: UIView {
         if let next = context.nextFocusedView, next.isDescendant(of: self), next is UIControl {
             lastFocusedButton = next
         }
-    }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses where press.type == .downArrow {
-            if let focused = UIScreen.main.focusedView, focused.isDescendant(of: cluster) {
-                onNavigateDown?()
-                return
-            }
-        }
-        super.pressesBegan(presses, with: event)
     }
 }

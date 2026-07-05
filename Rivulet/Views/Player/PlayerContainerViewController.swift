@@ -22,6 +22,7 @@ class PlayerContainerViewController: UIViewController {
     private var progressBar: PlayerProgressBarView?
     private var progressBarLeading: NSLayoutConstraint?
     private var progressBarTrailing: NSLayoutConstraint?
+    private var scrubberProxy: ScrubberFocusProxyView?
     private var skipPill: SkipPillButton?
     private var pausedDimView: UIView?
     private var pauseIndicator: UIStackView?
@@ -118,6 +119,7 @@ class PlayerContainerViewController: UIViewController {
 
             let railView = PlayerRailView()
             let bar = PlayerProgressBarView()
+            let proxy = ScrubberFocusProxyView()
             let pill = SkipPillButton()
             pill.isHidden = true
             pill.addTarget(self, action: #selector(skipPillTapped), for: .primaryActionTriggered)
@@ -156,7 +158,7 @@ class PlayerContainerViewController: UIViewController {
             spinner.isHidden = true
             spinnerLabel.isHidden = true
 
-            [chromeScrim, dim, railView, bar, pill, indicator, spinner, spinnerLabel].forEach {
+            [chromeScrim, dim, railView, bar, proxy, pill, indicator, spinner, spinnerLabel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
@@ -166,6 +168,7 @@ class PlayerContainerViewController: UIViewController {
             view.bringSubviewToFront(dim)
             view.bringSubviewToFront(railView)
             view.bringSubviewToFront(bar)
+            view.bringSubviewToFront(proxy)
             view.bringSubviewToFront(pill)
             view.bringSubviewToFront(indicator)
             view.bringSubviewToFront(spinner)
@@ -199,6 +202,18 @@ class PlayerContainerViewController: UIViewController {
                 trailing,
                 bar.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -34),
 
+                // Invisible focus proxy: geometrically below the button
+                // cluster (leading/trailing match the bar's; top/bottom pad
+                // 8pt around it) so the focus engine's downward search from
+                // ANY cluster button lands here rather than settling on a
+                // same-row cone candidate (the bug this proxy fixes). The
+                // bar itself is the visible indicator — this view draws
+                // nothing.
+                proxy.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+                proxy.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+                proxy.topAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
+                proxy.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: 8),
+
                 // Skip pill floats above the scrubber's right end.
                 pill.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
                 pill.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -28),
@@ -219,6 +234,7 @@ class PlayerContainerViewController: UIViewController {
             progressBarTrailing = trailing
             rail = railView
             progressBar = bar
+            scrubberProxy = proxy
             skipPill = pill
             pausedDimView = dim
             pauseIndicator = indicator
@@ -652,6 +668,23 @@ class PlayerContainerViewController: UIViewController {
             await vm?.filmstripImages(times: times, maxPixelWidth: maxWidth) ?? times.map { _ in nil }
         }
 
+        // Scrubber focus proxy: an invisible view geometrically below the
+        // rail's button cluster (see its constraints above) so the focus
+        // engine's own downward search from ANY cluster button lands here,
+        // not on a same-row cone candidate. The bar itself renders the
+        // focus indication (grow-and-brighten) — the proxy draws nothing.
+        scrubberProxy?.onFocusChange = { [weak bar] focused in
+            bar?.setFocusEmphasis(focused)
+        }
+        scrubberProxy?.onActivate = { [weak self, weak vm] _ in
+            // Same seek-entry path the touchpad pan uses: exit controls-focus
+            // mode and enter scrub at the current position. Left/right
+            // nudges after entry are handled by the existing seek input
+            // path (handleDPadLeft/RightTap/LongPress), not by the proxy.
+            vm?.exitControlsFocus()
+            self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+        }
+
         vm.$itemGeneration
             .dropFirst()
             .receive(on: DispatchQueue.main)
@@ -775,12 +808,6 @@ class PlayerContainerViewController: UIViewController {
 
         // Rail actions. (No play/pause control, no skip-back — the remote owns seeking.)
         rail.onReplayLongPress = { [weak vm] in vm?.replayWithCaptions() }
-        rail.onNavigateDown = { [weak self, weak vm] in
-            // Down from the rail enters seek mode at the current position
-            // (same entry the touchpad pan uses).
-            vm?.exitControlsFocus()
-            self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
-        }
         rail.onSubtitles = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             self.presentRailPanel(
@@ -921,6 +948,10 @@ class PlayerContainerViewController: UIViewController {
     /// - loading: spinner + label show whenever loading/idle AND not
     ///   ambient; they use `isHidden` from the state sink too so they
     ///   never intercept focus while alpha is mid-fade.
+    /// - scrubberProxy.isFocusEnabled: a FOCUS gate, not an alpha write (the
+    ///   proxy is always invisible) — it must never be focusable while
+    ///   controls are hidden, mid-scrub, or ambient, and only actually
+    ///   reachable once controls-focus mode has moved focus onto the rail.
     private func applyChromeVisibility() {
         guard let vm = viewModel else { return }
         let ambient = vm.pausePresentation != .frame
@@ -928,6 +959,8 @@ class PlayerContainerViewController: UIViewController {
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
         let railVisible = chromeVisible && !vm.isScrubbing
         let paused = vm.playbackState == .paused && !ambient
+
+        scrubberProxy?.isFocusEnabled = railVisible && !isLoading && vm.controlsFocusActive
 
         // The panel floats above the rail — a scrub/ambient/hide that
         // takes the rail away must take the panel with it, since it
@@ -954,6 +987,49 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func skipPillTapped() {
         Task { await viewModel?.skipActiveMarker() }
+    }
+}
+
+/// Invisible focus stop for the scrubber. Sits geometrically below the
+/// rail's button cluster (see the container's constraints) so the focus
+/// engine's downward search from ANY cluster button lands here rather than
+/// settling on a same-row cone candidate — the bug this view fixes. Draws
+/// nothing; the progress bar itself is the visible focus indicator
+/// (`PlayerProgressBarView.setFocusEmphasis(_:)`).
+private final class ScrubberFocusProxyView: UIView {
+
+    /// Focus gate, set by `PlayerContainerViewController.applyChromeVisibility()`.
+    /// Never true while controls are hidden, mid-scrub, or ambient.
+    var isFocusEnabled = false
+
+    /// Fired when this view gains or loses focus.
+    var onFocusChange: ((Bool) -> Void)?
+
+    /// Fired on `.select`/`.leftArrow`/`.rightArrow` while focused; those
+    /// press types are consumed here. Everything else (notably `.menu`) is
+    /// passed to `super` so it bubbles to the container's own handling.
+    var onActivate: ((UIPress.PressType) -> Void)?
+
+    override var canBecomeFocused: Bool { isFocusEnabled }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if context.nextFocusedView === self {
+            onFocusChange?(true)
+        } else if context.previouslyFocusedView === self {
+            onFocusChange?(false)
+        }
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            switch press.type {
+            case .select, .leftArrow, .rightArrow:
+                onActivate?(press.type)
+            default:
+                super.pressesBegan(presses, with: event)
+            }
+        }
     }
 }
 

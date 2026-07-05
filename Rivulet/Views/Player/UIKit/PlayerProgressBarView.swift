@@ -200,6 +200,15 @@ final class PlayerProgressBarView: UIView {
     /// immediately here because time ticks stop while the player is paused.
     private var isPausedDim = false
 
+    /// True while the scrubber focus proxy (`ScrubberFocusProxyView`, in
+    /// PlayerContainerViewController) holds focus. Folded into the same
+    /// grow-and-brighten emphasis computation as `isScrubbing` — see
+    /// `scrubEmphasis` in `update(...)` — so a down-press from any rail
+    /// button reads as "the scrubber has focus" the same way entering seek
+    /// mode does. Stored (not applied via `update(...)` alone) because
+    /// focus can change while time ticks are paused.
+    private var focusEmphasis = false
+
     private static let endsAtFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -473,8 +482,15 @@ final class PlayerProgressBarView: UIView {
         // "the scrubber has focus" — tvOS's own grow-and-brighten grammar —
         // even before the strip appears. Once the strip is open it takes
         // over that role entirely, so this only applies to the thin-bar
-        // state (`isScrubbing && !stripOpen`).
-        let scrubEmphasis = isScrubbing && !stripOpen
+        // state (`isScrubbing && !stripOpen`). Also true while the
+        // scrubber focus proxy holds focus (`focusEmphasis`) — a down-press
+        // from any rail button lands on the proxy, and it must read as
+        // "the scrubber has focus" the same grow-and-brighten way entering
+        // seek mode does. `stripOpen` requires `isScrubbing`, which is
+        // never true while the proxy can hold focus (mutually exclusive
+        // gating gates: `controlsFocusActive` vs. `isScrubbing`), so this
+        // fold-in never fights the strip-open state.
+        let scrubEmphasis = (isScrubbing || focusEmphasis) && !stripOpen
         let trackHeight: CGFloat = stripOpen ? Metrics.stripHeight : (scrubEmphasis ? Metrics.scrubTrackHeight : Metrics.trackHeight)
 
         currentPositionGhost.isHidden = !isScrubbing || stripOpen
@@ -485,7 +501,11 @@ final class PlayerProgressBarView: UIView {
         // being set in the first place, but the emphasis/strip states below
         // are re-derived from the current isScrubbing/stripOpen locals on
         // every call, so this stays consistent even if that ever changes).
-        let pausedAtRest = self.isPausedDim && !isScrubbing && !stripOpen
+        // Focus emphasis also rules it out: a down-press that lands the
+        // proxy in focus must win over the paused-at-rest knob shrink, so
+        // the "scrubber has focus" grow-and-brighten is never undercut by
+        // the smaller paused knob.
+        let pausedAtRest = self.isPausedDim && !isScrubbing && !stripOpen && !focusEmphasis
 
         UIView.animate(withDuration: 0.15) {
             self.progressFill.alpha = stripOpen ? 0 : (pausedAtRest ? 0.78 : 1)
@@ -502,18 +522,22 @@ final class PlayerProgressBarView: UIView {
             // Handle: a plain circle at rest — no morph to a tall bar
             // anymore (the strip's own playhead bar takes over that role
             // while scrubbing; see layoutStripOverlay). Grows 26 → 32 and
-            // its ring brightens 0.14 → 0.35 while scrubbing with the strip
-            // still closed, so seek focus reads instantly (tvOS's own
+            // its ring brightens 0.14 → 0.35 while scrubbing OR while the
+            // scrubber focus proxy holds focus (both fold into
+            // `scrubEmphasis`) with the strip still closed, so seek focus
+            // and down-press focus both read instantly (tvOS's own
             // grow-and-brighten grammar). While paused at rest (not
-            // scrubbing, strip closed) it instead shrinks 26 → 22 and its
-            // ring alpha drops to 0 (no glow) per the 3a paused-dim spec.
-            // Scrub emphasis takes priority over the paused shrink if both
-            // were ever true at once, though `pausedAtRest` already rules
-            // that combination out. Hidden entirely while the strip is
-            // open (below). Frame-driven, positioned at the fill edge and
-            // vertically centered on the track — a sibling of
-            // trackBackground so it isn't clipped by the track's own
-            // clipsToBounds.
+            // scrubbing, strip closed, NOT focus-emphasized) it instead
+            // shrinks 26 → 22 and its ring alpha drops to 0 (no glow) per
+            // the 3a paused-dim spec. `scrubEmphasis` (which now includes
+            // `focusEmphasis`) takes priority over the paused shrink in
+            // both ternaries below — checked first — and `pausedAtRest`'s
+            // own `!focusEmphasis` term rules out the combination existing
+            // in the first place; focused always wins over paused-at-rest.
+            // Hidden entirely while the strip is open (below). Frame-driven,
+            // positioned at the fill edge and vertically centered on the
+            // track — a sibling of trackBackground so it isn't clipped by
+            // the track's own clipsToBounds.
             let handleDiameter: CGFloat = scrubEmphasis ? 32 : (pausedAtRest ? 22 : 26)
             let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
             let ringInset: CGFloat = 6
@@ -652,14 +676,17 @@ final class PlayerProgressBarView: UIView {
     /// stop while the player is paused, so no later `update(...)` would
     /// pick up the change. The immediate setter only runs when the strip is
     /// closed and no skeleton, so it never races the morph block or the
-    /// skeleton's own fill handling (one-clock rule).
+    /// skeleton's own fill handling (one-clock rule). Skips the knob shrink
+    /// while `focusEmphasis` is active — focused wins over paused-at-rest,
+    /// same priority rule as `update(...)`'s `scrubEmphasis`/`pausedAtRest`.
     func setPausedDim(_ dimmed: Bool) {
         guard dimmed != isPausedDim else { return }
         isPausedDim = dimmed
         guard !isSkeleton, !isScrubbing else { return }
+        let dimmedAndUnfocused = dimmed && !focusEmphasis
         UIView.animate(withDuration: 0.25) {
-            self.progressFill.alpha = dimmed ? 0.78 : 1
-            let handleDiameter: CGFloat = dimmed ? 22 : 26
+            self.progressFill.alpha = dimmedAndUnfocused ? 0.78 : 1
+            let handleDiameter: CGFloat = dimmedAndUnfocused ? 22 : 26
             let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
             let center = CGPoint(x: self.handleView.frame.midX, y: self.handleView.frame.midY)
             self.handleView.frame = CGRect(x: center.x - handleSize.width / 2, y: center.y - handleSize.height / 2,
@@ -668,7 +695,52 @@ final class PlayerProgressBarView: UIView {
             let ringInset: CGFloat = 6
             self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
             self.handleRing.layer.cornerRadius = self.handleRing.frame.width / 2
-            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(dimmed ? 0 : 0.14)
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(dimmedAndUnfocused ? 0 : 0.14)
+        }
+    }
+
+    /// Focus emphasis: the scrubber focus proxy (`ScrubberFocusProxyView`
+    /// in PlayerContainerViewController) reports focus gain/loss here.
+    /// Applied immediately (not via `update(...)`) because focus can
+    /// change while time ticks are stopped (paused, or between ticks) —
+    /// same immediate-apply idiom as `setPausedDim`, same 0.15s duration as
+    /// `update(...)`'s own animate block (this is the sanctioned same-clock
+    /// idiom, not a new animation system: both this method and `update(...)`
+    /// only ever touch the fill/handle/ring properties that the OTHER one
+    /// also owns, on the same `UIView.animate` mechanism, never overlapping
+    /// in time since each is a discrete, guarded, one-shot call).
+    /// Skipped while scrubbing or skeleton — `update(...)`'s own emphasis
+    /// computation (`scrubEmphasis`, which folds in `focusEmphasis`) already
+    /// owns the knob/track in those states, and the proxy cannot hold focus
+    /// while scrubbing (mutually exclusive gating), so this guard is belt
+    /// and suspenders, not a real race.
+    func setFocusEmphasis(_ focused: Bool) {
+        guard focused != focusEmphasis else { return }
+        focusEmphasis = focused
+        guard !isScrubbing, !isSkeleton else { return }
+
+        // stripOpen is always false here (guarded above: !isScrubbing),
+        // so scrubEmphasis reduces to plain focusEmphasis — kept as the
+        // same-named local as update(...) for parallel reading.
+        let scrubEmphasis = focusEmphasis
+        let pausedAtRest = isPausedDim && !focusEmphasis
+        trackHeightConstraint.constant = scrubEmphasis ? Metrics.scrubTrackHeight : Metrics.trackHeight
+
+        UIView.animate(withDuration: 0.15) {
+            let handleDiameter: CGFloat = scrubEmphasis ? 32 : (pausedAtRest ? 22 : 26)
+            let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
+            let center = CGPoint(x: self.handleView.frame.midX, y: self.handleView.frame.midY)
+            self.handleView.frame = CGRect(x: center.x - handleSize.width / 2, y: center.y - handleSize.height / 2,
+                                           width: handleSize.width, height: handleSize.height)
+            self.handleView.layer.cornerRadius = handleSize.width / 2
+            let ringInset: CGFloat = 6
+            self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
+            self.handleRing.layer.cornerRadius = self.handleRing.frame.width / 2
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(
+                scrubEmphasis ? 0.35 : (pausedAtRest ? 0 : 0.14)
+            )
+            self.progressFill.alpha = pausedAtRest ? 0.78 : 1
+            self.layoutIfNeeded()
         }
     }
 
