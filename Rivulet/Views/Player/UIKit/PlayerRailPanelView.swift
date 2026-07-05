@@ -120,6 +120,13 @@ final class PlayerRailPanelView: UIView {
         container.addSubview(panel)
         panel.translatesAutoresizingMaskIntoConstraints = false
 
+        // The info sheet is one big scrollable focus target with nothing
+        // inside it to highlight, so the panel ring itself carries the
+        // focus treatment — brightened while the sheet holds focus.
+        (content as? CardInfoView)?.onFocusChange = { [weak panel] focused in
+            panel?.setFocusHighlight(focused)
+        }
+
         NSLayoutConstraint.activate([
             panel.widthAnchor.constraint(equalToConstant: width),
             panel.bottomAnchor.constraint(equalTo: rail.topAnchor, constant: -Metrics.railGap),
@@ -150,6 +157,10 @@ final class PlayerRailPanelView: UIView {
         container.updateFocusIfNeeded()
 
         return panel
+    }
+
+    func setFocusHighlight(_ focused: Bool) {
+        layer.borderColor = UIColor.white.withAlphaComponent(focused ? 0.3 : 0.1).cgColor
     }
 
     func dismissPanel() {

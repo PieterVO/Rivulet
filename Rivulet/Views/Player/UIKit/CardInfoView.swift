@@ -14,8 +14,13 @@ final class CardInfoView: UIView {
     /// (no AetherPlayer) — in that case the PLAYBACK section is omitted
     /// entirely rather than showing stale or synthesized numbers.
     private let liveStatsProvider: (() -> AetherLiveStats?)?
-    private let scrollView = UIScrollView()
+    private let scrollView = InfoScrollView()
     private let stack = UIStackView()
+
+    /// Fires when the scroll surface gains/loses focus, so the hosting
+    /// panel can show a focus treatment the sheet itself can't draw
+    /// (the panel ring is the natural boundary to brighten).
+    var onFocusChange: ((Bool) -> Void)?
 
     /// Live PLAYBACK rows, updated in place every tick. nil when the
     /// PLAYBACK section was omitted at populate() time.
@@ -86,6 +91,9 @@ final class CardInfoView: UIView {
         stack.alignment = .leading
         scrollView.addSubview(stack)
         addSubview(scrollView)
+        scrollView.onFocusChange = { [weak self] focused in
+            self?.onFocusChange?(focused)
+        }
 
         [scrollView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
 
@@ -134,8 +142,6 @@ final class CardInfoView: UIView {
         if let title = metadata.title {
             stack.addArrangedSubview(bodyLabel(title, secondary: true))
         }
-
-        populatePlaybackSection()
 
         stack.addArrangedSubview(sectionLabel("VIDEO"))
         if let videoStream = primaryVideoStream {
@@ -192,6 +198,8 @@ final class CardInfoView: UIView {
             }
         }
 
+        populatePlaybackSection()
+
         if !subtitleStreams.isEmpty {
             stack.addArrangedSubview(sectionLabel("SUBTITLES"))
             for stream in subtitleStreams {
@@ -225,10 +233,10 @@ final class CardInfoView: UIView {
         }
     }
 
-    /// Live engine stats section, inserted first (ahead of the static Plex
-    /// metadata sections). Omitted entirely when there's no provider (the
-    /// `hls` route has no AetherPlayer) or the first snapshot is all-nil —
-    /// never rendered as an empty/placeholder header.
+    /// Live engine stats section, after the static VIDEO/AUDIO sections.
+    /// Omitted entirely when there's no provider (the `hls` route has no
+    /// AetherPlayer) or the first snapshot is all-nil — never rendered as
+    /// an empty/placeholder header.
     private func populatePlaybackSection() {
         guard let stats = liveStatsProvider?(), !stats.isEmpty else { return }
 
@@ -331,9 +339,58 @@ final class CardInfoView: UIView {
         }
     }
 
-    // Info has no selectable rows, but the panel still needs to be a real
-    // focus target -- otherwise focus never lands inside it and up/down
-    // presses never scroll it. Scrolling is driven by up/down presses via
-    // the inherited UIScrollView focus-scroll behavior.
+}
+
+// MARK: - InfoScrollView
+
+/// Focusable scroll surface for the info sheet. A plain UIScrollView is
+/// inert on tvOS — with no focusable rows inside, the focus engine never
+/// scrolls it and remote input goes nowhere. This takes focus itself,
+/// lets the remote's indirect swipes drive the pan gesture directly, and
+/// steps the offset on discrete up/down edge clicks.
+private final class InfoScrollView: UIScrollView {
+
+    var onFocusChange: ((Bool) -> Void)?
+
+    private static let clickStep: CGFloat = 240
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
     override var canBecomeFocused: Bool { true }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let focused = context.nextFocusedView === self
+        if focused {
+            flashScrollIndicators()
+        }
+        onFocusChange?(focused)
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .upArrow || press.type == .downArrow {
+            // Swallowed even at the ends — the hosting panel's focus
+            // fence traps focus here, so letting the press bubble would
+            // only ask the focus engine for a move it must refuse.
+            step(up: press.type == .upArrow)
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    private func step(up: Bool) {
+        let topOffset = -adjustedContentInset.top
+        let maxOffset = max(topOffset, contentSize.height + adjustedContentInset.bottom - bounds.height)
+        let target = contentOffset.y + (up ? -Self.clickStep : Self.clickStep)
+        let clamped = min(max(target, topOffset), maxOffset)
+        guard clamped != contentOffset.y else { return }
+        setContentOffset(CGPoint(x: contentOffset.x, y: clamped), animated: true)
+    }
 }
