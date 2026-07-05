@@ -348,6 +348,10 @@ class PlayerContainerViewController: UIViewController {
     private var isHandlingMenuPress = false
     private var isHandlingSelectPress = false
     private var isHandlingPlayPausePress = false
+    /// False until the first `.playing` of the current load; gates the
+    /// paused presentation so a transient startup `.paused` never flashes
+    /// "Paused" chrome before playback has begun.
+    private var hasPlayedSinceLoad = false
 
     /// Flag to block dismiss calls that occur immediately after we handled a menu action
     /// This prevents the double-handling issue where handleMenuButton() closes something,
@@ -552,21 +556,24 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadLeftTap() {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
+              scrubberProxy?.isFocused != true else { return }
 
         inputCoordinator.handle(action: .stepSeek(forward: false), source: .irPress)
     }
 
     @objc private func handleDPadRightTap() {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
+              scrubberProxy?.isFocused != true else { return }
 
         inputCoordinator.handle(action: .stepSeek(forward: true), source: .irPress)
     }
 
     @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
+              scrubberProxy?.isFocused != true else { return }
 
         switch gesture.state {
         case .began:
@@ -586,7 +593,8 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadRightLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive else { return }
+        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
+              scrubberProxy?.isFocused != true else { return }
 
         switch gesture.state {
         case .began:
@@ -682,18 +690,14 @@ class PlayerContainerViewController: UIViewController {
         }
         scrubberProxy?.onActivate = { [weak self, weak vm] pressType in
             guard let vm else { return }
-            // The proxy is the ONLY thing that ever sees this press: the
-            // container's own DPad tap/long-press gesture recognizers are
-            // attached higher up the responder chain and would normally
-            // get first crack, but every one of their handlers guards on
-            // `!controlsFocusActive` — true here, since the proxy is only
-            // focusable while controls-focus mode is active — so they
-            // silently no-op for this exact press. Route it to the same
-            // effect those handlers would have had, rather than a
-            // direction-blind `.scrubRelative(seconds: 0)` that used to
-            // waste this press on merely exiting controls-focus mode with
-            // no shuttle ever starting (a held FF/RW from a focused rail
-            // button needed a second, separate press to actually seek).
+            // While the proxy is focused it owns these presses OUTRIGHT:
+            // the container's DPad gesture handlers all defer to a focused
+            // proxy (not just to controls-focus mode). That deferral is
+            // load-bearing — the first press below exits controls-focus
+            // mode but the proxy KEEPS focus through the shuttle, so
+            // without it every follow-up click would fire both here (in
+            // pressesBegan) and in the tap gesture handler, bumping the
+            // shuttle two levels per press (2x straight to 6x).
             vm.exitControlsFocus()
             switch pressType {
             case .leftArrow:
@@ -703,9 +707,15 @@ class PlayerContainerViewController: UIViewController {
                 vm.scrubInDirection(forward: true)
                 vm.showControlsTemporarily()
             default:
-                // .select: same seek-entry path the touchpad pan uses —
-                // enter scrub at the current position, no direction yet.
-                self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+                // .select commits an active scrub — the proxy consumes
+                // select, so the container's select-commit branch in
+                // pressesBegan never sees this press. Otherwise: seek
+                // entry at the current position, same as touchpad pan.
+                if vm.isScrubbing {
+                    self?.inputCoordinator.handle(action: .scrubCommit, source: .irPress)
+                } else {
+                    self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+                }
             }
         }
 
@@ -757,9 +767,18 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self, weak vm] state in
                 guard let self, let vm else { return }
                 let loading = state == .loading || state == .idle
+                // Startup can pass through a split-second .paused before
+                // the first .playing; the paused presentation (indicator,
+                // dims) must not flash for it. Only a pause AFTER playback
+                // has actually begun counts; a new load resets the gate.
+                if state == .playing {
+                    self.hasPlayedSinceLoad = true
+                } else if loading {
+                    self.hasPlayedSinceLoad = false
+                }
                 self.rail?.setLoading(loading)
                 self.progressBar?.setSkeleton(loading)
-                self.progressBar?.setPausedDim(state == .paused)
+                self.progressBar?.setPausedDim(state == .paused && self.hasPlayedSinceLoad)
                 self.skipPill?.isHidden = loading || !vm.showSkipButton
 
                 self.loadingLabel?.isHidden = !loading
@@ -948,7 +967,7 @@ class PlayerContainerViewController: UIViewController {
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
         let railVisible = chromeVisible && !vm.isScrubbing
-        let paused = vm.playbackState == .paused && !ambient
+        let paused = vm.playbackState == .paused && !ambient && hasPlayedSinceLoad
 
         scrubberProxy?.isFocusEnabled = railVisible && !isLoading && vm.controlsFocusActive
 
