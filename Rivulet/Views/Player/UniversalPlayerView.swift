@@ -903,7 +903,9 @@ struct UniversalPlayerView: View {
             } else if viewModel.player != nil {
                 SubtitleOverlayView(
                     subtitleManager: viewModel.subtitleManager,
-                    bottomOffset: viewModel.showControls ? 220 : 60
+                    // 368 = rail bottom inset 84 + railHeight 260 + 24 gap
+                    // (matches AetherSubtitleOverlayView's controlsVisiblePadding).
+                    bottomOffset: viewModel.showControls ? 368 : 60
                 )
                 .ignoresSafeArea()
             }

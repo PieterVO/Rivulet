@@ -85,6 +85,9 @@ private struct SubtitleTextView: View {
     /// System caption appearance (foreground/background/edge).
     let style: CaptionStyle
 
+    /// Foreground with the system text-opacity preference applied.
+    private var foreground: Color { style.foreground.opacity(style.foregroundOpacity) }
+
     var body: some View {
         // The system background box is applied for every edge style (it stays
         // invisible when the system background opacity is 0 — honoring "no box").
@@ -109,16 +112,16 @@ private struct SubtitleTextView: View {
                 base.foregroundColor(.black).offset(x:  2, y: -2)
                 base.foregroundColor(.black).offset(x: -2, y:  2)
                 base.foregroundColor(.black).offset(x:  2, y:  2)
-                base.foregroundColor(style.foreground)
+                base.foregroundColor(foreground)
             }
 
         case .dropShadow:
             base
-                .foregroundColor(style.foreground)
+                .foregroundColor(foreground)
                 .shadow(color: .black.opacity(0.85), radius: 3, x: 0, y: 1)
 
         default:
-            base.foregroundColor(style.foreground)
+            base.foregroundColor(foreground)
         }
     }
 

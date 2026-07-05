@@ -30,6 +30,12 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
     // Subtitle-specific
     let subtitleKey: String?  // Plex URL path for external subtitles (e.g., "/library/streams/12345")
 
+    /// Engine-side marker: true for AetherEngine tracks registered from an
+    /// external sidecar file (TrackInfo.isExternal). The Plex-side analogue
+    /// is `subtitleKey != nil`; the two lists are matched ordinal-to-ordinal
+    /// among externals in UniversalPlayerViewModel's track mapping.
+    let isExternal: Bool
+
     init(
         id: Int,
         name: String,
@@ -41,7 +47,8 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         isHearingImpaired: Bool = false,
         extendedDisplayTitle: String? = nil,
         channels: Int? = nil,
-        subtitleKey: String? = nil
+        subtitleKey: String? = nil,
+        isExternal: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -54,6 +61,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.extendedDisplayTitle = extendedDisplayTitle
         self.channels = channels
         self.subtitleKey = subtitleKey
+        self.isExternal = isExternal
     }
 
     /// Creates a MediaTrack from a PlexStream
@@ -69,6 +77,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.extendedDisplayTitle = stream.extendedDisplayTitle
         self.channels = stream.channels
         self.subtitleKey = stream.key
+        self.isExternal = false
     }
 
     /// Bridge from agnostic `AudioTrack` for use in pickers like
@@ -87,6 +96,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.extendedDisplayTitle = track.extendedTitle
         self.channels = track.channels
         self.subtitleKey = nil
+        self.isExternal = false
     }
 
     /// Bridge from agnostic `SubtitleTrack`.
@@ -102,6 +112,7 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.extendedDisplayTitle = track.extendedTitle
         self.channels = nil
         self.subtitleKey = track.externalURL?.path
+        self.isExternal = track.externalURL != nil
     }
 
     /// Display name with additional info. Prefers Plex's long-form

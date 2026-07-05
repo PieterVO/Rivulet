@@ -12,6 +12,11 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
     /// Text/foreground color.
     var foreground: Color
 
+    /// Opacity of the text itself (0...1). Some system presets (and user
+    /// overrides) express "translucent text"; ignoring it renders captions
+    /// more opaque than the user asked for.
+    var foregroundOpacity: Double
+
     /// Character-cell background color.
     var backgroundColor: Color
 
@@ -47,6 +52,7 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
 
     static let `default` = CaptionStyle(
         foreground: .white,
+        foregroundOpacity: 1.0,
         backgroundColor: .black,
         backgroundOpacity: 0.75,
         fontScale: 1.0,
@@ -56,6 +62,7 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
 
     static func == (lhs: CaptionStyle, rhs: CaptionStyle) -> Bool {
         lhs.foreground == rhs.foreground
+            && lhs.foregroundOpacity == rhs.foregroundOpacity
             && lhs.backgroundColor == rhs.backgroundColor
             && lhs.backgroundOpacity == rhs.backgroundOpacity
             && lhs.fontScale == rhs.fontScale
@@ -93,9 +100,11 @@ enum CaptionAppearance {
     static func current() -> CaptionStyle {
         var behavior = MACaptionAppearanceBehavior.useValue
 
-        // Foreground color
+        // Foreground color + opacity
         let fgUnmanaged = MACaptionAppearanceCopyForegroundColor(.user, &behavior)
         let foreground = Color(fgUnmanaged.takeRetainedValue() as CGColor)
+        let rawFgOpacity = Double(MACaptionAppearanceGetForegroundOpacity(.user, &behavior))
+        let foregroundOpacity = rawFgOpacity > 0 ? min(rawFgOpacity, 1.0) : 1.0
 
         // Background color + opacity — the box drawn directly behind the glyphs.
         let bgCG = MACaptionAppearanceCopyBackgroundColor(.user, &behavior).takeRetainedValue()
@@ -132,6 +141,7 @@ enum CaptionAppearance {
 
         return CaptionStyle(
             foreground: foreground,
+            foregroundOpacity: foregroundOpacity,
             backgroundColor: backgroundColor,
             backgroundOpacity: backgroundOpacity,
             fontScale: scale,

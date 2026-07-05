@@ -213,8 +213,28 @@ final class AetherPlayer: PlayerProtocol {
             codec: t.codec,
             isDefault: t.isDefault,
             isHearingImpaired: t.isHearingImpaired,
-            channels: t.channels > 0 ? t.channels : nil
+            channels: t.channels > 0 ? t.channels : nil,
+            isExternal: t.isExternal
         )
+    }
+
+    /// Host-side description of an external (sidecar) subtitle file to
+    /// register with the engine at load. Mirrors AetherEngine's
+    /// ExternalSubtitleTrack without exposing the engine type to the view
+    /// model (same isolation discipline as AetherSubtitleCue). Registered
+    /// tracks appear in `subtitleTracks` with `isExternal == true`, in
+    /// registration order, and are selected through the normal
+    /// `selectSubtitleTrack(id:)` path.
+    struct SidecarSubtitle {
+        let url: URL
+        let name: String?
+        let language: String?
+        let isForced: Bool
+        let isHearingImpaired: Bool
+        let isDefault: Bool
+        /// File-extension hint ("srt", "ass", "vtt") for URLs whose path
+        /// hides the format (Plex stream keys have no extension).
+        let formatHint: String?
     }
 
     /// Read panel HDR state for LoadOptions.panelIsInHDRMode. Matches
@@ -290,6 +310,7 @@ final class AetherPlayer: PlayerProtocol {
         subtitleLanguageHintsByStreamIndex: [Int: String],
         preferredAudioLanguages: [String] = [],
         preferredSubtitleLanguages: [String] = [],
+        externalSubtitles: [SidecarSubtitle] = [],
         isLive: Bool = false
     ) async throws {
         // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
@@ -312,6 +333,10 @@ final class AetherPlayer: PlayerProtocol {
         // host must declare live sources. Enables the engine's live path:
         // clock live-edge tracking, LiveReloadPolicy reconnect, and
         // seek(to:) becoming a no-op.
+        // externalSubtitles: registered at load (not addExternalSubtitleTrack)
+        // so the engine can also serve them as native WebVTT renditions if
+        // that path is ever enabled; httpHeaders nil inherits the media's
+        // own LoadOptions headers (same Plex auth).
         let options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
@@ -320,7 +345,19 @@ final class AetherPlayer: PlayerProtocol {
             audioBridgeMode: .lossless,
             isLive: isLive,
             preferredAudioLanguages: preferredAudioLanguages,
-            preferredSubtitleLanguages: preferredSubtitleLanguages
+            preferredSubtitleLanguages: preferredSubtitleLanguages,
+            externalSubtitles: externalSubtitles.map { sub in
+                ExternalSubtitleTrack(
+                    url: sub.url,
+                    name: sub.name,
+                    language: sub.language,
+                    isForced: sub.isForced,
+                    isHearingImpaired: sub.isHearingImpaired,
+                    isDefault: sub.isDefault,
+                    httpHeaders: nil,
+                    formatHint: sub.formatHint
+                )
+            }
         )
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)

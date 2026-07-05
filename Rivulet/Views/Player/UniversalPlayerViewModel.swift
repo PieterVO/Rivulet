@@ -1302,7 +1302,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     startTime: startTime,
                     subtitleLanguageHintsByStreamIndex: aetherSubtitleLanguageHintsByStreamIndex(),
                     preferredAudioLanguages: aetherPreferredAudioLanguages(),
-                    preferredSubtitleLanguages: aetherPreferredSubtitleLanguages()
+                    preferredSubtitleLanguages: aetherPreferredSubtitleLanguages(),
+                    externalSubtitles: aetherExternalSubtitles()
                 )
             } catch {
                 guard planHasHLSFallback(plan) else { throw error }
@@ -1314,6 +1315,32 @@ final class UniversalPlayerViewModel: ObservableObject {
                 )
                 return
             }
+        }
+    }
+
+    /// Plex external (sidecar) subtitle streams, registered with the engine
+    /// at load as first-class tracks. External streams are the ones with a
+    /// `key` (a /library/streams path served by the Plex server) — they are
+    /// NOT inside the media container, so the engine can't discover them by
+    /// demuxing. Registration order == metadata stream order; the id mapping
+    /// in aetherSubtitleIndex/plexSubtitleId relies on that ordinal identity.
+    private func aetherExternalSubtitles() -> [AetherPlayer.SidecarSubtitle] {
+        guard let streams = metadata.Media?.first?.Part?.first?.Stream else { return [] }
+        return streams.filter { $0.isSubtitle && $0.key != nil }.compactMap { stream in
+            guard let key = stream.key,
+                  var components = URLComponents(string: "\(serverURL)\(key)") else { return nil }
+            components.queryItems = (components.queryItems ?? [])
+                + [URLQueryItem(name: "X-Plex-Token", value: authToken)]
+            guard let url = components.url else { return nil }
+            return AetherPlayer.SidecarSubtitle(
+                url: url,
+                name: stream.displayTitle ?? stream.extendedDisplayTitle,
+                language: stream.languageCode ?? stream.language,
+                isForced: stream.forced ?? false,
+                isHearingImpaired: stream.hearingImpaired ?? false,
+                isDefault: stream.default ?? false,
+                formatHint: stream.codec
+            )
         }
     }
 
@@ -2961,22 +2988,39 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard !aetherTracks.isEmpty,
               let plexIndex = subtitleTracks.firstIndex(where: { $0.id == id }) else { return nil }
         let plexTrack = subtitleTracks[plexIndex]
+
+        // External (sidecar) subtitles: registered with the engine at load
+        // in metadata order (aetherExternalSubtitles), so the nth external
+        // Plex stream IS the nth isExternal engine track. Never language-
+        // match these against embedded streams - a sidecar SRT must not
+        // select an embedded track of the same language.
+        if plexTrack.subtitleKey != nil {
+            let externalAether = aetherTracks.filter(\.isExternal)
+            let externalOrdinal = subtitleTracks[...plexIndex].filter { $0.subtitleKey != nil }.count - 1
+            guard externalOrdinal >= 0, externalOrdinal < externalAether.count else { return nil }
+            return externalAether[externalOrdinal].id
+        }
+
+        // Embedded: match among the engine's embedded (container) tracks only.
+        let embeddedAether = aetherTracks.filter { !$0.isExternal }
         let lang = plexTrack.languageCode?.lowercased()
         let codec = plexTrack.codec?.lowercased()
 
         if let lang {
-            if let match = aetherTracks.first(where: {
+            if let match = embeddedAether.first(where: {
                 $0.languageCode?.lowercased() == lang && $0.codec?.lowercased() == codec
             }) {
                 return match.id
             }
-            if let match = aetherTracks.first(where: { $0.languageCode?.lowercased() == lang }) {
+            if let match = embeddedAether.first(where: { $0.languageCode?.lowercased() == lang }) {
                 return match.id
             }
         }
-        // Ordinal fallback: same position among subtitle tracks.
-        if plexIndex < aetherTracks.count {
-            return aetherTracks[plexIndex].id
+        // Ordinal fallback: same position among EMBEDDED subtitle tracks on
+        // both sides (external entries excluded from both lists).
+        let embeddedPlexIndex = subtitleTracks[..<plexIndex].filter { $0.subtitleKey == nil }.count
+        if embeddedPlexIndex < embeddedAether.count {
+            return embeddedAether[embeddedPlexIndex].id
         }
         return nil
     }
@@ -2987,23 +3031,35 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard !aetherTracks.isEmpty,
               let aetherIndex = aetherTracks.firstIndex(where: { $0.id == id }) else { return nil }
         let aetherTrack = aetherTracks[aetherIndex]
+
+        // External engine tracks map back by ordinal among externals
+        // (mirror of aetherSubtitleIndex).
+        if aetherTrack.isExternal {
+            let externalPlex = subtitleTracks.filter { $0.subtitleKey != nil }
+            let externalOrdinal = aetherTracks[...aetherIndex].filter(\.isExternal).count - 1
+            guard externalOrdinal >= 0, externalOrdinal < externalPlex.count else { return nil }
+            return externalPlex[externalOrdinal].id
+        }
+
+        let embeddedPlex = subtitleTracks.filter { $0.subtitleKey == nil }
         let lang = aetherTrack.languageCode?.lowercased()
         let codec = MediaTrack.normalizedSubtitleCodec(aetherTrack.codec)
 
         if let lang {
-            if let match = subtitleTracks.first(where: {
+            if let match = embeddedPlex.first(where: {
                 $0.languageCode?.lowercased() == lang &&
                 MediaTrack.normalizedSubtitleCodec($0.codec) == codec
             }) {
                 return match.id
             }
-            if let match = subtitleTracks.first(where: { $0.languageCode?.lowercased() == lang }) {
+            if let match = embeddedPlex.first(where: { $0.languageCode?.lowercased() == lang }) {
                 return match.id
             }
         }
 
-        if aetherIndex < subtitleTracks.count {
-            return subtitleTracks[aetherIndex].id
+        let embeddedAetherIndex = aetherTracks[..<aetherIndex].filter { !$0.isExternal }.count
+        if embeddedAetherIndex < embeddedPlex.count {
+            return embeddedPlex[embeddedAetherIndex].id
         }
         return nil
     }
