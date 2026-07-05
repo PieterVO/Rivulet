@@ -133,10 +133,10 @@ final class BIFFilmstripTests: XCTestCase {
         // time is N * 10s, so the last frame, index 59, covers 590s).
         let bif = BIFData(data: makeBIF(frameCount: 60, intervalMs: 10_000))!
 
-        // Simulate a 23-minute (1380s) episode's evenly spaced strip
-        // samples, matching PlayerProgressBarView.beginFilmstripLoad's
-        // `duration * (i + 0.5) / count` construction — beyond the BIF's
-        // 590s of real coverage. Hand-verified split: samples 0...4 (up to
+        // Simulate a 23-minute (1380s) episode's evenly spaced samples
+        // (`duration * (i + 0.5) / count` construction) reaching well
+        // beyond the BIF's 590s of real coverage. Hand-verified split:
+        // samples 0...4 (up to
         // 517.5s) are in-range; samples 5...11 (7 samples, 632.5s onward)
         // overshoot. The last in-range sample (517.5s) resolves to frame
         // index 52, leaving indices 53...59 (exactly 7) unused — enough to

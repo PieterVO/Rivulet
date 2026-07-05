@@ -684,10 +684,6 @@ class PlayerContainerViewController: UIViewController {
         // Static metadata (re-applied on episode advance via itemGeneration).
         applyRailMetadata(vm: vm)
 
-        bar.filmstripProvider = { [weak vm] times, maxWidth in
-            await vm?.filmstripImages(times: times, maxPixelWidth: maxWidth) ?? times.map { _ in nil }
-        }
-
         // Scrubber focus proxy: an invisible view geometrically below the
         // rail's button cluster (see its constraints above) so the focus
         // engine's own downward search from ANY cluster button lands here,
