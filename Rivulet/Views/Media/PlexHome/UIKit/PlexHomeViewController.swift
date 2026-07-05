@@ -3155,7 +3155,9 @@ final class PlexHomeViewController: UIViewController {
             // A typed library must resolve to a concrete type; a non-video
             // library (nil) is not eligible and must bail here so the home
             // interleave path never runs on it.
-            guard let t = trendingHeroType() else { return }
+            // Libraries may not have loaded yet (type resolves to nil); reset so a
+            // later trigger, once libraries load, can re-attempt at this generation.
+            guard let t = trendingHeroType() else { lastUpgradedIndexGeneration = -1; return }
             cacheKey = key
             heroType = t
         case .discover, .search:
