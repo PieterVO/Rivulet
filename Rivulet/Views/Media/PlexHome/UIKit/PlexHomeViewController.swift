@@ -2274,15 +2274,20 @@ final class PlexHomeViewController: UIViewController {
             }
             .store(in: &dataStoreObservers)
 
-        // TMDB hero logo upgrade is home-only for now (the library hero uses
-        // the items' own art; revisit if library logos need the upgrade too).
-        if case .home = mode {
+        // The TMDB trending-hero upgrade runs on home and on typed (movie/show)
+        // libraries; `requestHeroUpgrade` -> `upgradeHeroFromTMDB` self-gates
+        // non-video libraries via `trendingHeroType() == nil`, so it's safe to
+        // subscribe unconditionally for any `.library` surface here.
+        switch mode {
+        case .home, .library:
             NotificationCenter.default.publisher(for: .libraryGUIDIndexDidUpdate)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in
                     self?.requestHeroUpgrade()
                 }
                 .store(in: &dataStoreObservers)
+        case .discover, .search:
+            break
         }
     }
 
@@ -2978,6 +2983,18 @@ final class PlexHomeViewController: UIViewController {
     private static let heroItemCap = 9
     private static let heroTMDBMinMatches = 3
 
+    /// TMDB media type to pull the trending hero for, or nil when the current
+    /// surface should not get the trending upgrade (home uses the interleaved
+    /// path instead; non-video libraries get none).
+    private func trendingHeroType() -> TMDBMediaType? {
+        guard case .library(let key, _) = mode else { return nil }
+        switch dataStore.libraries.first(where: { $0.key == key })?.type {
+        case "movie": return .movie
+        case "show": return .tv
+        default: return nil
+        }
+    }
+
     private func selectHeroItemsIfNeeded() {
         guard showHomeHero else { return }
 
@@ -3020,8 +3037,13 @@ final class PlexHomeViewController: UIViewController {
             }
         }
 
-        if case .home = mode {
+        switch mode {
+        case .home:
             requestHeroUpgrade()
+        case .library:
+            if trendingHeroType() != nil { requestHeroUpgrade() }  // movie/show libraries only
+        case .discover, .search:
+            break
         }
     }
 
@@ -3057,33 +3079,51 @@ final class PlexHomeViewController: UIViewController {
         return []
     }
 
-    /// Pure async helper. Returns up to `cap` library items chosen by
-    /// interleaving Trending Movies + Trending TV from TMDB, filtered to items
-    /// the user already owns.
-    static func computeTMDBHero(cap: Int) async -> [PlexMetadata] {
+    /// Pure async helper. Returns up to `cap` library items chosen from TMDB
+    /// trending, filtered to items the user already owns.
+    ///
+    /// `type == nil` (home): interleaves Trending Movies + Trending TV,
+    /// preserving today's behavior byte-for-byte. `type == .movie` / `.tv`
+    /// (a typed library): fetches only that single trending section, so the
+    /// hero stays pure single-type for that library.
+    static func computeTMDBHero(cap: Int, type: TMDBMediaType? = nil) async -> [PlexMetadata] {
         let indexEmpty = await LibraryGUIDIndex.shared.isEmpty
-        async let movies = TMDBDiscoverService.shared.fetchSection(.movieTrending)
-        async let shows = TMDBDiscoverService.shared.fetchSection(.tvTrending)
-        let (m, s) = await (movies, shows)
-        homeUIKitLog.debug("[Hero] computeTMDBHero: trendingMovies=\(m.count, privacy: .public), trendingTV=\(s.count, privacy: .public), guidIndexEmpty=\(indexEmpty, privacy: .public)")
 
-        // Interleave [m0, s0, m1, s1, ...] preserving TMDB's trending order.
-        var interleaved: [TMDBListItem] = []
-        let count = max(m.count, s.count)
-        for i in 0..<count {
-            if i < m.count { interleaved.append(m[i]) }
-            if i < s.count { interleaved.append(s[i]) }
+        let ordered: [TMDBListItem]
+        switch type {
+        case nil:
+            async let movies = TMDBDiscoverService.shared.fetchSection(.movieTrending)
+            async let shows = TMDBDiscoverService.shared.fetchSection(.tvTrending)
+            let (m, s) = await (movies, shows)
+            homeUIKitLog.debug("[Hero] computeTMDBHero(type: nil): trendingMovies=\(m.count, privacy: .public), trendingTV=\(s.count, privacy: .public), guidIndexEmpty=\(indexEmpty, privacy: .public)")
+
+            // Interleave [m0, s0, m1, s1, ...] preserving TMDB's trending order.
+            var interleaved: [TMDBListItem] = []
+            let count = max(m.count, s.count)
+            for i in 0..<count {
+                if i < m.count { interleaved.append(m[i]) }
+                if i < s.count { interleaved.append(s[i]) }
+            }
+            ordered = interleaved
+        case .movie:
+            let m = await TMDBDiscoverService.shared.fetchSection(.movieTrending)
+            homeUIKitLog.debug("[Hero] computeTMDBHero(type: movie): trendingMovies=\(m.count, privacy: .public), guidIndexEmpty=\(indexEmpty, privacy: .public)")
+            ordered = m
+        case .tv:
+            let s = await TMDBDiscoverService.shared.fetchSection(.tvTrending)
+            homeUIKitLog.debug("[Hero] computeTMDBHero(type: tv): trendingTV=\(s.count, privacy: .public), guidIndexEmpty=\(indexEmpty, privacy: .public)")
+            ordered = s
         }
 
         var matches: [PlexMetadata] = []
-        for item in interleaved {
+        for item in ordered {
             if let plex = await LibraryGUIDIndex.shared.lookup(tmdbId: item.id, type: item.mediaType) {
                 matches.append(plex)
                 if matches.count >= cap { break }
             }
         }
         let matchTitles = matches.map { "\($0.title ?? "?") [\($0.type ?? "?")]" }.joined(separator: ", ")
-        homeUIKitLog.debug("[Hero] computeTMDBHero: \(interleaved.count, privacy: .public) trending items -> \(matches.count, privacy: .public) matches (cap=\(cap, privacy: .public)): \(matchTitles, privacy: .public)")
+        homeUIKitLog.debug("[Hero] computeTMDBHero: \(ordered.count, privacy: .public) trending items -> \(matches.count, privacy: .public) matches (cap=\(cap, privacy: .public)): \(matchTitles, privacy: .public)")
         return matches
     }
 
@@ -3105,8 +3145,25 @@ final class PlexHomeViewController: UIViewController {
         }
         lastUpgradedIndexGeneration = generation
 
+        let cacheKey: String
+        let heroType: TMDBMediaType?  // nil == home's interleaved movies+TV path
+        switch mode {
+        case .home:
+            cacheKey = "home"
+            heroType = nil
+        case .library(let key, _):
+            // A typed library must resolve to a concrete type; a non-video
+            // library (nil) is not eligible and must bail here so the home
+            // interleave path never runs on it.
+            guard let t = trendingHeroType() else { return }
+            cacheKey = key
+            heroType = t
+        case .discover, .search:
+            return
+        }
+
         homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB: starting (gen=\(generation, privacy: .public), current heroItems=\(self.heroItems.count, privacy: .public))")
-        let curated = await Self.computeTMDBHero(cap: Self.heroItemCap)
+        let curated = await Self.computeTMDBHero(cap: Self.heroItemCap, type: heroType)
         guard curated.count >= Self.heroTMDBMinMatches else {
             homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public)); keeping hub-backed hero")
             // A later index generation may yield enough matches; allow re-run.
@@ -3150,7 +3207,7 @@ final class PlexHomeViewController: UIViewController {
 
         homeUIKitLog.info("[Hero] upgradeHeroFromTMDB APPLIED: replacing hero with \(mergedItems.count, privacy: .public) trending-matched items")
         heroItems = mergedItems
-        dataStore.cacheHeroItems(mergedItems, forLibrary: "home")
+        dataStore.cacheHeroItems(mergedItems, forLibrary: cacheKey)
         updateBackdropForCurrentHeroItem()
         applySnapshot(animated: false)
         // The hero cell's diffable item id is a constant ("hero-overlay"), so
