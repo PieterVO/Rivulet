@@ -42,20 +42,20 @@ final class ShuttleGrammarTests: XCTestCase {
 
     func testRateAndBadge() {
         XCTAssertEqual(ShuttleGrammar.rate(forLevel: 0), 0)
-        XCTAssertEqual(ShuttleGrammar.rate(forLevel: 1), 2)
-        XCTAssertEqual(ShuttleGrammar.rate(forLevel: 2), 4)
-        XCTAssertEqual(ShuttleGrammar.rate(forLevel: 3), 6)
+        XCTAssertEqual(ShuttleGrammar.rate(forLevel: 1), 15)
+        XCTAssertEqual(ShuttleGrammar.rate(forLevel: 2), 60)
+        XCTAssertEqual(ShuttleGrammar.rate(forLevel: 3), 240)
         // rate(forLevel:) takes the magnitude — direction is irrelevant.
-        XCTAssertEqual(ShuttleGrammar.rate(forLevel: -1), 2)
-        XCTAssertEqual(ShuttleGrammar.rate(forLevel: -2), 4)
-        XCTAssertEqual(ShuttleGrammar.rate(forLevel: -3), 6)
+        XCTAssertEqual(ShuttleGrammar.rate(forLevel: -1), 15)
+        XCTAssertEqual(ShuttleGrammar.rate(forLevel: -2), 60)
+        XCTAssertEqual(ShuttleGrammar.rate(forLevel: -3), 240)
 
         XCTAssertNil(ShuttleGrammar.badge(forSpeed: 0))
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 1), "▶ 2x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 2), "▶ 4x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 3), "▶ 6x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -1), "◀ 2x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -2), "◀ 4x")
-        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -3), "◀ 6x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 1), "▶ 15x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 2), "▶ 60x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: 3), "▶ 240x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -1), "◀ 15x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -2), "◀ 60x")
+        XCTAssertEqual(ShuttleGrammar.badge(forSpeed: -3), "◀ 240x")
     }
 }

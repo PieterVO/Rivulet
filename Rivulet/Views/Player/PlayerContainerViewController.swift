@@ -359,6 +359,7 @@ class PlayerContainerViewController: UIViewController {
     /// Track if we're currently consuming presses
     private var isHandlingMenuPress = false
     private var isHandlingSelectPress = false
+    private var isHandlingPlayPausePress = false
 
     /// Flag to block dismiss calls that occur immediately after we handled a menu action
     /// This prevents the double-handling issue where handleMenuButton() closes something,
@@ -380,6 +381,17 @@ class PlayerContainerViewController: UIViewController {
                     return
                 }
             }
+            if press.type == .playPause {
+                // Always honored, whatever holds focus — rail buttons, the
+                // scrubber stop, or an open panel. SwiftUI's
+                // .onPlayPauseCommand only fires while focus is in the
+                // SwiftUI hierarchy, so the UIKit chrome dead-zoned the
+                // button without this. Same coordinator action as the
+                // SwiftUI path: commits an active scrub, else toggles.
+                isHandlingPlayPausePress = true
+                inputCoordinator.handle(action: .playPause, source: .irPress)
+                return
+            }
         }
         super.pressesBegan(presses, with: event)
     }
@@ -400,6 +412,10 @@ class PlayerContainerViewController: UIViewController {
                 isHandlingSelectPress = false
                 return
             }
+            if press.type == .playPause && isHandlingPlayPausePress {
+                isHandlingPlayPausePress = false
+                return
+            }
         }
         super.pressesEnded(presses, with: event)
     }
@@ -412,6 +428,10 @@ class PlayerContainerViewController: UIViewController {
             }
             if press.type == .select && isHandlingSelectPress {
                 isHandlingSelectPress = false
+                return
+            }
+            if press.type == .playPause && isHandlingPlayPausePress {
+                isHandlingPlayPausePress = false
                 return
             }
         }
