@@ -20,14 +20,11 @@ class PlayerContainerViewController: UIViewController {
     private var hostingController: UIHostingController<AnyView>?
     private var rail: PlayerRailView?
     private var progressBar: PlayerProgressBarView?
-    private var progressBarLeading: NSLayoutConstraint?
-    private var progressBarTrailing: NSLayoutConstraint?
     private var scrubberProxy: ScrubberFocusProxyView?
     private var skipPill: SkipPillButton?
     private var pausedDimView: UIView?
     private var pauseIndicator: UIStackView?
     private var pauseTimeLabel: UILabel?
-    private var loadingSpinner: IrisSpinnerView?
     private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
     private var cancellables = Set<AnyCancellable>()
@@ -44,10 +41,6 @@ class PlayerContainerViewController: UIViewController {
     /// touching the CC/audio/info panels, which don't go stale off that
     /// publisher.
     private var isShowingUpNextPanel = false
-    /// Tracks the previous `isScrubbing` value so the scrubber-inset
-    /// animation runs only on the true→false / false→true edge, not on
-    /// every tick of the combined time sink.
-    private var wasScrubbing = false
     private var panGestureRecognizer: UIPanGestureRecognizer?
     private var touchSurfaceTapGesture: UITapGestureRecognizer?
 
@@ -111,7 +104,7 @@ class PlayerContainerViewController: UIViewController {
 
             // Full-frame pause dim sits just above the video, below every
             // other chrome layer (z-order bottom-up: scrim, dim, rail,
-            // progress bar, skip pill, pause indicator, spinner+label).
+            // progress bar, skip pill, pause indicator, loading label).
             let dim = UIView()
             dim.backgroundColor = UIColor.black.withAlphaComponent(0.28)
             dim.alpha = 0
@@ -150,15 +143,18 @@ class PlayerContainerViewController: UIViewController {
             indicator.alignment = .center
             indicator.alpha = 0
 
-            // Centered loading spinner + label.
-            let spinner = IrisSpinnerView(diameter: 110, stroke: 9)
-            let spinnerLabel = UILabel()
-            spinnerLabel.font = .systemFont(ofSize: 22, weight: .medium)
-            spinnerLabel.textColor = UIColor.white.withAlphaComponent(0.5)
-            spinner.isHidden = true
-            spinnerLabel.isHidden = true
+            // Top-left "Loading" label — same spot the paused indicator
+            // occupies, styled like its time label. The progress bar's own
+            // skeleton shimmer (see `PlayerProgressBarView.setSkeleton`) is
+            // the primary loading visual; this is a quiet text-only cue,
+            // no spinner.
+            let loadingLabel = UILabel()
+            loadingLabel.font = .systemFont(ofSize: 22, weight: .medium)
+            loadingLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+            loadingLabel.text = "Loading"
+            loadingLabel.isHidden = true
 
-            [chromeScrim, dim, railView, bar, proxy, pill, indicator, spinner, spinnerLabel].forEach {
+            [chromeScrim, dim, railView, bar, proxy, pill, indicator, loadingLabel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
@@ -171,11 +167,7 @@ class PlayerContainerViewController: UIViewController {
             view.bringSubviewToFront(proxy)
             view.bringSubviewToFront(pill)
             view.bringSubviewToFront(indicator)
-            view.bringSubviewToFront(spinner)
-            view.bringSubviewToFront(spinnerLabel)
-
-            let leading = bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 132)
-            let trailing = bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -132)
+            view.bringSubviewToFront(loadingLabel)
 
             NSLayoutConstraint.activate([
                 chromeScrim.topAnchor.constraint(equalTo: view.topAnchor),
@@ -196,10 +188,11 @@ class PlayerContainerViewController: UIViewController {
 
                 // Scrubber lives in the rail's lower region — a container
                 // sibling overlaid on the rail, not a rail child (its
-                // morph/behavior layer is untouched by this task).
-                // Leading/trailing inset 132 at rest, 96 while scrubbing.
-                leading,
-                trailing,
+                // morph/behavior layer is untouched by this task). Leading/
+                // trailing inset stays 132 at rest AND while scrubbing —
+                // the bar never moves (see PlayerProgressBarView).
+                bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 132),
+                bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -132),
                 bar.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -34),
 
                 // Invisible focus proxy: geometrically below the button
@@ -222,16 +215,12 @@ class PlayerContainerViewController: UIViewController {
                 indicator.topAnchor.constraint(equalTo: view.topAnchor, constant: 44),
                 indicator.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 64),
 
-                // Loading spinner centered horizontally; vertical position
-                // 42% down from the top. Label sits below it.
-                spinner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                NSLayoutConstraint(item: spinner, attribute: .centerY, relatedBy: .equal,
-                                    toItem: view, attribute: .bottom, multiplier: 0.42, constant: 0),
-                spinnerLabel.topAnchor.constraint(equalTo: spinner.bottomAnchor, constant: 28),
-                spinnerLabel.centerXAnchor.constraint(equalTo: spinner.centerXAnchor),
+                // Loading label occupies the exact same spot as the pause
+                // indicator (the two are disjoint states — never shown at
+                // the same time — but kept as separate views).
+                loadingLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 44),
+                loadingLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 64),
             ])
-            progressBarLeading = leading
-            progressBarTrailing = trailing
             rail = railView
             progressBar = bar
             scrubberProxy = proxy
@@ -239,8 +228,7 @@ class PlayerContainerViewController: UIViewController {
             pausedDimView = dim
             pauseIndicator = indicator
             pauseTimeLabel = timeLabel
-            loadingSpinner = spinner
-            loadingLabel = spinnerLabel
+            self.loadingLabel = loadingLabel
 
             bindChrome(to: vm)
         }
@@ -746,19 +734,9 @@ class PlayerContainerViewController: UIViewController {
                     chapters: vm.metadata.Chapter ?? [],
                     isWheelScrubbing: isWheelScrubbing
                 )
-                // Scrubbing insets the scrubber to the rail's narrower
-                // width (96 vs. 132 at rest); animate only on the edge so
-                // steady-state ticks stay free.
-                if isScrubbing != self.wasScrubbing {
-                    self.wasScrubbing = isScrubbing
-                    self.progressBarLeading?.constant = isScrubbing ? 96 : 132
-                    self.progressBarTrailing?.constant = isScrubbing ? -96 : -132
-                    UIView.animate(withDuration: 0.15) {
-                        self.view.layoutIfNeeded()
-                    }
-                }
                 // Scrubbing hides the rail and skip pill; scrubber and
-                // scrim stay (design mock state 2).
+                // scrim stay (design mock state 2). The bar itself keeps
+                // its rest geometry — no inset swap.
                 self.applyChromeVisibility()
             }
             .store(in: &cancellables)
@@ -784,11 +762,7 @@ class PlayerContainerViewController: UIViewController {
                 self.progressBar?.setPausedDim(state == .paused)
                 self.skipPill?.isHidden = loading || !vm.showSkipButton
 
-                self.loadingSpinner?.isHidden = !loading
                 self.loadingLabel?.isHidden = !loading
-                if loading {
-                    self.loadingLabel?.attributedText = self.loadingLabelText(for: vm)
-                }
 
                 if state == .paused, vm.duration > 0 {
                     let minutesLeft = Int(max(0, vm.duration - vm.currentTime) / 60)
@@ -943,27 +917,6 @@ class PlayerContainerViewController: UIViewController {
         rail?.setMeta(rating: meta.contentRating, runtime: runtime, audio: audio)
     }
 
-    /// Loading label text: quality read ported from `CardInfoView`'s video
-    /// section (same `isDolbyVision` / `isHDR` / `videoResolution` reads),
-    /// uppercased with the rail's loading-label kerning; falls back to a
-    /// plain "LOADING" when no stream/media info is available yet.
-    private func loadingLabelText(for vm: UniversalPlayerViewModel) -> NSAttributedString {
-        let meta = vm.metadata
-        let videoStream = meta.Media?.first?.Part?.first?.Stream?.first { $0.isVideo }
-        var text = "LOADING"
-        if let videoStream {
-            if videoStream.isDolbyVision {
-                text = "DOLBY VISION"
-            } else if videoStream.isHDR {
-                text = "HDR10"
-            }
-        }
-        if meta.Media?.first?.videoResolution?.lowercased() == "4k" {
-            text = "4K \(text)"
-        }
-        return NSAttributedString(string: text, attributes: [.kern: 22 * 0.14])
-    }
-
     /// Single writer for all chrome alphas. Every visibility rule lives
     /// here so no two sinks can fight over the same view's alpha (the old
     /// setChromeHidden / setAuxChromeHidden split let the ~0.5s time-sink
@@ -981,9 +934,10 @@ class PlayerContainerViewController: UIViewController {
     ///   scrubber (user call 2026-07-03).
     /// - paused: playback paused AND the frame is live (not ambient) —
     ///   drives the top-left pause indicator and the full-frame dim.
-    /// - loading: spinner + label show whenever loading/idle AND not
-    ///   ambient; they use `isHidden` from the state sink too so they
-    ///   never intercept focus while alpha is mid-fade.
+    /// - loading: the top-left "Loading" label shows whenever loading/idle
+    ///   AND not ambient (the progress bar's own skeleton shimmer carries
+    ///   the rest of the loading look); it uses `isHidden` from the state
+    ///   sink too so it never intercepts focus while alpha is mid-fade.
     /// - scrubberProxy.isFocusEnabled: a FOCUS gate, not an alpha write (the
     ///   proxy is always invisible) — it must never be focusable while
     ///   controls are hidden, mid-scrub, or ambient, and only actually
@@ -1012,7 +966,6 @@ class PlayerContainerViewController: UIViewController {
             (skipPill, railVisible && !isLoading ? 1 : 0),
             (pauseIndicator, paused ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
-            (loadingSpinner, isLoading && !ambient ? 1 : 0),
             (loadingLabel, isLoading && !ambient ? 1 : 0),
         ]
         guard targets.contains(where: { view, alpha in view.map { abs($0.alpha - alpha) > 0.01 } == true }) else { return }

@@ -4,30 +4,25 @@
 //
 //  Transport scrubber styled after AVPlayerViewController (tvOS 15+):
 //  a thin rounded white bar with a 26pt circular knob — the fill edge is
-//  the playhead. While scrubbing, the bar morphs into a 130pt timeline
-//  ribbon with a glowing playhead bar (overhanging above/below the strip)
-//  and a fainter line marking the actual playback position; an oversized
-//  readout (chapter eyebrow + large timecode) follows the playhead above
-//  the strip, and a bottom progress line (accent-gradient fill on a faint
-//  track) runs along the strip's own bottom edge. A single trickplay
-//  thumbnail card floats above the readout, centered on the seek x and
-//  clamped to the ribbon's bounds — no tiled BIF imagery; real chapters
-//  show as subtle glass-block segments with seam hairlines between them,
-//  chapterless content is one continuous band. Time remaining sits below
-//  the right end, with an "Ends at" clock-time label beside it at rest
-//  (hidden while the strip is open). Plex markers (intro/credits) tint
-//  their range on both the thin bar and the strip.
+//  the playhead. While scrubbing, the bar keeps its REST geometry (no
+//  ribbon/strip morph) — only the existing scrub/focus emphasis treatment
+//  (thicker track, larger knob, brighter ring) marks the state. An
+//  oversized readout (chapter eyebrow + large timecode) tracks the seek x
+//  ~12pt above the bar, and a single trickplay thumbnail card (288×162)
+//  floats 12pt above the readout — both clamped to the bar's own
+//  horizontal bounds, visible only while scrubbing. Time remaining sits
+//  below the right end, with an "Ends at" clock-time label beside it.
+//  Plex markers (intro/credits) tint their range on the bar.
 //
 //  The view's own height covers only the track + label band; the
-//  thumb/strip overhangs above it (clipsToBounds = false) so the
-//  transport bar doesn't reserve blank space when not scrubbing.
+//  thumb/readout overhangs above it (clipsToBounds = false) so the
+//  transport bar doesn't reserve blank space when they're hidden.
 //
-//  One-clock rule: the strip's alpha/height and the thin-bar fill all
-//  ride the SAME `UIView.animate` block in `update(...)` that already
-//  animates `trackHeightConstraint` + `layoutIfNeeded`. The thumb card's
-//  position is frame assignment in `layoutStripOverlay(...)`, not a new
-//  animator. No second animator, no CABasicAnimation, no separate
-//  CADisplayLink.
+//  One-clock rule: any show/hide animation for the readout/thumb rides
+//  the SAME `UIView.animate` block in `update(...)` that already animates
+//  `trackHeightConstraint` + `layoutIfNeeded`. Their position is frame
+//  assignment in `layoutScrubOverlay(...)`, not a new animator. No second
+//  animator, no CABasicAnimation, no separate CADisplayLink.
 //
 
 import UIKit
@@ -56,21 +51,6 @@ final class AccentGradientView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
-/// Played-side dim: black .5 → .08 across the played region of the strip.
-final class StripDimView: UIView {
-    override class var layerClass: AnyClass { CAGradientLayer.self }
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        let g = layer as! CAGradientLayer
-        g.colors = [UIColor.black.withAlphaComponent(0.5).cgColor,
-                    UIColor.black.withAlphaComponent(0.08).cgColor]
-        g.startPoint = CGPoint(x: 0, y: 0.5)
-        g.endPoint = CGPoint(x: 1, y: 0.5)
-        isUserInteractionEnabled = false
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-
 final class PlayerProgressBarView: UIView {
 
     // MARK: - Metrics (AVPlayerViewController-matched)
@@ -78,7 +58,6 @@ final class PlayerProgressBarView: UIView {
     private enum Metrics {
         static let trackHeight: CGFloat = 10
         static let scrubTrackHeight: CGFloat = 14
-        static let stripHeight: CGFloat = 130
         static let labelBandSpacing: CGFloat = 14
         static let thumbnailWidth: CGFloat = 288
         static let thumbnailHeight: CGFloat = 162
@@ -118,64 +97,29 @@ final class PlayerProgressBarView: UIView {
     private let thumbnailImageView = UIImageView()
     private let thumbnailContainer = UIView()
 
-    // Strip morph subviews.
-    private let stripContainer = UIView()
-    private let livePositionLine = UIView()
-    private let dimOverlay = StripDimView()
-
-    /// Timeline-first playhead bar: an 8pt white glowing bar on a 16pt
-    /// black@0.4 rounded backing, both siblings of `stripContainer` on
-    /// `self` (not clipped by the track), spanning from `stripTop − 14` to
-    /// `stripBottom + 14`. Replaces the old hairline `playheadLine` (inside
-    /// the strip) and the 3pt `playheadThread` (connecting the strip down
-    /// to the track) — positioned together in `layoutStripOverlay(...)`.
-    private let playheadBarBacking = UIView()
-    private let playheadBar = UIView()
-
-    /// Bottom progress line: a 5pt ribbon pinned inside the strip's own
-    /// bottom edge, full width. `progressLineTrack` is the white@0.12
-    /// base; `progressLineFill` is an `AccentGradientView` sized to the
-    /// seek fraction, both children of `stripContainer` so they clip/scale
-    /// with it. Positioned in `layoutStripOverlay(...)`.
-    private let progressLineTrack = UIView()
-    private let progressLineFill = AccentGradientView()
-
     /// Oversized scrub readout: replaces the old `PaddedChipLabel` chip.
     /// `readoutContainer` is a small frame-driven container (a sibling of
-    /// `stripContainer` on `self`, positioned/clamped exactly like the old
-    /// callout) holding a small-caps chapter eyebrow above a large
+    /// `trackBackground` on `self`, positioned/clamped above the bar's own
+    /// rest geometry) holding a small-caps chapter eyebrow above a large
     /// timecode. The eyebrow hides when the playhead isn't inside a named
     /// chapter, leaving just the timecode.
     private let readoutContainer = UIView()
     private let readoutEyebrowLabel = UILabel()
     private let readoutTimecodeLabel = UILabel()
 
-    // Chapter-proportional segment geometry for the currently open strip
-    // (recomputed in `buildSegments`). Each real-chapter segment gets its
-    // own rounded glass-block container; `nil` / empty means the
-    // pre-segment (or chapterless single-segment) rendering.
-    private var segmentLayout: ChapterSegmentLayout?
-    private var segmentContainers: [UIView] = []
-
     // Jog wheel indicator: shown beside the readout only while a circular
     // clickpad rotation is actively driving the scrub (`isWheelScrubbing`).
     // Frame-driven like readoutContainer, positioned in
-    // `layoutStripOverlay(...)`.
+    // `layoutScrubOverlay(...)`.
     private let wheelRing = UIView()
     private let wheelDot = UIView()
     private var isWheelScrubbing = false
 
-    // Chapter seam hairlines, drawn at each chapter start's x position
-    // while the strip is open. Rebuilt only when chapters/width change.
-    private var chapterSeams: [UIView] = []
     private var lastChapters: [PlexChapter] = []
-    private var lastSeamsChapterIds: [Int?] = []
-    private var lastSeamWidth: CGFloat = 0
 
     private var duration: TimeInterval = 0
     /// Cached from the last `update(...)` call so `resetFilmstrip()` can
-    /// redraw the marker band after closing the strip mid-scrub without
-    /// losing state.
+    /// redraw the marker band without losing state.
     private var lastMarkers: [PlexMarker] = []
 
     private var trackHeightConstraint: NSLayoutConstraint!
@@ -245,8 +189,8 @@ final class PlayerProgressBarView: UIView {
         scrubStepLabel.textColor = UIColor.white.withAlphaComponent(0.8)
         scrubStepLabel.isHidden = true
 
-        // Single trickplay thumb card: floats above the readout while the
-        // strip is open, centered on the seek x. Plain dim fill (no
+        // Single trickplay thumb card: floats above the readout while
+        // scrubbing, centered on the seek x. Plain dim fill (no
         // spinner/skeleton) shows until the first `scrubThumbnail` lands;
         // `thumbnailImageView` keeps whatever frame it last had while the
         // next one loads (see `update(...)`'s image assignment).
@@ -268,38 +212,10 @@ final class PlayerProgressBarView: UIView {
         thumbnailImageView.layer.cornerCurve = .continuous
         thumbnailContainer.addSubview(thumbnailImageView)
 
-        // Strip: clipped, rounded, pinned to trackBackground's own
-        // bounds so it grows/shrinks with trackHeightConstraint for free.
-        stripContainer.clipsToBounds = true
-        stripContainer.layer.cornerCurve = .continuous
-        stripContainer.alpha = 0
-        stripContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        stripContainer.frame = trackBackground.bounds
-
-        // Played-side dim sits above the segments but below the
-        // playhead/live lines, sized to the played width in
-        // `layoutStripOverlay(...)`.
-        dimOverlay.isHidden = true
-        stripContainer.addSubview(dimOverlay)
-
-        livePositionLine.backgroundColor = UIColor.white.withAlphaComponent(0.5)
-        stripContainer.addSubview(livePositionLine)
-
-        // Bottom progress line: 5pt ribbon pinned inside the strip's own
-        // bottom edge. Track + gradient fill are children of stripContainer
-        // so they clip/scale with it; sized in `layoutStripOverlay(...)`.
-        progressLineTrack.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        progressLineTrack.layer.cornerRadius = 2.5
-        progressLineTrack.layer.cornerCurve = .continuous
-        progressLineTrack.clipsToBounds = true
-        progressLineTrack.isHidden = true
-        stripContainer.addSubview(progressLineTrack)
-        progressLineTrack.addSubview(progressLineFill)
-
         // Oversized readout: replaces the old pill chip. A small-caps
         // chapter eyebrow above a large monospaced timecode, laid out
         // frame-wise (no constraints — 2a lesson: cross-view constraints
-        // must not be introduced inside the strip's frame-driven overlays).
+        // must not be introduced inside these frame-driven overlays).
         readoutEyebrowLabel.font = .systemFont(ofSize: 16, weight: .semibold)
         readoutEyebrowLabel.textColor = UIColor.white.withAlphaComponent(0.5)
         readoutEyebrowLabel.textAlignment = .center
@@ -312,24 +228,6 @@ final class PlayerProgressBarView: UIView {
         readoutContainer.addSubview(readoutEyebrowLabel)
         readoutContainer.addSubview(readoutTimecodeLabel)
         readoutContainer.isHidden = true
-
-        // Playhead bar: 8pt white glowing bar on a 16pt black@0.4 rounded
-        // backing. Siblings of stripContainer on self (not clipped by the
-        // track), hidden until the strip is open. Replaces the old
-        // in-strip playheadLine hairline and the playheadThread connector.
-        playheadBarBacking.backgroundColor = UIColor.black.withAlphaComponent(0.4)
-        playheadBarBacking.layer.cornerRadius = 8
-        playheadBarBacking.layer.cornerCurve = .continuous
-        playheadBarBacking.isHidden = true
-
-        playheadBar.backgroundColor = .white
-        playheadBar.layer.cornerRadius = 6
-        playheadBar.layer.cornerCurve = .continuous
-        playheadBar.layer.shadowColor = UIColor(red: 180/255, green: 205/255, blue: 1, alpha: 1).cgColor
-        playheadBar.layer.shadowOpacity = 0.6
-        playheadBar.layer.shadowRadius = 13
-        playheadBar.layer.shadowOffset = .zero
-        playheadBar.isHidden = true
 
         wheelRing.backgroundColor = .clear
         wheelRing.layer.borderWidth = Metrics.wheelRingBorderWidth
@@ -345,21 +243,18 @@ final class PlayerProgressBarView: UIView {
          endsAtLabel, scrubStepLabel, readoutContainer, thumbnailContainer, wheelRing, wheelDot].forEach {
             addSubview($0)
         }
-        [currentPositionGhost, progressFill, markersContainer, stripContainer].forEach {
+        [currentPositionGhost, progressFill, markersContainer].forEach {
             trackBackground.addSubview($0)
         }
-        // Handle views, and the playhead bar + its backing, are
-        // frame-driven siblings of trackBackground (not children of it —
-        // the track clips its contents, which would clip the handle's
-        // shadow / the playhead bar's overhang above and below the track).
+        // Handle views are frame-driven siblings of trackBackground (not
+        // children of it — the track clips its contents, which would clip
+        // the handle's shadow).
         addSubview(handleRing)
         addSubview(handleView)
-        addSubview(playheadBarBacking)
-        addSubview(playheadBar)
 
         // Thumbnail card is frame-driven, like readoutContainer — it only
-        // ever appears while the strip is open, positioned and clamped in
-        // `layoutStripOverlay(...)`.
+        // ever appears while scrubbing, positioned and clamped in
+        // `layoutScrubOverlay(...)`.
         thumbnailImageView.frame = thumbnailContainer.bounds
         thumbnailImageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
@@ -397,23 +292,10 @@ final class PlayerProgressBarView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         trackBackground.layer.cornerRadius = trackHeightConstraint.constant / 2
-        // With more than one chapter segment, each segment container owns
-        // its own rounding + clipping (see `buildSegments`), so
-        // stripContainer itself goes unclipped/square. With zero or one
-        // segment (no chapters), stripContainer keeps the old single
-        // rounded-rect behavior so there's no regression on chapterless
-        // titles.
-        if segmentContainers.count > 1 {
-            stripContainer.layer.cornerRadius = 0
-            stripContainer.clipsToBounds = false
-        } else {
-            stripContainer.layer.cornerRadius = trackBackground.layer.cornerRadius
-            stripContainer.clipsToBounds = true
-        }
         // Keep the shimmer's gradient layer sized to the track (skeleton
-        // mode never coexists with the strip morph, so the track stays at
-        // its resting height, but width can still change on layout).
-        // Disable implicit actions so this frame sync doesn't animate.
+        // mode never coexists with scrubbing, so the track stays at its
+        // resting height, but width can still change on layout). Disable
+        // implicit actions so this frame sync doesn't animate.
         if let shimmerLayer {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -437,7 +319,6 @@ final class PlayerProgressBarView: UIView {
     ) {
         guard !isSkeleton else { return }
 
-        let wasScrubbing = self.isScrubbing
         self.isScrubbing = isScrubbing
         self.isWheelScrubbing = isWheelScrubbing
         self.duration = duration
@@ -450,47 +331,32 @@ final class PlayerProgressBarView: UIView {
         let width = trackBackground.bounds.width
         let currentProgress: Double = duration > 0 ? min(1, max(0, currentTime / duration)) : 0
 
-        // The strip opens immediately on scrub start — it no longer waits
-        // on any async load (chapters are already in `metadata.Chapter` by
-        // the time playback starts, and `ChapterSegmentLayout` renders a
-        // single continuous band when there are none), so there's no more
-        // separate "thin-bar while filmstrip loads" state. Segments are
-        // (re)built once per scrub session on the start edge; per-tick
-        // updates just reposition overlays against the cached layout.
-        if isScrubbing && !wasScrubbing {
-            buildSegments()
-        }
-        let stripOpen = isScrubbing
         // Seek-focus emphasis: true while the scrubber focus proxy holds
-        // focus (`focusEmphasis`) even though the strip is closed at rest —
-        // a down-press from any rail button lands on the proxy, and it must
+        // focus (`focusEmphasis`) even when not actively scrubbing — a
+        // down-press from any rail button lands on the proxy, and it must
         // read as "the scrubber has focus" the same grow-and-brighten way
-        // entering seek mode does. `stripOpen` requires `isScrubbing`, which
-        // is never true while the proxy can hold focus (mutually exclusive
-        // gating: `controlsFocusActive` vs. `isScrubbing`), so this fold-in
-        // never fights the strip-open state.
-        let scrubEmphasis = (isScrubbing || focusEmphasis) && !stripOpen
-        let trackHeight: CGFloat = stripOpen ? Metrics.stripHeight : (scrubEmphasis ? Metrics.scrubTrackHeight : Metrics.trackHeight)
+        // entering seek mode does.
+        let scrubEmphasis = isScrubbing || focusEmphasis
+        let trackHeight: CGFloat = scrubEmphasis ? Metrics.scrubTrackHeight : Metrics.trackHeight
 
-        currentPositionGhost.isHidden = !isScrubbing || stripOpen
+        currentPositionGhost.isHidden = !isScrubbing
         trackHeightConstraint.constant = trackHeight
 
         // Paused dim only applies at rest — never while actively scrubbing
         // (setPausedDim's own guard already prevents that combination from
-        // being set in the first place, but the emphasis/strip states below
-        // are re-derived from the current isScrubbing/stripOpen locals on
-        // every call, so this stays consistent even if that ever changes).
-        // Focus emphasis also rules it out: a down-press that lands the
-        // proxy in focus must win over the paused-at-rest knob shrink, so
-        // the "scrubber has focus" grow-and-brighten is never undercut by
-        // the smaller paused knob.
-        let pausedAtRest = self.isPausedDim && !isScrubbing && !stripOpen && !focusEmphasis
+        // being set in the first place, but the emphasis state below is
+        // re-derived from the current isScrubbing local on every call, so
+        // this stays consistent even if that ever changes). Focus emphasis
+        // also rules it out: a down-press that lands the proxy in focus
+        // must win over the paused-at-rest knob shrink, so the "scrubber
+        // has focus" grow-and-brighten is never undercut by the smaller
+        // paused knob.
+        let pausedAtRest = self.isPausedDim && !isScrubbing && !focusEmphasis
 
         UIView.animate(withDuration: 0.15) {
-            self.progressFill.alpha = stripOpen ? 0 : (pausedAtRest ? 0.78 : 1)
-            self.stripContainer.alpha = stripOpen ? 1 : 0
+            self.progressFill.alpha = pausedAtRest ? 0.78 : 1
             self.progressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackHeight)
-            if isScrubbing && !stripOpen {
+            if isScrubbing {
                 self.currentPositionGhost.frame = CGRect(
                     x: 0, y: 0,
                     width: width * currentProgress,
@@ -498,25 +364,21 @@ final class PlayerProgressBarView: UIView {
                 )
             }
 
-            // Handle: a plain circle at rest — no morph to a tall bar
-            // anymore (the strip's own playhead bar takes over that role
-            // while scrubbing; see layoutStripOverlay). Grows 26 → 32 and
-            // its ring brightens 0.14 → 0.35 while scrubbing OR while the
-            // scrubber focus proxy holds focus (both fold into
-            // `scrubEmphasis`) with the strip still closed, so seek focus
-            // and down-press focus both read instantly (tvOS's own
-            // grow-and-brighten grammar). While paused at rest (not
-            // scrubbing, strip closed, NOT focus-emphasized) it instead
-            // shrinks 26 → 22 and its ring alpha drops to 0 (no glow) per
-            // the 3a paused-dim spec. `scrubEmphasis` (which now includes
-            // `focusEmphasis`) takes priority over the paused shrink in
-            // both ternaries below — checked first — and `pausedAtRest`'s
-            // own `!focusEmphasis` term rules out the combination existing
-            // in the first place; focused always wins over paused-at-rest.
-            // Hidden entirely while the strip is open (below). Frame-driven,
-            // positioned at the fill edge and vertically centered on the
-            // track — a sibling of trackBackground so it isn't clipped by
-            // the track's own clipsToBounds.
+            // Handle: a plain circle at rest. Grows 26 → 32 and its ring
+            // brightens 0.14 → 0.35 while scrubbing OR while the scrubber
+            // focus proxy holds focus (both fold into `scrubEmphasis`), so
+            // seek focus and down-press focus both read instantly (tvOS's
+            // own grow-and-brighten grammar). While paused at rest (not
+            // scrubbing, NOT focus-emphasized) it instead shrinks 26 → 22
+            // and its ring alpha drops to 0 (no glow) per the 3a
+            // paused-dim spec. `scrubEmphasis` takes priority over the
+            // paused shrink in both ternaries below — checked first — and
+            // `pausedAtRest`'s own `!focusEmphasis` term rules out the
+            // combination existing in the first place; focused always wins
+            // over paused-at-rest. Frame-driven, positioned at the fill
+            // edge and vertically centered on the track — a sibling of
+            // trackBackground so it isn't clipped by the track's own
+            // clipsToBounds.
             let handleDiameter: CGFloat = scrubEmphasis ? 32 : (pausedAtRest ? 22 : 26)
             let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
             let ringInset: CGFloat = 6
@@ -530,60 +392,51 @@ final class PlayerProgressBarView: UIView {
             self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(
                 scrubEmphasis ? 0.35 : (pausedAtRest ? 0 : 0.14)
             )
-            self.handleView.isHidden = stripOpen
-            self.handleRing.isHidden = stripOpen
+
+            // Readout + thumb: fade with the same clock as the rest of
+            // this block (one-clock rule) — no strip morph left to gate
+            // them on, just the scrubbing state itself.
+            self.readoutContainer.alpha = isScrubbing ? 1 : 0
+            self.thumbnailContainer.alpha = isScrubbing ? 1 : 0
 
             self.layoutIfNeeded()
         }
 
-        renderMarkers(markers, duration: duration, trackWidth: width,
-                      trackHeight: stripOpen ? 4 : trackHeight, bottomAligned: stripOpen)
+        renderMarkers(markers, duration: duration, trackWidth: width, trackHeight: trackHeight)
 
-        // stripContainer is a sibling of markersContainer inside
-        // trackBackground; when the strip is open it must sit behind the
-        // marker band (a 4pt strip pinned to the bottom edge) rather than
-        // covering it. At rest / thin-bar, stripContainer is fully
-        // transparent (alpha 0) so ordering there doesn't matter, but
-        // bring markersContainer back to front so it doesn't stay trapped
-        // behind stripContainer's view hierarchy once raised.
-        trackBackground.bringSubviewToFront(markersContainer)
-
-        if stripOpen {
-            layoutStripOverlay(progress: progress, currentProgress: currentProgress, width: width)
+        if isScrubbing {
+            layoutScrubOverlay(progress: progress, width: width)
         }
 
         // The elapsed time label is static and left-pinned — always
         // visible, showing the live/scrub position (no playhead-following
-        // or clamping needed; the oversized readout above the strip covers
-        // the scrub-position readout while the strip is open).
+        // or clamping needed; the oversized readout above the bar covers
+        // the scrub-position readout while scrubbing).
         currentTimeLabel.text = Self.formatTime(displayTime)
 
         remainingTimeLabel.text = "-\(Self.formatTime(max(0, duration - displayTime)))"
 
         let endsAt = Date().addingTimeInterval(max(0, duration - displayTime))
         endsAtLabel.text = "Ends at \(Self.endsAtFormatter.string(from: endsAt))"
-        endsAtLabel.isHidden = duration <= 0 || stripOpen
+        endsAtLabel.isHidden = duration <= 0 || isScrubbing
 
         scrubStepLabel.isHidden = !isScrubbing || scrubStepLabelText == nil
         scrubStepLabel.text = scrubStepLabelText
 
-        // Trickplay thumb card: only ever shown while the strip is open
-        // (position/frame assigned in `layoutStripOverlay`). The image is
+        // Trickplay thumb card: only ever shown while scrubbing
+        // (position/frame assigned in `layoutScrubOverlay`). The image is
         // set whenever a new one lands — never waited on — so the last
         // frame stays visible while the next scrub tick's fetch is still
         // in flight; before the first frame arrives the plain dim fill set
         // on `thumbnailImageView`'s background shows through.
-        thumbnailContainer.isHidden = !stripOpen
+        thumbnailContainer.isHidden = !isScrubbing
         if let scrubThumbnail {
             thumbnailImageView.image = scrubThumbnail
         }
 
-        readoutContainer.isHidden = !stripOpen
-        dimOverlay.isHidden = !stripOpen
-        playheadBar.isHidden = !stripOpen
-        playheadBarBacking.isHidden = !stripOpen
+        readoutContainer.isHidden = !isScrubbing
 
-        let showWheelIndicator = stripOpen && isScrubbing && isWheelScrubbing
+        let showWheelIndicator = isScrubbing && isWheelScrubbing
         wheelRing.isHidden = !showWheelIndicator
         wheelDot.isHidden = !showWheelIndicator
     }
@@ -614,11 +467,11 @@ final class PlayerProgressBarView: UIView {
     }
 
     /// Dedicated-layer shimmer sanctioned outside the one-clock rule: the
-    /// skeleton never coexists with the strip morph (`update(...)` guards
-    /// on `isSkeleton` as its very first line), so this `CAGradientLayer` +
+    /// skeleton never coexists with scrubbing (`update(...)` guards on
+    /// `isSkeleton` as its very first line), so this `CAGradientLayer` +
     /// `CABasicAnimation` never competes with the UIView-animation clock
-    /// that drives the morph. Masked to `trackBackground`'s rounded bounds
-    /// so the shimmer stays inside the track.
+    /// that drives `update(...)`. Masked to `trackBackground`'s rounded
+    /// bounds so the shimmer stays inside the track.
     private static let shimmerAnimationKey = "skeletonShimmer"
     private var shimmerLayer: CAGradientLayer?
 
@@ -653,11 +506,12 @@ final class PlayerProgressBarView: UIView {
     /// Paused presentation: the accent fill dims while paused (2a spec).
     /// Applied immediately here (not via `update(...)`) because time ticks
     /// stop while the player is paused, so no later `update(...)` would
-    /// pick up the change. The immediate setter only runs when the strip is
-    /// closed and no skeleton, so it never races the morph block or the
-    /// skeleton's own fill handling (one-clock rule). Skips the knob shrink
-    /// while `focusEmphasis` is active — focused wins over paused-at-rest,
-    /// same priority rule as `update(...)`'s `scrubEmphasis`/`pausedAtRest`.
+    /// pick up the change. The immediate setter only runs while not
+    /// scrubbing and no skeleton, so it never races `update(...)`'s own
+    /// animate block or the skeleton's own fill handling (one-clock rule).
+    /// Skips the knob shrink while `focusEmphasis` is active — focused wins
+    /// over paused-at-rest, same priority rule as `update(...)`'s
+    /// `scrubEmphasis`/`pausedAtRest`.
     func setPausedDim(_ dimmed: Bool) {
         guard dimmed != isPausedDim else { return }
         isPausedDim = dimmed
@@ -698,9 +552,9 @@ final class PlayerProgressBarView: UIView {
         focusEmphasis = focused
         guard !isScrubbing, !isSkeleton else { return }
 
-        // stripOpen is always false here (guarded above: !isScrubbing),
-        // so scrubEmphasis reduces to plain focusEmphasis — kept as the
-        // same-named local as update(...) for parallel reading.
+        // scrubEmphasis reduces to plain focusEmphasis here (guarded above:
+        // !isScrubbing) — kept as the same-named local as update(...) for
+        // parallel reading.
         let scrubEmphasis = focusEmphasis
         let pausedAtRest = isPausedDim && !focusEmphasis
         trackHeightConstraint.constant = scrubEmphasis ? Metrics.scrubTrackHeight : Metrics.trackHeight
@@ -729,149 +583,39 @@ final class PlayerProgressBarView: UIView {
 
     // MARK: - Filmstrip reset
 
-    /// Clears all cached per-item strip state (segments, seams, thumb
-    /// image) so the next scrub rebuilds from scratch. Must be called
-    /// whenever the view model swaps to a different playable item (e.g.
-    /// auto-advancing to the next episode) on this same, reused
-    /// `PlayerProgressBarView` instance — otherwise stale chapter geometry
-    /// or the previous title's last thumbnail frame would show briefly on
-    /// the next scrub. Safe to call mid-scrub: if the strip is currently
-    /// open, it's closed back to the thin-bar rest state first so nothing
-    /// is left showing stale content.
+    /// Clears cached per-item state (chapters, thumb image) so the next
+    /// scrub rebuilds from scratch. Must be called whenever the view model
+    /// swaps to a different playable item (e.g. auto-advancing to the next
+    /// episode) on this same, reused `PlayerProgressBarView` instance —
+    /// otherwise the previous title's last thumbnail frame or chapter
+    /// eyebrow would show briefly on the next scrub. Safe to call
+    /// mid-scrub: the readout/thumb/wheel indicator are hidden back to the
+    /// rest state so nothing is left showing stale content.
     func resetFilmstrip() {
-        // Segment containers are per-item — clear them along with the
-        // layout so the next scrub rebuilds from the new item's chapters
-        // rather than reusing stale geometry.
-        segmentContainers.forEach { $0.removeFromSuperview() }
-        segmentContainers.removeAll()
-        segmentLayout = nil
-
-        // Chapters change per item — clear cached seam state so the next
-        // scrub rebuilds seams from the new item's chapters rather than
-        // reusing stale x positions from the previous title.
-        chapterSeams.forEach { $0.removeFromSuperview() }
-        chapterSeams.removeAll()
         lastChapters = []
-        lastSeamsChapterIds = []
-        lastSeamWidth = 0
 
         // Drop the last title's thumbnail frame so a stale image can't
         // flash before the next scrub's first `scrubThumbnail` lands.
         thumbnailImageView.image = nil
 
-        let wasStripOpen = stripContainer.alpha > 0
-        guard wasStripOpen else { return }
-
-        trackHeightConstraint.constant = Metrics.trackHeight
-        UIView.animate(withDuration: 0.15) {
-            self.stripContainer.alpha = 0
-            self.progressFill.alpha = 1
-            self.handleView.isHidden = false
-            self.handleRing.isHidden = false
-            self.layoutIfNeeded()
-        }
-        currentPositionGhost.isHidden = !isScrubbing
         readoutContainer.isHidden = true
+        readoutContainer.alpha = 0
         thumbnailContainer.isHidden = true
+        thumbnailContainer.alpha = 0
         wheelRing.isHidden = true
         wheelDot.isHidden = true
-        livePositionLine.isHidden = true
-        dimOverlay.isHidden = true
-        playheadBar.isHidden = true
-        playheadBarBacking.isHidden = true
-        progressLineTrack.isHidden = true
-        progressLineFill.isHidden = true
+        currentPositionGhost.isHidden = !isScrubbing
         renderMarkers(lastMarkers, duration: duration, trackWidth: trackBackground.bounds.width,
-                      trackHeight: Metrics.trackHeight, bottomAligned: false)
+                      trackHeight: trackHeightConstraint.constant)
     }
 
-    /// Builds one subtle glass block per real chapter segment — no tiled
-    /// imagery. A segment container is only created when there are 2+
-    /// segments (i.e. real chapter boundaries exist); chapterless content
-    /// (`ChapterSegmentLayout` returns a single full-width segment) gets no
-    /// container at all, so it reads as one continuous band showing
-    /// `trackBackground`'s own fill through the (unclipped, per
-    /// `layoutSubviews`) stripContainer, with no synthetic seam.
-    private func buildSegments() {
-        segmentContainers.forEach { $0.removeFromSuperview() }
-        segmentContainers.removeAll()
-
-        let width = trackBackground.bounds.width
-        let layout = ChapterSegmentLayout(chapters: lastChapters, duration: duration,
-                                           width: width, height: Metrics.stripHeight, gap: 6)
-        segmentLayout = layout
-
-        guard layout.segments.count > 1 else {
-            lastSeamsChapterIds = []
-            lastSeamWidth = 0
-            setNeedsLayout()
-            return
-        }
-
-        for segment in layout.segments {
-            let container = UIView()
-            container.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-            container.layer.cornerRadius = 14
-            container.layer.cornerCurve = .continuous
-            container.clipsToBounds = true
-            container.frame = segment.rect
-            stripContainer.insertSubview(container, at: 0)
-            segmentContainers.append(container)
-        }
-
-        // Keep the dim overlay, live-position line, and bottom progress
-        // line above the segment containers. The playhead bar itself is a
-        // sibling of stripContainer on self, not a child, so it isn't part
-        // of this stack.
-        stripContainer.bringSubviewToFront(dimOverlay)
-        stripContainer.bringSubviewToFront(livePositionLine)
-        stripContainer.bringSubviewToFront(progressLineTrack)
-
-        // Segments changed identity — force the seam ticks to rebuild
-        // against the new layout on the next overlay pass.
-        lastSeamsChapterIds = []
-        lastSeamWidth = 0
-
-        setNeedsLayout()
-    }
-
-    private func layoutStripOverlay(progress: Double, currentProgress: Double, width: CGFloat) {
-        // The scrub-position → time mapping stays LINEAR (unchanged) —
-        // segments are a display treatment only. `segmentLayout.x(for:)`
-        // is used purely to position strip overlays (playhead bar, live
-        // line, dim width, readout, bottom progress line) against the
-        // chapter-proportional segment geometry.
+    private func layoutScrubOverlay(progress: Double, width: CGFloat) {
         let displayTime = duration > 0 ? Double(progress) * duration : 0
-        let currentTime = duration > 0 ? Double(currentProgress) * duration : 0
-
-        let lineWidth: CGFloat = 2
-        let playheadX = segmentLayout?.x(for: displayTime) ?? width * CGFloat(progress)
-
-        let liveX = segmentLayout?.x(for: currentTime) ?? width * CGFloat(currentProgress)
-        livePositionLine.isHidden = false
-        livePositionLine.frame = CGRect(x: liveX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
-
-        // Played-side dim: black .5 → .08 gradient from the strip's start
-        // up to the playhead.
-        dimOverlay.isHidden = false
-        dimOverlay.frame = CGRect(x: 0, y: 0, width: max(0, playheadX), height: Metrics.stripHeight)
-
-        rebuildChapterSeamsIfNeeded(width: width)
-
-        // Bottom progress line: 5pt ribbon pinned inside the strip's own
-        // bottom edge, full ribbon width; the gradient fill is sized to
-        // the seek fraction (playheadX / width, i.e. the SAME fraction the
-        // playhead bar uses, so the two stay visually in lockstep).
-        let progressLineHeight: CGFloat = 5
-        progressLineTrack.frame = CGRect(x: 0, y: Metrics.stripHeight - progressLineHeight,
-                                         width: width, height: progressLineHeight)
-        progressLineTrack.isHidden = false
-        progressLineFill.frame = CGRect(x: 0, y: 0, width: max(0, playheadX), height: progressLineHeight)
-        progressLineFill.isHidden = false
+        let playheadX = width * CGFloat(progress)
 
         // Oversized readout: eyebrow (chapter name, hidden when the
         // playhead isn't inside a named chapter) + large timecode, clamped
-        // fully on-screen exactly like the old chip.
+        // fully on-screen.
         let eyebrowText = chapterEyebrowText(at: displayTime)
         readoutEyebrowLabel.isHidden = eyebrowText == nil
         if let eyebrowText {
@@ -896,42 +640,28 @@ final class PlayerProgressBarView: UIView {
             y: readoutHeight - readoutTimecodeLabel.bounds.height / 2
         )
 
+        // Readout sits ~12pt above the bar's own rest geometry (never
+        // moves — the bar itself no longer changes position while
+        // scrubbing), clamped fully inside the bar's horizontal bounds.
         let halfReadout = readoutWidth / 2
         let clampedCenter = min(max(playheadX, halfReadout), max(halfReadout, width - halfReadout))
         readoutContainer.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - readoutHeight / 2)
 
         // Trickplay thumb card: stacked above the readout with a 12pt gap
         // (the two must never overlap), centered on the seek x and
-        // clamped so it never crosses the ribbon's own horizontal bounds
-        // (a separate, wider clamp than the readout's — the card is
-        // narrower than most readout widths but shouldn't inherit the
-        // readout's clamp, which is sized to the readout's own text).
+        // clamped so it never crosses the bar's own horizontal bounds (a
+        // separate, wider clamp than the readout's — the card is narrower
+        // than most readout widths but shouldn't inherit the readout's
+        // clamp, which is sized to the readout's own text).
         let halfThumb = Metrics.thumbnailWidth / 2
         let thumbCenterX = min(max(playheadX, halfThumb), max(halfThumb, width - halfThumb))
         let thumbCenterY = readoutContainer.frame.minY - Metrics.thumbnailReadoutGap - Metrics.thumbnailHeight / 2
         thumbnailContainer.bounds = CGRect(x: 0, y: 0, width: Metrics.thumbnailWidth, height: Metrics.thumbnailHeight)
         thumbnailContainer.center = CGPoint(x: thumbCenterX, y: thumbCenterY)
-        // Explicit shadowPath (matches the playhead bar below): without
-        // one, CA rasterizes the shadow offscreen on every frame the card
-        // moves while scrubbing.
+        // Explicit shadowPath: without one, CA rasterizes the shadow
+        // offscreen on every frame the card moves while scrubbing.
         thumbnailContainer.layer.shadowPath = UIBezierPath(
             roundedRect: thumbnailContainer.bounds, cornerRadius: 14).cgPath
-
-        // Playhead bar: 8pt white glowing bar on a 16pt black@0.4 rounded
-        // backing, both spanning from stripTop − 14 to stripBottom + 14 —
-        // anchored to the STRIP's playhead x (which can differ slightly
-        // from the thin-bar handle x below by design — segments distort x
-        // but the bar only ever connects to the strip directly above it).
-        let barTop = trackBackground.frame.minY - 14
-        let barHeight = Metrics.stripHeight + 28
-        playheadBar.isHidden = false
-        playheadBar.frame = CGRect(x: playheadX - 4, y: barTop, width: 8, height: barHeight)
-        // Explicit shadowPath: without it CA rasterizes the glow offscreen on
-        // every frame the bar moves (60fps while scrubbing).
-        playheadBar.layer.shadowPath = UIBezierPath(
-            roundedRect: playheadBar.bounds, cornerRadius: 6).cgPath
-        playheadBarBacking.isHidden = false
-        playheadBarBacking.frame = CGRect(x: playheadX - 8, y: barTop, width: 16, height: barHeight)
 
         layoutWheelIndicator(progress: progress, calloutCenter: readoutContainer.center, calloutHalfWidth: halfReadout, width: width)
     }
@@ -997,52 +727,10 @@ final class PlayerProgressBarView: UIView {
         )
     }
 
-    /// Rebuilds the chapter boundary ticks only when the chapter list or
-    /// track width has changed, so this is cheap to call on every strip
-    /// layout pass while scrubbing. With segments, the gap between
-    /// adjacent segment containers already visually separates chapters;
-    /// the tick is a 2pt `white@0.22` hairline centered in that gap (i.e.
-    /// at the midpoint between one segment's trailing edge and the next
-    /// segment's leading edge). Skipped entirely when there's only one
-    /// segment — no chapters, no gaps, no ticks.
-    private func rebuildChapterSeamsIfNeeded(width: CGFloat) {
-        guard lastChapters.map(\.id) != lastSeamsChapterIds || width != lastSeamWidth else { return }
-        lastSeamsChapterIds = lastChapters.map(\.id)
-        lastSeamWidth = width
-
-        chapterSeams.forEach { $0.removeFromSuperview() }
-        chapterSeams.removeAll()
-
-        guard let layout = segmentLayout, layout.segments.count > 1 else { return }
-
-        let seamWidth: CGFloat = 2
-        for i in 0..<(layout.segments.count - 1) {
-            let trailingEdge = layout.segments[i].rect.maxX
-            let leadingEdge = layout.segments[i + 1].rect.minX
-            let x = (trailingEdge + leadingEdge) / 2
-            let seam = UIView()
-            seam.backgroundColor = UIColor.white.withAlphaComponent(0.22)
-            seam.frame = CGRect(x: x - seamWidth / 2, y: 0, width: seamWidth, height: Metrics.stripHeight)
-            stripContainer.insertSubview(seam, at: 0)
-            chapterSeams.append(seam)
-        }
-        // Seams sit above the segment containers but below the dim
-        // overlay, the live line, and the bottom progress line.
-        chapterSeams.forEach { stripContainer.bringSubviewToFront($0) }
-        stripContainer.bringSubviewToFront(dimOverlay)
-        stripContainer.bringSubviewToFront(livePositionLine)
-        stripContainer.bringSubviewToFront(progressLineTrack)
-    }
-
-    private func renderMarkers(_ markers: [PlexMarker], duration: TimeInterval, trackWidth: CGFloat, trackHeight: CGFloat, bottomAligned: Bool) {
+    private func renderMarkers(_ markers: [PlexMarker], duration: TimeInterval, trackWidth: CGFloat, trackHeight: CGFloat) {
         markersContainer.subviews.forEach { $0.removeFromSuperview() }
         guard duration > 0 else { return }
 
-        // Use the constraint's target height (already updated by the
-        // caller before this runs), not `trackBackground.bounds`, which
-        // still reflects the pre-morph size until `layoutIfNeeded()`
-        // executes inside the animate block.
-        let containerHeight = trackHeightConstraint.constant
         for marker in markers {
             let startProgress = max(0, marker.startTimeSeconds / duration)
             let endProgress = min(1, marker.endTimeSeconds / duration)
@@ -1052,8 +740,7 @@ final class PlayerProgressBarView: UIView {
             markerView.backgroundColor = Self.color(for: marker).withAlphaComponent(0.85)
             let x = trackWidth * CGFloat(startProgress)
             let markerWidth = max(4, trackWidth * CGFloat(endProgress - startProgress))
-            let y = bottomAligned ? max(0, containerHeight - trackHeight) : 0
-            markerView.frame = CGRect(x: x, y: y, width: markerWidth, height: trackHeight)
+            markerView.frame = CGRect(x: x, y: 0, width: markerWidth, height: trackHeight)
             markersContainer.addSubview(markerView)
         }
     }
