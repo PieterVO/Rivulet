@@ -16,6 +16,7 @@ final class PlayerRailPanelView: UIView {
 
     private enum Metrics {
         static let cornerRadius: CGFloat = 20
+        static let railGap: CGFloat = 12
         static let padding: CGFloat = 20
         static let maxHeight: CGFloat = 560
         static let presentTranslationY: CGFloat = 12
@@ -30,9 +31,6 @@ final class PlayerRailPanelView: UIView {
     private let content: UIView
     private var didDismiss = false
 
-    private static let borderColor = UIColor(red: 143/255, green: 233/255, blue: 212/255, alpha: 0.5).cgColor
-    private static let haloColor = UIColor(red: 143/255, green: 233/255, blue: 212/255, alpha: 1).cgColor
-
     private init(content: UIView) {
         self.content = content
         if #available(tvOS 26.0, *) {
@@ -43,42 +41,34 @@ final class PlayerRailPanelView: UIView {
         super.init(frame: .zero)
 
         // Shadow lives on the unclipped self layer (two-layer split,
-        // same pattern as PlayerUpNextPanelView / PlayerRailView):
-        // the halo glow + drop shadow need an unclipped layer to
-        // paint outside the bounds, while the glass/tint below clip
-        // themselves individually so the blur doesn't smear past
-        // the rounded corners.
+        // same pattern as PlayerRailView): the drop shadow needs an
+        // unclipped layer to paint outside the bounds, while the
+        // glass/tint below clip themselves individually so the blur
+        // doesn't smear past the rounded corners.
         //
-        // The panel sits flush against the rail (trailing + bottom
-        // anchored to the rail itself, touching) so it reads as growing
-        // out of the rail glass rather than floating above it — only the
-        // top corners are rounded; the bottom corners are square where
-        // the panel meets the rail. All three rounded layers (self, the
-        // glass effect view, the tint view) must agree on maskedCorners
-        // or the corner treatment visibly mismatches between the shadow
-        // silhouette and the actual glass fill.
+        // The panel floats detached just above the rail with all four
+        // corners rounded. A flush weld can't work: each glass surface
+        // draws its own edge highlight and border, so two abutting
+        // pieces always show a double seam. Border/shadow deliberately
+        // match the rail so the two read as one material family.
         layer.cornerRadius = Metrics.cornerRadius
         layer.cornerCurve = .continuous
-        layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         layer.borderWidth = 1
-        layer.borderColor = Self.borderColor
+        layer.borderColor = UIColor.white.withAlphaComponent(0.1).cgColor
 
-        // Teal halo.
-        layer.shadowColor = Self.haloColor
-        layer.shadowOpacity = 0.18
-        layer.shadowRadius = 3
-        layer.shadowOffset = .zero
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.5
+        layer.shadowRadius = 24
+        layer.shadowOffset = CGSize(width: 0, height: 10)
 
         backgroundEffectView.clipsToBounds = true
         backgroundEffectView.layer.cornerRadius = Metrics.cornerRadius
         backgroundEffectView.layer.cornerCurve = .continuous
-        backgroundEffectView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
 
         tintView.backgroundColor = UIColor(red: 16/255, green: 18/255, blue: 24/255, alpha: 0.5)
         tintView.clipsToBounds = true
         tintView.layer.cornerRadius = Metrics.cornerRadius
         tintView.layer.cornerCurve = .continuous
-        tintView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
 
         [backgroundEffectView, tintView, content].forEach {
             addSubview($0)
@@ -109,25 +99,19 @@ final class PlayerRailPanelView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Panel's own layer has no drawn contents, so the halo shadow
-        // needs an explicit path (outset 3pt per spec's "spread").
-        // Only the top corners are rounded — the panel is flush against
-        // the rail along its bottom edge — so the shadow silhouette must
-        // round the same two corners the layers above are masked to,
-        // otherwise the glow reads as a full rounded-rect halo peeking
-        // out from behind square bottom corners.
+        // Panel's own layer has no drawn contents, so the animated
+        // shadow needs an explicit path or Core Animation rasterizes
+        // offscreen every frame of the rise-in.
         layer.shadowPath = UIBezierPath(
-            roundedRect: bounds.insetBy(dx: -3, dy: -3),
-            byRoundingCorners: [.topLeft, .topRight],
-            cornerRadii: CGSize(width: Metrics.cornerRadius + 3, height: Metrics.cornerRadius + 3)
+            roundedRect: bounds,
+            cornerRadius: Metrics.cornerRadius
         ).cgPath
     }
 
     // MARK: - Presentation
 
-    /// Builds, adds to `container`, and animates the panel in attached to
-    /// `rail` — flush with the rail's trailing edge and touching its top
-    /// edge, so the panel reads as growing directly out of the rail glass
+    /// Builds, adds to `container`, and animates the panel in floating
+    /// just above `rail`, right-aligned with the rail's trailing edge
     /// (button projection intentionally simplified to the rail's own
     /// trailing edge rather than the individual button — see brief note).
     @discardableResult
@@ -138,7 +122,7 @@ final class PlayerRailPanelView: UIView {
 
         NSLayoutConstraint.activate([
             panel.widthAnchor.constraint(equalToConstant: width),
-            panel.bottomAnchor.constraint(equalTo: rail.topAnchor),
+            panel.bottomAnchor.constraint(equalTo: rail.topAnchor, constant: -Metrics.railGap),
             panel.trailingAnchor.constraint(equalTo: rail.trailingAnchor),
         ])
 
