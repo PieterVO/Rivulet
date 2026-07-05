@@ -30,6 +30,16 @@ class PlayerContainerViewController: UIViewController {
     private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
     private var cancellables = Set<AnyCancellable>()
+    /// The one floating panel shared by CC/audio/info (Task 5) and Up
+    /// Next (Task 6). Only one can be up at a time — presenting a new
+    /// one dismisses whatever's showing first.
+    private var activeRailPanel: PlayerRailPanelView?
+    /// The rail button that opened `activeRailPanel`, recorded so a
+    /// future task could re-derive per-button anchoring; focus landing
+    /// back on it after dismiss is actually handled by the rail's own
+    /// `lastFocusedButton` (it was focused when pressed, so it's still
+    /// the rail's remembered target once the panel yields focus back).
+    private weak var railPanelSourceButton: UIView?
     /// Snapshot of the last `$upNextEpisodes` emission — Task 6's panel
     /// reads this when it comes online; Task 3 only derives the rail
     /// button's availability from it.
@@ -262,6 +272,9 @@ class PlayerContainerViewController: UIViewController {
     /// prefers the rail (its own preferred-focus handles which button
     /// lands, remembering the last-focused control).
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let panel = activeRailPanel, panel.window != nil {
+            return [panel]
+        }
         if viewModel?.controlsFocusActive == true, let rail {
             return [rail]
         }
@@ -292,6 +305,10 @@ class PlayerContainerViewController: UIViewController {
             }
             if vm.isScrubbing {
                 vm.cancelScrub()
+                return
+            }
+            if let panel = activeRailPanel {
+                panel.dismissPanel()
                 return
             }
             if vm.controlsFocusActive {
@@ -413,6 +430,8 @@ class PlayerContainerViewController: UIViewController {
                 dismissPlayer()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
+            } else if let panel = activeRailPanel {
+                panel.dismissPanel()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {
@@ -756,10 +775,58 @@ class PlayerContainerViewController: UIViewController {
             vm?.exitControlsFocus()
             self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
         }
-        rail.onSubtitles = {} // wired in Task 5
-        rail.onAudio = {} // wired in Task 5
-        rail.onInfo = {} // wired in Task 5
+        rail.onSubtitles = { [weak self] in
+            guard let self, let vm = self.viewModel else { return }
+            self.presentRailPanel(
+                content: CardTrackListView(
+                    header: "Subtitles", tracks: vm.subtitleTracks,
+                    selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+                    onSelect: { [weak vm, weak self] id in
+                        vm?.selectSubtitleTrack(id: id)
+                        self?.activeRailPanel?.dismissPanel()
+                    }),
+                width: 452, from: rail.subtitlesButton)
+        }
+        rail.onAudio = { [weak self] in
+            guard let self, let vm = self.viewModel else { return }
+            self.presentRailPanel(
+                content: CardTrackListView(
+                    header: "Audio", tracks: vm.audioTracks,
+                    selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
+                    onSelect: { [weak vm, weak self] id in
+                        if let id { vm?.selectAudioTrack(id: id) }
+                        self?.activeRailPanel?.dismissPanel()
+                    }),
+                width: 452, from: rail.audioButton)
+        }
+        rail.onInfo = { [weak self] in
+            guard let self, let vm = self.viewModel else { return }
+            self.presentRailPanel(
+                content: CardInfoView(metadata: vm.metadata, liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() }),
+                width: 480, from: rail.infoButton)
+        }
         rail.onUpNext = {} // wired in Task 6
+    }
+
+    /// Shared presenter for the CC/audio/info/Up Next rail panel. Only
+    /// one panel is ever up: presenting a new one dismisses whatever's
+    /// showing. Guarded on the rail cluster actually being visible and
+    /// not mid-scrub — the rail's buttons are hidden during a scrub and
+    /// while loading, but a stray callback firing in that window (e.g.
+    /// a race on the loading→ready edge) must not construct a panel
+    /// anchored to a rail that isn't there to anchor to.
+    private func presentRailPanel(content: UIView, width: CGFloat, from button: UIView) {
+        guard let rail, rail.alpha > 0.5, viewModel?.isScrubbing != true else { return }
+        activeRailPanel?.dismissPanel()
+        railPanelSourceButton = button
+        let panel = PlayerRailPanelView.present(content: content, width: width,
+                                                in: view, aboveRail: rail, towards: button)
+        panel.onDismiss = { [weak self] in
+            self?.activeRailPanel = nil
+            self?.setNeedsFocusUpdate(); self?.updateFocusIfNeeded()
+        }
+        activeRailPanel = panel
+        view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
     }
 
     /// Eyebrow + title + meta row from the current item, ported from the
@@ -822,6 +889,13 @@ class PlayerContainerViewController: UIViewController {
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
         let railVisible = chromeVisible && !vm.isScrubbing
         let paused = vm.playbackState == .paused && !ambient
+
+        // The panel floats above the rail — a scrub/ambient/hide that
+        // takes the rail away must take the panel with it, since it
+        // has nothing to anchor to and no route back to visible.
+        if !railVisible {
+            activeRailPanel?.dismissPanel()
+        }
 
         let targets: [(UIView?, CGFloat)] = [
             (chromeScrim, chromeVisible ? 1 : 0),
