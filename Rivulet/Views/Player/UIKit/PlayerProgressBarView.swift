@@ -3,15 +3,19 @@
 //  Rivulet
 //
 //  Transport scrubber styled after AVPlayerViewController (tvOS 15+):
-//  a thin rounded white bar with no knob — the fill edge is the playhead.
-//  While scrubbing, the bar morphs into a 100pt filmstrip of BIF
-//  trickplay frames with a hairline playhead and a fainter line marking
-//  the actual playback position; a callout follows the playhead above
-//  the strip. If no filmstrip data is available (still loading, or the
-//  title has no BIF), scrubbing looks exactly like before: thin bar +
-//  floating single thumbnail. Time remaining sits below the right end,
-//  with an "Ends at" clock-time label beside it at rest. Plex markers
-//  (intro/credits) tint their range on both the thin bar and the strip.
+//  a thin rounded white bar with a 26pt circular knob — the fill edge is
+//  the playhead. While scrubbing, the bar morphs into a 130pt timeline-
+//  first filmstrip of BIF trickplay frames with a glowing playhead bar
+//  (overhanging above/below the strip) and a fainter line marking the
+//  actual playback position; an oversized readout (chapter eyebrow +
+//  large timecode) follows the playhead above the strip, and a bottom
+//  progress line (accent-gradient fill on a faint track) runs along the
+//  strip's own bottom edge. If no filmstrip data is available (still
+//  loading, or the title has no BIF), scrubbing looks exactly like
+//  before: thin bar + floating single thumbnail. Time remaining sits
+//  below the right end, with an "Ends at" clock-time label beside it at
+//  rest (hidden while the strip is open). Plex markers (intro/credits)
+//  tint their range on both the thin bar and the strip.
 //
 //  The view's own height covers only the track + label band; the
 //  thumbnail/strip overhangs above it (clipsToBounds = false) so the
@@ -64,38 +68,13 @@ final class StripDimView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
-/// Uppercase pill "chip" label used for the scrub callout — a plain
-/// `UILabel` has no content insets, so this subclass pads `intrinsicContentSize`
-/// / `sizeThatFits` by `textInsets` and draws the text inset accordingly.
-/// `sizeToFit()` (used by the existing clamping code in `layoutStripOverlay`)
-/// keeps working unmodified against this larger, padded size.
-final class PaddedChipLabel: UILabel {
-    var textInsets = UIEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
-
-    override func drawText(in rect: CGRect) {
-        super.drawText(in: rect.inset(by: textInsets))
-    }
-
-    override var intrinsicContentSize: CGSize {
-        let size = super.intrinsicContentSize
-        return CGSize(width: size.width + textInsets.left + textInsets.right,
-                      height: size.height + textInsets.top + textInsets.bottom)
-    }
-
-    override func sizeThatFits(_ size: CGSize) -> CGSize {
-        let fit = super.sizeThatFits(size)
-        return CGSize(width: fit.width + textInsets.left + textInsets.right,
-                      height: fit.height + textInsets.top + textInsets.bottom)
-    }
-}
-
 final class PlayerProgressBarView: UIView {
 
     // MARK: - Metrics (AVPlayerViewController-matched)
 
     private enum Metrics {
         static let trackHeight: CGFloat = 10
-        static let stripHeight: CGFloat = 120
+        static let stripHeight: CGFloat = 130
         static let stripTileAspect: CGFloat = 16.0 / 9.0
         static let labelBandSpacing: CGFloat = 14
         static let thumbnailWidth: CGFloat = 320
@@ -138,14 +117,35 @@ final class PlayerProgressBarView: UIView {
     // Filmstrip morph subviews.
     private let stripContainer = UIView()
     private var stripTiles: [UIImageView] = []
-    private let playheadLine = UIView()
     private let livePositionLine = UIView()
-    private let calloutLabel = PaddedChipLabel()
     private let dimOverlay = StripDimView()
-    /// 3pt playhead thread connecting the strip's playhead x down to the
-    /// track below. A sibling of `stripContainer` on `self` (not clipped
-    /// by the track), positioned in `self` coordinates.
-    private let playheadThread = UIView()
+
+    /// Timeline-first playhead bar: an 8pt white glowing bar on a 16pt
+    /// black@0.4 rounded backing, both siblings of `stripContainer` on
+    /// `self` (not clipped by the track), spanning from `stripTop − 14` to
+    /// `stripBottom + 14`. Replaces the old hairline `playheadLine` (inside
+    /// the strip) and the 3pt `playheadThread` (connecting the strip down
+    /// to the track) — positioned together in `layoutStripOverlay(...)`.
+    private let playheadBarBacking = UIView()
+    private let playheadBar = UIView()
+
+    /// Bottom progress line: a 5pt ribbon pinned inside the strip's own
+    /// bottom edge, full width. `progressLineTrack` is the white@0.12
+    /// base; `progressLineFill` is an `AccentGradientView` sized to the
+    /// seek fraction, both children of `stripContainer` so they clip/scale
+    /// with it. Positioned in `layoutStripOverlay(...)`.
+    private let progressLineTrack = UIView()
+    private let progressLineFill = AccentGradientView()
+
+    /// Oversized scrub readout: replaces the old `PaddedChipLabel` chip.
+    /// `readoutContainer` is a small frame-driven container (a sibling of
+    /// `stripContainer` on `self`, positioned/clamped exactly like the old
+    /// callout) holding a small-caps chapter eyebrow above a large
+    /// timecode. The eyebrow hides when the playhead isn't inside a named
+    /// chapter, leaving just the timecode.
+    private let readoutContainer = UIView()
+    private let readoutEyebrowLabel = UILabel()
+    private let readoutTimecodeLabel = UILabel()
 
     // Chapter-proportional segment geometry for the currently open strip
     // (recomputed in `populateStrip`). Each segment gets its own rounded,
@@ -155,9 +155,9 @@ final class PlayerProgressBarView: UIView {
     private var segmentLayout: ChapterSegmentLayout?
     private var segmentContainers: [UIView] = []
 
-    // Jog wheel indicator: shown beside the callout label only while a
-    // circular clickpad rotation is actively driving the scrub
-    // (`isWheelScrubbing`). Frame-driven like calloutLabel, positioned in
+    // Jog wheel indicator: shown beside the readout only while a circular
+    // clickpad rotation is actively driving the scrub (`isWheelScrubbing`).
+    // Frame-driven like readoutContainer, positioned in
     // `layoutStripOverlay(...)`.
     private let wheelRing = UIView()
     private let wheelDot = UIView()
@@ -281,30 +281,54 @@ final class PlayerProgressBarView: UIView {
         dimOverlay.isHidden = true
         stripContainer.addSubview(dimOverlay)
 
-        playheadLine.backgroundColor = .white
         livePositionLine.backgroundColor = UIColor.white.withAlphaComponent(0.5)
-        stripContainer.addSubview(playheadLine)
         stripContainer.addSubview(livePositionLine)
 
-        // Chip: uppercase pill callout (time + "CH n · NAME"), restyled in
-        // place from the old plain-text callout label so its clamping
-        // logic in `layoutStripOverlay(...)` keeps working unmodified.
-        calloutLabel.font = .monospacedDigitSystemFont(ofSize: 17, weight: .semibold)
-        calloutLabel.textColor = .white
-        calloutLabel.textAlignment = .center
-        calloutLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        calloutLabel.layer.cornerRadius = 8
-        calloutLabel.layer.cornerCurve = .continuous
-        calloutLabel.clipsToBounds = true
-        calloutLabel.textInsets = UIEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
-        calloutLabel.isHidden = true
+        // Bottom progress line: 5pt ribbon pinned inside the strip's own
+        // bottom edge. Track + gradient fill are children of stripContainer
+        // so they clip/scale with it; sized in `layoutStripOverlay(...)`.
+        progressLineTrack.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        progressLineTrack.layer.cornerRadius = 2.5
+        progressLineTrack.layer.cornerCurve = .continuous
+        progressLineTrack.clipsToBounds = true
+        progressLineTrack.isHidden = true
+        stripContainer.addSubview(progressLineTrack)
+        progressLineTrack.addSubview(progressLineFill)
 
-        // Playhead thread: 3pt white vertical line from the strip's top
-        // down to the track below. A sibling of stripContainer on self
-        // (not clipped by the track), hidden until the strip is open.
-        playheadThread.backgroundColor = .white
-        playheadThread.alpha = 0.9
-        playheadThread.isHidden = true
+        // Oversized readout: replaces the old pill chip. A small-caps
+        // chapter eyebrow above a large monospaced timecode, laid out
+        // frame-wise (no constraints — 2a lesson: cross-view constraints
+        // must not be introduced inside the strip's frame-driven overlays).
+        readoutEyebrowLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        readoutEyebrowLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        readoutEyebrowLabel.textAlignment = .center
+        readoutEyebrowLabel.isHidden = true
+
+        readoutTimecodeLabel.font = .monospacedDigitSystemFont(ofSize: 50, weight: .bold)
+        readoutTimecodeLabel.textColor = .white
+        readoutTimecodeLabel.textAlignment = .center
+
+        readoutContainer.addSubview(readoutEyebrowLabel)
+        readoutContainer.addSubview(readoutTimecodeLabel)
+        readoutContainer.isHidden = true
+
+        // Playhead bar: 8pt white glowing bar on a 16pt black@0.4 rounded
+        // backing. Siblings of stripContainer on self (not clipped by the
+        // track), hidden until the strip is open. Replaces the old
+        // in-strip playheadLine hairline and the playheadThread connector.
+        playheadBarBacking.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        playheadBarBacking.layer.cornerRadius = 8
+        playheadBarBacking.layer.cornerCurve = .continuous
+        playheadBarBacking.isHidden = true
+
+        playheadBar.backgroundColor = .white
+        playheadBar.layer.cornerRadius = 6
+        playheadBar.layer.cornerCurve = .continuous
+        playheadBar.layer.shadowColor = UIColor(red: 180/255, green: 205/255, blue: 1, alpha: 1).cgColor
+        playheadBar.layer.shadowOpacity = 0.6
+        playheadBar.layer.shadowRadius = 13
+        playheadBar.layer.shadowOffset = .zero
+        playheadBar.isHidden = true
 
         wheelRing.backgroundColor = .clear
         wheelRing.layer.borderWidth = Metrics.wheelRingBorderWidth
@@ -317,19 +341,20 @@ final class PlayerProgressBarView: UIView {
         wheelDot.isHidden = true
 
         [trackBackground, thumbnailContainer, currentTimeLabel, remainingTimeLabel,
-         endsAtLabel, scrubStepLabel, calloutLabel, wheelRing, wheelDot].forEach {
+         endsAtLabel, scrubStepLabel, readoutContainer, wheelRing, wheelDot].forEach {
             addSubview($0)
         }
         [currentPositionGhost, progressFill, markersContainer, stripContainer].forEach {
             trackBackground.addSubview($0)
         }
-        // Handle views, and the playhead thread, are frame-driven siblings
-        // of trackBackground (not children of it — the track clips its
-        // contents, which would clip the handle's shadow / the thread's
-        // drop below the track edge).
+        // Handle views, and the playhead bar + its backing, are
+        // frame-driven siblings of trackBackground (not children of it —
+        // the track clips its contents, which would clip the handle's
+        // shadow / the playhead bar's overhang above and below the track).
         addSubview(handleRing)
         addSubview(handleView)
-        addSubview(playheadThread)
+        addSubview(playheadBarBacking)
+        addSubview(playheadBar)
 
         [trackBackground, thumbnailContainer, thumbnailImageView,
          currentTimeLabel, remainingTimeLabel, endsAtLabel, scrubStepLabel].forEach {
@@ -391,6 +416,16 @@ final class PlayerProgressBarView: UIView {
             stripContainer.layer.cornerRadius = trackBackground.layer.cornerRadius
             stripContainer.clipsToBounds = true
         }
+        // Keep the shimmer's gradient layer sized to the track (skeleton
+        // mode never coexists with the strip morph, so the track stays at
+        // its resting height, but width can still change on layout).
+        // Disable implicit actions so this frame sync doesn't animate.
+        if let shimmerLayer {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            shimmerLayer.frame = trackBackground.bounds
+            CATransaction.commit()
+        }
     }
 
     // MARK: - Update
@@ -448,21 +483,25 @@ final class PlayerProgressBarView: UIView {
                 )
             }
 
-            // Handle: circle at rest, morphs to a tall rounded bar while
-            // scrubbing. Frame-driven, positioned at the fill edge and
-            // vertically centered on the track — a sibling of
-            // trackBackground so it isn't clipped by the track's own
-            // clipsToBounds.
-            let handleSize: CGSize = isScrubbing ? CGSize(width: 14, height: 46) : CGSize(width: 24, height: 24)
-            let ringInset: CGFloat = isScrubbing ? 5 : 6
+            // Handle: a plain 26pt circle at rest, always — no morph to a
+            // tall bar anymore (the strip's own playhead bar takes over
+            // that role while scrubbing; see layoutStripOverlay). Hidden
+            // entirely while the strip is open (below). Frame-driven,
+            // positioned at the fill edge and vertically centered on the
+            // track — a sibling of trackBackground so it isn't clipped by
+            // the track's own clipsToBounds.
+            let handleSize = CGSize(width: 26, height: 26)
+            let ringInset: CGFloat = 6
             let handleX = width * CGFloat(progress)
             let trackMidY = self.trackBackground.frame.minY + trackHeight / 2
             self.handleView.frame = CGRect(x: handleX - handleSize.width / 2, y: trackMidY - handleSize.height / 2,
                                            width: handleSize.width, height: handleSize.height)
-            self.handleView.layer.cornerRadius = isScrubbing ? 8 : handleSize.width / 2
+            self.handleView.layer.cornerRadius = handleSize.width / 2
             self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
-            self.handleRing.layer.cornerRadius = isScrubbing ? 8 + ringInset : self.handleRing.frame.width / 2
-            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(isScrubbing ? 0.16 : 0.14)
+            self.handleRing.layer.cornerRadius = self.handleRing.frame.width / 2
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+            self.handleView.isHidden = stripOpen
+            self.handleRing.isHidden = stripOpen
 
             self.layoutIfNeeded()
         }
@@ -485,15 +524,15 @@ final class PlayerProgressBarView: UIView {
 
         // The elapsed time label is static and left-pinned — always
         // visible, showing the live/scrub position (no playhead-following
-        // or clamping needed; the callout above the strip covers the
-        // scrub-position readout while the strip is open).
+        // or clamping needed; the oversized readout above the strip covers
+        // the scrub-position readout while the strip is open).
         currentTimeLabel.text = Self.formatTime(displayTime)
 
         remainingTimeLabel.text = "-\(Self.formatTime(max(0, duration - displayTime)))"
 
         let endsAt = Date().addingTimeInterval(max(0, duration - displayTime))
         endsAtLabel.text = "Ends at \(Self.endsAtFormatter.string(from: endsAt))"
-        endsAtLabel.isHidden = duration <= 0
+        endsAtLabel.isHidden = duration <= 0 || stripOpen
 
         scrubStepLabel.isHidden = !isScrubbing || scrubStepLabelText == nil
         scrubStepLabel.text = scrubStepLabelText
@@ -509,9 +548,10 @@ final class PlayerProgressBarView: UIView {
             thumbnailCenterXConstraint.constant = clampedCenter
         }
 
-        calloutLabel.isHidden = !stripOpen
+        readoutContainer.isHidden = !stripOpen
         dimOverlay.isHidden = !stripOpen
-        playheadThread.isHidden = !stripOpen
+        playheadBar.isHidden = !stripOpen
+        playheadBarBacking.isHidden = !stripOpen
 
         let showWheelIndicator = stripOpen && isScrubbing && isWheelScrubbing
         wheelRing.isHidden = !showWheelIndicator
@@ -535,10 +575,49 @@ final class PlayerProgressBarView: UIView {
             remainingTimeLabel.text = "--:--"
             currentTimeLabel.textColor = skeletonColor
             remainingTimeLabel.textColor = skeletonColor
+            addSkeletonShimmer()
         } else {
             currentTimeLabel.textColor = UIColor.white.withAlphaComponent(0.82)
             remainingTimeLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+            removeSkeletonShimmer()
         }
+    }
+
+    /// Dedicated-layer shimmer sanctioned outside the one-clock rule: the
+    /// skeleton never coexists with the strip morph (`update(...)` guards
+    /// on `isSkeleton` as its very first line), so this `CAGradientLayer` +
+    /// `CABasicAnimation` never competes with the UIView-animation clock
+    /// that drives the morph. Masked to `trackBackground`'s rounded bounds
+    /// so the shimmer stays inside the track.
+    private static let shimmerAnimationKey = "skeletonShimmer"
+    private var shimmerLayer: CAGradientLayer?
+
+    private func addSkeletonShimmer() {
+        removeSkeletonShimmer()
+        let layer = CAGradientLayer()
+        layer.colors = [UIColor.clear.cgColor,
+                        UIColor.white.withAlphaComponent(0.22).cgColor,
+                        UIColor.clear.cgColor]
+        layer.startPoint = CGPoint(x: 0, y: 0.5)
+        layer.endPoint = CGPoint(x: 1, y: 0.5)
+        layer.locations = [-0.4, -0.2, 0]
+        layer.frame = trackBackground.bounds
+        trackBackground.layer.addSublayer(layer)
+        shimmerLayer = layer
+
+        let animation = CABasicAnimation(keyPath: "locations")
+        animation.fromValue = [-0.4, -0.2, 0] as [NSNumber]
+        animation.toValue = [1, 1.2, 1.4] as [NSNumber]
+        animation.duration = 1.8
+        animation.repeatCount = .infinity
+        layer.add(animation, forKey: Self.shimmerAnimationKey)
+    }
+
+    private func removeSkeletonShimmer() {
+        guard let layer = shimmerLayer else { return }
+        layer.removeAnimation(forKey: Self.shimmerAnimationKey)
+        layer.removeFromSuperlayer()
+        shimmerLayer = nil
     }
 
     /// Paused presentation: the accent fill dims while paused (2a spec).
@@ -592,10 +671,12 @@ final class PlayerProgressBarView: UIView {
         UIView.animate(withDuration: 0.15) {
             self.progressFill.alpha = 0
             self.stripContainer.alpha = 1
+            self.handleView.isHidden = true
+            self.handleRing.isHidden = true
             self.layoutIfNeeded()
         }
         currentPositionGhost.isHidden = true
-        calloutLabel.isHidden = false
+        readoutContainer.isHidden = false
         renderMarkers(lastMarkers, duration: duration, trackWidth: width, trackHeight: 4, bottomAligned: true)
         trackBackground.bringSubviewToFront(markersContainer)
         layoutStripOverlay(progress: lastProgress, currentProgress: lastCurrentProgress, width: width)
@@ -639,15 +720,20 @@ final class PlayerProgressBarView: UIView {
         UIView.animate(withDuration: 0.15) {
             self.stripContainer.alpha = 0
             self.progressFill.alpha = 1
+            self.handleView.isHidden = false
+            self.handleRing.isHidden = false
             self.layoutIfNeeded()
         }
         currentPositionGhost.isHidden = !isScrubbing
-        calloutLabel.isHidden = true
+        readoutContainer.isHidden = true
         wheelRing.isHidden = true
         wheelDot.isHidden = true
         livePositionLine.isHidden = true
         dimOverlay.isHidden = true
-        playheadThread.isHidden = true
+        playheadBar.isHidden = true
+        playheadBarBacking.isHidden = true
+        progressLineTrack.isHidden = true
+        progressLineFill.isHidden = true
         renderMarkers(lastMarkers, duration: duration, trackWidth: trackBackground.bounds.width,
                       trackHeight: Metrics.trackHeight, bottomAligned: false)
     }
@@ -672,7 +758,7 @@ final class PlayerProgressBarView: UIView {
 
         for segment in layout.segments {
             let container = UIView()
-            container.layer.cornerRadius = 12
+            container.layer.cornerRadius = 14
             container.layer.cornerCurve = .continuous
             container.clipsToBounds = true
             container.frame = segment.rect
@@ -691,11 +777,13 @@ final class PlayerProgressBarView: UIView {
             }
         }
 
-        // Keep the dim overlay, playhead/live-position lines above the
-        // segment containers (and their tiles).
+        // Keep the dim overlay, live-position line, and bottom progress
+        // line above the segment containers (and their tiles). The
+        // playhead bar itself is a sibling of stripContainer on self, not
+        // a child, so it isn't part of this stack.
         stripContainer.bringSubviewToFront(dimOverlay)
-        stripContainer.bringSubviewToFront(playheadLine)
         stripContainer.bringSubviewToFront(livePositionLine)
+        stripContainer.bringSubviewToFront(progressLineTrack)
 
         // Segments changed identity — force the seam ticks to rebuild
         // against the new layout on the next overlay pass.
@@ -708,15 +796,14 @@ final class PlayerProgressBarView: UIView {
     private func layoutStripOverlay(progress: Double, currentProgress: Double, width: CGFloat) {
         // The scrub-position → time mapping stays LINEAR (unchanged) —
         // segments are a display treatment only. `segmentLayout.x(for:)`
-        // is used purely to position strip overlays (playhead/live lines,
-        // dim width, chip, thread) against the chapter-proportional
-        // segment geometry.
+        // is used purely to position strip overlays (playhead bar, live
+        // line, dim width, readout, bottom progress line) against the
+        // chapter-proportional segment geometry.
         let displayTime = duration > 0 ? Double(progress) * duration : 0
         let currentTime = duration > 0 ? Double(currentProgress) * duration : 0
 
         let lineWidth: CGFloat = 2
         let playheadX = segmentLayout?.x(for: displayTime) ?? width * CGFloat(progress)
-        playheadLine.frame = CGRect(x: playheadX - lineWidth / 2, y: 0, width: lineWidth, height: Metrics.stripHeight)
 
         let liveX = segmentLayout?.x(for: currentTime) ?? width * CGFloat(currentProgress)
         livePositionLine.isHidden = false
@@ -729,59 +816,88 @@ final class PlayerProgressBarView: UIView {
 
         rebuildChapterSeamsIfNeeded(width: width)
 
-        // Chip: "MM:SS · CH n · NAME" (uppercase, kerned), or just the
-        // time when the playhead isn't inside a named chapter.
-        let chipText = "\(Self.formatTime(displayTime))\(chapterChipSuffix(at: displayTime))"
-        calloutLabel.attributedText = NSAttributedString(
-            string: chipText.uppercased(),
-            attributes: [.kern: 0.1 * 17]
-        )
-        calloutLabel.sizeToFit()
-        let halfLabel = calloutLabel.bounds.width / 2
-        let clampedCenter = min(max(playheadX, halfLabel), max(halfLabel, width - halfLabel))
-        calloutLabel.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - calloutLabel.bounds.height / 2)
+        // Bottom progress line: 5pt ribbon pinned inside the strip's own
+        // bottom edge, full ribbon width; the gradient fill is sized to
+        // the seek fraction (playheadX / width, i.e. the SAME fraction the
+        // playhead bar uses, so the two stay visually in lockstep).
+        let progressLineHeight: CGFloat = 5
+        progressLineTrack.frame = CGRect(x: 0, y: Metrics.stripHeight - progressLineHeight,
+                                         width: width, height: progressLineHeight)
+        progressLineTrack.isHidden = false
+        progressLineFill.frame = CGRect(x: 0, y: 0, width: max(0, playheadX), height: progressLineHeight)
+        progressLineFill.isHidden = false
 
-        // Playhead thread: 3pt white line from the strip's top down to the
-        // track below, anchored to the STRIP's playhead x (which can
-        // differ slightly from the thin-bar handle x below by design —
-        // segments distort x but the thread only ever connects the strip
-        // to the track directly beneath it).
-        playheadThread.isHidden = false
-        let threadDropBelow = trackBackground.frame.maxY - trackBackground.frame.minY
-        playheadThread.frame = CGRect(
-            x: playheadX - 1.5,
-            y: trackBackground.frame.minY,
-            width: 3,
-            height: Metrics.stripHeight + threadDropBelow
+        // Oversized readout: eyebrow (chapter name, hidden when the
+        // playhead isn't inside a named chapter) + large timecode, clamped
+        // fully on-screen exactly like the old chip.
+        let eyebrowText = chapterEyebrowText(at: displayTime)
+        readoutEyebrowLabel.isHidden = eyebrowText == nil
+        if let eyebrowText {
+            readoutEyebrowLabel.attributedText = NSAttributedString(
+                string: eyebrowText,
+                attributes: [.kern: 16 * 0.12]
+            )
+        }
+        readoutTimecodeLabel.text = Self.formatTime(displayTime)
+
+        readoutEyebrowLabel.sizeToFit()
+        readoutTimecodeLabel.sizeToFit()
+        let readoutWidth = max(readoutEyebrowLabel.bounds.width, readoutTimecodeLabel.bounds.width)
+        let readoutSpacing: CGFloat = readoutEyebrowLabel.isHidden ? 0 : 4
+        let readoutHeight = (readoutEyebrowLabel.isHidden ? 0 : readoutEyebrowLabel.bounds.height + readoutSpacing)
+            + readoutTimecodeLabel.bounds.height
+        readoutContainer.bounds = CGRect(x: 0, y: 0, width: readoutWidth, height: readoutHeight)
+
+        readoutEyebrowLabel.center = CGPoint(x: readoutWidth / 2, y: readoutEyebrowLabel.bounds.height / 2)
+        readoutTimecodeLabel.center = CGPoint(
+            x: readoutWidth / 2,
+            y: readoutHeight - readoutTimecodeLabel.bounds.height / 2
         )
 
-        layoutWheelIndicator(progress: progress, calloutCenter: calloutLabel.center, calloutHalfWidth: halfLabel, width: width)
+        let halfReadout = readoutWidth / 2
+        let clampedCenter = min(max(playheadX, halfReadout), max(halfReadout, width - halfReadout))
+        readoutContainer.center = CGPoint(x: clampedCenter, y: trackBackground.frame.minY - Metrics.thumbnailGap - readoutHeight / 2)
+
+        // Playhead bar: 8pt white glowing bar on a 16pt black@0.4 rounded
+        // backing, both spanning from stripTop − 14 to stripBottom + 14 —
+        // anchored to the STRIP's playhead x (which can differ slightly
+        // from the thin-bar handle x below by design — segments distort x
+        // but the bar only ever connects to the strip directly above it).
+        let barTop = trackBackground.frame.minY - 14
+        let barHeight = Metrics.stripHeight + 28
+        playheadBar.isHidden = false
+        playheadBar.frame = CGRect(x: playheadX - 4, y: barTop, width: 8, height: barHeight)
+        playheadBarBacking.isHidden = false
+        playheadBarBacking.frame = CGRect(x: playheadX - 8, y: barTop, width: 16, height: barHeight)
+
+        layoutWheelIndicator(progress: progress, calloutCenter: readoutContainer.center, calloutHalfWidth: halfReadout, width: width)
     }
 
-    /// " · CH n · NAME" for the chapter containing `time` (n = 1-based
-    /// ordinal, NAME uppercased), or "" when there's no chapter at that
-    /// time or the chapter has no name.
-    private func chapterChipSuffix(at time: TimeInterval) -> String {
+    /// "CHAPTER n · NAME" for the chapter containing `time` (n = 1-based
+    /// ordinal, NAME uppercased), or `nil` when there's no chapter at that
+    /// time or the chapter has no name — the readout's eyebrow hides in
+    /// that case, matching the old chip's suffix-less fallback.
+    private func chapterEyebrowText(at time: TimeInterval) -> String? {
         for (index, chapter) in lastChapters.enumerated() {
             guard let startMs = chapter.startTimeOffset else { continue }
             let start = TimeInterval(startMs) / 1000.0
             let end = chapter.endTimeOffset.map { TimeInterval($0) / 1000.0 } ?? duration
             guard time >= start && time < end else { continue }
             guard let tag = chapter.tag?.trimmingCharacters(in: .whitespacesAndNewlines), !tag.isEmpty else {
-                return ""
+                return nil
             }
-            return " · CH \(index + 1) · \(tag.uppercased())"
+            return "CHAPTER \(index + 1) · \(tag.uppercased())"
         }
-        return ""
+        return nil
     }
 
-    /// Positions the 44pt ring + orbiting 6pt dot beside `calloutLabel`
-    /// while a circular clickpad rotation is driving the scrub. The ring
-    /// sits to the right of the callout (or the left, clamped inside the
-    /// track bounds, if the callout is pinned to the right edge). The dot
-    /// orbits the ring center at `angle = progress * 4 * .pi` — two full
-    /// laps across the track — so it visibly advances with scrub
-    /// progress rather than just sitting at a fixed rest position.
+    /// Positions the 44pt ring + orbiting 6pt dot beside the readout while
+    /// a circular clickpad rotation is driving the scrub. The ring sits to
+    /// the right of the readout (or the left, clamped inside the track
+    /// bounds, if the readout is pinned to the right edge). The dot orbits
+    /// the ring center at `angle = progress * 4 * .pi` — two full laps
+    /// across the track — so it visibly advances with scrub progress
+    /// rather than just sitting at a fixed rest position.
     private func layoutWheelIndicator(progress: Double, calloutCenter: CGPoint, calloutHalfWidth: CGFloat, width: CGFloat) {
         guard isWheelScrubbing else { return }
 
@@ -848,11 +964,11 @@ final class PlayerProgressBarView: UIView {
             chapterSeams.append(seam)
         }
         // Seams sit above the segment containers/tiles but below the dim
-        // overlay and the playhead/live lines.
+        // overlay, the live line, and the bottom progress line.
         chapterSeams.forEach { stripContainer.bringSubviewToFront($0) }
         stripContainer.bringSubviewToFront(dimOverlay)
-        stripContainer.bringSubviewToFront(playheadLine)
         stripContainer.bringSubviewToFront(livePositionLine)
+        stripContainer.bringSubviewToFront(progressLineTrack)
     }
 
     private func renderMarkers(_ markers: [PlexMarker], duration: TimeInterval, trackWidth: CGFloat, trackHeight: CGFloat, bottomAligned: Bool) {
