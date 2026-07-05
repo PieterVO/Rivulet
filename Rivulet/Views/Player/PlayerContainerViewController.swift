@@ -842,6 +842,12 @@ class PlayerContainerViewController: UIViewController {
     @discardableResult
     private func presentRailPanel(content: UIView, width: CGFloat, from button: UIView) -> Bool {
         guard let rail, rail.alpha > 0.5, viewModel?.isScrubbing != true else { return false }
+        // Every presentation resets the content-type flag — only onUpNext
+        // re-marks it (after this call returns). Without this, a CC/audio/info
+        // panel superseding an open Up Next panel leaves the flag stuck true
+        // (the old panel's onDismiss identity guard rightly won't touch it),
+        // and the next $upNextEpisodes emission would dismiss the wrong panel.
+        isShowingUpNextPanel = false
         activeRailPanel?.dismissPanel()
         let panel = PlayerRailPanelView.present(content: content, width: width,
                                                 in: view, aboveRail: rail, towards: button)
