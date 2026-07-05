@@ -34,12 +34,6 @@ class PlayerContainerViewController: UIViewController {
     /// Next (Task 6). Only one can be up at a time — presenting a new
     /// one dismisses whatever's showing first.
     private var activeRailPanel: PlayerRailPanelView?
-    /// The rail button that opened `activeRailPanel`, recorded so a
-    /// future task could re-derive per-button anchoring; focus landing
-    /// back on it after dismiss is actually handled by the rail's own
-    /// `lastFocusedButton` (it was focused when pressed, so it's still
-    /// the rail's remembered target once the panel yields focus back).
-    private weak var railPanelSourceButton: UIView?
     /// Snapshot of the last `$upNextEpisodes` emission — Task 6's panel
     /// reads this when it comes online; Task 3 only derives the rail
     /// button's availability from it.
@@ -818,12 +812,14 @@ class PlayerContainerViewController: UIViewController {
     private func presentRailPanel(content: UIView, width: CGFloat, from button: UIView) {
         guard let rail, rail.alpha > 0.5, viewModel?.isScrubbing != true else { return }
         activeRailPanel?.dismissPanel()
-        railPanelSourceButton = button
         let panel = PlayerRailPanelView.present(content: content, width: width,
                                                 in: view, aboveRail: rail, towards: button)
-        panel.onDismiss = { [weak self] in
-            self?.activeRailPanel = nil
-            self?.setNeedsFocusUpdate(); self?.updateFocusIfNeeded()
+        panel.onDismiss = { [weak self, weak panel] in
+            guard let self else { return }
+            if self.activeRailPanel === panel {
+                self.activeRailPanel = nil
+            }
+            self.setNeedsFocusUpdate(); self.updateFocusIfNeeded()
         }
         activeRailPanel = panel
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
