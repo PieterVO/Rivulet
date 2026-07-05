@@ -38,7 +38,7 @@ final class CardInfoView: UIView {
 
     // MARK: - Live tick lifecycle
     //
-    // The panel is added/removed via PlayerFocusCardView.swapContent, which
+    // The panel is hosted by PlayerRailPanelView, whose dismissPanel()
     // always ends in removeFromSuperview() for the outgoing panel — so
     // didMoveToWindow with window == nil is a reliable "panel is gone"
     // signal for tearing the timer down. Starting in didMoveToWindow
