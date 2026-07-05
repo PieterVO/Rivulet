@@ -74,6 +74,7 @@ final class PlayerProgressBarView: UIView {
 
     private enum Metrics {
         static let trackHeight: CGFloat = 10
+        static let scrubTrackHeight: CGFloat = 14
         static let stripHeight: CGFloat = 130
         static let stripTileAspect: CGFloat = 16.0 / 9.0
         static let labelBandSpacing: CGFloat = 14
@@ -466,7 +467,15 @@ final class PlayerProgressBarView: UIView {
         }
 
         let stripOpen = isScrubbing && stripLoaded
-        let trackHeight: CGFloat = stripOpen ? Metrics.stripHeight : Metrics.trackHeight
+        // Seek-focus emphasis: while scrubbing but before the filmstrip
+        // ribbon opens (still loading, or a chapterless/no-BIF title), grow
+        // the thin track and knob so entering seek mode reads instantly as
+        // "the scrubber has focus" — tvOS's own grow-and-brighten grammar —
+        // even before the strip appears. Once the strip is open it takes
+        // over that role entirely, so this only applies to the thin-bar
+        // state (`isScrubbing && !stripOpen`).
+        let scrubEmphasis = isScrubbing && !stripOpen
+        let trackHeight: CGFloat = stripOpen ? Metrics.stripHeight : (scrubEmphasis ? Metrics.scrubTrackHeight : Metrics.trackHeight)
 
         currentPositionGhost.isHidden = !isScrubbing || stripOpen
         trackHeightConstraint.constant = trackHeight
@@ -483,14 +492,18 @@ final class PlayerProgressBarView: UIView {
                 )
             }
 
-            // Handle: a plain 26pt circle at rest, always — no morph to a
-            // tall bar anymore (the strip's own playhead bar takes over
-            // that role while scrubbing; see layoutStripOverlay). Hidden
-            // entirely while the strip is open (below). Frame-driven,
-            // positioned at the fill edge and vertically centered on the
-            // track — a sibling of trackBackground so it isn't clipped by
-            // the track's own clipsToBounds.
-            let handleSize = CGSize(width: 26, height: 26)
+            // Handle: a plain circle at rest — no morph to a tall bar
+            // anymore (the strip's own playhead bar takes over that role
+            // while scrubbing; see layoutStripOverlay). Grows 26 → 32 and
+            // its ring brightens 0.14 → 0.35 while scrubbing with the strip
+            // still closed, so seek focus reads instantly (tvOS's own
+            // grow-and-brighten grammar). Hidden entirely while the strip
+            // is open (below). Frame-driven, positioned at the fill edge
+            // and vertically centered on the track — a sibling of
+            // trackBackground so it isn't clipped by the track's own
+            // clipsToBounds.
+            let handleDiameter: CGFloat = scrubEmphasis ? 32 : 26
+            let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
             let ringInset: CGFloat = 6
             let handleX = width * CGFloat(progress)
             let trackMidY = self.trackBackground.frame.minY + trackHeight / 2
@@ -499,7 +512,7 @@ final class PlayerProgressBarView: UIView {
             self.handleView.layer.cornerRadius = handleSize.width / 2
             self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
             self.handleRing.layer.cornerRadius = self.handleRing.frame.width / 2
-            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(scrubEmphasis ? 0.35 : 0.14)
             self.handleView.isHidden = stripOpen
             self.handleRing.isHidden = stripOpen
 

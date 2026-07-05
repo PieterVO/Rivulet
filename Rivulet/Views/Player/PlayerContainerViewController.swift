@@ -773,8 +773,7 @@ class PlayerContainerViewController: UIViewController {
             }
             .store(in: &cancellables)
 
-        // Rail actions. (No play/pause control — the remote owns that.)
-        rail.onSkipBack = { [weak vm] in Task { await vm?.seekRelative(by: -15) } }
+        // Rail actions. (No play/pause control, no skip-back — the remote owns seeking.)
         rail.onReplayLongPress = { [weak vm] in vm?.replayWithCaptions() }
         rail.onNavigateDown = { [weak self, weak vm] in
             // Down from the rail enters seek mode at the current position

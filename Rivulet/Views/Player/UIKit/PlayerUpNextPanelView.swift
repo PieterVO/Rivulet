@@ -18,6 +18,10 @@ final class UpNextListView: UIView {
 
     private enum Metrics {
         static let maxHeight: CGFloat = 520
+        // Horizontal inset for the row stack inside the scroll view so a
+        // focused row's 1.02 scale doesn't overflow the clipping scroll
+        // view at the left/right edges.
+        static let rowInset: CGFloat = 8
     }
 
     private let onSelect: (PlexMetadata) -> Void
@@ -58,7 +62,10 @@ final class UpNextListView: UIView {
 
         NSLayoutConstraint.activate([
             headerLabel.topAnchor.constraint(equalTo: topAnchor),
-            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            // Header stays flush with the rows' own (inset) content, not
+            // the old view edge, so it aligns with row text/thumbnails
+            // rather than the scroll view's outer bounds.
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.rowInset),
             headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
 
             scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 16),
@@ -69,10 +76,10 @@ final class UpNextListView: UIView {
             scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: Metrics.maxHeight),
 
             stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: Metrics.rowInset),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -Metrics.rowInset),
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -(Metrics.rowInset * 2)),
         ])
     }
 
@@ -112,9 +119,20 @@ final class UpNextListView: UIView {
 
     private var didScrollToCurrent = false
 
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        guard window != nil, !didScrollToCurrent else { return }
+    /// Positions the scroll view on the now-playing row instantly and
+    /// invisibly, before the panel's rise-in animation renders its first
+    /// visible frame. MUST be called by the presenter (PlayerRailPanelView)
+    /// synchronously, after the panel has been given its real constraints
+    /// and `layoutIfNeeded()` has resolved a real frame — NOT from
+    /// `didMoveToWindow()`, which fires while this view is added to the
+    /// window during `container.addSubview(panel)`, before the panel's own
+    /// width/position constraints are activated. Calling `scrollToCurrentRow`
+    /// against that not-yet-laid-out geometry produced a wrong initial
+    /// offset that then visibly corrected itself (looked like an animated
+    /// scroll from episode 1 to the current row) once real layout landed.
+    /// Idempotent — only the first call does anything.
+    func prepareForPresentation() {
+        guard !didScrollToCurrent else { return }
         didScrollToCurrent = true
         scrollToCurrentRow()
     }

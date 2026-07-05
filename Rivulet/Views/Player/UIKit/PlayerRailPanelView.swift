@@ -128,6 +128,17 @@ final class PlayerRailPanelView: UIView {
         panel.transform = CGAffineTransform(translationX: 0, y: Metrics.presentTranslationY)
         container.layoutIfNeeded()
 
+        // Content that needs to position itself against real geometry
+        // before the first visible frame (e.g. Up Next's scroll-to-current
+        // row) must do so here — after the panel has its real
+        // width/position constraints and `layoutIfNeeded()` above has
+        // resolved them, but before the rise-in animation below renders
+        // anything. Doing it any later (e.g. from the content's own
+        // `didMoveToWindow()`, which fires earlier during `addSubview`
+        // above, against not-yet-laid-out geometry) makes the correction
+        // visibly animate in as the real layout lands.
+        (content as? UpNextListView)?.prepareForPresentation()
+
         UIView.animate(withDuration: Metrics.presentDuration) {
             panel.alpha = 1
             panel.transform = .identity

@@ -23,9 +23,8 @@ final class PlayerRailView: UIView {
         static let buttonDiameter: CGFloat = 74
     }
 
-    let skipBackButton = TransportControlButton(
-        icon: UIImage(systemName: "gobackward.15"), accessibilityLabel: "Skip back 15 seconds",
-        diameter: Metrics.buttonDiameter)
+    // No skip-back control — the remote's own scrub gesture owns seeking
+    // (same philosophy as the earlier Resume-pill removal).
     let subtitlesButton = TransportControlButton(
         icon: UIImage(systemName: "captions.bubble"), accessibilityLabel: "Subtitles",
         diameter: Metrics.buttonDiameter)
@@ -39,7 +38,6 @@ final class PlayerRailView: UIView {
         icon: UIImage(systemName: "list.and.film"), accessibilityLabel: "Up Next",
         diameter: Metrics.buttonDiameter)
 
-    var onSkipBack: (() -> Void)?
     var onSubtitles: (() -> Void)?
     var onAudio: (() -> Void)?
     var onInfo: (() -> Void)?
@@ -114,7 +112,7 @@ final class PlayerRailView: UIView {
         cluster.axis = .horizontal
         cluster.spacing = Metrics.buttonGap
         cluster.alignment = .center
-        [skipBackButton, subtitlesButton, audioButton, infoButton, upNextButton].forEach {
+        [subtitlesButton, audioButton, infoButton, upNextButton].forEach {
             cluster.addArrangedSubview($0)
         }
 
@@ -150,7 +148,6 @@ final class PlayerRailView: UIView {
             cluster.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
         ])
 
-        skipBackButton.onPress = { [weak self] in self?.onSkipBack?() }
         subtitlesButton.onPress = { [weak self] in self?.onSubtitles?() }
         subtitlesButton.onLongPress = { [weak self] in self?.onReplayLongPress?() }
         audioButton.onPress = { [weak self] in self?.onAudio?() }
@@ -192,7 +189,7 @@ final class PlayerRailView: UIView {
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let last = lastFocusedButton, !last.isHidden { return [last] }
-        return [skipBackButton]
+        return [subtitlesButton]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
