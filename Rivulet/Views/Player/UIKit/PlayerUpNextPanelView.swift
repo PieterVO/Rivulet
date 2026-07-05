@@ -2,119 +2,44 @@
 //  PlayerUpNextPanelView.swift
 //  Rivulet
 //
-//  Right-side Up Next panel for the 2a chrome. Unfocused: a single
-//  collapsed row (the up-next episode) vertically centered at the right
-//  edge. Focused: expands to the season list ("UP NEXT · SEASON n"),
-//  auto-scrolled to the playing episode. Collapse/expand is driven purely
-//  by focus membership (didUpdateFocus); Menu is NOT handled here — the
-//  container's exitControlsFocus step pulls focus back to the card and
-//  the panel collapses on focus loss.
+//  Up Next content for the shared rail panel (Task 6). Pure list
+//  content — no glass chrome, no collapsed/expanded state machine.
+//  The panel presenter (PlayerRailPanelView, via
+//  PlayerContainerViewController.presentRailPanel) owns the floating
+//  chrome and width; this view only builds the header + scrollable
+//  row list and reports its preferred initial focus (the up-next
+//  row, scrolled into view). A fresh instance is built per
+//  presentation, so there's no setEpisodes statefulness to manage.
 //
 
 import UIKit
 
-final class PlayerUpNextPanelView: UIView {
+final class UpNextListView: UIView {
 
     private enum Metrics {
-        static let width: CGFloat = 470
         static let maxHeight: CGFloat = 520
-        static let cornerRadius: CGFloat = 26
-        static let padding: CGFloat = 24
     }
 
-    var onSelectEpisode: ((PlexMetadata) -> Void)?
-    var isEmpty: Bool { rows.isEmpty }
-
-    private let backgroundEffectView: UIVisualEffectView
-    private let tintView = UIView()
+    private let onSelect: (PlexMetadata) -> Void
     private let headerLabel = UILabel()
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var rows: [UpNextRowButton] = []
-    private var expanded = false
-    private var currentRatingKey: String?
 
-    /// The header isn't in the stack, so hiding it doesn't collapse its
-    /// layout space — the scroll view's top constraint is swapped instead.
-    private var expandedTopConstraint: NSLayoutConstraint?
-    private var collapsedTopConstraint: NSLayoutConstraint?
-
-    private static let restBorderColor = UIColor.white.withAlphaComponent(0.1).cgColor
-    private static let focusedBorderColor = UIColor(red: 143/255, green: 233/255, blue: 212/255, alpha: 0.55).cgColor
-    private static let focusedGlowColor = UIColor(red: 143/255, green: 233/255, blue: 212/255, alpha: 0.22).cgColor
-
-    init() {
-        if #available(tvOS 26.0, *) {
-            backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-        } else {
-            backgroundEffectView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-        }
+    init(episodes: [PlexMetadata], currentRatingKey: String?, seasonNumber: Int?,
+         serverURL: String, authToken: String, onSelect: @escaping (PlexMetadata) -> Void) {
+        self.onSelect = onSelect
         super.init(frame: .zero)
-        setupChrome()
         setupContent()
+        buildRows(episodes: episodes, currentRatingKey: currentRatingKey, seasonNumber: seasonNumber,
+                   serverURL: serverURL, authToken: authToken)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private func setupChrome() {
-        // The panel itself stays unclipped so the focus glow (an outer
-        // shadow) can render; the glass layers are rounded and clipped
-        // individually (same split as PlayerTrackPopupView).
-        layer.cornerRadius = Metrics.cornerRadius
-        layer.cornerCurve = .continuous
-        layer.borderWidth = 1
-        layer.borderColor = Self.restBorderColor
-        layer.shadowColor = Self.focusedGlowColor
-        layer.shadowOpacity = 0
-        layer.shadowRadius = 24
-        layer.shadowOffset = .zero
-
-        backgroundEffectView.layer.cornerRadius = Metrics.cornerRadius
-        backgroundEffectView.layer.cornerCurve = .continuous
-        backgroundEffectView.clipsToBounds = true
-
-        tintView.backgroundColor = UIColor(red: 14/255, green: 17/255, blue: 23/255, alpha: 0.55)
-        tintView.layer.cornerRadius = Metrics.cornerRadius
-        tintView.layer.cornerCurve = .continuous
-        tintView.clipsToBounds = true
-
-        [backgroundEffectView, tintView].forEach {
-            addSubview($0)
-            $0.translatesAutoresizingMaskIntoConstraints = false
-        }
-
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Metrics.width),
-            heightAnchor.constraint(lessThanOrEqualToConstant: Metrics.maxHeight),
-
-            backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
-            backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backgroundEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backgroundEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            tintView.topAnchor.constraint(equalTo: topAnchor),
-            tintView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            tintView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            tintView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // The panel's own layer has no contents, so the glow shadow needs
-        // an explicit path.
-        layer.shadowPath = UIBezierPath(
-            roundedRect: bounds, cornerRadius: Metrics.cornerRadius
-        ).cgPath
-    }
-
     private func setupContent() {
-        headerLabel.font = .systemFont(ofSize: 15, weight: .bold)
-        headerLabel.textColor = UIColor.white.withAlphaComponent(0.5)
-        headerLabel.isHidden = true
-
         stack.axis = .vertical
         stack.spacing = 8
         scrollView.addSubview(stack)
@@ -131,22 +56,17 @@ final class PlayerUpNextPanelView: UIView {
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
         scrollHeight.priority = .defaultHigh
 
-        let expandedTop = scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 16)
-        let collapsedTop = scrollView.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.padding)
-        expandedTopConstraint = expandedTop
-        collapsedTopConstraint = collapsedTop
-        collapsedTop.isActive = true
-
         NSLayoutConstraint.activate([
-            headerLabel.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.padding),
-            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.padding),
-            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.padding),
+            headerLabel.topAnchor.constraint(equalTo: topAnchor),
+            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
 
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.padding),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.padding),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.padding),
+            scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 16),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollHeight,
-            scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: Metrics.maxHeight - Metrics.padding * 2),
+            scrollView.heightAnchor.constraint(lessThanOrEqualToConstant: Metrics.maxHeight),
 
             stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
             stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
@@ -156,21 +76,8 @@ final class PlayerUpNextPanelView: UIView {
         ])
     }
 
-    // MARK: - Content API
-
-    /// Rebuilds rows from scratch. Called whenever the VM's up-next list
-    /// changes (episode advance, season boundary, playback of a different
-    /// item). Old rows' in-flight thumbnail tasks are cancelled before
-    /// they're torn down.
-    func setEpisodes(_ episodes: [PlexMetadata], currentRatingKey: String?, seasonNumber: Int?,
-                      serverURL: String, authToken: String) {
-        self.currentRatingKey = currentRatingKey
-        rows.forEach {
-            $0.cancelImageLoad()
-            $0.removeFromSuperview()
-        }
-        rows.removeAll()
-
+    private func buildRows(episodes: [PlexMetadata], currentRatingKey: String?, seasonNumber: Int?,
+                            serverURL: String, authToken: String) {
         let headerText = seasonNumber.map { "UP NEXT · SEASON \($0)" } ?? "UP NEXT"
         headerLabel.attributedText = NSAttributedString(
             string: headerText,
@@ -184,45 +91,32 @@ final class PlayerUpNextPanelView: UIView {
         for episode in episodes {
             let state = UpNextRowState.state(for: episode, in: episodes, currentRatingKey: currentRatingKey)
             let row = UpNextRowButton(episode: episode, state: state, serverURL: serverURL, authToken: authToken)
-            row.onTap = { [weak self] in self?.onSelectEpisode?(episode) }
+            row.onTap = { [weak self] in self?.onSelect(episode) }
             stack.addArrangedSubview(row)
             rows.append(row)
         }
-
-        applyExpansion()
     }
 
-    // MARK: - Collapse / Expand
+    // MARK: - Teardown
 
-    /// Collapsed: only the up-next row is visible (fallback now-playing,
-    /// then the first row); header hidden. Expanded: every row visible.
-    private func applyExpansion() {
-        headerLabel.isHidden = !expanded
-        // Swap the scroll view's top edge: below the header when expanded,
-        // straight to the panel padding when collapsed (deactivate first
-        // so both are never active at once).
-        if expanded {
-            collapsedTopConstraint?.isActive = false
-            expandedTopConstraint?.isActive = true
-        } else {
-            expandedTopConstraint?.isActive = false
-            collapsedTopConstraint?.isActive = true
-        }
+    override func removeFromSuperview() {
+        rows.forEach { $0.cancelImageLoad() }
+        super.removeFromSuperview()
+    }
 
-        if expanded {
-            rows.forEach { $0.isHidden = false }
-        } else {
-            let visible = rows.first(where: { $0.rowState == .upNext })
-                ?? rows.first(where: { $0.rowState == .nowPlaying })
-                ?? rows.first
-            rows.forEach { $0.isHidden = ($0 !== visible) }
-        }
+    deinit {
+        rows.forEach { $0.cancelImageLoad() }
+    }
 
-        // `expanded` is only ever true while focus is contained here (see
-        // didUpdateFocus below), so it doubles as the "expanded AND
-        // containing focus" condition from the design spec.
-        layer.borderColor = expanded ? Self.focusedBorderColor : Self.restBorderColor
-        layer.shadowOpacity = expanded ? 1 : 0
+    // MARK: - Scroll-to-current
+
+    private var didScrollToCurrent = false
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, !didScrollToCurrent else { return }
+        didScrollToCurrent = true
+        scrollToCurrentRow()
     }
 
     private func scrollToCurrentRow() {
@@ -233,20 +127,6 @@ final class PlayerUpNextPanelView: UIView {
     }
 
     // MARK: - Focus
-
-    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
-        super.didUpdateFocus(in: context, with: coordinator)
-        let containsFocus = context.nextFocusedView?.isDescendant(of: self) == true
-        guard containsFocus != expanded else { return }
-        expanded = containsFocus
-        coordinator.addCoordinatedAnimations({
-            self.applyExpansion()
-            self.superview?.layoutIfNeeded()
-        }, completion: { [weak self] in
-            guard let self, self.expanded else { return }
-            self.scrollToCurrentRow()
-        })
-    }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         // Land on the up-next row first (the collapsed row), then free movement.

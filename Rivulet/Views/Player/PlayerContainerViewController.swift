@@ -38,6 +38,11 @@ class PlayerContainerViewController: UIViewController {
     /// reads this when it comes online; Task 3 only derives the rail
     /// button's availability from it.
     private var upNextEpisodesCache: [PlexMetadata] = []
+    /// True while `activeRailPanel` is showing Up Next content, so the
+    /// `$upNextEpisodes` sink can dismiss a now-stale list without
+    /// touching the CC/audio/info panels, which don't go stale off that
+    /// publisher.
+    private var isShowingUpNextPanel = false
     /// Tracks the previous `isScrubbing` value so the scrubber-inset
     /// animation runs only on the true→false / false→true edge, not on
     /// every tick of the combined time sink.
@@ -748,6 +753,14 @@ class PlayerContainerViewController: UIViewController {
                 guard let self, let vm else { return }
                 self.upNextEpisodesCache = episodes
                 self.rail?.setUpNextAvailable(!episodes.isEmpty && vm.metadata.type == "episode")
+                // The open Up Next panel is reading a snapshot of the old
+                // list — a fresh instance is built per presentation, so
+                // there's no way to refresh it in place. Dismiss rather
+                // than leave a stale list on screen; doesn't touch the
+                // CC/audio/info panels, which don't key off this publisher.
+                if self.isShowingUpNextPanel {
+                    self.activeRailPanel?.dismissPanel()
+                }
             }
             .store(in: &cancellables)
 
@@ -799,7 +812,20 @@ class PlayerContainerViewController: UIViewController {
                 content: CardInfoView(metadata: vm.metadata, liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() }),
                 width: 480, from: rail.infoButton)
         }
-        rail.onUpNext = {} // wired in Task 6
+        rail.onUpNext = { [weak self] in
+            guard let self, let vm = self.viewModel, !self.upNextEpisodesCache.isEmpty else { return }
+            let presented = self.presentRailPanel(
+                content: UpNextListView(
+                    episodes: self.upNextEpisodesCache, currentRatingKey: vm.metadata.ratingKey,
+                    seasonNumber: vm.metadata.parentIndex, serverURL: vm.serverURL, authToken: vm.authToken,
+                    onSelect: { [weak self, weak vm] episode in
+                        vm?.exitControlsFocus()
+                        Task { await vm?.playEpisode(episode) }
+                        self?.activeRailPanel?.dismissPanel()
+                    }),
+                width: 452, from: rail.upNextButton)
+            self.isShowingUpNextPanel = presented
+        }
     }
 
     /// Shared presenter for the CC/audio/info/Up Next rail panel. Only
@@ -809,20 +835,32 @@ class PlayerContainerViewController: UIViewController {
     /// while loading, but a stray callback firing in that window (e.g.
     /// a race on the loading→ready edge) must not construct a panel
     /// anchored to a rail that isn't there to anchor to.
-    private func presentRailPanel(content: UIView, width: CGFloat, from button: UIView) {
-        guard let rail, rail.alpha > 0.5, viewModel?.isScrubbing != true else { return }
+    ///
+    /// Returns whether a panel was actually presented, so callers that
+    /// track "which content is showing" (Task 6's Up Next staleness
+    /// check) know whether their flag should stick.
+    @discardableResult
+    private func presentRailPanel(content: UIView, width: CGFloat, from button: UIView) -> Bool {
+        guard let rail, rail.alpha > 0.5, viewModel?.isScrubbing != true else { return false }
         activeRailPanel?.dismissPanel()
         let panel = PlayerRailPanelView.present(content: content, width: width,
                                                 in: view, aboveRail: rail, towards: button)
         panel.onDismiss = { [weak self, weak panel] in
             guard let self else { return }
+            // Guard on identity: a superseding presentRailPanel() call
+            // dismisses this panel asynchronously (0.15s fade) then
+            // synchronously swaps in the next one, so this completion can
+            // fire after `activeRailPanel`/`isShowingUpNextPanel` already
+            // describe a newer panel — must not clobber that state.
             if self.activeRailPanel === panel {
                 self.activeRailPanel = nil
+                self.isShowingUpNextPanel = false
             }
             self.setNeedsFocusUpdate(); self.updateFocusIfNeeded()
         }
         activeRailPanel = panel
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
+        return true
     }
 
     /// Eyebrow + title + meta row from the current item, ported from the
