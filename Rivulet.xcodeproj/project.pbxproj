@@ -109,7 +109,7 @@
 			files = (
 				A740D1192F59C56300B9820B /* AVKit.framework in Frameworks */,
 				B2000001AAAA000000000001 /* AetherEngine in Frameworks */,
-																A7F159552F04124A001B2177 /* Sentry in Frameworks */,
+				A7F159552F04124A001B2177 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -756,7 +756,7 @@
 			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
 			requirement = {
 				kind = exactVersion;
-				version = 4.8.0;
+				version = 4.12.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
