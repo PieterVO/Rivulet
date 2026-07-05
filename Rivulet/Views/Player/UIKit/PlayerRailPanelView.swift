@@ -18,8 +18,6 @@ final class PlayerRailPanelView: UIView {
         static let cornerRadius: CGFloat = 20
         static let padding: CGFloat = 20
         static let maxHeight: CGFloat = 560
-        static let bottomGap: CGFloat = 24
-        static let trailingInset: CGFloat = 132
         static let presentTranslationY: CGFloat = 12
         static let presentDuration: TimeInterval = 0.2
         static let dismissDuration: TimeInterval = 0.15
@@ -50,8 +48,18 @@ final class PlayerRailPanelView: UIView {
         // paint outside the bounds, while the glass/tint below clip
         // themselves individually so the blur doesn't smear past
         // the rounded corners.
+        //
+        // The panel sits flush against the rail (trailing + bottom
+        // anchored to the rail itself, touching) so it reads as growing
+        // out of the rail glass rather than floating above it — only the
+        // top corners are rounded; the bottom corners are square where
+        // the panel meets the rail. All three rounded layers (self, the
+        // glass effect view, the tint view) must agree on maskedCorners
+        // or the corner treatment visibly mismatches between the shadow
+        // silhouette and the actual glass fill.
         layer.cornerRadius = Metrics.cornerRadius
         layer.cornerCurve = .continuous
+        layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         layer.borderWidth = 1
         layer.borderColor = Self.borderColor
 
@@ -64,11 +72,13 @@ final class PlayerRailPanelView: UIView {
         backgroundEffectView.clipsToBounds = true
         backgroundEffectView.layer.cornerRadius = Metrics.cornerRadius
         backgroundEffectView.layer.cornerCurve = .continuous
+        backgroundEffectView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
 
         tintView.backgroundColor = UIColor(red: 16/255, green: 18/255, blue: 24/255, alpha: 0.5)
         tintView.clipsToBounds = true
         tintView.layer.cornerRadius = Metrics.cornerRadius
         tintView.layer.cornerCurve = .continuous
+        tintView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
 
         [backgroundEffectView, tintView, content].forEach {
             addSubview($0)
@@ -101,17 +111,25 @@ final class PlayerRailPanelView: UIView {
         super.layoutSubviews()
         // Panel's own layer has no drawn contents, so the halo shadow
         // needs an explicit path (outset 3pt per spec's "spread").
+        // Only the top corners are rounded — the panel is flush against
+        // the rail along its bottom edge — so the shadow silhouette must
+        // round the same two corners the layers above are masked to,
+        // otherwise the glow reads as a full rounded-rect halo peeking
+        // out from behind square bottom corners.
         layer.shadowPath = UIBezierPath(
-            roundedRect: bounds.insetBy(dx: -3, dy: -3), cornerRadius: Metrics.cornerRadius + 3
+            roundedRect: bounds.insetBy(dx: -3, dy: -3),
+            byRoundingCorners: [.topLeft, .topRight],
+            cornerRadii: CGSize(width: Metrics.cornerRadius + 3, height: Metrics.cornerRadius + 3)
         ).cgPath
     }
 
     // MARK: - Presentation
 
-    /// Builds, adds to `container`, and animates the panel in above
-    /// `rail`, positioned trailing-aligned with the rail (button
-    /// projection intentionally simplified to a fixed rail-relative
-    /// trailing inset — see brief note).
+    /// Builds, adds to `container`, and animates the panel in attached to
+    /// `rail` — flush with the rail's trailing edge and touching its top
+    /// edge, so the panel reads as growing directly out of the rail glass
+    /// (button projection intentionally simplified to the rail's own
+    /// trailing edge rather than the individual button — see brief note).
     @discardableResult
     static func present(content: UIView, width: CGFloat, in container: UIView, aboveRail rail: UIView, towards button: UIView) -> PlayerRailPanelView {
         let panel = PlayerRailPanelView(content: content)
@@ -120,8 +138,8 @@ final class PlayerRailPanelView: UIView {
 
         NSLayoutConstraint.activate([
             panel.widthAnchor.constraint(equalToConstant: width),
-            panel.bottomAnchor.constraint(equalTo: rail.topAnchor, constant: -Metrics.bottomGap),
-            panel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -Metrics.trailingInset),
+            panel.bottomAnchor.constraint(equalTo: rail.topAnchor),
+            panel.trailingAnchor.constraint(equalTo: rail.trailingAnchor),
         ])
 
         panel.alpha = 0

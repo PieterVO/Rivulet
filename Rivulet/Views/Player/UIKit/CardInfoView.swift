@@ -88,17 +88,30 @@ final class CardInfoView: UIView {
         addSubview(scrollView)
 
         [scrollView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+
+        // The scroll view grows with content up to the panel's own height
+        // cap, so a short info sheet hugs its rows instead of collapsing
+        // to zero height — same idiom as CardTrackListView. Without this,
+        // nothing propagates the stack's content size to the scroll view
+        // (contentLayoutGuide-based content constraints alone don't size
+        // the scroll view itself), and the panel — which sizes itself from
+        // its content rather than a fixed frame like the old 2a card —
+        // renders as an empty glass box.
+        let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
+        scrollHeight.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            scrollHeight,
 
-            stack.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
-            stack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
         ])
     }
 
