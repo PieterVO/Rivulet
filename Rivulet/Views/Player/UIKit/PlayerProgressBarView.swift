@@ -126,6 +126,10 @@ final class PlayerProgressBarView: UIView {
 
     /// Loading placeholder mode; see `setSkeleton(_:)`.
     private var isSkeleton = false
+    /// Set when the skeleton clears so the next `update(...)` applies
+    /// without animation — the first real fill position after loading
+    /// must jump into place, not sweep out from zero.
+    private var snapNextUpdate = false
 
     /// Paused presentation: the accent fill dims while paused (2a spec).
     /// Stored and folded into update()'s alpha computation; applied
@@ -353,7 +357,12 @@ final class PlayerProgressBarView: UIView {
         // paused knob.
         let pausedAtRest = self.isPausedDim && !isScrubbing && !focusEmphasis
 
-        UIView.animate(withDuration: 0.15) {
+        // First paint after loading snaps into place: animating the fill
+        // from zero out to a resume position reads as a sweep, not a jump.
+        let animationDuration: TimeInterval = snapNextUpdate ? 0 : 0.15
+        snapNextUpdate = false
+
+        UIView.animate(withDuration: animationDuration) {
             self.progressFill.alpha = pausedAtRest ? 0.78 : 1
             self.progressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackHeight)
             if isScrubbing {
@@ -446,6 +455,7 @@ final class PlayerProgressBarView: UIView {
     func setSkeleton(_ on: Bool) {
         guard on != isSkeleton else { return }
         isSkeleton = on
+        if !on { snapNextUpdate = true }
         trackBackground.backgroundColor = UIColor.white.withAlphaComponent(on ? 0.08 : 0.16)
         progressFill.isHidden = on
         handleView.isHidden = on
