@@ -893,7 +893,11 @@ struct UniversalPlayerView: View {
                 AetherSubtitleOverlayView(
                     model: viewModel.aetherSubtitleModel,
                     style: captionStyle,
-                    controlsVisible: viewModel.showControls
+                    // Matches applyChromeVisibility's chromeVisible signal
+                    // (showControls || isScrubbing): the scrub ribbon keeps
+                    // the bottom band occupied even when the rail hides, so
+                    // captions stay lifted through a scrub.
+                    controlsVisible: viewModel.showControls || viewModel.isScrubbing
                 )
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
@@ -905,7 +909,7 @@ struct UniversalPlayerView: View {
                     subtitleManager: viewModel.subtitleManager,
                     // 368 = rail bottom inset 84 + railHeight 260 + 24 gap
                     // (matches AetherSubtitleOverlayView's controlsVisiblePadding).
-                    bottomOffset: viewModel.showControls ? 368 : 60
+                    bottomOffset: (viewModel.showControls || viewModel.isScrubbing) ? 368 : 60
                 )
                 .ignoresSafeArea()
             }

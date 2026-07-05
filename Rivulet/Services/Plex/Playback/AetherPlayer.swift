@@ -430,12 +430,6 @@ final class AetherPlayer: PlayerProtocol {
     }
 
     /// Load a sidecar subtitle file (SRT, ASS, VTT, PGS) by URL.
-    /// `headers` is forwarded as `httpHeaders` to AetherEngine for
-    /// authenticated subtitle URLs (Plex token, CDN auth, etc.).
-    func selectSidecarSubtitle(url: URL, headers: [String: String]?) {
-        engine.selectSidecarSubtitle(url: url, httpHeaders: headers)
-    }
-
     func prepareForReuse() {
         // No-op: AetherEngine doesn't have a reset-without-stop primitive.
         // stop() is called when the view model swaps players, and a fresh
