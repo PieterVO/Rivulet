@@ -176,10 +176,10 @@ class PlayerContainerViewController: UIViewController {
                 dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-                // Rail: left/right 96, pinned to the bottom.
-                railView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 96),
-                railView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -96),
-                railView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -64),
+                // Rail: left/right 90, pinned to the bottom.
+                railView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 90),
+                railView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -90),
+                railView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -84),
                 railView.heightAnchor.constraint(equalToConstant: PlayerRailView.railHeight),
 
                 // Scrubber lives in the rail's lower region — a container
