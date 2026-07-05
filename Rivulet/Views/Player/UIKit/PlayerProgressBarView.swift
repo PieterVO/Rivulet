@@ -480,8 +480,15 @@ final class PlayerProgressBarView: UIView {
         currentPositionGhost.isHidden = !isScrubbing || stripOpen
         trackHeightConstraint.constant = trackHeight
 
+        // Paused dim only applies at rest — never while actively scrubbing
+        // (setPausedDim's own guard already prevents that combination from
+        // being set in the first place, but the emphasis/strip states below
+        // are re-derived from the current isScrubbing/stripOpen locals on
+        // every call, so this stays consistent even if that ever changes).
+        let pausedAtRest = self.isPausedDim && !isScrubbing && !stripOpen
+
         UIView.animate(withDuration: 0.15) {
-            self.progressFill.alpha = stripOpen ? 0 : (self.isPausedDim ? 0.55 : 1)
+            self.progressFill.alpha = stripOpen ? 0 : (pausedAtRest ? 0.78 : 1)
             self.stripContainer.alpha = stripOpen ? 1 : 0
             self.progressFill.frame = CGRect(x: 0, y: 0, width: width * progress, height: trackHeight)
             if isScrubbing && !stripOpen {
@@ -497,12 +504,17 @@ final class PlayerProgressBarView: UIView {
             // while scrubbing; see layoutStripOverlay). Grows 26 → 32 and
             // its ring brightens 0.14 → 0.35 while scrubbing with the strip
             // still closed, so seek focus reads instantly (tvOS's own
-            // grow-and-brighten grammar). Hidden entirely while the strip
-            // is open (below). Frame-driven, positioned at the fill edge
-            // and vertically centered on the track — a sibling of
+            // grow-and-brighten grammar). While paused at rest (not
+            // scrubbing, strip closed) it instead shrinks 26 → 22 and its
+            // ring alpha drops to 0 (no glow) per the 3a paused-dim spec.
+            // Scrub emphasis takes priority over the paused shrink if both
+            // were ever true at once, though `pausedAtRest` already rules
+            // that combination out. Hidden entirely while the strip is
+            // open (below). Frame-driven, positioned at the fill edge and
+            // vertically centered on the track — a sibling of
             // trackBackground so it isn't clipped by the track's own
             // clipsToBounds.
-            let handleDiameter: CGFloat = scrubEmphasis ? 32 : 26
+            let handleDiameter: CGFloat = scrubEmphasis ? 32 : (pausedAtRest ? 22 : 26)
             let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
             let ringInset: CGFloat = 6
             let handleX = width * CGFloat(progress)
@@ -512,7 +524,9 @@ final class PlayerProgressBarView: UIView {
             self.handleView.layer.cornerRadius = handleSize.width / 2
             self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
             self.handleRing.layer.cornerRadius = self.handleRing.frame.width / 2
-            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(scrubEmphasis ? 0.35 : 0.14)
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(
+                scrubEmphasis ? 0.35 : (pausedAtRest ? 0 : 0.14)
+            )
             self.handleView.isHidden = stripOpen
             self.handleRing.isHidden = stripOpen
 
@@ -644,7 +658,17 @@ final class PlayerProgressBarView: UIView {
         isPausedDim = dimmed
         guard !isSkeleton, !isScrubbing else { return }
         UIView.animate(withDuration: 0.25) {
-            self.progressFill.alpha = dimmed ? 0.55 : 1
+            self.progressFill.alpha = dimmed ? 0.78 : 1
+            let handleDiameter: CGFloat = dimmed ? 22 : 26
+            let handleSize = CGSize(width: handleDiameter, height: handleDiameter)
+            let center = CGPoint(x: self.handleView.frame.midX, y: self.handleView.frame.midY)
+            self.handleView.frame = CGRect(x: center.x - handleSize.width / 2, y: center.y - handleSize.height / 2,
+                                           width: handleSize.width, height: handleSize.height)
+            self.handleView.layer.cornerRadius = handleSize.width / 2
+            let ringInset: CGFloat = 6
+            self.handleRing.frame = self.handleView.frame.insetBy(dx: -ringInset, dy: -ringInset)
+            self.handleRing.layer.cornerRadius = self.handleRing.frame.width / 2
+            self.handleRing.backgroundColor = UIColor.white.withAlphaComponent(dimmed ? 0 : 0.14)
         }
     }
 
