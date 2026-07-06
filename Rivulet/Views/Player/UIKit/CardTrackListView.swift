@@ -21,6 +21,12 @@ final class CardTrackListView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var rowButtons: [CardTrackRowButton] = []
+    /// Pin focus to the selected row only for the FIRST landing. After focus
+    /// has entered the list once, `preferredFocusEnvironments` yields no
+    /// preference so the focus engine leaves focus on whatever row the user
+    /// navigated to — otherwise reaching the bottom and pressing Down would
+    /// re-resolve focus back up to the selected row (the "bounce").
+    private var hasPinnedInitialFocus = false
 
     init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
@@ -96,10 +102,21 @@ final class CardTrackListView: UIView {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        // Once focus has landed in the list, express no preference so the
+        // engine keeps focus on the current row (no bottom-of-list bounce).
+        guard !hasPinnedInitialFocus else { return [] }
         if let first = rowButtons.first(where: { $0.row.isSelected }) {
             return [first]
         }
         return rowButtons.isEmpty ? [self] : [rowButtons[0]]
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        // Once focus enters any of our rows, stop pinning the selected row.
+        if let next = context.nextFocusedView, rowButtons.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
+            hasPinnedInitialFocus = true
+        }
     }
 }
 

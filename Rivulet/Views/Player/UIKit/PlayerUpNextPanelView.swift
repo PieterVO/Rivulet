@@ -29,6 +29,11 @@ final class UpNextListView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var rows: [UpNextRowButton] = []
+    /// Pin focus to the up-next row only for the FIRST landing; afterwards
+    /// express no preference so the focus engine leaves focus where the user
+    /// navigated (no bounce back up from the bottom of the list). See the
+    /// matching flag in CardTrackListView.
+    private var hasPinnedInitialFocus = false
 
     init(episodes: [PlexMetadata], currentRatingKey: String?, seasonNumber: Int?,
          serverURL: String, authToken: String, onSelect: @escaping (PlexMetadata) -> Void) {
@@ -147,9 +152,20 @@ final class UpNextListView: UIView {
     // MARK: - Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        // Once focus has landed, express no preference so the engine keeps
+        // focus on the current row (no bottom-of-list bounce back up).
+        guard !hasPinnedInitialFocus else { return [] }
         // Land on the up-next row first (the collapsed row), then free movement.
         if let target = rows.first(where: { $0.rowState == .upNext }) ?? rows.first { return [target] }
         return [self]
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        // Once focus enters any of our rows, stop pinning the up-next row.
+        if let next = context.nextFocusedView, rows.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
+            hasPinnedInitialFocus = true
+        }
     }
 }
 
