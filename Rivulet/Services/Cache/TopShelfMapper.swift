@@ -37,9 +37,10 @@ enum TopShelfMapper {
             guard let ratingKey = m.ratingKey else { return nil }
             let isEpisode = m.type == "episode"
 
-            let title = isEpisode
-                ? (m.fullEpisodeTitle ?? m.title ?? "Unknown")
-                : (m.title ?? "Unknown")
+            // Bare episode name for the carousel — the show name rides the line
+            // above (contextTitle) Apple-TV+-style, so no "SxxExx - " prefix here
+            // (that's what `fullEpisodeTitle` would add).
+            let title = m.title ?? "Unknown"
             let subtitle = isEpisode ? m.grandparentTitle : nil
 
             // Tall poster (kept for fallback) — episode prefers show poster.

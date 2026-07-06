@@ -29,12 +29,9 @@ final class TopShelfMapperTests: XCTestCase {
         return m
     }
 
-    // `PlexMetadata.fullEpisodeTitle` always prefixes "S00E00 - " for any
-    // metadata with type == "episode" (parentIndex/index default to 0 when
-    // unset) — this is established production behavior in
-    // PlexDataStore.updateTopShelfCache, preserved verbatim by the mapper.
-    // Episode-title tests must account for this prefix rather than expect
-    // the bare title.
+    // The carousel shows the BARE episode name as the title (the show name
+    // rides the contextTitle line above, Apple-TV+-style). The mapper uses
+    // `m.title` directly, NOT `fullEpisodeTitle` — so no "SxxExx - " prefix.
 
     private let server = "http://plex.local:32400"
     private let token = "TESTTOKEN"
@@ -79,10 +76,8 @@ final class TopShelfMapperTests: XCTestCase {
     func testEpisodeTextUsesEpisodeNameAndShowSubtitle() {
         let input = [meta(ratingKey: "e1", type: "episode", title: "Ozymandias", grandparentTitle: "Breaking Bad", grandparentArt: "/art/bb", lastViewedAt: 100)]
         let item = TopShelfMapper.items(from: input, serverURL: server, token: token).first
-        // fullEpisodeTitle prefixes "S00E00 - " (parentIndex/index default to 0
-        // when unset in the fixture) — established production behavior.
-        XCTAssertEqual(item?.title, "S00E00 - Ozymandias")
-        XCTAssertTrue(item?.title.contains("Ozymandias") ?? false)
+        // Bare episode name (no "SxxExx - " prefix); show name is the subtitle.
+        XCTAssertEqual(item?.title, "Ozymandias")
         XCTAssertEqual(item?.subtitle, "Breaking Bad")
     }
 
