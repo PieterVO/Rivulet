@@ -1539,8 +1539,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         player.$activeSubtitleTrackId
             .receive(on: DispatchQueue.main)
             .sink { [weak self] id in
-                guard let self else { return }
-                self.currentSubtitleTrackId = id.flatMap { self.plexSubtitleId(forAetherTrackId: $0) }
+                // Ignore engine-originated nil, exactly as the audio sink above
+                // does. The engine transiently clears its active subtitle index
+                // to nil while it rebuilds the pipeline (e.g. on an audio-track
+                // change) and then re-arms the same subtitle — but that nil
+                // would otherwise flip our UI to "off" even though captions keep
+                // rendering. A genuine user turn-off sets currentSubtitleTrackId
+                // directly via selectSubtitleTrackWithoutSaving, not through this
+                // mirror sink, so dropping nil here doesn't miss real off events.
+                guard let self, let id else { return }
+                self.currentSubtitleTrackId = self.plexSubtitleId(forAetherTrackId: id)
             }
             .store(in: &cancellables)
 
