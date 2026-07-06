@@ -461,6 +461,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         return metadata.year.map { String($0) }
     }
 
+    /// Episode line for the ambient pause backdrop: "S2 E4 · The Suitcase".
+    /// The backdrop's title logo already carries the show identity, so this
+    /// line carries the episode number + episode name (distinct from
+    /// `subtitle`, which is "Show S#E#" for the rail). Nil for movies — they
+    /// show the logo only. Matches the AVKit external-metadata format.
+    var ambientEpisodeLine: String? {
+        guard metadata.type == "episode" else { return nil }
+        let season = metadata.parentIndex ?? 0
+        let episode = metadata.index ?? 0
+        let epTitle = metadata.title ?? ""
+        return "S\(season) E\(episode) · \(epTitle)"
+    }
+
     // MARK: - Private State
 
     private var cancellables = Set<AnyCancellable>()

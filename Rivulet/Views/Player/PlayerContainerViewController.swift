@@ -27,6 +27,7 @@ class PlayerContainerViewController: UIViewController {
     private var pauseTimeLabel: UILabel?
     private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
+    private var ambientScrim: BottomScrimView?
     private var cancellables = Set<AnyCancellable>()
     /// The one floating panel shared by CC/audio/info (Task 5) and Up
     /// Next (Task 6). Only one can be up at a time — presenting a new
@@ -110,6 +111,8 @@ class PlayerContainerViewController: UIViewController {
             dim.alpha = 0
             dim.isUserInteractionEnabled = false
 
+            let ambientBottomScrim = BottomScrimView()
+            ambientBottomScrim.alpha = 0
             let railView = PlayerRailView()
             let bar = PlayerProgressBarView()
             let proxy = ScrubberFocusProxyView()
@@ -154,7 +157,7 @@ class PlayerContainerViewController: UIViewController {
             loadingLabel.text = "Loading"
             loadingLabel.isHidden = true
 
-            [chromeScrim, dim, railView, bar, proxy, pill, indicator, loadingLabel].forEach {
+            [chromeScrim, dim, ambientBottomScrim, railView, bar, proxy, pill, indicator, loadingLabel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
@@ -162,6 +165,9 @@ class PlayerContainerViewController: UIViewController {
             // matches, but state this is intentional, not incidental).
             view.bringSubviewToFront(chromeScrim)
             view.bringSubviewToFront(dim)
+            // Ambient bottom scrim sits above the dim/chrome scrim but below
+            // the scrubber, so during ambient pause the scrubber reads over it.
+            view.bringSubviewToFront(ambientBottomScrim)
             view.bringSubviewToFront(railView)
             view.bringSubviewToFront(bar)
             view.bringSubviewToFront(proxy)
@@ -179,6 +185,14 @@ class PlayerContainerViewController: UIViewController {
                 dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+                // Ambient bottom scrim: full-width, pinned to the bottom, tall
+                // enough to sit behind the scrubber (which is ~118pt off the
+                // bottom) during ambient pause.
+                ambientBottomScrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                ambientBottomScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                ambientBottomScrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                ambientBottomScrim.heightAnchor.constraint(equalToConstant: 320),
 
                 // Rail: left/right 90, pinned to the bottom.
                 railView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 90),
@@ -225,6 +239,7 @@ class PlayerContainerViewController: UIViewController {
             progressBar = bar
             scrubberProxy = proxy
             skipPill = pill
+            ambientScrim = ambientBottomScrim
             pausedDimView = dim
             pauseIndicator = indicator
             pauseTimeLabel = timeLabel
@@ -976,6 +991,10 @@ class PlayerContainerViewController: UIViewController {
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
         let railVisible = chromeVisible && !vm.isScrubbing
         let paused = vm.playbackState == .paused && !ambient && hasPlayedSinceLoad
+        // Ambient pause keeps the scrubber (and its bottom scrim) up as a
+        // read-only position indicator even though the rail fades. Not shown
+        // while loading — there is no meaningful position yet.
+        let scrubberVisible = chromeVisible || (ambient && !isLoading)
 
         scrubberProxy?.isFocusEnabled = railVisible && !isLoading && vm.controlsFocusActive
 
@@ -988,7 +1007,8 @@ class PlayerContainerViewController: UIViewController {
 
         let targets: [(UIView?, CGFloat)] = [
             (chromeScrim, chromeVisible ? 1 : 0),
-            (progressBar, chromeVisible ? 1 : 0),
+            (progressBar, scrubberVisible ? 1 : 0),
+            (ambientScrim, (ambient && !isLoading) ? 1 : 0),
             (rail, railVisible ? 1 : 0),
             (skipPill, railVisible && !isLoading ? 1 : 0),
             (pauseIndicator, paused ? 1 : 0),
@@ -1064,6 +1084,27 @@ final class ChromeScrimView: UIView {
         gradient.locations = [0, 0.46, 0.66]
         gradient.startPoint = CGPoint(x: 0, y: 0.5)
         gradient.endPoint = CGPoint(x: 1, y: 0.5)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Bottom-anchored legibility gradient for the ambient-pause scrubber. The
+/// glass rail normally grounds the scrubber; during ambient the rail is gone,
+/// so this thin transparent→black gradient keeps the scrubber readable over
+/// bright backdrops.
+final class BottomScrimView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        let gradient = layer as! CAGradientLayer
+        gradient.colors = [
+            UIColor.black.withAlphaComponent(0).cgColor,
+            UIColor.black.withAlphaComponent(0.55).cgColor,
+        ]
+        gradient.locations = [0, 1]
+        gradient.startPoint = CGPoint(x: 0.5, y: 0)
+        gradient.endPoint = CGPoint(x: 0.5, y: 1)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
