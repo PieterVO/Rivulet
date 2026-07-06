@@ -24,16 +24,14 @@ class ContentProvider: TVTopShelfContentProvider {
         let carouselItems = items.compactMap { item -> TVTopShelfCarouselItem? in
             let cItem = TVTopShelfCarouselItem(identifier: item.ratingKey)
 
-            // TVTopShelfCarouselItem has NO `title` property (that's only on the
-            // sectioned item). Carousel text comes from contextTitle (the small
-            // line above) + summary (the body). Map:
-            //   episode -> contextTitle = show name, summary = episode name
-            //   movie   -> summary = movie name, contextTitle = nil
+            // `title` (inherited from TVTopShelfObject) is the carousel's main
+            // heading — the movie/episode name. `contextTitle` is the small line
+            // above it; we use it for the show name on episodes. Map:
+            //   episode -> title = episode name, contextTitle = show name
+            //   movie   -> title = movie name,   contextTitle = nil
+            cItem.title = item.title
             if let subtitle = item.subtitle, !subtitle.isEmpty {
                 cItem.contextTitle = subtitle   // show name (episodes)
-                cItem.summary = item.title      // episode name
-            } else {
-                cItem.summary = item.title       // movie name
             }
 
             // 16:9 backdrop art; fall back to the poster so an item is NEVER dropped.
