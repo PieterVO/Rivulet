@@ -216,9 +216,19 @@ class PlexDataStore: ObservableObject {
 
     // MARK: - Background Polling
 
-    /// Timer for periodic hub refresh (3 minutes)
+    /// Timer for periodic *full* hub refresh (`/hubs` + `/hubs/continueWatching`).
+    /// The global `/hubs` payload is large (~395KB) and its rows (Recently Added,
+    /// genres) change slowly, so this stays at 3 minutes.
     private var pollingTimer: Timer?
     private let pollingInterval: TimeInterval = 180 // 3 minutes
+
+    /// Timer for the fast Continue-Watching-only refresh
+    /// (`/hubs/continueWatching`, a small payload). Continue Watching is the one
+    /// Home row that changes on this cadence — resume position advances and items
+    /// reorder as you watch — so it's polled more often than the full `/hubs`
+    /// fetch without paying that fetch's cost. See `fetchContinueWatchingOnly`.
+    private var continueWatchingPollingTimer: Timer?
+    private let continueWatchingPollingInterval: TimeInterval = 30 // 30 seconds
 
     /// Track if playback is active (pause polling during playback)
     private var isPlaybackActive = false
@@ -282,21 +292,31 @@ class PlexDataStore: ObservableObject {
     func startPollingIfNeeded() {
         guard isInForeground,
               !isPlaybackActive,
-              authManager.selectedServerURL != nil,
-              pollingTimer == nil else { return }
+              authManager.selectedServerURL != nil else { return }
 
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                await self?.pollHubs()
+        if pollingTimer == nil {
+            pollingTimer = Timer.scheduledTimer(withTimeInterval: pollingInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    await self?.pollHubs()
+                }
+            }
+        }
+
+        if continueWatchingPollingTimer == nil {
+            continueWatchingPollingTimer = Timer.scheduledTimer(withTimeInterval: continueWatchingPollingInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    await self?.pollContinueWatching()
+                }
             }
         }
     }
 
-    /// Stop polling
+    /// Stop polling (both the full and Continue-Watching-only timers)
     private func stopPolling() {
-        guard pollingTimer != nil else { return }
         pollingTimer?.invalidate()
         pollingTimer = nil
+        continueWatchingPollingTimer?.invalidate()
+        continueWatchingPollingTimer = nil
     }
 
     /// Poll hubs silently (no loading indicator)
@@ -305,6 +325,16 @@ class PlexDataStore: ObservableObject {
               let token = authManager.selectedServerToken else { return }
 
         await fetchHubsFromServer(serverURL: serverURL, token: token, updateLoading: false)
+    }
+
+    /// Fast poll: refresh only the Continue Watching hub (small payload). When
+    /// this tick coincides with the full poll the equality gate makes the second
+    /// fetch a no-op, so the overlap is harmless.
+    private func pollContinueWatching() async {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+
+        await fetchContinueWatchingOnly(serverURL: serverURL, token: token)
     }
 
     // MARK: - Connection Recovery
@@ -636,6 +666,35 @@ class PlexDataStore: ObservableObject {
                 self.isLoadingHubs = false
             }
         }
+    }
+
+    /// Refresh *only* the Continue Watching hub (`/hubs/continueWatching`), not
+    /// the fat global `/hubs` payload. This is the fast-poll path: Continue
+    /// Watching is the only Home row that meaningfully changes on a 30s cadence
+    /// (resume position advances, items reorder as you watch), whereas Recently
+    /// Added / genre rows barely move. Polling just this small hub keeps the row
+    /// fresh without re-pulling the ~395KB `/hubs` response 6× as often.
+    ///
+    /// Reuses the same fetch call, equality gate, and projection as the full
+    /// path (`fetchHubsFromServer`) so the two can't diverge. A thrown fetch is
+    /// swallowed (keep the current hub) exactly as the full path does.
+    private func fetchContinueWatchingOnly(serverURL: String, token: String) async {
+        let userId = profileManager.selectedUserId
+        let fetched: PlexHub?
+        do {
+            fetched = try await fetchContinueWatchingOffMain(serverURL: serverURL, token: token, userId: userId)
+        } catch {
+            // Transient error: keep the current hub, same as the full path.
+            print("📦 PlexDataStore: Continue Watching fast-poll error (keeping current hub): \(error)")
+            return
+        }
+
+        hasFetchedContinueWatching = true
+        guard !continueWatchingHubsAreEqual(self.continueWatchingHub, fetched) else { return }
+        self.continueWatchingHub = fetched
+        self.hubsVersion = UUID()
+        updateTopShelfCache()
+        projectHomeItems()
     }
 
     /// Recover the cold-launch Home when the first `/hubs` fetch loses the race
