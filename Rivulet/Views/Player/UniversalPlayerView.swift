@@ -937,10 +937,9 @@ struct UniversalPlayerView: View {
                 }
             }
 
-            // Buffering Indicator
-            if viewModel.isBuffering && viewModel.playbackState != .loading {
-                bufferingIndicator
-            }
+            // Mid-playback buffering has no centered indicator: the quiet
+            // top-left "Loading" cue in PlayerContainerViewController covers
+            // it in the same slot the Paused indicator uses.
 
             // Seek Indicator (10s skip)
             if let indicator = viewModel.seekIndicator {
@@ -1104,19 +1103,6 @@ struct UniversalPlayerView: View {
             )
             .ignoresSafeArea()
         }
-    }
-
-    // MARK: - Buffering Indicator
-
-    private var bufferingIndicator: some View {
-        ProgressView()
-            .scaleEffect(1.5)
-            .tint(.white)
-            .padding(20)
-            .background(
-                Circle()
-                    .fill(.black.opacity(0.5))
-            )
     }
 
     // MARK: - Seek Indicator View

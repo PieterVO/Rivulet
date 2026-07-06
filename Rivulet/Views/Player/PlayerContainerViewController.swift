@@ -781,7 +781,12 @@ class PlayerContainerViewController: UIViewController {
                 self.progressBar?.setPausedDim(state == .paused && self.hasPlayedSinceLoad)
                 self.skipPill?.isHidden = loading || !vm.showSkipButton
 
-                self.loadingLabel?.isHidden = !loading
+                // Mid-playback buffering (seek landings, engine stalls)
+                // borrows the same quiet cue — no skeleton, no centered
+                // spinner, just the label. Buffering must NOT feed the
+                // skeleton/focus gates above: the bar keeps its fill and the
+                // scrubber stays focusable through a rebuffer.
+                self.loadingLabel?.isHidden = !(loading || state == .buffering)
 
                 if state == .paused, vm.duration > 0 {
                     let minutesLeft = Int(max(0, vm.duration - vm.currentTime) / 60)
@@ -965,6 +970,9 @@ class PlayerContainerViewController: UIViewController {
         guard let vm = viewModel else { return }
         let ambient = vm.pausePresentation != .frame
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
+        // Buffering shares the loading label but none of the other loading
+        // treatment (no skeleton, no focus gate) — see the state sink.
+        let showsActivityCue = isLoading || vm.playbackState == .buffering
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
         let railVisible = chromeVisible && !vm.isScrubbing
         let paused = vm.playbackState == .paused && !ambient && hasPlayedSinceLoad
@@ -985,7 +993,7 @@ class PlayerContainerViewController: UIViewController {
             (skipPill, railVisible && !isLoading ? 1 : 0),
             (pauseIndicator, paused ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
-            (loadingLabel, isLoading && !ambient ? 1 : 0),
+            (loadingLabel, showsActivityCue && !ambient ? 1 : 0),
         ]
         guard targets.contains(where: { view, alpha in view.map { abs($0.alpha - alpha) > 0.01 } == true }) else { return }
         UIView.animate(withDuration: 0.25) {

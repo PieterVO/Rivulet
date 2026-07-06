@@ -53,10 +53,21 @@ final class AetherPlayer: PlayerProtocol {
     /// (embedded or sidecar) is selected and the engine has cue data.
     @Published private(set) var isSubtitleActive: Bool = false
 
-    /// Mirrors engine.$isBuffering. Aether keeps its playback state as
-    /// `.playing` during AVPlayer waits to avoid transport flicker, so Rivulet
-    /// observes this separately for spinner/stall handling.
+    /// True while playback is stalled waiting for media. Combines
+    /// engine.$isBuffering with a direct timeControlStatus observation on the
+    /// engine's inner AVPlayer: the engine's flag only updates inside its
+    /// timeControlStatus sink gated on `state == .playing` at that moment, so
+    /// a far seek that lands while the player is still waiting (producer
+    /// remuxing at the new anchor) leaves the flag stale-false — a silent
+    /// stall window (upstream gap; the engine patches this in its seek-wedge
+    /// branch but not the normal landing path).
     @Published private(set) var isBuffering: Bool = false
+
+    /// Inputs for the combined `isBuffering` (see above).
+    private var engineReportsBuffering = false
+    private var engineIsPlaying = false
+    private var hostPlayerWaiting = false
+    private var timeControlStatusCancellable: AnyCancellable?
 
     /// Active Aether subtitle stream index, or nil when subtitles are off.
     @Published private(set) var activeSubtitleTrackId: Int?
@@ -85,7 +96,13 @@ final class AetherPlayer: PlayerProtocol {
         engine.$state
             .receive(on: DispatchQueue.main)
             .sink { [weak self] aetherState in
-                self?.stateSubject.send(Self.translate(aetherState))
+                guard let self else { return }
+                self.engineIsPlaying = (aetherState == .playing)
+                // Recompute BEFORE publishing the state so the view model's
+                // ".playing while still buffering" reconciliation sees the
+                // combined flag the moment a seek lands.
+                self.recomputeIsBuffering()
+                self.stateSubject.send(Self.translate(aetherState))
             }
             .store(in: &cancellables)
 
@@ -135,7 +152,8 @@ final class AetherPlayer: PlayerProtocol {
         engine.$isBuffering
             .receive(on: DispatchQueue.main)
             .sink { [weak self] buffering in
-                self?.isBuffering = buffering
+                self?.engineReportsBuffering = buffering
+                self?.recomputeIsBuffering()
             }
             .store(in: &cancellables)
 
@@ -162,6 +180,7 @@ final class AetherPlayer: PlayerProtocol {
                 // Live TV grid relies on per-slot muting persisting.
                 avp?.isMuted = self.isMuted
                 self.currentAVPlayer = avp
+                self.observeTimeControlStatus(of: avp)
             }
             .store(in: &cancellables)
 
@@ -178,6 +197,32 @@ final class AetherPlayer: PlayerProtocol {
                 self?._subtitleTracks = tracks.map(Self.translateTrack)
             }
             .store(in: &cancellables)
+    }
+
+    /// Watch the inner AVPlayer's transport directly. Replaced whenever the
+    /// engine swaps its player (track switch, background reopen); nil on the
+    /// software backend's no-AVPlayer configurations, where the engine's own
+    /// flag is the only (and sufficient) signal.
+    private func observeTimeControlStatus(of player: AVPlayer?) {
+        timeControlStatusCancellable = player?
+            .publisher(for: \.timeControlStatus)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in
+                self?.hostPlayerWaiting = (status == .waitingToPlayAtSpecifiedRate)
+                self?.recomputeIsBuffering()
+            }
+        if player == nil {
+            hostPlayerWaiting = false
+            recomputeIsBuffering()
+        }
+    }
+
+    private func recomputeIsBuffering() {
+        // hostPlayerWaiting only counts while the ENGINE believes it is
+        // playing: during loads/seeks the engine state already communicates,
+        // and a paused AVPlayer never reports waiting anyway.
+        let combined = engineReportsBuffering || (engineIsPlaying && hostPlayerWaiting)
+        if combined != isBuffering { isBuffering = combined }
     }
 
     private static func translate(_ s: PlaybackState) -> UniversalPlaybackState {
