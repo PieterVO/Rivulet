@@ -1226,10 +1226,14 @@ struct UniversalPlayerView: View {
         viewModel.hidePausedPoster()
 
         switch direction {
-        case .left:
-            inputCoordinator.handle(action: .stepSeek(forward: false), source: .swiftUICommand)
-        case .right:
-            inputCoordinator.handle(action: .stepSeek(forward: true), source: .swiftUICommand)
+        case .left, .right:
+            // Left/right are owned by the GameController/UIKit long-press path
+            // (RemoteHoldDetector) for tap-vs-hold shuttle detection, which
+            // emits .scrubNudge. Handling them here too fired a second
+            // .stepSeek → .seekRelative that bumped the shuttle a second time
+            // (one press jumping 2x→6x). Ignore them in the SwiftUI move
+            // handler — this handler only owns up/down.
+            break
         case .down:
             // Scrubbing: cancel. Controls visible: hand focus to the
             // transport bar's buttons (AVPlayerViewController model).
