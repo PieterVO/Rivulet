@@ -12,6 +12,17 @@ enum InputConfig {
     static let seekCoalesceInterval: TimeInterval = 0.05
     static let actionDedupeWindow: TimeInterval = 0.08
     static let transportDedupeWindow: TimeInterval = 0.35
+    /// A single directional press-and-hold is observed by TWO independent
+    /// detectors at the same ~0.4s threshold — the GameController hold timer
+    /// (.siriMicroGamepad, via an async hop) and the UIKit long-press
+    /// recognizer (.irPress, synchronous). Both emit `.scrubNudge`, and the
+    /// async skew routinely pushes them >0.08s apart, so each was bumping the
+    /// shuttle a level (a single hold jumping 2x→4x on its own). This wider
+    /// CROSS-SOURCE window coalesces the two into one hold entry, while
+    /// deliberate same-source re-clicks (which bump on purpose) are never
+    /// deduped because they share a source. Sized above the observed skew but
+    /// below a human's fastest deliberate double-click.
+    static let scrubNudgeDedupeWindow: TimeInterval = 0.25
     static let blockDismissTimeout: TimeInterval = 0.3
 
     static let tapSeekSeconds: TimeInterval = 10

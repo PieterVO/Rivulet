@@ -117,6 +117,21 @@ final class PlaybackInputCoordinator {
             return
         }
 
+        // A directional hold fires .scrubNudge from two detectors (GameController
+        // + UIKit long-press) at the same ~0.4s threshold. Coalesce that
+        // cross-source pair over a wider window so one hold is one nudge; a
+        // deliberate same-source re-click still bumps because it shares a source.
+        if isScrubNudge(action),
+           isDuplicate(action, source: source, crossSourceOnly: true, window: InputConfig.scrubNudgeDedupeWindow) {
+            PlaybackInputTelemetry.shared.recordDeduped(
+                action: action,
+                source: source,
+                window: InputConfig.scrubNudgeDedupeWindow,
+                crossSourceOnly: true
+            )
+            return
+        }
+
         if shouldDedupe(action), isDuplicate(action, source: source) {
             PlaybackInputTelemetry.shared.recordDeduped(
                 action: action,
@@ -145,11 +160,12 @@ final class PlaybackInputCoordinator {
     private func isDuplicate(
         _ action: PlaybackInputAction,
         source: PlaybackInputSource,
-        crossSourceOnly: Bool = false
+        crossSourceOnly: Bool = false,
+        window: TimeInterval = InputConfig.actionDedupeWindow
     ) -> Bool {
         guard lastAction == action else { return false }
         if crossSourceOnly, lastActionSource == source { return false }
-        return Date().timeIntervalSince(lastActionAt) < InputConfig.actionDedupeWindow
+        return Date().timeIntervalSince(lastActionAt) < window
     }
 
     @MainActor
@@ -169,6 +185,11 @@ final class PlaybackInputCoordinator {
         default:
             return false
         }
+    }
+
+    private func isScrubNudge(_ action: PlaybackInputAction) -> Bool {
+        if case .scrubNudge = action { return true }
+        return false
     }
 
     @MainActor
