@@ -1037,6 +1037,15 @@ struct UniversalPlayerView: View {
     /// 900px default and look soft). A deeper dim overlay layers in once
     /// `pausePresentation` reaches `.dimmed` (OLED burn-in guard after 2
     /// minutes paused).
+    /// Bottom inset for the ambient title logo. For a show the logo sits just
+    /// above the rail's held episode title (which stays at its rail position
+    /// ~278pt off the bottom), keeping the same small gap the logo has from
+    /// the rail title normally. For a movie there is no held title, so the
+    /// logo floats a touch lower in the lower third.
+    private var ambientLogoBottomInset: CGFloat {
+        viewModel.metadata.type == "episode" ? 292 : 260
+    }
+
     @ViewBuilder
     private func ambientBackdropView(url: URL) -> some View {
         ZStack {
@@ -1056,28 +1065,26 @@ struct UniversalPlayerView: View {
                     .ignoresSafeArea()
             }
 
-            // Title logo raised into the lower third, with an episode line
-            // beneath it for shows (movies show the logo only). Kept clear of
-            // the scrubber, which floats near the very bottom during ambient.
-            VStack(alignment: .leading, spacing: 14) {
-                Spacer()
-                if let logo = viewModel.titleLogoImage {
-                    Image(uiImage: logo)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 500, maxHeight: 130, alignment: .bottomLeading)
+            // Title logo, sitting just above the rail's episode title. For a
+            // show the episode name stays put in the glass rail (kept visible
+            // by PlayerRailView.setAmbient); the logo sits the same distance
+            // above it that it has from the rail title normally. For a movie
+            // there is no held title — the logo just floats in the lower third.
+            if let logo = viewModel.titleLogoImage {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Image(uiImage: logo)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 500, maxHeight: 130, alignment: .bottomLeading)
+                            .padding(.leading, 132)
+                            .padding(.bottom, ambientLogoBottomInset)
+                        Spacer()
+                    }
                 }
-                if let episodeLine = viewModel.ambientEpisodeLine {
-                    Text(episodeLine)
-                        .font(.system(size: 23, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.66))
-                        .lineLimit(1)
-                }
+                .transition(.opacity)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 96)
-            .padding(.bottom, 260)
-            .transition(.opacity)
         }
         .task(id: url) {
             ambientBackdropImage = await ImageCacheManager.shared.image(for: url, quality: .full)

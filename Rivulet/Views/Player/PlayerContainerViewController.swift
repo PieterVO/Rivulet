@@ -995,6 +995,13 @@ class PlayerContainerViewController: UIViewController {
         // read-only position indicator even though the rail fades. Not shown
         // while loading — there is no meaningful position yet.
         let scrubberVisible = chromeVisible || (ambient && !isLoading)
+        // For a show, the episode title stays put in the rail during ambient
+        // (same place, same size) while the rest of the rail empties out. The
+        // rail view itself is held at alpha 1 so that held title shows; the
+        // plate/eyebrow/meta/buttons fade inside `setAmbient`. Movies keep
+        // nothing here (logo only).
+        let keepRailTitle = ambient && vm.metadata.type == "episode"
+        let railAlpha: CGFloat = keepRailTitle ? 1 : (railVisible ? 1 : 0)
 
         scrubberProxy?.isFocusEnabled = railVisible && !isLoading && vm.controlsFocusActive
 
@@ -1009,15 +1016,24 @@ class PlayerContainerViewController: UIViewController {
             (chromeScrim, chromeVisible ? 1 : 0),
             (progressBar, scrubberVisible ? 1 : 0),
             (ambientScrim, (ambient && !isLoading) ? 1 : 0),
-            (rail, railVisible ? 1 : 0),
+            (rail, railAlpha),
             (skipPill, railVisible && !isLoading ? 1 : 0),
             (pauseIndicator, paused ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
             (loadingLabel, showsActivityCue && !ambient ? 1 : 0),
         ]
-        guard targets.contains(where: { view, alpha in view.map { abs($0.alpha - alpha) > 0.01 } == true }) else { return }
+        // `setAmbient` also drives the rail's sub-view alphas (plate/eyebrow/
+        // meta/buttons vs. the held title), which the `targets` diff below
+        // doesn't see, so fold its own change-detection in. (No rail → nothing
+        // to animate there, so treat as unchanged.)
+        let railAmbientChanged = rail.map { $0.ambientState != (ambient, keepRailTitle) } ?? false
+        let targetsChanged = targets.contains(where: { view, alpha in
+            view.map { abs($0.alpha - alpha) > 0.01 } == true
+        })
+        guard targetsChanged || railAmbientChanged else { return }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
+            self.rail?.setAmbient(ambient, keepTitle: keepRailTitle)
         }
     }
 

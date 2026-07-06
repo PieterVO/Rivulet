@@ -182,6 +182,32 @@ final class PlayerRailView: UIView {
         upNextButton.isHidden = !available
     }
 
+    // MARK: - Ambient pause
+
+    /// During ambient pause the glass plate, eyebrow, meta, and buttons fade
+    /// out, but for a show the episode `titleLabel` stays exactly where the
+    /// rail draws it (same place, same 38pt bold) — it does not fade with the
+    /// rest. `keepTitle` is false for movies (logo only, nothing kept here).
+    /// The container holds the rail's own alpha at 1 while ambient so this
+    /// held title can show through.
+    ///
+    /// `ambientState` lets the container detect a real change (the sub-view
+    /// alpha shifts here aren't visible to its own top-level `targets` diff).
+    private(set) var ambientState: (ambient: Bool, keepTitle: Bool) = (false, false)
+
+    func setAmbient(_ ambient: Bool, keepTitle: Bool) {
+        ambientState = (ambient, keepTitle)
+        let plateAlpha: CGFloat = ambient ? 0 : 1
+        backgroundEffectView.alpha = plateAlpha
+        tintView.alpha = plateAlpha
+        eyebrowLabel.alpha = plateAlpha
+        metaRow.alpha = plateAlpha
+        cluster.alpha = plateAlpha
+        // Shadow belongs to the plate; drop it so no glass ghost lingers.
+        layer.shadowOpacity = ambient ? 0 : 0.6
+        titleLabel.alpha = ambient ? (keepTitle ? 1 : 0) : 1
+    }
+
     // MARK: - Focus
 
     private weak var lastFocusedButton: UIView?
