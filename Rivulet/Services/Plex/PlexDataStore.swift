@@ -1587,110 +1587,19 @@ class PlexDataStore: ObservableObject {
     /// Update the Top Shelf cache with Continue Watching items
     /// Called after hubs are fetched to keep Top Shelf in sync
     private func updateTopShelfCache() {
-
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
             print("TopShelf: No server URL or token available")
             return
         }
 
-        // Use server URL as identifier (unique per server)
-        let serverIdentifier = serverURL
+        // Source from the dedicated /hubs/continueWatching hub — the same source
+        // the in-app Continue Watching row trusts. The old global-/hubs scrape
+        // dropped movies (GitHub #194); the dedicated hub returns movies + episodes.
+        let metadata = continueWatchingHub?.Metadata ?? []
+        let items = TopShelfMapper.items(from: metadata, serverURL: serverURL, token: token, limit: 5)
 
-        // Collect Continue Watching items from hubs
-        var continueWatchingItems: [PlexMetadata] = []
-
-        for hub in hubs {
-            let identifier = hub.hubIdentifier?.lowercased() ?? ""
-            let isContinueWatching = identifier.contains("continuewatching") ||
-                                     identifier.contains("ondeck") ||
-                                     identifier.contains("inprogress")
-
-            if isContinueWatching, let items = hub.Metadata {
-                continueWatchingItems.append(contentsOf: items)
-            }
-        }
-
-        // Deduplicate by ratingKey and sort by lastViewedAt (Unix timestamp)
-        var seen = Set<String>()
-        var deduplicatedItems: [PlexMetadata] = []
-        for item in continueWatchingItems {
-            guard let key = item.ratingKey, !seen.contains(key) else { continue }
-            seen.insert(key)
-            deduplicatedItems.append(item)
-        }
-        // Sort by lastViewedAt descending (most recent first)
-        deduplicatedItems.sort { ($0.lastViewedAt ?? 0) > ($1.lastViewedAt ?? 0) }
-        let uniqueItems = deduplicatedItems
-
-        // Convert to TopShelfItem and take top 10
-        let topShelfItems = uniqueItems.prefix(10).compactMap { metadata -> TopShelfItem? in
-            guard let ratingKey = metadata.ratingKey else { return nil }
-
-            // Build title
-            let title: String
-            if metadata.type == "episode" {
-                title = metadata.fullEpisodeTitle ?? metadata.title ?? "Unknown"
-            } else {
-                title = metadata.title ?? "Unknown"
-            }
-
-            // Build image URL with token
-            // For episodes, prefer show poster (grandparentThumb) for Top Shelf display
-            let thumbPath: String
-            if metadata.type == "episode" {
-                thumbPath = metadata.grandparentThumb ?? metadata.parentThumb ?? metadata.thumb ?? ""
-            } else {
-                thumbPath = metadata.thumb ?? ""
-            }
-            var imageURL = thumbPath
-            if !thumbPath.isEmpty && !thumbPath.hasPrefix("http") {
-                imageURL = "\(serverURL)\(thumbPath)"
-            }
-            if !imageURL.contains("X-Plex-Token") && !imageURL.isEmpty {
-                imageURL += imageURL.contains("?") ? "&" : "?"
-                imageURL += "X-Plex-Token=\(token)"
-            }
-
-            // Build wide (16:9 backdrop) URL with token — prefer art/grandparentArt,
-            // fall back to the poster thumbPath when no backdrop is present.
-            let widePath: String
-            if metadata.type == "episode" {
-                widePath = metadata.grandparentArt ?? metadata.parentThumb ?? metadata.thumb ?? ""
-            } else {
-                widePath = metadata.art ?? metadata.thumb ?? ""
-            }
-            var wideImageURL = widePath
-            if !widePath.isEmpty && !widePath.hasPrefix("http") {
-                wideImageURL = "\(serverURL)\(widePath)"
-            }
-            if !wideImageURL.contains("X-Plex-Token") && !wideImageURL.isEmpty {
-                wideImageURL += wideImageURL.contains("?") ? "&" : "?"
-                wideImageURL += "X-Plex-Token=\(token)"
-            }
-
-            // Convert Unix timestamp to Date
-            let lastWatchedDate: Date
-            if let timestamp = metadata.lastViewedAt {
-                lastWatchedDate = Date(timeIntervalSince1970: TimeInterval(timestamp))
-            } else {
-                lastWatchedDate = Date()
-            }
-
-            return TopShelfItem(
-                ratingKey: ratingKey,
-                title: title,
-                subtitle: metadata.grandparentTitle,
-                imageURL: imageURL,
-                wideImageURL: wideImageURL,
-                progress: metadata.watchProgress ?? 0,
-                type: metadata.type ?? "movie",
-                lastWatched: lastWatchedDate,
-                serverIdentifier: serverIdentifier
-            )
-        }
-
-        TopShelfCache.shared.writeItems(Array(topShelfItems))
+        TopShelfCache.shared.writeItems(items)
     }
 
     // MARK: - Reset (on sign out)
