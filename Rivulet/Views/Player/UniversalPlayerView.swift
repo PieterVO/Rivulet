@@ -728,6 +728,12 @@ struct UniversalPlayerView: View {
     /// CaptionAppearance.changedNotification so restyles apply live.
     @State private var captionStyle: CaptionStyle = CaptionAppearance.current()
 
+    /// Full-resolution decode of the ambient-pause backdrop. Loaded via
+    /// ImageCacheManager at `.full` (3840px) so it matches the preview
+    /// carousel; CachedAsyncImage would decode at the `.thumb` 900px
+    /// default and look soft full-screen on a 4K panel.
+    @State private var ambientBackdropImage: UIImage?
+
     /// Initialize with metadata (creates viewModel internally)
     @MainActor
     init(
@@ -1026,27 +1032,24 @@ struct UniversalPlayerView: View {
     // MARK: - Ambient Pause Backdrop
 
     /// Full-resolution backdrop for the ambient pause moment: full-bleed
-    /// crossfade of the raw Plex art (native size, not the 400x600
-    /// photo-transcode `loadingArtImage`/`loadingThumbImage` use), with a
-    /// deeper dim overlay once `pausePresentation` reaches `.dimmed`
-    /// (OLED burn-in guard after 2 minutes paused).
+    /// raw Plex art decoded at `.full` (3840px) via ImageCacheManager —
+    /// same source and decode ceiling as the preview carousel, so it reads
+    /// crisp on a 4K panel (CachedAsyncImage would decode at the `.thumb`
+    /// 900px default and look soft). A deeper dim overlay layers in once
+    /// `pausePresentation` reaches `.dimmed` (OLED burn-in guard after 2
+    /// minutes paused).
     @ViewBuilder
     private func ambientBackdropView(url: URL) -> some View {
         ZStack {
             Color.black
                 .ignoresSafeArea()
 
-            CachedAsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                case .empty, .failure:
-                    Color.black
-                }
+            if let image = ambientBackdropImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .ignoresSafeArea()
             }
-            .ignoresSafeArea()
 
             if viewModel.pausePresentation == .dimmed {
                 Color.black
@@ -1069,6 +1072,9 @@ struct UniversalPlayerView: View {
                 }
                 .transition(.opacity)
             }
+        }
+        .task(id: url) {
+            ambientBackdropImage = await ImageCacheManager.shared.image(for: url, quality: .full)
         }
         .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
     }
