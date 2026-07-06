@@ -1183,9 +1183,12 @@ class PlexDataStore: ObservableObject {
     }
 
     private func continueWatchingHubsAreEqual(_ lhs: PlexHub?, _ rhs: PlexHub?) -> Bool {
-        let lhsKeys = lhs?.Metadata?.compactMap { $0.ratingKey } ?? []
-        let rhsKeys = rhs?.Metadata?.compactMap { $0.ratingKey } ?? []
-        return lhsKeys == rhsKeys
+        // Delegate to the shared per-item comparison so this path can't drift
+        // from `hubsAreEqual`. Comparing ratingKeys alone (the old behaviour)
+        // ignored `viewOffset`, which froze Continue Watching progress bars
+        // after a refresh — the item set was unchanged so the refreshed hub was
+        // judged "equal" and never re-published.
+        PlexHub.metadataStateEqual(lhs?.Metadata, rhs?.Metadata)
     }
 
     private func fetchLibrariesOffMain(serverURL: String, token: String, userId: Int?) async throws -> [PlexLibrary] {
@@ -1667,15 +1670,10 @@ class PlexDataStore: ObservableObject {
         guard lhs.count == rhs.count else { return false }
         for (l, r) in zip(lhs, rhs) {
             if l.hubIdentifier != r.hubIdentifier { return false }
-            if l.Metadata?.count != r.Metadata?.count { return false }
-            // Also compare item watch status to detect changes
-            if let lItems = l.Metadata, let rItems = r.Metadata {
-                for (lItem, rItem) in zip(lItems, rItems) {
-                    if lItem.ratingKey != rItem.ratingKey { return false }
-                    if lItem.viewCount != rItem.viewCount { return false }
-                    if lItem.viewOffset != rItem.viewOffset { return false }
-                }
-            }
+            // Per-item watch-state comparison (ratingKey + viewOffset +
+            // viewCount) is shared with the Continue Watching path so the two
+            // can't diverge — see `PlexHub.metadataStateEqual`.
+            if !PlexHub.metadataStateEqual(l.Metadata, r.Metadata) { return false }
         }
         return true
     }

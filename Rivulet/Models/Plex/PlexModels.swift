@@ -235,6 +235,32 @@ nonisolated struct PlexHub: Codable, Identifiable, Sendable {
         self.size = size
         self.Metadata = Metadata
     }
+
+    // MARK: - State-change equality
+
+    /// Whether two hubs' item lists represent the *same displayed state*.
+    ///
+    /// This is the single source of truth for "did anything the UI renders
+    /// change?" on a hub refresh. It compares each item's `ratingKey`,
+    /// `viewOffset` (resume position) **and** `viewCount` (watched state) in
+    /// order. `ratingKey` alone is not enough: resuming an item that's already
+    /// in the list advances only its `viewOffset`, and a stale-offset check
+    /// silently freezes Continue Watching progress bars.
+    ///
+    /// Both the global `/hubs` refresh and the `/hubs/continueWatching` refresh
+    /// in `PlexDataStore` route their equality checks through here so the two
+    /// paths can never drift apart again.
+    nonisolated static func metadataStateEqual(_ lhs: [PlexMetadata]?, _ rhs: [PlexMetadata]?) -> Bool {
+        let l = lhs ?? []
+        let r = rhs ?? []
+        guard l.count == r.count else { return false }
+        for (a, b) in zip(l, r) {
+            if a.ratingKey != b.ratingKey { return false }
+            if a.viewOffset != b.viewOffset { return false }
+            if a.viewCount != b.viewCount { return false }
+        }
+        return true
+    }
 }
 
 // MARK: - Media Item (Movie, Show, Episode, etc.)
