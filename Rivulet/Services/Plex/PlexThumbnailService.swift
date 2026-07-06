@@ -330,23 +330,27 @@ nonisolated struct BIFData: Sendable {
 
     /// Nearest frame index for a playback time.
     ///
-    /// Fast path (O(1)): when the parser dropped no frames, Plex BIF
-    /// timestamps are dense frame numbers and `frames[i].timestamp == i`,
-    /// so the index can be computed directly from `time / interval`.
+    /// Fast path (O(1)): valid ONLY when timestamps are dense frame numbers
+    /// (`frames[i].timestamp == i`, so `frames.last.timestamp == count - 1`).
+    /// Then the index is `time / interval` directly.
     ///
-    /// Fallback path (O(log n)): if the parser silently dropped a
-    /// malformed frame entry (see `init?(data:)`), array position no
-    /// longer matches timestamp past the drop point. Binary-search
-    /// `frames` by real time (`timestamp * interval`) — frames remain
-    /// timestamp-sorted by construction even with gaps — so lookups stay
-    /// correct instead of reading whatever frame happens to sit at the
-    /// naively-computed array position.
+    /// Fallback path (O(log n)): Plex also ships BIFs whose timestamps are
+    /// STRIDED — e.g. `0, 2, 4, … , 1416` for 709 frames (each frame's real
+    /// time is `timestamp * interval`, spaced ~2s even though intervalMs=1000).
+    /// There `time / interval` runs out of frames at ~half the runtime and
+    /// clamps every later scrub onto the final (credits) frame. The same
+    /// happens when the parser drops a malformed frame and array position
+    /// desyncs from timestamp. In both cases binary-search `frames` (which
+    /// stays timestamp-sorted by construction) by real time so each thumbnail
+    /// re-times to its true position and the whole timeline is covered.
     func frameIndex(at time: TimeInterval) -> Int? {
         guard !frames.isEmpty else { return nil }
         let interval = TimeInterval(intervalMs) / 1000.0
         guard interval > 0 else { return 0 }
 
-        if timestampsAreContiguous {
+        // Dense only when the last timestamp equals the last array index.
+        let timestampsAreDense = Int(frames[frames.count - 1].timestamp) == frames.count - 1
+        if timestampsAreContiguous && timestampsAreDense {
             let idx = Int((time / interval).rounded())
             return min(max(idx, 0), frames.count - 1)
         }

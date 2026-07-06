@@ -46,6 +46,81 @@ final class BIFFilmstripTests: XCTestCase {
         XCTAssertNil(bif?.frameIndex(at: 5))
     }
 
+    /// Same as `makeBIF`, but writes STRIDED timestamps: frame i's timestamp
+    /// is `i * stride` instead of `i`. This mirrors real Plex BIFs seen in
+    /// the field (e.g. 709 frames whose timestamps run 0,2,4,…,1416 with
+    /// intervalMs=1000 — real frame spacing ~2s, and lastTS != count-1).
+    private func makeStridedBIF(frameCount: Int, intervalMs: UInt32, stride: UInt32) -> Data {
+        var data = Data([0x89, 0x42, 0x49, 0x46, 0x0D, 0x0A, 0x1A, 0x0A]) // magic
+        func appendLE(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
+        appendLE(0)                    // version
+        appendLE(UInt32(frameCount))   // count
+        appendLE(intervalMs)           // interval
+        data.append(Data(repeating: 0, count: 44)) // reserved to byte 64
+        let payloads: [Data] = (0..<frameCount).map { Data([UInt8(($0 + 1) & 0xFF), 0xFF]) }
+        var offset = UInt32(64 + (frameCount + 1) * 8)
+        for (i, p) in payloads.enumerated() {
+            appendLE(UInt32(i) * stride) // timestamp = frame number * stride
+            appendLE(offset)
+            offset += UInt32(p.count)
+        }
+        appendLE(UInt32.max)           // end-marker timestamp (unused)
+        appendLE(offset)               // end offset
+        payloads.forEach { data.append($0) }
+        return data
+    }
+
+    /// Regression test for the field bug where a BIF's timestamps are strided
+    /// (real coverage == full runtime) but `frameIndex(at:)` used the dense
+    /// `time / interval` fast path — running out of frames at ~half the
+    /// runtime and clamping every later scrub onto the final (credits) frame.
+    /// The lookup must re-time by each frame's real time so every scrub
+    /// position lands on a distinct frame across the WHOLE timeline.
+    func testFrameIndexStridedTimestampsSpanWholeTimeline() {
+        // 709 frames, intervalMs=1000, stride 2 → timestamps 0,2,…,1416.
+        // Real time of frame i = (i*2) * 1s = 2i seconds; coverage 1416s.
+        let bif = BIFData(data: makeStridedBIF(frameCount: 709, intervalMs: 1000, stride: 2))!
+        XCTAssertEqual(bif.frameCount, 709)
+        XCTAssertEqual(bif.frames.last?.timestamp, 1416)
+
+        // A scrub near the MIDPOINT must NOT clamp to the last frame.
+        // 708s real time → nearest frame is the one at timestamp 708 (real
+        // 708s), which is array index 354. The old fast path returned
+        // round(708/1.0)=708 → clamped to 708 (the credits frame).
+        let mid = bif.frameIndex(at: 708)
+        XCTAssertEqual(mid, 354, "midpoint scrub must resolve to the true mid frame, not the clamped last frame")
+        XCTAssertNotEqual(mid, bif.frameCount - 1, "midpoint must not be the final (credits) frame")
+
+        // 90% of the way in: 1276s is the exact real time of frame 638
+        // (timestamp 1276), still well short of the last frame (708).
+        let late = bif.frameIndex(at: 1276)
+        XCTAssertEqual(late, 638, "a 90% scrub must resolve to a distinct late frame, not the last")
+        XCTAssertNotEqual(late, bif.frameCount - 1)
+
+        // Distinct positions across the timeline must yield distinct frames
+        // (monotonic increasing), proving the frames spread over the runtime.
+        let quarter = bif.frameIndex(at: 354)!   // ~timestamp 354 → index 177
+        XCTAssertEqual(quarter, 177)
+        XCTAssertLessThan(quarter, mid!)
+        XCTAssertLessThan(mid!, late!)
+
+        // Endpoints still behave: 0 → first frame, past-end → clamps to last.
+        XCTAssertEqual(bif.frameIndex(at: 0), 0)
+        XCTAssertEqual(bif.frameIndex(at: 9_999), 708)
+    }
+
+    /// A genuinely dense BIF (timestamp == index) must still use the exact
+    /// fast path — this fix must not regress the common case.
+    func testFrameIndexDenseTimestampsUseExactMapping() {
+        // 6 frames at 10s, dense timestamps 0..5. lastTS(5) == count-1(5).
+        let bif = BIFData(data: makeBIF(frameCount: 6, intervalMs: 10_000))!
+        XCTAssertEqual(bif.frames.last?.timestamp, 5)
+        XCTAssertEqual(bif.frameIndex(at: 0), 0)
+        XCTAssertEqual(bif.frameIndex(at: 25), 3)   // round(25/10)=round(2.5)=3 → 30s
+        XCTAssertEqual(bif.frameIndex(at: 24), 2)   // round(24/10)=round(2.4)=2 → 20s
+        XCTAssertEqual(bif.frameIndex(at: 50), 5)   // last
+    }
+
     /// Same as `makeBIF`, but corrupts one middle frame's index entry so
     /// its offset points beyond the end of the file. The parser's
     /// offset-bounds guard (`start < data.count`) silently drops that
