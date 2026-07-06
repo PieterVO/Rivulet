@@ -329,11 +329,10 @@ class PlayerContainerViewController: UIViewController {
                 panel.dismissPanel()
                 return
             }
-            if vm.controlsFocusActive {
-                vm.exitControlsFocus()
-                return
-            }
-            if vm.showControls {
+            // Back from the transport buttons closes the whole chrome in one
+            // press (not first de-focusing onto the scrubber). Hiding
+            // showControls cascades to clear controlsFocusActive via its didSet.
+            if vm.controlsFocusActive || vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
                 }

@@ -700,9 +700,12 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 )
                 vm.cancelScrub()
                 onResetRemoteInput?()
-            } else if vm.controlsFocusActive {
-                vm.exitControlsFocus()
-            } else if vm.showControls {
+            } else if vm.controlsFocusActive || vm.showControls {
+                // Back from the transport buttons (or from any visible chrome)
+                // closes the whole chrome in one press, rather than first
+                // de-focusing the buttons onto the scrubber and leaving the rail
+                // up. Hiding showControls cascades to clear controlsFocusActive
+                // via its didSet, so this single step exits focus mode too.
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
                 }
