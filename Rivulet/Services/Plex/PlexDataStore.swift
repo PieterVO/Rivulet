@@ -1652,6 +1652,23 @@ class PlexDataStore: ObservableObject {
                 imageURL += "X-Plex-Token=\(token)"
             }
 
+            // Build wide (16:9 backdrop) URL with token — prefer art/grandparentArt,
+            // fall back to the poster thumbPath when no backdrop is present.
+            let widePath: String
+            if metadata.type == "episode" {
+                widePath = metadata.grandparentArt ?? metadata.parentThumb ?? metadata.thumb ?? ""
+            } else {
+                widePath = metadata.art ?? metadata.thumb ?? ""
+            }
+            var wideImageURL = widePath
+            if !widePath.isEmpty && !widePath.hasPrefix("http") {
+                wideImageURL = "\(serverURL)\(widePath)"
+            }
+            if !wideImageURL.contains("X-Plex-Token") && !wideImageURL.isEmpty {
+                wideImageURL += wideImageURL.contains("?") ? "&" : "?"
+                wideImageURL += "X-Plex-Token=\(token)"
+            }
+
             // Convert Unix timestamp to Date
             let lastWatchedDate: Date
             if let timestamp = metadata.lastViewedAt {
@@ -1665,6 +1682,7 @@ class PlexDataStore: ObservableObject {
                 title: title,
                 subtitle: metadata.grandparentTitle,
                 imageURL: imageURL,
+                wideImageURL: wideImageURL,
                 progress: metadata.watchProgress ?? 0,
                 type: metadata.type ?? "movie",
                 lastWatched: lastWatchedDate,
