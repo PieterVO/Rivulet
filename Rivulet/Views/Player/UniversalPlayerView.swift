@@ -1057,21 +1057,28 @@ struct UniversalPlayerView: View {
                     .ignoresSafeArea()
             }
 
-            if let logo = viewModel.titleLogoImage {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Image(uiImage: logo)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 500, maxHeight: 130, alignment: .bottomLeading)
-                            .padding(.leading, 96)
-                            .padding(.bottom, 96)
-                        Spacer()
-                    }
+            // Title logo raised into the lower third, with an episode line
+            // beneath it for shows (movies show the logo only). Kept clear of
+            // the scrubber, which floats near the very bottom during ambient.
+            VStack(alignment: .leading, spacing: 14) {
+                Spacer()
+                if let logo = viewModel.titleLogoImage {
+                    Image(uiImage: logo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 500, maxHeight: 130, alignment: .bottomLeading)
                 }
-                .transition(.opacity)
+                if let episodeLine = viewModel.ambientEpisodeLine {
+                    Text(episodeLine)
+                        .font(.system(size: 23, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.66))
+                        .lineLimit(1)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 96)
+            .padding(.bottom, 260)
+            .transition(.opacity)
         }
         .task(id: url) {
             ambientBackdropImage = await ImageCacheManager.shared.image(for: url, quality: .full)
