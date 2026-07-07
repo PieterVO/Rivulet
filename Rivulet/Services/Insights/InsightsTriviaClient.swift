@@ -38,6 +38,13 @@ actor InsightsTriviaClient {
         await fetchTrivia(path: "insights/tv/\(showTmdbId)/\(season)/\(episode)")
     }
 
+    /// Show-level trivia (production/casting/overall, not tied to an episode).
+    /// Used for a show context, or as a fallback for an episode that has no
+    /// episode-specific trivia yet.
+    func showTrivia(showTmdbId: Int) async -> TitleTrivia? {
+        await fetchTrivia(path: "insights/tv/\(showTmdbId)/show")
+    }
+
     /// The set of suppressed fact ids (auto-hidden after enough reports).
     /// Empty set on any failure — suppression is a safety overlay, and failing
     /// open (showing a fact) is acceptable; failing closed is not required.

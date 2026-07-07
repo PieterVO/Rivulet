@@ -3854,9 +3854,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         var trivia: TitleTrivia?
-        if metadata.type == "episode", let season = metadata.parentIndex, let episode = metadata.index {
-            trivia = await InsightsTriviaClient.shared.episodeTrivia(showTmdbId: tmdbId, season: season, episode: episode)
-        } else {
+        switch metadata.type {
+        case "episode":
+            if let season = metadata.parentIndex, let episode = metadata.index {
+                trivia = await InsightsTriviaClient.shared.episodeTrivia(
+                    showTmdbId: tmdbId, season: season, episode: episode)
+            }
+            // Fall back to the show's overall trivia when this episode has none
+            // yet — production/casting facts are still relevant to the viewer.
+            if trivia == nil {
+                trivia = await InsightsTriviaClient.shared.showTrivia(showTmdbId: tmdbId)
+            }
+        case "show", "season":
+            trivia = await InsightsTriviaClient.shared.showTrivia(showTmdbId: tmdbId)
+        default:
             trivia = await InsightsTriviaClient.shared.movieTrivia(tmdbId: tmdbId)
         }
         let suppressed = await InsightsTriviaClient.shared.suppressedFactIDs()
