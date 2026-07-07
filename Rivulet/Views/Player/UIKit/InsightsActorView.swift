@@ -49,7 +49,11 @@ final class InsightsActorView: UIView {
     }
 
     private let person: MediaPerson
-    private var detail: PersonDetail?
+    /// Internal (not private) visibility so `@testable import Rivulet` tests
+    /// can observe whether a load result actually reached this view — the
+    /// stale-load integration test asserts on this after a coordinator-token
+    /// mismatch to prove `populate(_:)` never got called for a dropped load.
+    private(set) var detail: PersonDetail?
     private var movies: [FilmographyEntry] = []
     private var shows: [FilmographyEntry] = []
     /// True until `populate`/`showDetailsUnavailable` drives the header's

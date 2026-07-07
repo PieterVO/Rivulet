@@ -41,7 +41,10 @@ final class InsightsPanelContainerView: UIView {
     private lazy var listView = InsightsCastListView(cast: cast, onSelect: { [weak self] person in
         self?.crossfadeToActor(person)
     })
-    private var actorView: InsightsActorView?
+    /// Internal (not private) visibility so `@testable import Rivulet` tests
+    /// can observe the currently-hosted actor view (e.g. to confirm a stale
+    /// load never reached it after the user backed out / switched actors).
+    private(set) var actorView: InsightsActorView?
     private let coordinator = InsightsActorLoadCoordinator()
     private var state: State = .list
 
@@ -71,7 +74,10 @@ final class InsightsPanelContainerView: UIView {
 
     // MARK: - Crossfade
 
-    private func crossfadeToActor(_ person: MediaPerson) {
+    /// Internal (not private) visibility so `@testable import Rivulet`
+    /// integration tests can drive selection directly (in production this
+    /// only ever fires from `InsightsCastListView`'s row `onSelect`).
+    func crossfadeToActor(_ person: MediaPerson) {
         guard state == .list else { return }
         let token = coordinator.begin()
 
@@ -119,7 +125,8 @@ final class InsightsPanelContainerView: UIView {
         }
     }
 
-    private func reverseCrossfadeToList() {
+    /// Internal (not private) visibility — see `crossfadeToActor`.
+    func reverseCrossfadeToList() {
         guard state == .actor, let actor = actorView else { return }
         coordinator.cancel()
         state = .list
