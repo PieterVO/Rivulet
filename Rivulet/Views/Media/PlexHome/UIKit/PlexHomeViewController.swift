@@ -1804,6 +1804,7 @@ final class PlexHomeViewController: UIViewController {
         collectionView.register(ShelfRowCell.self, forCellWithReuseIdentifier: ShelfRowCell.reuseID)
         collectionView.register(ContinueWatchingCell.self, forCellWithReuseIdentifier: ContinueWatchingCell.reuseID)
         collectionView.register(HeroOverlayCell.self, forCellWithReuseIdentifier: HeroOverlayCell.reuseID)
+        collectionView.register(HeroLoadingCell.self, forCellWithReuseIdentifier: HeroLoadingCell.reuseID)
         collectionView.register(WatchlistPosterCell.self, forCellWithReuseIdentifier: WatchlistPosterCell.reuseID)
         collectionView.register(PosterSkeletonCell.self, forCellWithReuseIdentifier: PosterSkeletonCell.reuseID)
         collectionView.register(RecommendationsStateCell.self, forCellWithReuseIdentifier: RecommendationsStateCell.reuseID)
@@ -2091,6 +2092,9 @@ final class PlexHomeViewController: UIViewController {
 
         switch section.kind {
         case .hero:
+            if itemID.itemID == Self.heroLoadingItemToken {
+                return collectionView.dequeueReusableCell(withReuseIdentifier: HeroLoadingCell.reuseID, for: indexPath)
+            }
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: HeroOverlayCell.reuseID, for: indexPath) as! HeroOverlayCell
             if !section.heroMediaItems.isEmpty {
                 // Discover mode: TMDB-mapped MediaItem hero (same overlay,
@@ -2413,7 +2417,11 @@ final class PlexHomeViewController: UIViewController {
             var ids: [HomeItemID]
             switch section.kind {
             case .hero:
-                ids = [HomeItemID(sectionID: section.id, itemID: "hero-overlay")]
+                // Discover's hero is MediaItem-backed; only a section with
+                // neither item array is the loading placeholder.
+                let isPlaceholder = section.heroItems.isEmpty && section.heroMediaItems.isEmpty
+                ids = [HomeItemID(sectionID: section.id,
+                                  itemID: isPlaceholder ? Self.heroLoadingItemToken : "hero-overlay")]
             case .sortHeader:
                 ids = [Self.sortHeaderItemID]
             case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid:
@@ -2476,6 +2484,10 @@ final class PlexHomeViewController: UIViewController {
 
     /// Single diffable itemID for every shelf row (one item per hub section).
     static let shelfRowItemToken = "__shelf-row__"
+
+    /// Diffable itemID for the hero slot's loading placeholder. Distinct from
+    /// "hero-overlay" so the snapshot swap re-vends the cell when content lands.
+    static let heroLoadingItemToken = "hero-loading"
 
     /// Resting scroll offset per shelf section, restored across cell reuse.
     private var shelfOffsets: [HomeSectionID: CGFloat] = [:]
@@ -2823,9 +2835,15 @@ final class PlexHomeViewController: UIViewController {
 
         var sections: [HomeSectionData] = []
 
-        // Hero (when enabled + items available)
-        if showHomeHero, !heroItems.isEmpty {
-            sections.append(.hero(items: heroItems))
+        // Hero (when enabled): the real carousel once items resolve; while
+        // the trending fetch is in flight the section stays in the snapshot
+        // as a fixed-height placeholder so rows below never shift.
+        if showHomeHero {
+            if !heroItems.isEmpty {
+                sections.append(.hero(items: heroItems))
+            } else if heroState == .loading {
+                sections.append(.hero(items: []))
+            }
         }
 
         // Continue Watching + Recently-Added-per-library rows come from the
@@ -2881,8 +2899,12 @@ final class PlexHomeViewController: UIViewController {
     private func computeLibrarySections(libraryKey key: String, libraryTitle: String) -> [HomeSectionData] {
         var sections: [HomeSectionData] = []
 
-        if showHomeHero, !heroItems.isEmpty {
-            sections.append(.hero(items: heroItems))
+        if showHomeHero {
+            if !heroItems.isEmpty {
+                sections.append(.hero(items: heroItems))
+            } else if heroState == .loading {
+                sections.append(.hero(items: []))
+            }
         }
 
         // Library hub rows come from the per-library MediaItem projection
@@ -2982,6 +3004,16 @@ final class PlexHomeViewController: UIViewController {
 
     private static let heroItemCap = 9
     private static let heroTMDBMinMatches = 3
+
+    /// Hero slot resolution. `.loading` keeps the hero section in the
+    /// snapshot as a fixed-height placeholder (spinner) so rows below never
+    /// shift when the trending hero lands. `.unavailable` means TMDB and the
+    /// hub fallback both resolved empty on settled hubs — the slot is given
+    /// up and selection won't re-show the placeholder (a later GUID-index
+    /// update or hub refresh can still apply content directly via
+    /// `resolveHeroWithHubFallback` / the upgrade path).
+    private enum HeroState { case idle, loading, loaded, unavailable }
+    private var heroState: HeroState = .idle
 
     /// TMDB media type to pull the trending hero for, or nil when the current
     /// surface should not get the trending upgrade (home uses the interleaved
@@ -4443,7 +4475,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // launch focus stranded on a shelf tile.
         if needsInitialHeroFocus {
             let prevInside = context.previouslyFocusedView?.isDescendant(of: collectionView) == true
-            if kind == .hero || (prevInside && !context.focusHeading.isEmpty) {
+            // The loading placeholder parks focus but must not consume the
+            // initial-hero routing — the real hero still needs it to land on
+            // Play when content arrives.
+            let heroHasContent = kind == .hero && heroState != .loading
+            if heroHasContent || (prevInside && !context.focusHeading.isEmpty) {
                 needsInitialHeroFocus = false
             }
         }
