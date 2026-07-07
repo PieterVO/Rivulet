@@ -3780,7 +3780,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     func loadInsightsCast() async {
         let generation = itemGeneration
         let isMovie = metadata.type == "movie"
-        let tmdbId = metadata.tmdbId ?? metadata.parentShowTmdbId ?? metadata.showTmdbId
+        // Episodes: use the SHOW's tmdb id, never the episode's own guid. Some
+        // Plex agents put a per-episode tmdb:// id in the episode's Guid array,
+        // which would resolve to the wrong id and silently drop TMDB cast.
+        let tmdbId = metadata.type == "episode"
+            ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
+            : metadata.tmdbId
 
         var people: [MediaPerson] = []
 
