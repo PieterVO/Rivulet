@@ -31,7 +31,12 @@ nonisolated struct TriviaFact: Codable, Identifiable, Sendable, Hashable {
         // Unknown categories degrade to `.other` rather than failing the whole
         // payload — the store's category enum may grow ahead of the client.
         category = (try? c.decode(TriviaCategory.self, forKey: .category)) ?? .other
-        spoiler = (try? c.decode(Int.self, forKey: .spoiler)) ?? 0
+        // Fail CLOSED on a missing/malformed spoiler tag: default to the
+        // highest level (2) so a corrupt payload hides the fact under the
+        // hide-spoilers toggle rather than leaking it over the user's video.
+        // The pipeline always emits a valid 0/1/2; this guards R2 corruption
+        // or a future schema change, where showing-by-default is the wrong risk.
+        spoiler = (try? c.decode(Int.self, forKey: .spoiler)) ?? 2
         source = try c.decode(TriviaSource.self, forKey: .source)
     }
 }

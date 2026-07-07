@@ -47,6 +47,22 @@ final class TriviaFactTests: XCTestCase {
         XCTAssertEqual(trivia.facts.last?.category, .other)
     }
 
+    func testMissingSpoilerFieldFailsClosedAndIsHidden() throws {
+        // A fact with no spoiler field must default to a spoiler (fail closed),
+        // so a corrupt payload hides it under hide-spoilers rather than leaking.
+        let noSpoiler = """
+        { "id": "tmdb://1", "type": "movie", "generatedAt": "", "pipelineVersion": 1,
+          "attribution": [],
+          "facts": [ { "id": "f_nospoil", "text": "A fact with no spoiler field.",
+            "category": "production",
+            "source": { "name": "Wikipedia", "url": "https://w/x" } } ] }
+        """.data(using: .utf8)!
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: noSpoiler)
+        XCTAssertGreaterThanOrEqual(trivia.facts[0].spoiler, 1, "missing spoiler must fail closed (>= 1)")
+        let visible = trivia.visibleFacts(hideSpoilers: true, suppressed: [])
+        XCTAssertTrue(visible.isEmpty, "a fail-closed fact must be hidden when spoilers are hidden")
+    }
+
     func testHideSpoilersDropsLevelOneAndAbove() throws {
         let trivia = try decoded()
         let visible = trivia.visibleFacts(hideSpoilers: true, suppressed: [])
