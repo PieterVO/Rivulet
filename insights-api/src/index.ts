@@ -2,14 +2,17 @@
  * insights-api — serves Rivulet Insights trivia JSON from R2.
  *
  * Routes:
- *   GET /insights/movie/{tmdbId}                    → movie trivia JSON
- *   GET /insights/tv/{tmdbId}/{season}/{episode}    → episode trivia JSON
- *   GET /insights/suppressed                        → array of suppressed fact ids (short TTL)
- *   POST /report                                    → append a fact report (P2b; stubbed here)
+ *   GET  /insights/movie/{tmdbId}                    → movie trivia JSON
+ *   GET  /insights/tv/{tmdbId}/{season}/{episode}    → episode trivia JSON
+ *   GET  /insights/suppressed                        → array of suppressed fact ids (short TTL)
+ *   POST /insights/request                           → on-demand generation request → R2 queue
+ *   POST /report                                     → append a fact report (P2b; stubbed here)
  *
  * The fact JSON is immutable per generatedAt → long edge cache. The suppressed
  * list is the one dynamic read → short cache. R2 is bound natively (no S3 creds).
  */
+
+import { validateRequest, workItemKey, publishedKey, queueObject } from "./request";
 
 export interface Env {
   INSIGHTS: R2Bucket;
@@ -55,6 +58,27 @@ export default {
 
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
+
+    // POST /insights/request — on-demand generation trigger. Validates the
+    // camelCase app payload, short-circuits if already published, otherwise
+    // writes a snake_case queue object to R2 for the pipeline's serve stage.
+    if (request.method === "POST" && parts[0] === "insights" && parts[1] === "request") {
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return cors(json({ status: "invalid", reason: "bad_json" }, 400));
+      }
+      const v = validateRequest(body);
+      if (!v.ok) return cors(json({ status: "invalid", reason: v.reason }, 400));
+      const pub = publishedKey(v.req);
+      if (await env.INSIGHTS.head(pub)) return cors(json({ status: "ready" }, 200));
+      const key = `requests/pending/${workItemKey(v.req)}.json`;
+      await env.INSIGHTS.put(key, JSON.stringify(queueObject(v.req, new Date().toISOString())), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      return cors(json({ status: "queued" }, 202));
+    }
 
     // POST /report — P2b feedback sink. Stubbed 202 for now so the client can
     // wire the button ahead of the full report/suppress mechanism.
