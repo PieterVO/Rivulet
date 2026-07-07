@@ -16,6 +16,7 @@ from insights.stages.seed import (
     build_episode_work_items,
     build_seed_list,
     load_published_keys,
+    load_published_records,
     load_recurate_list,
     parse_plex_library_response,
     parse_tmdb_list_response,
@@ -343,15 +344,17 @@ def test_load_published_keys_missing_file_returns_empty_set(tmp_path: Path) -> N
 
 def test_append_and_load_published_keys_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "published.jsonl"
-    append_published_keys(["movie:1", "tv:2:S1E1"], path, published_at="2026-07-07T00:00:00Z")
+    append_published_keys(
+        [{"key": "movie:1"}, {"key": "tv:2:S1E1"}], path, published_at="2026-07-07T00:00:00Z"
+    )
 
     assert load_published_keys(path) == {"movie:1", "tv:2:S1E1"}
 
 
 def test_append_published_keys_appends_across_multiple_calls(tmp_path: Path) -> None:
     path = tmp_path / "published.jsonl"
-    append_published_keys(["movie:1"], path, published_at="2026-07-07T00:00:00Z")
-    append_published_keys(["tv:2:S1E1"], path, published_at="2026-07-08T00:00:00Z")
+    append_published_keys([{"key": "movie:1"}], path, published_at="2026-07-07T00:00:00Z")
+    append_published_keys([{"key": "tv:2:S1E1"}], path, published_at="2026-07-08T00:00:00Z")
 
     assert load_published_keys(path) == {"movie:1", "tv:2:S1E1"}
     assert len(path.read_text(encoding="utf-8").splitlines()) == 2
@@ -370,3 +373,27 @@ def test_load_published_keys_skips_malformed_lines(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert load_published_keys(path) == {"movie:1"}
+
+
+def test_manifest_records_roundtrip(tmp_path: Path) -> None:
+    p = tmp_path / "published.jsonl"
+    rec = {
+        "key": "movie:27205",
+        "type": "movie",
+        "tmdb_id": 27205,
+        "title": "Inception",
+        "year": 2010,
+        "release_date": "2010-07-16",
+        "covered": True,
+    }
+    append_published_keys([rec], p, published_at="2026-07-07T00:00:00Z")
+    assert "movie:27205" in load_published_keys(p)
+    recs = load_published_records(p)
+    assert recs[0]["release_date"] == "2010-07-16"
+    assert recs[0]["published_at"] == "2026-07-07T00:00:00Z"
+
+
+def test_load_published_keys_tolerates_old_format(tmp_path: Path) -> None:
+    p = tmp_path / "published.jsonl"
+    p.write_text('{"key": "movie:1", "published_at": "2026-01-01T00:00:00Z"}\n', encoding="utf-8")
+    assert load_published_keys(p) == {"movie:1"}

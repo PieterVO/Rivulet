@@ -133,6 +133,31 @@ def test_build_publish_plan_movie() -> None:
     assert "source_snippet" not in plan.payload["facts"][0]
 
 
+def test_zero_facts_publishes_tombstone() -> None:
+    # NOTE: the plan names this function `assemble_publish_plan`; the
+    # existing codebase already has an equivalent `build_publish_plan`
+    # (same signature/intent), so this uses that name rather than
+    # introducing a duplicate.
+    w = WorkItem(
+        tmdb_id=125988, type="tv", title="Silo", year=2023, season=3, episode=4,
+        release_date="2025-01-01",
+    )
+    plan = build_publish_plan(w, facts=[], generated_at="2026-07-07T00:00:00Z")
+    assert plan.payload["covered"] is False
+    assert plan.payload["facts"] == []
+    assert plan.payload["releaseDate"] == "2025-01-01"
+    assert plan.key == "insights/tv/125988/3/4.json"
+
+
+def test_facts_present_publishes_covered() -> None:
+    w = WorkItem(tmdb_id=27205, type="movie", title="Inception", year=2010, release_date="2010-07-16")
+    f = make_fact("A fact.")
+    plan = build_publish_plan(w, facts=[f], generated_at="2026-07-07T00:00:00Z")
+    assert plan.payload["covered"] is True
+    assert len(plan.payload["facts"]) == 1
+    assert plan.payload["releaseDate"] == "2010-07-16"
+
+
 # --- WranglerUploader (subprocess mocked, not real wrangler) ---
 
 
@@ -222,10 +247,15 @@ def test_run_assembles_writes_and_uploads_all_verified_items(tmp_path: Path) -> 
     uploader = _FakeUploader()
     plans = run(config, uploader=uploader, generated_at="2026-07-07T00:00:00Z")
 
-    assert len(plans) == 2  # no_facts_item skipped
+    # no_facts_item publishes too -- as a tombstone (covered=False), not a skip.
+    assert len(plans) == 3
     keys = {p.key for p in plans}
-    assert keys == {"insights/movie/1.json", "insights/tv/2/1/2.json"}
-    assert len(uploader.uploaded) == 2
+    assert keys == {"insights/movie/1.json", "insights/tv/2/1/2.json", "insights/movie/3.json"}
+    assert len(uploader.uploaded) == 3
+
+    tombstone_plan = next(p for p in plans if p.key == "insights/movie/3.json")
+    assert tombstone_plan.payload["covered"] is False
+    assert tombstone_plan.payload["facts"] == []
 
     # Local published files were written with the correct payload shape.
     for local_path, key in uploader.uploaded:

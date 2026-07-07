@@ -38,7 +38,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from insights.config import PIPELINE_VERSION, Config
 from insights.models import Fact, Source, TitleTrivia
@@ -114,6 +114,8 @@ def assemble_title_trivia(work_item: WorkItem, facts: list[Fact], generated_at: 
         type=_title_trivia_type(work_item),  # type: ignore[arg-type]
         generated_at=generated_at,
         pipeline_version=PIPELINE_VERSION,
+        covered=True,
+        release_date=work_item.release_date,
         attribution=attribution,
         facts=facts,
     )
@@ -132,8 +134,23 @@ class PublishPlan:
 
 
 def build_publish_plan(work_item: WorkItem, facts: list[Fact], generated_at: str) -> PublishPlan:
-    """Pure: work item + verified facts -> the R2 key + published JSON payload."""
-    trivia = assemble_title_trivia(work_item, facts, generated_at)
+    """Pure: work item + verified facts -> the R2 key + published JSON payload.
+
+    Zero verified facts publishes a **tombstone** (`covered: false`, empty
+    facts/attribution) rather than being skipped — a present-but-empty
+    object is what makes "nothing to share" definitive for the client, so
+    it stops re-requesting generation for a title with no source material.
+    """
+    if facts:
+        trivia = assemble_title_trivia(work_item, facts, generated_at)
+    else:
+        trivia = TitleTrivia.tombstone(
+            id=_title_trivia_id(work_item),
+            type=_title_trivia_type(work_item),
+            generated_at=generated_at,
+            pipeline_version=PIPELINE_VERSION,
+            release_date=work_item.release_date,
+        )
     return PublishPlan(
         key=derive_object_key(work_item),
         work_item_key=work_item.key,
@@ -243,6 +260,7 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
     publish_dir.mkdir(parents=True, exist_ok=True)
 
     plans: list[PublishPlan] = []
+    records: list[dict[str, Any]] = []
     skipped = 0
     for key, facts in facts_by_key.items():
         work_item = work_items_by_key.get(key)
@@ -250,10 +268,11 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
             logger.warning("publish: %s has verified facts but no matching seed entry; skipping", key)
             skipped += 1
             continue
-        if not facts:
-            logger.info("publish: %s has zero verified facts; skipping (no trivia to publish)", key)
-            skipped += 1
-            continue
+        # NOTE: zero verified facts is NOT skipped here -- build_publish_plan
+        # publishes a tombstone (covered=False, empty facts) for it, which is
+        # a successful publish: it uploads and gets a manifest entry just
+        # like a covered title, so "nothing to share" is definitive and the
+        # client stops re-requesting generation for this title.
 
         try:
             plan = build_publish_plan(work_item, facts, generated_at)
@@ -276,12 +295,32 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
             continue
 
         plans.append(plan)
+        records.append(
+            {
+                "key": work_item.key,
+                "type": plan.payload["type"],
+                "tmdb_id": work_item.tmdb_id,
+                "title": work_item.title,
+                "year": work_item.year,
+                "season": work_item.season,
+                "episode": work_item.episode,
+                "release_date": work_item.release_date,
+                "covered": plan.payload["covered"],
+                "pipeline_version": plan.payload["pipelineVersion"],
+            }
+        )
 
     append_published_keys(
-        [plan.work_item_key for plan in plans],
+        records,
         config.data_dir / "published.jsonl",
         published_at=generated_at,
     )
 
-    logger.info("publish: %d work items published, %d skipped", len(plans), skipped)
+    tombstoned = sum(1 for r in records if not r["covered"])
+    logger.info(
+        "publish: %d work items published (%d tombstoned), %d skipped",
+        len(plans),
+        tombstoned,
+        skipped,
+    )
     return plans

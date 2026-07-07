@@ -312,19 +312,48 @@ def load_published_keys(path: Path) -> set[str]:
     return keys
 
 
-def append_published_keys(keys: list[str], path: Path, *, published_at: str) -> None:
-    """Append newly-published work-item keys to the `published.jsonl` manifest.
+def append_published_keys(records: list[dict[str, Any]], path: Path, *, published_at: str) -> None:
+    """Append newly-published work-item records to the `published.jsonl` manifest.
 
-    Called by the publish stage after a successful upload. Append-only (not
+    Called by the publish stage after a successful upload (a tombstone
+    publish counts as successful too). Each record is a dict carrying at
+    least `"key"`; the publish stage passes the enriched shape (`type`,
+    `tmdb_id`, `title`, `year`, `season`, `episode`, `release_date`,
+    `covered`) so `load_published_records` can feed the scheduled TTL-refresh
+    staleness check without re-fetching from TMDB. Append-only (not
     rewritten) so the manifest is safe to grow across many pipeline runs
     without re-reading/re-writing the whole file each time.
     """
-    if not keys:
+    if not records:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
-        for key in keys:
-            f.write(json.dumps({"key": key, "published_at": published_at}) + "\n")
+        for record in records:
+            f.write(json.dumps({**record, "published_at": published_at}) + "\n")
+
+
+def load_published_records(path: Path) -> list[dict[str, Any]]:
+    """Read every line of the `published.jsonl` manifest as a dict.
+
+    Used by the scheduled seed's TTL-refresh staleness check (Task 7), which
+    needs the full enriched record (type/tmdb_id/release_date/covered/
+    pipeline_version), not just the bare key `load_published_keys` returns.
+    Malformed lines are skipped defensively, same posture as the rest of
+    this module's jsonl readers.
+    """
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
 
 
 def load_recurate_list(path: Path) -> list[WorkItem]:
