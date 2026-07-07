@@ -213,20 +213,24 @@ def load_seed_index(path: Path) -> dict[str, WorkItem]:
     return {item.key: item for item in load_seed_jsonl(path)}
 
 
+DEFAULT_R2_BUCKET = "rivulet-insights"
+
+
 def run(config: Config, *, uploader: Uploader | None = None, generated_at: str | None = None) -> list[PublishPlan]:
     """IO shell: assemble + write local JSON + upload every verified work item to R2.
 
-    `uploader` defaults to WranglerUploader(config's R2 bucket via env, see
-    below) — pass a fake in tests. `generated_at` defaults to now (UTC,
+    `uploader` defaults to WranglerUploader(config.r2_bucket, falling back
+    to the real bucket name if `INSIGHTS_R2_BUCKET` is unset — wrangler
+    needs only the bucket name, not the full S3-style credential set
+    `Config.r2_configured` gates, since it authenticates via its own OAuth
+    session) — pass a fake in tests. `generated_at` defaults to now (UTC,
     ISO8601); pass a fixed value in tests for determinism.
     """
-    import os
-
     generated_at = generated_at or datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     facts_by_key = load_facts_verified_grouped(config.data_dir / "facts_verified.jsonl")
     work_items_by_key = load_seed_index(config.data_dir / "seed.jsonl")
 
-    bucket = os.environ.get("INSIGHTS_R2_BUCKET_NAME", "rivulet-insights")
+    bucket = config.r2_bucket or DEFAULT_R2_BUCKET
     active_uploader: Uploader = uploader or WranglerUploader(bucket=bucket)
 
     publish_dir = config.data_dir / "published"
