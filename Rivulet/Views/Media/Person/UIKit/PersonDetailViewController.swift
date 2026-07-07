@@ -33,10 +33,6 @@ final class PersonDetailViewController: UIViewController {
     /// Reports the MediaItem behind a tapped poster (server or metadata-only).
     var onSelectItem: ((MediaItem) -> Void)?
 
-    /// Fired when the page is being dismissed. The player presents this page
-    /// over paused playback and uses this to resume.
-    var onDismiss: (() -> Void)?
-
     // MARK: - Section / item model
 
     private enum Section: Int, CaseIterable {
@@ -149,7 +145,6 @@ final class PersonDetailViewController: UIViewController {
         super.viewWillDisappear(animated)
         loadTask?.cancel()
         loadTask = nil
-        if isBeingDismissed { onDismiss?() }
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {

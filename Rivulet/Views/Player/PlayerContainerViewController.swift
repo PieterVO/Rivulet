@@ -305,13 +305,6 @@ class PlayerContainerViewController: UIViewController {
     /// Override dismiss to intercept system-triggered dismissals (e.g., from Menu button)
     /// and only allow dismissal when we've explicitly decided to dismiss.
     override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
-        // A presented page (person detail) is being dismissed — let UIKit
-        // handle it; the ladder below is only for the player's own chrome.
-        if presentedViewController != nil {
-            super.dismiss(animated: flag, completion: completion)
-            return
-        }
-
         // If we just handled a menu action that closed something, block this dismiss
         if blockNextDismiss {
             blockNextDismiss = false
@@ -935,7 +928,7 @@ class PlayerContainerViewController: UIViewController {
             self.presentRailPanel(
                 content: InsightsCastListView(
                     cast: self.insightsCastCache,
-                    onSelect: { [weak self] person in self?.presentPersonPage(person) }),
+                    onSelect: { _ in }),  // TODO(Task D): wire in-panel actor crossfade
                 width: 480, from: rail.insightsButton)
         }
     }
@@ -979,27 +972,6 @@ class PlayerContainerViewController: UIViewController {
         activeRailPanel = panel
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
         return true
-    }
-
-    /// Cast row Select → person detail page over paused playback. The rail
-    /// panel is dismissed first (its focus fence would fight the presented
-    /// page), and playback resumes when the page is dismissed. Filmography
-    /// posters are intentionally inert from the player (onSelectItem unset)
-    /// — navigating to another title mid-playback is out of scope for P1.
-    private func presentPersonPage(_ person: MediaPerson) {
-        guard let vm = viewModel else { return }
-        activeRailPanel?.dismissPanel()
-        // Only auto-resume on dismiss if we were the one who paused. If the
-        // user had already paused manually before opening the panel, leave
-        // playback paused when they return.
-        let wasPlaying = vm.isPlaying
-        vm.pause()
-        let page = PersonDetailViewController(person: person)
-        page.onDismiss = { [weak vm] in
-            guard wasPlaying else { return }
-            vm?.resume()
-        }
-        present(page, animated: true)
     }
 
     /// Eyebrow + title + meta row from the current item, ported from the
