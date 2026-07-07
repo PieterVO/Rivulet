@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -485,7 +485,9 @@ def run(config: Config) -> list[WorkItem]:
     published_keys = load_published_keys(config.data_dir / "published.jsonl")
     show_items = [item for item in seed_list if item.type == "tv"]
     episodes_by_show: dict[int, list[WorkItem]] = {}
-    today = date.today()
+    # UTC, not host-local: TMDB air_date is a plain date and the pipeline host's
+    # timezone must not shift the aired/not-aired boundary for a same-day episode.
+    today = datetime.now(UTC).date()
     for show_item in show_items:
         episodes_by_show[show_item.tmdb_id] = _fetch_episodes_for_show(config, show_item, today)
     episode_items = build_episode_work_items(show_items, episodes_by_show, published_keys)
