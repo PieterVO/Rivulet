@@ -989,9 +989,16 @@ class PlayerContainerViewController: UIViewController {
     private func presentPersonPage(_ person: MediaPerson) {
         guard let vm = viewModel else { return }
         activeRailPanel?.dismissPanel()
+        // Only auto-resume on dismiss if we were the one who paused. If the
+        // user had already paused manually before opening the panel, leave
+        // playback paused when they return.
+        let wasPlaying = vm.isPlaying
         vm.pause()
         let page = PersonDetailViewController(person: person)
-        page.onDismiss = { [weak vm] in vm?.resume() }
+        page.onDismiss = { [weak vm] in
+            guard wasPlaying else { return }
+            vm?.resume()
+        }
         present(page, animated: true)
     }
 
