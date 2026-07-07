@@ -3237,6 +3237,14 @@ final class PlexHomeViewController: UIViewController {
             return
         }
 
+        // Persist the pure trending list, not the merge below: the merge can
+        // carry over the currently-visible slide for in-session continuity,
+        // and persisting that would make a stale slide immortal across
+        // launches (each launch re-preserves index 0 of the cache). Runs
+        // before the no-op guard so the cache heals even when the displayed
+        // carousel doesn't change.
+        persistHeroItems(curated, cacheKey: cacheKey)
+
         // Preserve currently-visible item if it's in the curated set.
         let mergedItems: [PlexMetadata]
         if !heroItems.isEmpty {
@@ -3274,7 +3282,6 @@ final class PlexHomeViewController: UIViewController {
         homeUIKitLog.info("[Hero] upgradeHeroFromTMDB APPLIED: replacing hero with \(mergedItems.count, privacy: .public) trending-matched items")
         heroItems = mergedItems
         heroState = .loaded
-        persistHeroItems(mergedItems, cacheKey: cacheKey)
         updateBackdropForCurrentHeroItem()
         applySnapshot(animated: false)
         // The hero cell's diffable item id is a constant ("hero-overlay"), so
