@@ -2,9 +2,12 @@
 //  PlayerInsightsPanelView.swift
 //  Rivulet
 //
-//  Cast list content for the Insights rail panel (P1). Structure and
-//  focus behavior mirror UpNextListView: scroll + stack, capped height,
-//  pin-first-focus-then-free. Rows deep-link to the Person detail page.
+//  Cast list content for the Insights rail panel (P1), plus the read-only
+//  Trivia section (P2a) appended below it in the same scroll view. Structure
+//  and focus behavior mirror UpNextListView: scroll + stack, capped height,
+//  pin-first-focus-then-free. Cast rows deep-link to the actor crossfade;
+//  trivia rows are plain (non-focusable) text — read-only, scrollable only,
+//  no per-fact action yet (Report lands in P2b).
 //
 
 import UIKit
@@ -17,6 +20,7 @@ final class InsightsCastListView: UIView {
         // focused row's 1.02 scale doesn't overflow the clipping scroll
         // view's left/right edges. Matches UpNextListView.
         static let rowInset: CGFloat = 8
+        static let sectionSpacing: CGFloat = 24
     }
 
     private let headerLabel = UILabel()
@@ -28,10 +32,29 @@ final class InsightsCastListView: UIView {
     /// user navigated (no bounce back). Matching flag in UpNextListView.
     private var hasPinnedInitialFocus = false
 
-    init(cast: [MediaPerson], onSelect: @escaping (MediaPerson) -> Void) {
+    /// Number of trivia fact rows currently in the stack. Internal (not
+    /// private) so `@testable import Rivulet` tests can assert the
+    /// graceful-absent rule (no trivia / all-filtered → 0) and the
+    /// visible-count-after-filtering wiring without reaching into UIKit's
+    /// `UIStackView.arrangedSubviews` directly.
+    var triviaRowCount: Int {
+        stack.arrangedSubviews.filter { $0 is InsightsTriviaRowView }.count
+    }
+    /// Whether the trivia section's header/footer chrome was added. Internal
+    /// for the same testing reason as `triviaRowCount`.
+    var hasTriviaSection: Bool { triviaRowCount > 0 }
+
+    init(
+        cast: [MediaPerson],
+        trivia: TitleTrivia? = nil,
+        suppressedTriviaIDs: Set<String> = [],
+        hideSpoilers: Bool = true,
+        onSelect: @escaping (MediaPerson) -> Void
+    ) {
         super.init(frame: .zero)
         setupContent()
         buildRows(cast: cast, onSelect: onSelect)
+        buildTriviaSection(trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs, hideSpoilers: hideSpoilers)
     }
 
     @available(*, unavailable)
@@ -94,6 +117,52 @@ final class InsightsCastListView: UIView {
             row.onTap = { onSelect(person) }
             stack.addArrangedSubview(row)
             rows.append(row)
+        }
+    }
+
+    /// Appends the read-only Trivia section below the cast rows in the SAME
+    /// stack/scroll view — no separate panel state, per the spec (Trivia
+    /// lives in the panel's existing cast-list state). Graceful absent: nil
+    /// trivia, or a trivia payload with no facts left after
+    /// hide-spoilers/suppression filtering, adds nothing at all — same rule
+    /// as cast's empty state.
+    private func buildTriviaSection(trivia: TitleTrivia?, suppressedTriviaIDs: Set<String>, hideSpoilers: Bool) {
+        guard let trivia else { return }
+        let facts = trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs)
+        guard !facts.isEmpty else { return }
+
+        // Extra breathing room between the cast rows and the trivia header,
+        // beyond the stack's uniform inter-row spacing (matches the gap the
+        // fixed "CAST" header keeps above the scroll view).
+        if !rows.isEmpty {
+            stack.setCustomSpacing(Metrics.sectionSpacing, after: rows[rows.count - 1])
+        }
+
+        let triviaHeader = UILabel()
+        triviaHeader.attributedText = NSAttributedString(
+            string: "TRIVIA",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .bold),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.5),
+                .kern: 1.5,
+            ]
+        )
+        stack.addArrangedSubview(triviaHeader)
+        stack.setCustomSpacing(16, after: triviaHeader)
+
+        for fact in facts {
+            stack.addArrangedSubview(InsightsTriviaRowView(fact: fact))
+        }
+
+        if !trivia.attribution.isEmpty {
+            let footer = UILabel()
+            footer.numberOfLines = 1
+            footer.font = .systemFont(ofSize: 13, weight: .regular)
+            footer.textColor = UIColor.white.withAlphaComponent(0.35)
+            let names = trivia.attribution.map(\.name).joined(separator: " · ")
+            footer.text = "Info from \(names)"
+            stack.setCustomSpacing(12, after: stack.arrangedSubviews.last ?? footer)
+            stack.addArrangedSubview(footer)
         }
     }
 
@@ -262,5 +331,75 @@ final class InsightsCastRowButton: UIControl {
             return
         }
         super.pressesBegan(presses, with: event)
+    }
+}
+
+// MARK: - InsightsTriviaRowView
+
+/// One trivia fact row: fact text + a small category label. Read-only —
+/// NOT focusable (no per-fact action exists yet; Report is P2b), so it
+/// carries none of `InsightsCastRowButton`'s focus/press machinery. Matches
+/// the cast rows' glass aesthetic (same rest background/corner radius) at
+/// rest, just without the focus-reactive state.
+final class InsightsTriviaRowView: UIView {
+
+    private let textLabel = UILabel()
+    private let categoryLabel = UILabel()
+
+    init(fact: TriviaFact) {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+
+        backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        layer.cornerRadius = 14
+        layer.cornerCurve = .continuous
+
+        textLabel.text = fact.text
+        textLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        textLabel.textColor = .white
+        textLabel.numberOfLines = 0
+
+        categoryLabel.attributedText = NSAttributedString(
+            string: fact.category.displayName.uppercased(),
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.4),
+                .kern: 1.0,
+            ]
+        )
+
+        let contentStack = UIStackView(arrangedSubviews: [textLabel, categoryLabel])
+        contentStack.axis = .vertical
+        contentStack.spacing = 8
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentStack)
+
+        NSLayoutConstraint.activate([
+            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
+            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+}
+
+private extension TriviaCategory {
+    /// Short display label for the row's category tag. Calm, no icons.
+    var displayName: String {
+        switch self {
+        case .production: return "Production"
+        case .casting: return "Casting"
+        case .adaptation: return "Adaptation"
+        case .reference: return "Reference"
+        case .lore: return "Lore"
+        case .goof: return "Goof"
+        case .music: return "Music"
+        case .other: return "Trivia"
+        }
     }
 }

@@ -40,6 +40,10 @@ class PlayerContainerViewController: UIViewController {
     /// Snapshot of the last `$insightsCast` emission, read when the rail's
     /// Insights panel is presented.
     private var insightsCastCache: [MediaPerson] = []
+    /// Snapshot of the last `$insightsTrivia`/`$suppressedTriviaIDs` emission,
+    /// read when the rail's Insights panel is presented (P2a).
+    private var insightsTriviaCache: TitleTrivia?
+    private var suppressedTriviaIDsCache: Set<String> = []
     /// True while `activeRailPanel` is showing Up Next content, so the
     /// `$upNextEpisodes` sink can dismiss a now-stale list without
     /// touching the CC/audio/info panels, which don't go stale off that
@@ -853,17 +857,30 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self] cast in
                 guard let self else { return }
                 self.insightsCastCache = cast
-                self.rail?.setInsightsAvailable(!cast.isEmpty)
+                self.updateInsightsAvailability()
             }
             .store(in: &cancellables)
 
-        // Kick the cast load per item. @Published replays the current value on
-        // subscribe, so this also fires once at bind time for the first item.
+        vm.$insightsTrivia
+            .combineLatest(vm.$suppressedTriviaIDs)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] trivia, suppressed in
+                guard let self else { return }
+                self.insightsTriviaCache = trivia
+                self.suppressedTriviaIDsCache = suppressed
+                self.updateInsightsAvailability()
+            }
+            .store(in: &cancellables)
+
+        // Kick the cast + trivia loads per item. @Published replays the
+        // current value on subscribe, so this also fires once at bind time
+        // for the first item.
         vm.$itemGeneration
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak vm] _ in
                 Task { await vm?.loadInsightsCast() }
+                Task { await vm?.loadInsightsTrivia() }
             }
             .store(in: &cancellables)
 
@@ -924,11 +941,34 @@ class PlayerContainerViewController: UIViewController {
         }
 
         rail.onInsights = { [weak self] in
-            guard let self, !self.insightsCastCache.isEmpty else { return }
+            guard let self, self.insightsButtonShouldBeAvailable else { return }
             self.presentRailPanel(
-                content: InsightsPanelContainerView(cast: self.insightsCastCache),
+                content: InsightsPanelContainerView(
+                    cast: self.insightsCastCache,
+                    trivia: self.insightsTriviaCache,
+                    suppressedTriviaIDs: self.suppressedTriviaIDsCache,
+                    hideSpoilers: SettingsStore.bool("hideSpoilersForUnwatched", default: false)),
                 width: 480, from: rail.insightsButton)
         }
+    }
+
+    /// Whether the Insights panel has anything to show: a non-empty cast
+    /// list, or at least one trivia fact left after the hide-spoilers /
+    /// suppression filter. Either section alone is enough to surface the
+    /// rail button; both empty means fully graceful-absent (no button).
+    private var insightsButtonShouldBeAvailable: Bool {
+        if !insightsCastCache.isEmpty { return true }
+        guard let trivia = insightsTriviaCache else { return false }
+        let hideSpoilers = SettingsStore.bool("hideSpoilersForUnwatched", default: false)
+        return !trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDsCache).isEmpty
+    }
+
+    /// Re-derives the rail's Insights button visibility from the current
+    /// cast + trivia snapshots. Called from both the `$insightsCast` and
+    /// `$insightsTrivia` sinks since either can flip the combined
+    /// availability independently of the other.
+    private func updateInsightsAvailability() {
+        rail?.setInsightsAvailable(insightsButtonShouldBeAvailable)
     }
 
     /// Shared presenter for the CC/audio/info/Up Next rail panel. Only

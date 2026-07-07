@@ -32,15 +32,23 @@ final class InsightsPanelContainerView: UIView {
     }
 
     private let cast: [MediaPerson]
+    private let trivia: TitleTrivia?
+    private let suppressedTriviaIDs: Set<String>
+    private let hideSpoilers: Bool
     private let provider: PersonFilmographyProviding
 
     // `lazy` so the init closure can capture `self` directly — evaluated on
     // first access (from `init`, after `super.init()` has returned), so
     // `self` is fully formed by the time `InsightsCastListView`'s own init
     // runs. Simpler than routing through an intermediate box.
-    private lazy var listView = InsightsCastListView(cast: cast, onSelect: { [weak self] person in
-        self?.crossfadeToActor(person)
-    })
+    private lazy var listView = InsightsCastListView(
+        cast: cast,
+        trivia: trivia,
+        suppressedTriviaIDs: suppressedTriviaIDs,
+        hideSpoilers: hideSpoilers,
+        onSelect: { [weak self] person in
+            self?.crossfadeToActor(person)
+        })
     /// Internal (not private) visibility so `@testable import Rivulet` tests
     /// can observe the currently-hosted actor view (e.g. to confirm a stale
     /// load never reached it after the user backed out / switched actors).
@@ -50,8 +58,17 @@ final class InsightsPanelContainerView: UIView {
 
     private var heightConstraint: NSLayoutConstraint!
 
-    init(cast: [MediaPerson], provider: PersonFilmographyProviding = PersonFilmographyProvider()) {
+    init(
+        cast: [MediaPerson],
+        trivia: TitleTrivia? = nil,
+        suppressedTriviaIDs: Set<String> = [],
+        hideSpoilers: Bool = true,
+        provider: PersonFilmographyProviding = PersonFilmographyProvider()
+    ) {
         self.cast = cast
+        self.trivia = trivia
+        self.suppressedTriviaIDs = suppressedTriviaIDs
+        self.hideSpoilers = hideSpoilers
         self.provider = provider
         super.init(frame: .zero)
 
