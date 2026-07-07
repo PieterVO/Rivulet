@@ -64,6 +64,11 @@ class WorkItem:
     # ("episode" = enumerated from a tracked show's aired episode list, not
     # itself a TMDB popular/trending candidate).
     reason: str = "popular"
+    # Full ISO date (movie release_date / show first_air_date / episode
+    # air_date), kept alongside the derived `year` so downstream freshness
+    # (see freshness.py) can compute a title's exact age. Kept last so
+    # existing positional constructions in tests don't shift.
+    release_date: str | None = None
 
     @property
     def key(self) -> str:
@@ -85,6 +90,7 @@ class WorkItem:
             season=d.get("season"),
             episode=d.get("episode"),
             reason=d.get("reason", "popular"),
+            release_date=d.get("release_date"),
         )
 
 
@@ -140,9 +146,17 @@ def parse_tmdb_list_response(
         if tmdb_id is None or not title:
             continue
         date_field = "release_date" if media_type == "movie" else "first_air_date"
-        year = _year_from_date(entry.get(date_field))
+        raw_date = entry.get(date_field)
+        year = _year_from_date(raw_date)
         items.append(
-            WorkItem(tmdb_id=int(tmdb_id), type=media_type, title=title, year=year, reason=reason)
+            WorkItem(
+                tmdb_id=int(tmdb_id),
+                type=media_type,
+                title=title,
+                year=year,
+                reason=reason,
+                release_date=raw_date or None,
+            )
         )
     return items
 
@@ -221,6 +235,7 @@ def parse_tmdb_season_response(
                 season=int(season_number),
                 episode=int(episode_number),
                 reason="episode",
+                release_date=entry.get("air_date"),
             )
         )
     return items

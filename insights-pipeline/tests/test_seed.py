@@ -113,7 +113,12 @@ def test_parse_tmdb_list_response_movie() -> None:
     items = parse_tmdb_list_response(payload, "movie", reason="popular")
     assert len(items) == 2
     assert items[0] == WorkItem(
-        tmdb_id=27205, type="movie", title="Inception", year=2010, reason="popular"
+        tmdb_id=27205,
+        type="movie",
+        title="Inception",
+        year=2010,
+        reason="popular",
+        release_date="2010-07-16",
     )
     assert items[1].year is None
 
@@ -121,7 +126,33 @@ def test_parse_tmdb_list_response_movie() -> None:
 def test_parse_tmdb_list_response_tv_uses_name_and_first_air_date() -> None:
     payload = {"results": [{"id": 5, "name": "Silo", "first_air_date": "2023-05-05"}]}
     items = parse_tmdb_list_response(payload, "tv", reason="trending")
-    assert items == [WorkItem(tmdb_id=5, type="tv", title="Silo", year=2023, reason="trending")]
+    assert items == [
+        WorkItem(
+            tmdb_id=5, type="tv", title="Silo", year=2023, reason="trending", release_date="2023-05-05"
+        )
+    ]
+
+
+def test_list_parse_keeps_full_release_date() -> None:
+    payload = {"results": [{"id": 27205, "title": "Inception", "release_date": "2010-07-16"}]}
+    items = parse_tmdb_list_response(payload, media_type="movie", reason="popular")
+    assert items[0].release_date == "2010-07-16"
+    assert items[0].year == 2010
+
+
+def test_season_parse_keeps_air_date() -> None:
+    payload = {
+        "episodes": [{"episode_number": 1, "season_number": 1, "air_date": "2023-05-05"}]
+    }
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=125988, show_title="Silo", show_year=2023, today=date(2026, 7, 7)
+    )
+    assert items[0].release_date == "2023-05-05"
+
+
+def test_workitem_release_date_roundtrips() -> None:
+    w = WorkItem(tmdb_id=1, type="movie", title="X", year=2020, release_date="2020-02-02")
+    assert WorkItem.from_dict(w.to_dict()).release_date == "2020-02-02"
 
 
 def test_parse_plex_library_response_maps_show_to_tv_and_reads_guids() -> None:
@@ -188,8 +219,26 @@ def test_parse_tmdb_season_response_builds_episode_work_items_for_aired_episodes
         payload, tmdb_id=2802, show_title="Silo", show_year=2023, today=date(2023, 6, 1)
     )
     assert items == [
-        WorkItem(tmdb_id=2802, type="tv", title="Silo", year=2023, season=1, episode=1, reason="episode"),
-        WorkItem(tmdb_id=2802, type="tv", title="Silo", year=2023, season=1, episode=2, reason="episode"),
+        WorkItem(
+            tmdb_id=2802,
+            type="tv",
+            title="Silo",
+            year=2023,
+            season=1,
+            episode=1,
+            reason="episode",
+            release_date="2023-05-05",
+        ),
+        WorkItem(
+            tmdb_id=2802,
+            type="tv",
+            title="Silo",
+            year=2023,
+            season=1,
+            episode=2,
+            reason="episode",
+            release_date="2023-05-12",
+        ),
     ]
 
 
