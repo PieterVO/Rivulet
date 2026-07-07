@@ -113,11 +113,20 @@ from any point:
    report (fact ↔ source link) per batch for human eyeballing.
 6. **publish** — upload JSON to R2 (S3-compatible API), invalidate edge cache if re-publishing.
 
-**Model:** model-agnostic via an OpenAI-compatible endpoint. Default: local model on the 5090
-(vLLM or Ollama; a 27–32B-class instruct model suits extract-and-rewrite). The same pipeline can
-point at a hosted API (e.g. Claude Haiku batch, rough estimate ~$0.02/title) if local quality
-disappoints. Quality is judged from the spot-check reports on the library-validation batch before
-scaling out.
+**Model:** model-agnostic via an OpenAI-compatible endpoint. Default: Ollama on the 5090
+(a 27–32B-class instruct model suits extract-and-rewrite). The same pipeline can point at a
+hosted API (e.g. Claude Haiku batch, rough estimate ~$0.02/title) if local quality disappoints.
+Quality is judged from the spot-check reports on the library-validation batch before scaling out.
+
+**Unraid environment (surveyed 2026-07-07):** RTX 5090 32GB (driver 580.95.05), ~27GB VRAM free.
+An `ollama` container already exists pre-configured (GPU passthrough, `/mnt/user/appdata/ollama`
+volume, port 11434) but has never been started — setup is `docker start ollama` + pull a model.
+A llama.cpp CUDA server (`llama-gemma`, port 5809, Gemma 4 E2B, 131k ctx) is already running and
+proves the OpenAI-compatible local-serving pattern; the pipeline should target Ollama's
+`/v1` endpoint but work against either. Plex runs on the same box, so the seed stage's library
+dump is a local API call. The pipeline runs as a Docker container (per Bain's preference) with
+the repo's `insights-pipeline/` mounted, talking to Ollama over the docker network/host, invoked
+manually or on a schedule. Disk is a non-issue (179GB data disk free, 11TB array).
 
 ## Serving (Cloudflare)
 
