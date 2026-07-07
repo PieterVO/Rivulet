@@ -75,6 +75,15 @@ private struct TMDBCreditsResponse: Codable {
     let crew: [TMDBCredit]?
 }
 
+struct TMDBEpisodeCreditsResponse: Codable {
+    let cast: [TMDBCredit]?
+    let guestStars: [TMDBCredit]?
+    enum CodingKeys: String, CodingKey {
+        case cast
+        case guestStars = "guest_stars"
+    }
+}
+
 struct TMDBItemFeatures: Codable {
     var keywords: [String]
     var cast: [String]
@@ -222,5 +231,39 @@ final class TMDBClient: @unchecked Sendable {
         guard let match, let personId = match.id else { return nil }
         let person: TMDBPersonDetails? = try? await request(endpoint: "tmdb/person/\(personId)", queryItems: [])
         return person?.biography.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    // MARK: - Structured cast (Insights)
+
+    /// Structured cast for movie or show. Returns [] on any failure —
+    /// callers treat empty as "fall back to Plex roles".
+    func castCredits(tmdbId: Int, type: TMDBMediaType) async -> [TMDBCredit] {
+        let credits: TMDBCreditsResponse? = try? await request(endpoint: "tmdb/credits/\(tmdbId)", type: type)
+        return credits?.cast ?? []
+    }
+
+    /// Episode-level cast: season regulars followed by episode's guest
+    /// stars. Requires proxy's `episode_credits` route; returns nil when
+    /// unavailable so callers can fall back show-level `castCredits`.
+    func episodeCastCredits(showTmdbId: Int, season: Int, episode: Int) async -> [TMDBCredit]? {
+        let response: TMDBEpisodeCreditsResponse? = try? await request(
+            endpoint: "tmdb/episode_credits/\(showTmdbId)",
+            queryItems: [
+                URLQueryItem(name: "season", value: String(season)),
+                URLQueryItem(name: "episode", value: String(episode)),
+            ])
+        guard let response else { return nil }
+        let merged = Self.mergedEpisodeCast(response)
+        return merged.isEmpty ? nil : merged
+    }
+
+    /// Regulars first, guests; dedupe by person id (a regular also
+    /// appear in guest_stars for some shows).
+    static func mergedEpisodeCast(_ response: TMDBEpisodeCreditsResponse) -> [TMDBCredit] {
+        let cast = response.cast ?? []
+        let guests = response.guestStars ?? []
+        let regularIds = Set(cast.compactMap { $0.id })
+        let unique = cast + guests.filter { !regularIds.contains($0.id ?? -1) }
+        return unique
     }
 }
