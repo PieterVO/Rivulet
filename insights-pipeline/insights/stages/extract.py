@@ -35,7 +35,11 @@ from insights.stages.fetch import FetchedPage, WikiSection
 
 logger = logging.getLogger(__name__)
 
-PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "bakeoff" / "prompts" / "extract_v1.txt"
+# Bundled inside the package so it travels with the code (the bake-off copy in
+# bakeoff/prompts/ is the source of record; keep them in sync when the prompt
+# changes). Reaching a sibling bakeoff/ dir broke deployment where only the
+# package was copied.
+PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "extract.txt"
 
 
 def load_extract_prompt(path: Path = PROMPT_PATH) -> str:
