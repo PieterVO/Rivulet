@@ -46,7 +46,7 @@ CHAT_ENDPOINT = f"{BASE_URL}/chat/completions"
 
 MODELS = [m.strip() for m in os.environ.get(
     "BAKEOFF_MODELS",
-    "qwen2.5:32b-instruct,qwen3.5:27b-q4_K_M,gemma4:31b-it-q4_K_M",
+    "qwen2.5:32b-instruct,gemma4:31b-it-q4_K_M",
 ).split(",") if m.strip()]
 
 SCRIPT_DIR = Path(__file__).resolve().parent
