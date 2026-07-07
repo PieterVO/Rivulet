@@ -46,10 +46,11 @@ def test_derive_object_key_episode() -> None:
     assert derive_object_key(item) == "insights/tv/2802/1/3.json"
 
 
-def test_derive_object_key_show_level_tv_raises() -> None:
+def test_derive_object_key_show_level_tv() -> None:
+    # Show-level TV trivia (production/casting/overall, not tied to an episode)
+    # keys to insights/tv/{id}/show.json.
     item = WorkItem(tmdb_id=2802, type="tv", title="Silo", year=2023)  # no season/episode
-    with pytest.raises(ValueError, match="season/episode"):
-        derive_object_key(item)
+    assert derive_object_key(item) == "insights/tv/2802/show.json"
 
 
 # --- dedup_attribution ---
@@ -288,28 +289,28 @@ def _make_config(data_dir: Path):
     )
 
 
-def test_run_skips_show_level_tv_item_without_crashing_the_batch(tmp_path: Path) -> None:
-    """Regression guard: a show-level TV WorkItem (no season/episode) that
-    somehow reaches publish with facts attached must not raise out of the
-    batch loop and take down every other title in the same run.
+def test_run_publishes_show_level_tv_item(tmp_path: Path) -> None:
+    """A show-level TV WorkItem (no season/episode) publishes to the show-level
+    key alongside a movie in the same batch — production/casting/overall trivia
+    (e.g. from a show's Wikipedia article) has a home.
     """
     config = _make_config(tmp_path)
 
-    good_item = WorkItem(tmdb_id=1, type="movie", title="Good Movie", year=2020)
-    bad_item = WorkItem(tmdb_id=2, type="tv", title="Show-Level Only", year=2021)  # no season/episode
-    write_seed_jsonl([good_item, bad_item], tmp_path / "seed.jsonl")
+    movie_item = WorkItem(tmdb_id=1, type="movie", title="Good Movie", year=2020)
+    show_item = WorkItem(tmdb_id=2, type="tv", title="Show-Level Only", year=2021)  # no season/episode
+    write_seed_jsonl([movie_item, show_item], tmp_path / "seed.jsonl")
 
     results = [
-        VerifyBatchResult(key=good_item.key, verified=[make_fact("Good fact.")], all_decisions=[]),
-        VerifyBatchResult(key=bad_item.key, verified=[make_fact("Bad item fact.")], all_decisions=[]),
+        VerifyBatchResult(key=movie_item.key, verified=[make_fact("Movie fact.")], all_decisions=[]),
+        VerifyBatchResult(key=show_item.key, verified=[make_fact("Show fact.")], all_decisions=[]),
     ]
     write_facts_verified_jsonl(results, tmp_path / "facts_verified.jsonl")
 
     uploader = _FakeUploader()
     plans = run(config, uploader=uploader, generated_at="2026-07-07T00:00:00Z")
 
-    assert [p.key for p in plans] == ["insights/movie/1.json"]
-    assert len(uploader.uploaded) == 1
+    assert {p.key for p in plans} == {"insights/movie/1.json", "insights/tv/2/show.json"}
+    assert len(uploader.uploaded) == 2
 
 
 def test_run_upload_failure_for_one_title_does_not_crash_the_batch(tmp_path: Path) -> None:

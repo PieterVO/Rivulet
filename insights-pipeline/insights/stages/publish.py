@@ -52,20 +52,20 @@ class Uploader(Protocol):
 
 
 def derive_object_key(work_item: WorkItem) -> str:
-    """Pure: `insights/movie/{id}.json` or `insights/tv/{id}/{s}/{e}.json`.
+    """Pure: object key for a work item.
 
-    Matches the spec's fact-store key scheme exactly (`## Fact store
-    schema` in the design doc uses `insights/movie/{id}.json` for movies;
-    TV keys are per-episode: `insights/tv/{tmdbId}/{season}/{episode}.json`
-    — the show's own tmdb id, not the episode's).
+    - Movie:          `insights/movie/{id}.json`
+    - TV episode:     `insights/tv/{id}/{season}/{episode}.json`
+    - TV show-level:  `insights/tv/{id}/show.json`  (production/casting/overall
+      trivia that isn't tied to one episode — e.g. a show's Wikipedia article)
+
+    TV keys use the show's own tmdb id, not the episode's.
     """
     if work_item.type == "movie":
         return f"insights/movie/{work_item.tmdb_id}.json"
+    # Show-level TV: no season/episode -> the show's overall trivia.
     if work_item.season is None or work_item.episode is None:
-        raise ValueError(
-            f"TV work item {work_item.key} is missing season/episode; "
-            "publish only supports per-episode TV trivia, not show-level."
-        )
+        return f"insights/tv/{work_item.tmdb_id}/show.json"
     return f"insights/tv/{work_item.tmdb_id}/{work_item.season}/{work_item.episode}.json"
 
 

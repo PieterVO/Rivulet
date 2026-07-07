@@ -80,6 +80,12 @@ export default {
       return cors(await serveObject(env, `insights/movie/${parts[2]}.json`, LONG_TTL));
     }
 
+    // GET /insights/tv/{tmdbId}/show — show-level trivia (production/casting/
+    // overall, not tied to one episode).
+    if (parts[1] === "tv" && parts.length === 4 && /^\d+$/.test(parts[2]) && parts[3] === "show") {
+      return cors(await serveObject(env, `insights/tv/${parts[2]}/show.json`, LONG_TTL));
+    }
+
     // GET /insights/tv/{tmdbId}/{season}/{episode}
     if (
       parts[1] === "tv" &&
