@@ -159,8 +159,21 @@ def load_facts_raw_jsonl(path: Path) -> dict[str, list[Fact]]:
     return result
 
 
-def run(config: Config, pages_by_key: dict[str, list[FetchedPage]]) -> dict[str, list[Fact]]:
-    """IO shell: extract facts for every work item's fetched pages, resumable via facts_raw.jsonl."""
+def run(
+    config: Config, pages_by_key: dict[str, list[FetchedPage]] | None = None
+) -> dict[str, list[Fact]]:
+    """IO shell: extract facts for every work item's fetched pages, resumable via facts_raw.jsonl.
+
+    `pages_by_key` defaults to loading fetch's on-disk output
+    (`fetched_pages.jsonl`) so this stage can run standalone from the CLI;
+    pass it explicitly when chaining stages in-process (e.g. a full-batch
+    driver that already has fetch's return value in memory).
+    """
+    if pages_by_key is None:
+        from insights.stages.fetch import load_fetched_pages_jsonl
+
+        pages_by_key = load_fetched_pages_jsonl(config.data_dir / "fetched_pages.jsonl")
+
     facts_raw_path = config.data_dir / "facts_raw.jsonl"
     already_extracted = load_facts_raw_jsonl(facts_raw_path)
 

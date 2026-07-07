@@ -429,8 +429,20 @@ def render_spot_check_report(results: list[VerifyBatchResult]) -> str:
 </body></html>"""
 
 
-def run(config: Config, facts_by_key: dict[str, list[Fact]]) -> list[VerifyBatchResult]:
-    """IO shell: verify every work item's raw facts, write facts_verified.jsonl + spot-check report."""
+def run(
+    config: Config, facts_by_key: dict[str, list[Fact]] | None = None
+) -> list[VerifyBatchResult]:
+    """IO shell: verify every work item's raw facts, write facts_verified.jsonl + spot-check report.
+
+    `facts_by_key` defaults to loading extract's on-disk output
+    (`facts_raw.jsonl`) so this stage can run standalone from the CLI; pass
+    it explicitly when chaining stages in-process.
+    """
+    if facts_by_key is None:
+        from insights.stages.extract import load_facts_raw_jsonl
+
+        facts_by_key = load_facts_raw_jsonl(config.data_dir / "facts_raw.jsonl")
+
     facts_verified_path = config.data_dir / "facts_verified.jsonl"
     already_verified = load_facts_verified_jsonl(facts_verified_path)
 

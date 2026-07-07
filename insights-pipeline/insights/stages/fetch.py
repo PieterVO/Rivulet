@@ -21,11 +21,13 @@ wikitext, no network involved.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -235,17 +237,62 @@ def fetch_page_cached(url: str, cache_dir: Path, *, rate_limit_secs: float = 0.5
     return FetchedPage(url=url, title=title, sections=cleaned)
 
 
+def _page_to_dict(page: FetchedPage) -> dict[str, Any]:
+    return {
+        "url": page.url,
+        "title": page.title,
+        "sections": [{"heading": s.heading, "level": s.level, "body": s.body} for s in page.sections],
+    }
+
+
+def _page_from_dict(d: dict[str, Any]) -> FetchedPage:
+    return FetchedPage(
+        url=d["url"],
+        title=d["title"],
+        sections=[WikiSection(s["heading"], s["level"], s["body"]) for s in d["sections"]],
+    )
+
+
+def write_fetched_pages_jsonl(pages_by_key: dict[str, list[FetchedPage]], path: Path) -> None:
+    """Persist fetch's output so extract (and the CLI, run stage-by-stage) can
+    resume without re-fetching — the section-filtered/cleaned text, not just
+    the raw wikitext cache, so extract never re-does the cleanup pass either.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for key, pages in pages_by_key.items():
+            f.write(json.dumps({"key": key, "pages": [_page_to_dict(p) for p in pages]}) + "\n")
+
+
+def load_fetched_pages_jsonl(path: Path) -> dict[str, list[FetchedPage]]:
+    if not path.exists():
+        return {}
+    result: dict[str, list[FetchedPage]] = {}
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            result[d["key"]] = [_page_from_dict(pd) for pd in d["pages"]]
+    return result
+
+
 def run(config: Config) -> dict[str, list[FetchedPage]]:
     """IO shell: for every resolved sourcemap entry, fetch + cache + section-filter both pages."""
     from insights.stages.discover import load_sourcemap_jsonl
 
     sourcemap_path = config.data_dir / "sourcemap.jsonl"
     cache_dir = config.data_dir / "page_cache"
+    fetched_pages_path = config.data_dir / "fetched_pages.jsonl"
 
     entries: dict[str, SourceMapEntry] = load_sourcemap_jsonl(sourcemap_path)
-    result: dict[str, list[FetchedPage]] = {}
+    already_fetched = load_fetched_pages_jsonl(fetched_pages_path)
+    result: dict[str, list[FetchedPage]] = dict(already_fetched)
 
     for key, entry in entries.items():
+        if key in already_fetched:
+            continue
         pages: list[FetchedPage] = []
         if entry.wikipedia_url:
             page = fetch_page_cached(entry.wikipedia_url, cache_dir)
@@ -260,5 +307,6 @@ def run(config: Config) -> dict[str, list[FetchedPage]]:
         else:
             logger.info("fetch: no usable sections for %s", key)
 
+    write_fetched_pages_jsonl(result, fetched_pages_path)
     logger.info("fetch: %d/%d work items produced usable sections", len(result), len(entries))
     return result
