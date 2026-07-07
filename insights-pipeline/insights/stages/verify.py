@@ -451,8 +451,16 @@ def run(
 
     for key, facts in facts_by_key.items():
         if key in already_verified:
+            # Cached from a prior run of this stage: facts_verified.jsonl
+            # only persists survivors, not the full per-fact decision
+            # trail, so we can't recover the original malformed/filler/
+            # dedup/ungrounded drop reasons here. Still record a "kept"
+            # decision per survivor (rather than an empty list) so the
+            # drop-rate stat and spot-check report don't silently lose
+            # these facts from their denominator across a resumed batch.
+            cached_decisions = [VerifyDecision(f, True, "") for f in already_verified[key]]
             results.append(
-                VerifyBatchResult(key=key, verified=already_verified[key], all_decisions=[])
+                VerifyBatchResult(key=key, verified=already_verified[key], all_decisions=cached_decisions)
             )
             continue
         results.append(verify_batch(chat_client, key, facts))

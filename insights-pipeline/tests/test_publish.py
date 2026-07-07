@@ -264,3 +264,75 @@ def test_run_skips_verified_item_with_no_matching_seed_entry(tmp_path: Path) -> 
 
     assert plans == []
     assert uploader.uploaded == []
+
+
+def _make_config(data_dir: Path):
+    from insights.config import Config
+
+    return Config(
+        llm_base_url="http://fake/v1",
+        llm_model="gemma4:31b-it-q4_K_M",
+        llm_timeout_secs=5.0,
+        llm_max_retries=1,
+        data_dir=data_dir,
+        tmdb_proxy_base_url="https://tmdb-proxy.example",
+        plex_base_url="",
+        plex_token="",
+        r2_endpoint_url="",
+        r2_bucket="",
+        r2_access_key_id="",
+        r2_secret_access_key="",
+    )
+
+
+def test_run_skips_show_level_tv_item_without_crashing_the_batch(tmp_path: Path) -> None:
+    """Regression guard: a show-level TV WorkItem (no season/episode) that
+    somehow reaches publish with facts attached must not raise out of the
+    batch loop and take down every other title in the same run.
+    """
+    config = _make_config(tmp_path)
+
+    good_item = WorkItem(tmdb_id=1, type="movie", title="Good Movie", year=2020)
+    bad_item = WorkItem(tmdb_id=2, type="tv", title="Show-Level Only", year=2021)  # no season/episode
+    write_seed_jsonl([good_item, bad_item], tmp_path / "seed.jsonl")
+
+    results = [
+        VerifyBatchResult(key=good_item.key, verified=[make_fact("Good fact.")], all_decisions=[]),
+        VerifyBatchResult(key=bad_item.key, verified=[make_fact("Bad item fact.")], all_decisions=[]),
+    ]
+    write_facts_verified_jsonl(results, tmp_path / "facts_verified.jsonl")
+
+    uploader = _FakeUploader()
+    plans = run(config, uploader=uploader, generated_at="2026-07-07T00:00:00Z")
+
+    assert [p.key for p in plans] == ["insights/movie/1.json"]
+    assert len(uploader.uploaded) == 1
+
+
+def test_run_upload_failure_for_one_title_does_not_crash_the_batch(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+
+    good_item = WorkItem(tmdb_id=1, type="movie", title="Good Movie", year=2020)
+    failing_item = WorkItem(tmdb_id=2, type="movie", title="Upload Fails", year=2021)
+    write_seed_jsonl([good_item, failing_item], tmp_path / "seed.jsonl")
+
+    results = [
+        VerifyBatchResult(key=good_item.key, verified=[make_fact("Good fact.")], all_decisions=[]),
+        VerifyBatchResult(key=failing_item.key, verified=[make_fact("Fact.")], all_decisions=[]),
+    ]
+    write_facts_verified_jsonl(results, tmp_path / "facts_verified.jsonl")
+
+    class _PartiallyFailingUploader:
+        def __init__(self) -> None:
+            self.uploaded: list[tuple[Path, str]] = []
+
+        def upload(self, local_path: Path, key: str) -> None:
+            if "2.json" in key:
+                raise PublishError("simulated upload failure")
+            self.uploaded.append((local_path, key))
+
+    uploader = _PartiallyFailingUploader()
+    plans = run(config, uploader=uploader, generated_at="2026-07-07T00:00:00Z")
+
+    assert [p.key for p in plans] == ["insights/movie/1.json"]
+    assert len(uploader.uploaded) == 1

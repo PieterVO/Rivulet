@@ -216,18 +216,25 @@ def _fetch_wikitext(url: str, *, rate_limit_secs: float = 0.5) -> str | None:
 
 
 def fetch_page_cached(url: str, cache_dir: Path, *, rate_limit_secs: float = 0.5) -> FetchedPage | None:
-    """Fetch a page's wikitext (disk-cached by URL hash), split+filter sections."""
+    """Fetch a page's wikitext (disk-cached by URL hash), split+filter sections.
+
+    Only a successful fetch is written to the cache. A failure (network
+    error, MediaWiki error, empty page) is NEVER cached — caching an empty
+    result would make a transient failure permanent, since the cache-hit
+    check is just "does the file exist," and every future re-run of this
+    resumable stage would treat that as a confirmed "no content" instead of
+    retrying.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / cache_key_for_url(url)
 
     if cache_path.exists():
         wikitext = cache_path.read_text(encoding="utf-8")
     else:
-        wikitext = _fetch_wikitext(url, rate_limit_secs=rate_limit_secs) or ""
+        wikitext = _fetch_wikitext(url, rate_limit_secs=rate_limit_secs)
+        if not wikitext:
+            return None
         cache_path.write_text(wikitext, encoding="utf-8")
-
-    if not wikitext:
-        return None
 
     _, title = _mediawiki_api_base(url)
     all_sections = parse_wikitext_sections(wikitext, title)

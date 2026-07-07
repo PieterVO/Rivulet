@@ -249,11 +249,26 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
             skipped += 1
             continue
 
-        plan = build_publish_plan(work_item, facts, generated_at)
+        try:
+            plan = build_publish_plan(work_item, facts, generated_at)
+        except ValueError as exc:
+            # e.g. a show-level TV work item with no season/episode reached
+            # publish with facts attached (shouldn't happen upstream, but
+            # one bad title must never sink the rest of the batch).
+            logger.error("publish: %s could not be keyed, skipping: %s", key, exc)
+            skipped += 1
+            continue
+
         local_path = publish_dir / plan.key.replace("/", "__")
         local_path.write_text(json.dumps(plan.payload, indent=2), encoding="utf-8")
 
-        active_uploader.upload(local_path, plan.key)
+        try:
+            active_uploader.upload(local_path, plan.key)
+        except PublishError as exc:
+            logger.error("publish: upload failed for %s, skipping: %s", plan.key, exc)
+            skipped += 1
+            continue
+
         plans.append(plan)
 
     logger.info("publish: %d work items published, %d skipped", len(plans), skipped)

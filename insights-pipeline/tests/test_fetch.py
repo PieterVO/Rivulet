@@ -191,3 +191,26 @@ def test_fetch_page_cached_returns_none_when_fetch_fails(
     url = "https://en.wikipedia.org/wiki/Nonexistent_Page"
     page = fetch_page_cached(url, tmp_path)
     assert page is None
+
+
+def test_fetch_page_cached_failure_does_not_poison_cache_for_next_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient fetch failure must never be cached as "no content" —
+    the cache-hit check is just file existence, so writing an empty file on
+    failure would make a transient error permanent (regression guard).
+    """
+    from insights.stages import fetch as fetch_mod
+
+    url = "https://en.wikipedia.org/wiki/Flaky_Page"
+    cache_path = tmp_path / cache_key_for_url(url)
+
+    monkeypatch.setattr(fetch_mod, "_fetch_wikitext", lambda url, **kw: None)
+    page = fetch_page_cached(url, tmp_path)
+    assert page is None
+    assert not cache_path.exists()  # failure must not create a cache entry
+
+    monkeypatch.setattr(fetch_mod, "_fetch_wikitext", lambda url, **kw: load_fixture())
+    page = fetch_page_cached(url, tmp_path)
+    assert page is not None  # retried successfully on the next run
+    assert cache_path.exists()

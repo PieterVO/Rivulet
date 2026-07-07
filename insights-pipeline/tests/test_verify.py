@@ -330,3 +330,45 @@ def test_write_and_load_facts_verified_jsonl_round_trip(tmp_path: Path) -> None:
 
 def test_load_facts_verified_jsonl_missing_file_returns_empty(tmp_path: Path) -> None:
     assert load_facts_verified_jsonl(tmp_path / "nope.jsonl") == {}
+
+
+# --- run() IO shell: resume path must not silently drop cached facts from the drop-rate stat ---
+
+
+def test_run_resumed_item_counts_as_kept_not_dropped_from_stats(tmp_path: Path) -> None:
+    from insights.config import Config
+    from insights.stages.verify import run
+
+    config = Config(
+        llm_base_url="http://fake/v1",
+        llm_model="gemma4:31b-it-q4_K_M",
+        llm_timeout_secs=5.0,
+        llm_max_retries=1,
+        data_dir=tmp_path,
+        tmdb_proxy_base_url="https://tmdb-proxy.example",
+        plex_base_url="",
+        plex_token="",
+        r2_endpoint_url="",
+        r2_bucket="",
+        r2_access_key_id="",
+        r2_secret_access_key="",
+    )
+
+    # Simulate a prior run already having verified "movie:1".
+    from insights.stages.verify import VerifyBatchResult as _VBR
+
+    already = _VBR(key="movie:1", verified=[make_fact("Already verified fact.")], all_decisions=[])
+    write_facts_verified_jsonl([already], tmp_path / "facts_verified.jsonl")
+
+    # This run only supplies a NEW item; movie:1's raw facts aren't even
+    # passed in, matching how a real resumed run would only re-process
+    # what's missing from facts_verified.jsonl.
+    results = run(config, facts_by_key={"movie:1": [], "movie:2": [make_fact("New fact.")]})
+
+    resumed = next(r for r in results if r.key == "movie:1")
+    assert resumed.verified == [already.verified[0]]
+    # The cached survivor must be represented as a kept decision, not
+    # vanish from the denominator (regression guard).
+    assert len(resumed.all_decisions) == 1
+    assert resumed.all_decisions[0].kept is True
+    assert resumed.drop_rate == 0.0
