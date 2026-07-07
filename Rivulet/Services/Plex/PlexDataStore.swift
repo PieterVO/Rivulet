@@ -514,11 +514,6 @@ class PlexDataStore: ObservableObject {
                     await MainActor.run {
                         self.hubs = cachedHubs
                         self.hubsVersion = UUID()
-                        let heroItems = self.selectHomeHeroItems(from: cachedHubs)
-                        if !heroItems.isEmpty {
-                            self.cacheHeroItems(heroItems, forLibrary: "home")
-                            Task { await self.cacheManager.cacheHomeHeroItems(heroItems) }
-                        }
                         // projectHomeItems() also needs the Continue Watching
                         // hub + per-library hubs; those land on the deferred
                         // refresh. This first projection covers whatever the
@@ -617,13 +612,6 @@ class PlexDataStore: ObservableObject {
 
             // Always update Top Shelf cache after fetching (lightweight, idempotent)
             updateTopShelfCache()
-            let heroItems = selectHomeHeroItems(from: fetchedHubs)
-            if !heroItems.isEmpty {
-                cacheHeroItems(heroItems, forLibrary: "home")
-                await cacheManager.cacheHomeHeroItems(heroItems)
-            } else {
-                await cacheManager.clearHomeHeroItemsCache()
-            }
             self.hubsError = nil
             if updateLoading {
                 self.isLoadingHubs = false
@@ -1093,24 +1081,6 @@ class PlexDataStore: ObservableObject {
     /// `PlexHomeViewController.computeHubBackedHero(from:)` so warm launches
     /// can start the hero image load without decoding the full `[PlexHub]`
     /// cache first.
-    private func selectHomeHeroItems(from hubs: [PlexHub], cap: Int = 9) -> [PlexMetadata] {
-        let curatedKeywords = ["recommended", "promoted", "featured", "spotlight"]
-        let curated = hubs.first { hub in
-            guard let id = hub.hubIdentifier?.lowercased(),
-                  hub.Metadata?.isEmpty == false else { return false }
-            return curatedKeywords.contains(where: id.contains)
-        }
-        if let items = curated?.Metadata, !items.isEmpty {
-            return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
-        }
-
-        if let firstHub = hubs.first(where: { !isRecentlyAddedHub($0) && ($0.Metadata?.isEmpty == false) }),
-           let items = firstHub.Metadata, !items.isEmpty {
-            return Array(items.prefix(cap)).filter { $0.ratingKey != nil }
-        }
-        return []
-    }
-
     /// Replica of `PlexHomeViewController.isRecentlyAdded(_:)` — the home
     /// projection must select the SAME "Recently Added" hub per library.
     private func isRecentlyAddedHub(_ hub: PlexHub) -> Bool {
