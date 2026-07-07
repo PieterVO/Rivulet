@@ -78,16 +78,18 @@ class WorkItem:
 def build_seed_list(
     recurate_items: list[WorkItem],
     tmdb_candidates: list[WorkItem],
-    plex_library_tmdb_ids: set[tuple[MediaType, int]],
+    plex_library_tmdb_ids: set[tuple[MediaType, int]] | None,
 ) -> list[WorkItem]:
-    """Pure core: merge re-curation + TMDB-candidates-that-are-in-the-library.
+    """Pure core: merge re-curation + TMDB candidates.
 
-    Ordering: re-curation items first (already deduped against each other),
-    then TMDB candidates in the order given (callers pass popular before
-    trending, and within a section TMDB's own popularity order), filtered to
-    only those present in the Plex library dump. Dedup by `WorkItem.key`;
-    first occurrence wins (so a recurate entry beats a rediscovered
-    duplicate, and "popular" beats "trending" if the same title is both).
+    When `plex_library_tmdb_ids` is a set, TMDB candidates are filtered to only
+    titles in that library (library-only mode). When it is `None`, ALL
+    popular/trending TMDB candidates are kept (popular-only mode, the default)
+    — no Plex needed. Re-curation items are always kept.
+
+    Ordering: re-curation first (already deduped), then TMDB candidates in the
+    order given (popular before trending, TMDB's popularity order within a
+    section). Dedup by `WorkItem.key`; first occurrence wins.
     """
     seen: set[str] = set()
     result: list[WorkItem] = []
@@ -101,7 +103,7 @@ def build_seed_list(
     for item in tmdb_candidates:
         if item.key in seen:
             continue
-        if (item.type, item.tmdb_id) not in plex_library_tmdb_ids:
+        if plex_library_tmdb_ids is not None and (item.type, item.tmdb_id) not in plex_library_tmdb_ids:
             continue
         seen.add(item.key)
         result.append(item)
@@ -265,19 +267,25 @@ def run(config: Config) -> list[WorkItem]:
                 parse_tmdb_list_response(payload, media_type, reason=section)  # type: ignore[arg-type]
             )
 
-    try:
-        plex_payload = _fetch_plex_library_dump(config)
-        plex_ids = parse_plex_library_response(plex_payload)
-    except requests.RequestException as exc:
-        logger.error("Plex library dump failed: %s", exc)
-        plex_ids = set()
+    # Popular-only by default: cover all popular/trending content regardless of
+    # any library. Set INSIGHTS_LIBRARY_ONLY=1 to instead intersect with a Plex
+    # library dump (the only mode that needs Plex).
+    plex_ids: set[tuple[MediaType, int]] | None = None
+    if config.library_only:
+        try:
+            plex_payload = _fetch_plex_library_dump(config)
+            plex_ids = parse_plex_library_response(plex_payload)
+        except requests.RequestException as exc:
+            logger.error("Plex library dump failed: %s", exc)
+            plex_ids = set()
 
     seed_list = build_seed_list(recurate_items, tmdb_candidates, plex_ids)
     logger.info(
-        "seed: %d recurate + %d tmdb-candidates -> %d in-library work items",
+        "seed: %d recurate + %d tmdb-candidates -> %d work items (%s)",
         len(recurate_items),
         len(tmdb_candidates),
         len(seed_list),
+        "library-only" if config.library_only else "popular-only",
     )
     write_seed_jsonl(seed_list, config.data_dir / "seed.jsonl")
     return seed_list

@@ -27,7 +27,11 @@ class Config:
     # TMDB access is via the existing tmdb-proxy Worker (don't re-implement).
     tmdb_proxy_base_url: str
 
-    # Plex library dump (same box as the pipeline in prod).
+    # Seed scope. False (default) = popular-only: cover all TMDB popular/
+    # trending content, no Plex needed. True = intersect with a Plex library.
+    library_only: bool
+
+    # Plex library dump — only used when library_only is True.
     plex_base_url: str
     plex_token: str
 
@@ -61,6 +65,7 @@ class Config:
                 "INSIGHTS_TMDB_PROXY_BASE_URL",
                 "https://tmdb-proxy.baingurley.workers.dev",
             ).rstrip("/"),
+            library_only=os.environ.get("INSIGHTS_LIBRARY_ONLY", "").lower() in ("1", "true", "yes"),
             plex_base_url=os.environ.get("INSIGHTS_PLEX_BASE_URL", "").rstrip("/"),
             plex_token=os.environ.get("INSIGHTS_PLEX_TOKEN", ""),
             r2_endpoint_url=os.environ.get("INSIGHTS_R2_ENDPOINT_URL", "").rstrip("/"),

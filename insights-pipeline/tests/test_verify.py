@@ -359,6 +359,7 @@ def test_run_resumed_item_counts_as_kept_not_dropped_from_stats(tmp_path: Path) 
         llm_max_retries=1,
         data_dir=tmp_path,
         tmdb_proxy_base_url="https://tmdb-proxy.example",
+        library_only=False,
         plex_base_url="",
         plex_token="",
         r2_endpoint_url="",

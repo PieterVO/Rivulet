@@ -24,6 +24,7 @@ def make_config() -> Config:
         llm_max_retries=1,
         data_dir=Path("./data"),
         tmdb_proxy_base_url="https://tmdb-proxy.example",
+        library_only=False,
         plex_base_url="",
         plex_token="",
         r2_endpoint_url="",

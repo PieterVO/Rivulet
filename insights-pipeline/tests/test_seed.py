@@ -27,6 +27,18 @@ def test_work_item_key_dedup_movie_vs_episode() -> None:
     assert movie.key != ep.key
 
 
+def test_build_seed_list_popular_only_keeps_all_candidates_when_library_is_none() -> None:
+    # Popular-only mode (the default): no library filter, every TMDB candidate
+    # is kept regardless of ownership. This is the no-Plex path.
+    tmdb_candidates = [
+        WorkItem(tmdb_id=1, type="movie", title="A", year=2020, reason="popular"),
+        WorkItem(tmdb_id=2, type="movie", title="B", year=2021, reason="popular"),
+        WorkItem(tmdb_id=3, type="tv", title="C", year=2019, reason="trending"),
+    ]
+    result = build_seed_list([], tmdb_candidates, None)
+    assert [i.tmdb_id for i in result] == [1, 2, 3]
+
+
 def test_build_seed_list_intersects_tmdb_with_plex_library() -> None:
     tmdb_candidates = [
         WorkItem(tmdb_id=1, type="movie", title="In Library", year=2020, reason="popular"),
