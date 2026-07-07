@@ -157,12 +157,39 @@ Extends the same Worker/R2 stack pattern as `tmdb-proxy`.
 - **Absent data:** no tmdb id / 404 / network fail → Trivia section simply absent (same graceful
   rule as Cast). Never an error.
 
+## Seed scope (decided during the P2a dry-run)
+
+Seed is **popular-only by default** — it covers all TMDB popular/trending content and needs no
+Plex. The Plex library intersection is now opt-in (`INSIGHTS_LIBRARY_ONLY=1`); the token is only
+needed in that mode. Rationale: the GPU is free and time is not a constraint, so covering trending
+content outright beats gating on ownership, and it removes the Plex dependency from the common path.
+
+## Content freshness & refresh (P3 — decided, not yet built)
+
+The P2a pipeline is one-shot per title: generate once, never revisit. That's fine for the initial
+catalog but leaves three gaps, resolved as follows:
+
+- **New episodes of ongoing shows** — handled **both** ways (complementary, not either/or):
+  - *Scheduled re-seed*: a cron periodically re-runs seed, which enumerates each tracked show's
+    current episode list from TMDB and enqueues any episode lacking trivia. Catches new episodes
+    proactively within the cron interval.
+  - *On-demand*: the Worker's 404 miss-log (already recorded to Analytics Engine) is drained into
+    the re-curation queue, so anything a real user tried to watch gets generated next batch.
+- **Stale titles (source page enriched after release)** — **TTL-based refresh**: each published
+  title carries `generatedAt`; a periodic job re-runs any title older than a TTL (shorter for
+  recent releases, longer for old catalog). `fact.id` hashing already makes re-publish safe —
+  reports and suppression survive because ids are stable across a re-generation.
+- **Re-generation safety**: re-publishing bumps `generatedAt` and invalidates that key's edge
+  cache; unchanged facts keep their ids, so user reports/suppression carry over.
+
 ## Phasing within P2
 
 - **P2a — pipeline + read path:** stages 1–6 producing JSON to R2; GET routes; client Trivia
   section (read-only, spoiler toggle, attribution). This is the shippable core.
 - **P2b — feedback loop:** `POST /report`, `/insights/suppressed`, client Report button + auto-hide,
   seed-stage re-curation priority from drained reports.
+- **P3 — freshness:** scheduled re-seed with episode enumeration, on-demand from the miss-log,
+  TTL-based refresh (see "Content freshness" above).
 
 ## Testing
 
