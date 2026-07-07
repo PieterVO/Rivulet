@@ -7,13 +7,14 @@ are exercised against tmp_path fixtures rather than the real data dir.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from insights.stages.seed import (
     WorkItem,
     append_published_keys,
     build_episode_work_items,
+    build_scheduled_seed_list,
     build_seed_list,
     load_published_keys,
     load_published_records,
@@ -21,8 +22,14 @@ from insights.stages.seed import (
     parse_plex_library_response,
     parse_tmdb_list_response,
     parse_tmdb_season_response,
+    stale_workitems_from_records,
     write_seed_jsonl,
 )
+from tests.helpers import make_config
+
+
+def _cfg(**over):
+    return make_config(**over)
 
 
 def test_work_item_key_dedup_movie_vs_episode() -> None:
@@ -397,3 +404,64 @@ def test_load_published_keys_tolerates_old_format(tmp_path: Path) -> None:
     p = tmp_path / "published.jsonl"
     p.write_text('{"key": "movie:1", "published_at": "2026-01-01T00:00:00Z"}\n', encoding="utf-8")
     assert load_published_keys(p) == {"movie:1"}
+
+
+# --- scheduled seed: TTL refresh + priority ordering + cap (Task 7) ---
+
+
+def _w(id, **kw):
+    return WorkItem(
+        tmdb_id=id,
+        type=kw.get("type", "movie"),
+        title=str(id),
+        year=2020,
+        **{k: v for k, v in kw.items() if k != "type"},
+    )
+
+
+def test_priority_order_and_dedup() -> None:
+    stale = [_w(1)]
+    new_ep = [_w(2, type="tv", season=1, episode=1)]
+    popular = [_w(1), _w(3)]  # _w(1) dup of stale -> dropped
+    out = build_scheduled_seed_list(
+        stale_items=stale, new_episode_items=new_ep, popular_items=popular, max_titles=10
+    )
+    assert [w.tmdb_id for w in out] == [1, 2, 3]
+
+
+def test_cap_applied() -> None:
+    stale = [_w(i) for i in range(50)]
+    out = build_scheduled_seed_list(
+        stale_items=stale, new_episode_items=[], popular_items=[], max_titles=5
+    )
+    assert len(out) == 5
+
+
+def test_stale_selection_from_records() -> None:
+    now = datetime(2026, 7, 7, tzinfo=timezone.utc)
+    records = [
+        {
+            "key": "movie:1",
+            "type": "movie",
+            "tmdb_id": 1,
+            "title": "A",
+            "year": 2026,
+            "release_date": "2026-06-17",
+            "covered": True,
+            "published_at": "2026-06-22T00:00:00Z",
+            "pipeline_version": 1,
+        },  # young, 15d old -> stale
+        {
+            "key": "movie:2",
+            "type": "movie",
+            "tmdb_id": 2,
+            "title": "B",
+            "year": 2020,
+            "release_date": "2020-01-01",
+            "covered": True,
+            "published_at": "2026-07-06T00:00:00Z",
+            "pipeline_version": 1,
+        },  # mature, 1d old -> fresh
+    ]
+    out = stale_workitems_from_records(records, now=now, config=_cfg(), current_pipeline_version=1)
+    assert [w.tmdb_id for w in out] == [1]

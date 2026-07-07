@@ -37,7 +37,8 @@ from typing import Any, Literal
 
 import requests
 
-from insights.config import Config
+from insights.config import PIPELINE_VERSION, Config
+from insights.freshness import is_stale, object_kind
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,83 @@ def build_episode_work_items(
     return result
 
 
+# --- Scheduled seed: age-aware TTL refresh + priority ordering + cap ---
+
+
+def stale_workitems_from_records(
+    records: list[dict[str, Any]],
+    *,
+    now: datetime,
+    config: Config,
+    current_pipeline_version: int,
+) -> list[WorkItem]:
+    """Pure: published-manifest records -> WorkItems for anything stale.
+
+    Each record's `type` field is the *published* vocabulary ("movie" /
+    "episode" / "show" — see `freshness.object_kind`), not `WorkItem.type`
+    ("movie" / "tv"); the rebuilt WorkItem below maps back to the latter.
+    Reason is "recurate" so a stale item sorts with the same priority
+    class as a human-reported re-curation (both mean "regenerate this
+    now"); the actual priority ORDER is set by the caller via
+    `build_scheduled_seed_list`, not by this function.
+    """
+    out: list[WorkItem] = []
+    for record in records:
+        kind = object_kind(record.get("type", "movie"))
+        stale = is_stale(
+            generated_at=record.get("published_at", ""),
+            release_date=record.get("release_date"),
+            kind=kind,
+            now=now,
+            config=config,
+            pipeline_version=record.get("pipeline_version", 1),
+            current_pipeline_version=current_pipeline_version,
+        )
+        if not stale:
+            continue
+        work_item_type: MediaType = "movie" if record.get("type") == "movie" else "tv"
+        out.append(
+            WorkItem(
+                tmdb_id=int(record["tmdb_id"]),
+                type=work_item_type,
+                title=record.get("title") or str(record.get("tmdb_id", "")),
+                year=record.get("year"),
+                season=record.get("season"),
+                episode=record.get("episode"),
+                reason="recurate",
+                release_date=record.get("release_date"),
+            )
+        )
+    return out
+
+
+def build_scheduled_seed_list(
+    *,
+    stale_items: list[WorkItem],
+    new_episode_items: list[WorkItem],
+    popular_items: list[WorkItem],
+    max_titles: int,
+) -> list[WorkItem]:
+    """Pure: merge stale-refresh + newly-aired-episode + popular candidates.
+
+    Priority order is exactly the parameter order (stale -> new-episode ->
+    popular); deduped by `WorkItem.key` (first occurrence wins), truncated
+    to `max_titles` so one scheduled seed pass can never runaway the GPU
+    queue regardless of how many titles TMDB or the TTL check surface.
+    """
+    seen: set[str] = set()
+    result: list[WorkItem] = []
+    for group in (stale_items, new_episode_items, popular_items):
+        for item in group:
+            if len(result) >= max_titles:
+                return result
+            if item.key in seen:
+                continue
+            seen.add(item.key)
+            result.append(item)
+    return result
+
+
 def load_published_keys(path: Path) -> set[str]:
     """Read the `published.jsonl` manifest (appended to by the publish stage).
 
@@ -522,12 +600,12 @@ def run(config: Config) -> list[WorkItem]:
             logger.error("Plex library dump failed: %s", exc)
             plex_ids = set()
 
-    seed_list = build_seed_list(recurate_items, tmdb_candidates, plex_ids)
+    candidate_list = build_seed_list(recurate_items, tmdb_candidates, plex_ids)
 
     # Episode enumeration: expand every TV show-level item into its aired,
     # not-yet-published episodes.
     published_keys = load_published_keys(config.data_dir / "published.jsonl")
-    show_items = [item for item in seed_list if item.type == "tv"]
+    show_items = [item for item in candidate_list if item.type == "tv"]
     episodes_by_show: dict[int, list[WorkItem]] = {}
     # UTC, not host-local: TMDB air_date is a plain date and the pipeline host's
     # timezone must not shift the aired/not-aired boundary for a same-day episode.
@@ -535,16 +613,41 @@ def run(config: Config) -> list[WorkItem]:
     for show_item in show_items:
         episodes_by_show[show_item.tmdb_id] = _fetch_episodes_for_show(config, show_item, today)
     episode_items = build_episode_work_items(show_items, episodes_by_show, published_keys)
-    seed_list = seed_list + episode_items
+
+    # Age-aware TTL refresh (freshness.py): titles whose published object has
+    # gone stale (past its settle-window young-refresh cadence, past its
+    # mature TTL, or a pipeline-version bump) get a fresh WorkItem so
+    # discover->publish regenerates them.
+    published_records = load_published_records(config.data_dir / "published.jsonl")
+    now = datetime.now(UTC)
+    stale_items = stale_workitems_from_records(
+        published_records, now=now, config=config, current_pipeline_version=PIPELINE_VERSION
+    )
+
+    # Priority: recurate (human-flagged) + stale (TTL refresh) first — this
+    # preserves the pre-existing "recurate always gets in" behavior even
+    # under the new max_titles cap — then newly-aired episodes, then the
+    # rest of the popular/trending merge. Deduped by key across all groups,
+    # bounded to scheduled_max_titles so one seed pass can't runaway the GPU
+    # queue.
+    seed_list = build_scheduled_seed_list(
+        stale_items=recurate_items + stale_items,
+        new_episode_items=episode_items,
+        popular_items=candidate_list,
+        max_titles=config.scheduled_max_titles,
+    )
 
     logger.info(
-        "seed: %d recurate + %d tmdb-candidates -> %d work items (%s), +%d new episodes across %d shows",
+        "seed: %d recurate + %d stale-refresh + %d tmdb-candidates -> %d work items (%s), "
+        "+%d new episodes across %d shows, capped at %d",
         len(recurate_items),
+        len(stale_items),
         len(tmdb_candidates),
-        len(seed_list) - len(episode_items),
+        len(seed_list),
         "library-only" if config.library_only else "popular-only",
         len(episode_items),
         len(show_items),
+        config.scheduled_max_titles,
     )
     write_seed_jsonl(seed_list, config.data_dir / "seed.jsonl")
     return seed_list
