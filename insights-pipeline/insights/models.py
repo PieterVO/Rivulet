@@ -103,6 +103,12 @@ class TitleTrivia:
     type: Literal["movie", "episode", "show"]
     generated_at: str  # ISO8601; stamped at publish (passed in, never Date.now here)
     pipeline_version: int
+    # Additive fields (schema stays locked to the Swift client; only additive
+    # changes allowed). Missing `covered` on an older object is treated as
+    # True by the client, so the default here matches that same "assume
+    # covered" posture for anything that doesn't pass it explicitly.
+    covered: bool = True
+    release_date: str | None = None
     attribution: list[Source] = field(default_factory=list)
     facts: list[Fact] = field(default_factory=list)
 
@@ -112,6 +118,35 @@ class TitleTrivia:
             "type": self.type,
             "generatedAt": self.generated_at,
             "pipelineVersion": self.pipeline_version,
+            "covered": self.covered,
+            "releaseDate": self.release_date,
             "attribution": [s.to_dict() for s in self.attribution],
             "facts": [f.to_published_dict() for f in self.facts],
         }
+
+    @classmethod
+    def tombstone(
+        cls,
+        *,
+        id: str,
+        type: str,
+        generated_at: str,
+        pipeline_version: int,
+        release_date: str | None,
+    ) -> "TitleTrivia":
+        """A present-but-empty object: 'we generated, there's nothing to share.'
+
+        Publishing this (rather than skipping the title entirely) is what
+        makes "nothing to share" definitive — the client sees a real,
+        current object and stops re-requesting generation for it.
+        """
+        return cls(
+            id=id,
+            type=type,  # type: ignore[arg-type]
+            generated_at=generated_at,
+            pipeline_version=pipeline_version,
+            covered=False,
+            release_date=release_date,
+            attribution=[],
+            facts=[],
+        )

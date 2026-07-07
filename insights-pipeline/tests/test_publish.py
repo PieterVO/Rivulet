@@ -106,7 +106,16 @@ def test_assemble_title_trivia_published_dict_strips_source_snippet() -> None:
     trivia = assemble_title_trivia(item, [make_fact("A fact.")], generated_at="2026-01-01T00:00:00Z")
     d = trivia.to_published_dict()
     assert "source_snippet" not in json.dumps(d)
-    assert set(d.keys()) == {"id", "type", "generatedAt", "pipelineVersion", "attribution", "facts"}
+    assert set(d.keys()) == {
+        "id",
+        "type",
+        "generatedAt",
+        "pipelineVersion",
+        "covered",
+        "releaseDate",
+        "attribution",
+        "facts",
+    }
 
 
 # --- build_publish_plan ---

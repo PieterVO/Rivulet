@@ -65,7 +65,53 @@ def test_title_trivia_published_shape_matches_client_schema() -> None:
         "type",
         "generatedAt",
         "pipelineVersion",
+        "covered",
+        "releaseDate",
         "attribution",
         "facts",
     }
     assert set(d["facts"][0].keys()) == {"id", "text", "category", "spoiler", "source"}
+
+
+def test_published_dict_includes_covered_and_release_date() -> None:
+    t = TitleTrivia(
+        id="tmdb://27205",
+        type="movie",
+        generated_at="2026-07-07T00:00:00Z",
+        pipeline_version=1,
+        covered=True,
+        release_date="2010-07-16",
+    )
+    d = t.to_published_dict()
+    assert d["covered"] is True
+    assert d["releaseDate"] == "2010-07-16"
+
+
+def test_covered_and_release_date_default() -> None:
+    # Existing construction sites (pre-tombstone) don't pass these -- must
+    # default to covered=True, release_date=None so older callers keep working.
+    t = TitleTrivia(
+        id="tmdb://1",
+        type="movie",
+        generated_at="2026-07-07T00:00:00Z",
+        pipeline_version=1,
+    )
+    assert t.covered is True
+    assert t.release_date is None
+
+
+def test_tombstone_is_covered_false_empty() -> None:
+    t = TitleTrivia.tombstone(
+        id="tmdb://999",
+        type="movie",
+        generated_at="2026-07-07T00:00:00Z",
+        pipeline_version=1,
+        release_date="2025-01-01",
+    )
+    assert t.covered is False
+    assert t.facts == []
+    assert t.attribution == []
+    d = t.to_published_dict()
+    assert d["covered"] is False
+    assert d["releaseDate"] == "2025-01-01"
+    assert d["facts"] == []
