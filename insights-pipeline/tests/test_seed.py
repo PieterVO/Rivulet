@@ -7,14 +7,19 @@ are exercised against tmp_path fixtures rather than the real data dir.
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 from insights.stages.seed import (
     WorkItem,
+    append_published_keys,
+    build_episode_work_items,
     build_seed_list,
+    load_published_keys,
     load_recurate_list,
     parse_plex_library_response,
     parse_tmdb_list_response,
+    parse_tmdb_season_response,
     write_seed_jsonl,
 )
 
@@ -167,3 +172,152 @@ def test_write_seed_jsonl_round_trips(tmp_path: Path) -> None:
     assert len(lines) == 2
     round_tripped = [WorkItem.from_dict(json.loads(line)) for line in lines]
     assert round_tripped == items
+
+
+# --- parse_tmdb_season_response (episode enumeration) ---
+
+
+def test_parse_tmdb_season_response_builds_episode_work_items_for_aired_episodes() -> None:
+    payload = {
+        "episodes": [
+            {"episode_number": 1, "season_number": 1, "name": "Pilot", "air_date": "2023-05-05"},
+            {"episode_number": 2, "season_number": 1, "name": "Ep 2", "air_date": "2023-05-12"},
+        ]
+    }
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=2802, show_title="Silo", show_year=2023, today=date(2023, 6, 1)
+    )
+    assert items == [
+        WorkItem(tmdb_id=2802, type="tv", title="Silo", year=2023, season=1, episode=1, reason="episode"),
+        WorkItem(tmdb_id=2802, type="tv", title="Silo", year=2023, season=1, episode=2, reason="episode"),
+    ]
+
+
+def test_parse_tmdb_season_response_skips_future_episodes() -> None:
+    payload = {
+        "episodes": [
+            {"episode_number": 1, "season_number": 2, "air_date": "2023-05-05"},
+            {"episode_number": 2, "season_number": 2, "air_date": "2099-01-01"},  # not aired yet
+        ]
+    }
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=1, show_title="X", show_year=None, today=date(2023, 6, 1)
+    )
+    assert [i.episode for i in items] == [1]
+
+
+def test_parse_tmdb_season_response_skips_episodes_missing_air_date() -> None:
+    payload = {"episodes": [{"episode_number": 3, "season_number": 1}]}  # no air_date at all
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=1, show_title="X", show_year=None, today=date(2023, 6, 1)
+    )
+    assert items == []
+
+
+def test_parse_tmdb_season_response_skips_malformed_air_date() -> None:
+    payload = {"episodes": [{"episode_number": 1, "season_number": 1, "air_date": "not-a-date"}]}
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=1, show_title="X", show_year=None, today=date(2023, 6, 1)
+    )
+    assert items == []
+
+
+def test_parse_tmdb_season_response_skips_entries_missing_episode_number() -> None:
+    payload = {"episodes": [{"season_number": 1, "air_date": "2023-01-01"}]}  # missing episode_number
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=1, show_title="X", show_year=None, today=date(2023, 6, 1)
+    )
+    assert items == []
+
+
+def test_parse_tmdb_season_response_boundary_air_date_equals_today_has_aired() -> None:
+    payload = {"episodes": [{"episode_number": 1, "season_number": 1, "air_date": "2023-06-01"}]}
+    items = parse_tmdb_season_response(
+        payload, tmdb_id=1, show_title="X", show_year=None, today=date(2023, 6, 1)
+    )
+    assert len(items) == 1
+
+
+# --- build_episode_work_items (freshness / re-seed idempotency) ---
+
+
+def test_build_episode_work_items_expands_show_level_items_only() -> None:
+    show_item = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023)  # show-level, no season/episode
+    movie_item = WorkItem(tmdb_id=2, type="movie", title="A Movie", year=2020)
+    already_episode_item = WorkItem(
+        tmdb_id=3, type="tv", title="Other Show", year=2021, season=1, episode=1
+    )
+    ep1 = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023, season=1, episode=1, reason="episode")
+    episodes_by_show = {1: [ep1], 3: [ep1]}  # show 3's episodes should never surface: not show-level
+
+    result = build_episode_work_items(
+        [show_item, movie_item, already_episode_item], episodes_by_show, published_keys=set()
+    )
+
+    assert result == [ep1]
+
+
+def test_build_episode_work_items_skips_already_published_episodes() -> None:
+    show_item = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023)
+    ep1 = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023, season=1, episode=1, reason="episode")
+    ep2 = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023, season=1, episode=2, reason="episode")
+    episodes_by_show = {1: [ep1, ep2]}
+
+    result = build_episode_work_items(
+        [show_item], episodes_by_show, published_keys={ep1.key}
+    )
+
+    assert result == [ep2]  # ep1 already published; only the new episode is enqueued -- re-seed idempotency
+
+
+def test_build_episode_work_items_dedups_repeated_episode_entries() -> None:
+    show_item = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023)
+    ep1 = WorkItem(tmdb_id=1, type="tv", title="Silo", year=2023, season=1, episode=1, reason="episode")
+    episodes_by_show = {1: [ep1, ep1]}  # duplicate entry (e.g. overlapping season fetches)
+
+    result = build_episode_work_items([show_item], episodes_by_show, published_keys=set())
+
+    assert result == [ep1]
+
+
+def test_build_episode_work_items_no_shows_yields_empty() -> None:
+    movie_item = WorkItem(tmdb_id=1, type="movie", title="X", year=2020)
+    assert build_episode_work_items([movie_item], {}, published_keys=set()) == []
+
+
+# --- published.jsonl manifest ---
+
+
+def test_load_published_keys_missing_file_returns_empty_set(tmp_path: Path) -> None:
+    assert load_published_keys(tmp_path / "nope.jsonl") == set()
+
+
+def test_append_and_load_published_keys_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "published.jsonl"
+    append_published_keys(["movie:1", "tv:2:S1E1"], path, published_at="2026-07-07T00:00:00Z")
+
+    assert load_published_keys(path) == {"movie:1", "tv:2:S1E1"}
+
+
+def test_append_published_keys_appends_across_multiple_calls(tmp_path: Path) -> None:
+    path = tmp_path / "published.jsonl"
+    append_published_keys(["movie:1"], path, published_at="2026-07-07T00:00:00Z")
+    append_published_keys(["tv:2:S1E1"], path, published_at="2026-07-08T00:00:00Z")
+
+    assert load_published_keys(path) == {"movie:1", "tv:2:S1E1"}
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_append_published_keys_empty_list_is_noop_and_does_not_create_file(tmp_path: Path) -> None:
+    path = tmp_path / "published.jsonl"
+    append_published_keys([], path, published_at="2026-07-07T00:00:00Z")
+    assert not path.exists()
+
+
+def test_load_published_keys_skips_malformed_lines(tmp_path: Path) -> None:
+    path = tmp_path / "published.jsonl"
+    path.write_text(
+        'not valid json\n{"key": "movie:1", "published_at": "2026-07-07T00:00:00Z"}\n{"no_key": true}\n',
+        encoding="utf-8",
+    )
+    assert load_published_keys(path) == {"movie:1"}
