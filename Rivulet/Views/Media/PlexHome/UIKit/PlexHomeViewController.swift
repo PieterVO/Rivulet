@@ -621,11 +621,15 @@ final class PlexHomeViewController: UIViewController {
         observeUserDefaults()
         observeAuth()
 
+        // Prime the launch-pending flag BEFORE hero selection: on a cold
+        // launch it keeps the hero slot out of the loading state until the
+        // disk cache has had its chance to seed it (selectHeroItemsIfNeeded
+        // reads the flag).
+        primeInitialHomeLoadingStateIfNeeded()
         // Seed hero from cache before the initial snapshot so the first
         // frame already contains it on warm launches. Data-store refresh
         // below + the TMDB upgrade task will update the carousel later.
         selectHeroItemsIfNeeded()
-        primeInitialHomeLoadingStateIfNeeded()
 
         applySnapshot(animated: false)
         updateHomeState()
@@ -3046,36 +3050,60 @@ final class PlexHomeViewController: UIViewController {
             sourceHubs = dataStore.libraryHubs[key] ?? []
         }
 
+        // Warm path: the cache only ever holds a hero this controller
+        // actually applied (trending or fallback) — safe to show instantly.
         if heroItems.isEmpty,
            let cached = dataStore.getCachedHeroItems(forLibrary: cacheKey),
            !cached.isEmpty {
             heroItems = cached
+            heroState = .loaded
             updateBackdropForCurrentHeroItem()
             applySnapshot(animated: false)
         }
 
+        // TMDB-first: home always; a library only when it resolves to a
+        // video type. Non-video libraries have no trending source — they
+        // keep the immediate hub-backed hero.
+        let isTMDBEligible: Bool
+        switch mode {
+        case .home: isTMDBEligible = true
+        case .library: isTMDBEligible = trendingHeroType() != nil
+        case .discover, .search: isTMDBEligible = false
+        }
+
         if heroItems.isEmpty {
-            let candidates = computeHubBackedHero(from: sourceHubs)
-            if !candidates.isEmpty {
-                heroItems = candidates
-                dataStore.cacheHeroItems(candidates, forLibrary: cacheKey)
-                updateBackdropForCurrentHeroItem()
-                applySnapshot(animated: false)
-            } else if !sourceHubs.isEmpty {
-                // Hubs are loaded but none can drive a hero. Release the
-                // launch/loading gate instead of waiting for an image that will
-                // never be requested.
-                setHeroBackdrop(url: nil)
+            if isTMDBEligible {
+                // Hold the hero slot with the loading placeholder until the
+                // trending fetch resolves; upgradeHeroFromTMDB applies the
+                // hub fallback if trending can't produce enough matches. On
+                // home, wait out the launch cache paint first — the disk
+                // cache may still seed the slot without any placeholder.
+                if heroState == .idle, !isInitialHomeLoadPending, authManager.hasCredentials {
+                    heroState = .loading
+                    // The splash must not wait for a backdrop that hasn't
+                    // been chosen yet — reveal with the placeholder instead.
+                    markHeroReady()
+                    applySnapshot(animated: false)
+                }
+            } else {
+                let candidates = computeHubBackedHero(from: sourceHubs)
+                if !candidates.isEmpty {
+                    heroItems = candidates
+                    heroState = .loaded
+                    dataStore.cacheHeroItems(candidates, forLibrary: cacheKey)
+                    updateBackdropForCurrentHeroItem()
+                    applySnapshot(animated: false)
+                } else if !sourceHubs.isEmpty {
+                    // Hubs are loaded but none can drive a hero. Release the
+                    // launch/loading gate instead of waiting for an image that
+                    // will never be requested.
+                    setHeroBackdrop(url: nil)
+                }
             }
         }
 
-        switch mode {
-        case .home:
+        if isTMDBEligible {
             requestHeroUpgrade()
-        case .library:
-            if trendingHeroType() != nil { requestHeroUpgrade() }  // movie/show libraries only
-        case .discover, .search:
-            break
         }
     }
 
@@ -3166,17 +3194,6 @@ final class PlexHomeViewController: UIViewController {
             return
         }
 
-        // Skip if the GUID index hasn't changed since the last completed run.
-        // The upgrade is triggered from many sites; between the disk-hydrate and
-        // the network refresh the index is identical, so recomputing (2 cached
-        // fetches + 40 lookups) would be pure waste.
-        let generation = await LibraryGUIDIndex.shared.generation
-        guard generation != lastUpgradedIndexGeneration else {
-            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB skipped: index generation \(generation, privacy: .public) unchanged")
-            return
-        }
-        lastUpgradedIndexGeneration = generation
-
         let cacheKey: String
         let heroType: TMDBMediaType?  // nil == home's interleaved movies+TV path
         switch mode {
@@ -3196,12 +3213,27 @@ final class PlexHomeViewController: UIViewController {
             return
         }
 
+        // Skip if the GUID index hasn't changed since the last completed run.
+        // The upgrade is triggered from many sites; between the disk-hydrate and
+        // the network refresh the index is identical, so recomputing (2 cached
+        // fetches + 40 lookups) would be pure waste. A waiting placeholder (or a
+        // slot given up before its hubs loaded) still gets its hub fallback
+        // retried — hubs may have landed since the last run.
+        let generation = await LibraryGUIDIndex.shared.generation
+        guard generation != lastUpgradedIndexGeneration else {
+            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB skipped: index generation \(generation, privacy: .public) unchanged")
+            resolveHeroWithHubFallback(cacheKey: cacheKey)
+            return
+        }
+        lastUpgradedIndexGeneration = generation
+
         homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB: starting (gen=\(generation, privacy: .public), current heroItems=\(self.heroItems.count, privacy: .public))")
         let curated = await Self.computeTMDBHero(cap: Self.heroItemCap, type: heroType)
         guard curated.count >= Self.heroTMDBMinMatches else {
-            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public)); keeping hub-backed hero")
+            homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public))")
             // A later index generation may yield enough matches; allow re-run.
             lastUpgradedIndexGeneration = -1
+            resolveHeroWithHubFallback(cacheKey: cacheKey)
             return
         }
 
@@ -3241,7 +3273,8 @@ final class PlexHomeViewController: UIViewController {
 
         homeUIKitLog.info("[Hero] upgradeHeroFromTMDB APPLIED: replacing hero with \(mergedItems.count, privacy: .public) trending-matched items")
         heroItems = mergedItems
-        dataStore.cacheHeroItems(mergedItems, forLibrary: cacheKey)
+        heroState = .loaded
+        persistHeroItems(mergedItems, cacheKey: cacheKey)
         updateBackdropForCurrentHeroItem()
         applySnapshot(animated: false)
         // The hero cell's diffable item id is a constant ("hero-overlay"), so
@@ -3249,6 +3282,50 @@ final class PlexHomeViewController: UIViewController {
         // items it was first configured with. Force a reconfigure so it picks
         // up the swapped heroItems.
         reconfigureHeroCell()
+    }
+
+    /// TMDB couldn't produce enough owned matches (cold GUID index, TMDB
+    /// unreachable, small library). If the placeholder is holding the hero
+    /// slot — or the slot was given up before its hubs loaded — resolve it
+    /// with the hub-backed fallback. When hubs are settled and can't drive a
+    /// hero either, give the slot up so the placeholder doesn't spin forever.
+    private func resolveHeroWithHubFallback(cacheKey: String) {
+        guard heroState == .loading || heroState == .unavailable,
+              heroItems.isEmpty else { return }
+        let sourceHubs: [PlexHub]
+        switch mode {
+        case .home: sourceHubs = dataStore.hubs
+        case .library(let key, _): sourceHubs = dataStore.libraryHubs[key] ?? []
+        case .discover, .search: return
+        }
+        let fallback = computeHubBackedHero(from: sourceHubs)
+        if !fallback.isEmpty {
+            homeUIKitLog.info("[Hero] hub fallback APPLIED: \(fallback.count, privacy: .public) items")
+            heroItems = fallback
+            heroState = .loaded
+            persistHeroItems(fallback, cacheKey: cacheKey)
+            updateBackdropForCurrentHeroItem()
+            applySnapshot(animated: false)
+        } else if heroState == .loading, !sourceHubs.isEmpty || !dataStore.isLoadingHubs {
+            // Hubs settled and no hero content anywhere. Collapse the slot
+            // and release the splash's backdrop wait.
+            homeUIKitLog.debug("[Hero] no trending matches and no hub fallback; hero unavailable")
+            heroState = .unavailable
+            setHeroBackdrop(url: nil)
+            applySnapshot(animated: false)
+        }
+        // else: hubs still loading — stay on the placeholder; the hubsVersion
+        // observer re-runs selection + the upgrade when they land.
+    }
+
+    /// Cache the hero that was actually applied. The session cache seeds
+    /// same-session revisits; the home surface also persists to disk so the
+    /// next launch paints the real hero instantly instead of re-resolving.
+    private func persistHeroItems(_ items: [PlexMetadata], cacheKey: String) {
+        dataStore.cacheHeroItems(items, forLibrary: cacheKey)
+        if cacheKey == "home" {
+            Task { await CacheManager.shared.cacheHomeHeroItems(items) }
+        }
     }
 
     /// Re-vend the single hero cell after `heroItems` changes. Needed because the
