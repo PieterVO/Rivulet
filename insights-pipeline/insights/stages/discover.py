@@ -86,6 +86,34 @@ _YEAR_RE = re.compile(r"\((\d{4})")
 _DISAMBIG_MARKERS = ("disambiguation", "may refer to")
 
 
+def rank_fandom_landing_first(
+    candidates: list[SourceCandidate], work_item: WorkItem
+) -> list[SourceCandidate]:
+    """Order Fandom candidates so the page that best represents the SHOW as a
+    whole leads — that's what the adjudicator should judge and what we want as
+    the show-level Fandom source. Fandom search otherwise surfaces in-universe
+    pages ("Silo 18", a location) above the landing page.
+
+    Prefers, in order: an exact title match, a "<title> (TV series)"/"series"
+    page, the wiki's main/landing page, then everything else in search order.
+    """
+    base = work_item.title.lower()
+
+    def rank(c: SourceCandidate) -> int:
+        t = c.title.lower()
+        if t == base:
+            return 0
+        if t.startswith(base + " ") and ("series" in t or "tv" in t):
+            return 1
+        if t in (f"{base} wiki", "main page") or t.endswith(" wiki"):
+            return 2
+        if base in t:
+            return 3
+        return 4
+
+    return sorted(candidates, key=rank)
+
+
 def rank_candidates(
     candidates: list[SourceCandidate], work_item: WorkItem
 ) -> list[SourceCandidate]:
@@ -257,31 +285,72 @@ def _fetch_wikipedia_candidates(work_item: WorkItem) -> list[SourceCandidate]:
     return parse_wikipedia_query_extracts(resp.json())
 
 
-def _guess_fandom_wiki_slug(work_item: WorkItem) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "", work_item.title.lower())
-    return slug or "unknown"
+def candidate_fandom_wiki_slugs(work_item: WorkItem) -> list[str]:
+    """Candidate Fandom subdomains to try, best-guess first. Fandom wikis are
+    named unpredictably (a show's wiki may be `<title>`, `<title>series`,
+    `<title>tv`, or the source-work's name), so we probe a few and use the
+    first that exists rather than guessing one and giving up.
+    """
+    base = re.sub(r"[^a-z0-9]+", "", work_item.title.lower())
+    hyph = re.sub(r"[^a-z0-9]+", "-", work_item.title.lower()).strip("-")
+    slugs = [base, f"{base}series", f"{base}tv", f"{hyph}-series", f"{hyph}-tv"]
+    # Dedup preserving order; drop empties.
+    seen: set[str] = set()
+    out = []
+    for s in slugs:
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out or ["unknown"]
 
 
-def _fetch_fandom_candidates(work_item: WorkItem) -> tuple[str, list[SourceCandidate]]:
-    wiki = _guess_fandom_wiki_slug(work_item)
-    url = FANDOM_SEARCH_TEMPLATE.format(wiki=wiki)
+def _wiki_exists(wiki: str) -> bool:
+    try:
+        resp = requests.get(
+            FANDOM_SEARCH_TEMPLATE.format(wiki=wiki),
+            params={"action": "query", "meta": "siteinfo", "format": "json"},
+            headers=HTTP_HEADERS,
+            timeout=15,
+        )
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def _resolve_fandom_wiki(work_item: WorkItem) -> str | None:
+    """First candidate subdomain that actually exists, or None."""
+    for wiki in candidate_fandom_wiki_slugs(work_item):
+        if _wiki_exists(wiki):
+            return wiki
+    return None
+
+
+def _fetch_fandom_candidates(work_item: WorkItem) -> tuple[str | None, list[SourceCandidate]]:
+    wiki = _resolve_fandom_wiki(work_item)
+    if wiki is None:
+        return None, []
     query = work_item.title
     if work_item.season is not None and work_item.episode is not None:
         query = f"{work_item.title} season {work_item.season} episode {work_item.episode}"
+    # Fandom wikis don't reliably have the TextExtracts extension (extracts is
+    # empty), but list=search with srprop=snippet returns a real search snippet
+    # they DO support — enough context for the adjudicator.
     resp = requests.get(
-        url,
+        FANDOM_SEARCH_TEMPLATE.format(wiki=wiki),
         params={
             "action": "query",
             "list": "search",
             "srsearch": query,
-            "srlimit": "5",
+            "srlimit": "8",
+            "srprop": "snippet",
             "format": "json",
         },
         headers=HTTP_HEADERS,
         timeout=30,
     )
     resp.raise_for_status()
-    return wiki, parse_fandom_search(resp.json(), wiki)
+    candidates = parse_fandom_search(resp.json(), wiki)
+    return wiki, rank_fandom_landing_first(candidates, work_item)
 
 
 def resolve_one(
@@ -303,9 +372,11 @@ def resolve_one(
     fandom_wiki_slug: str | None = None
     if fetch_fandom:
         try:
-            fandom_wiki_slug, fandom_candidates = _fetch_fandom_candidates(work_item)
-            ranked_fandom = rank_candidates(fandom_candidates, work_item)
-            had_candidates = had_candidates or bool(fandom_candidates)
+            # _fetch_fandom_candidates already orders landing-page-first via
+            # rank_fandom_landing_first; don't re-rank with the Wikipedia-
+            # oriented scorer (it would re-surface in-universe pages).
+            fandom_wiki_slug, ranked_fandom = _fetch_fandom_candidates(work_item)
+            had_candidates = had_candidates or bool(ranked_fandom)
         except requests.RequestException as exc:
             logger.warning("Fandom search failed for %s: %s", work_item.key, exc)
 

@@ -23,7 +23,9 @@ from insights.stages.discover import (
     parse_adjudication_answer,
     parse_fandom_search,
     parse_wikipedia_opensearch,
+    parse_wikipedia_query_extracts,
     rank_candidates,
+    rank_fandom_landing_first,
     status_for,
     write_sourcemap_jsonl,
 )
@@ -250,3 +252,49 @@ def test_resolve_one_no_candidates_is_no_match(monkeypatch: pytest.MonkeyPatch) 
     entry = discover_mod.resolve_one(work_item, chat_client)
 
     assert entry.status == "no_match"
+
+
+def test_rank_fandom_landing_first_prefers_representative_page() -> None:
+    # Fandom search surfaces in-universe pages ("Silo 18", a location) above the
+    # landing page; the ranker must reorder so a show-representative page leads.
+    w = WorkItem(tmdb_id=125988, type="tv", title="Silo", year=2023)
+    cands = [
+        SourceCandidate(title="Silo 18", url="https://silo.fandom.com/wiki/Silo_18"),
+        SourceCandidate(title="Silo series", url="https://silo.fandom.com/wiki/Silo_series"),
+        SourceCandidate(title="Silo Wiki", url="https://silo.fandom.com/wiki/Silo_Wiki"),
+    ]
+    ranked = rank_fandom_landing_first(cands, w)
+    # "Silo series" (title-prefixed + series) must beat the in-universe "Silo 18".
+    assert ranked[0].title == "Silo series"
+    assert ranked[-1].title == "Silo 18"
+
+
+def test_rank_fandom_landing_first_exact_title_wins() -> None:
+    w = WorkItem(tmdb_id=1, type="tv", title="Fringe", year=2008)
+    cands = [
+        SourceCandidate(title="Walter Bishop", url="https://fringe.fandom.com/wiki/Walter_Bishop"),
+        SourceCandidate(title="Fringe", url="https://fringe.fandom.com/wiki/Fringe"),
+    ]
+    ranked = rank_fandom_landing_first(cands, w)
+    assert ranked[0].title == "Fringe"
+
+
+def test_parse_wikipedia_query_extracts_orders_by_index_and_keeps_snippet() -> None:
+    payload = {
+        "query": {
+            "pages": {
+                "999": {"title": "Silo", "fullurl": "https://w/Silo", "extract": "A grain store.", "index": 1},
+                "111": {"title": "Silo (TV series)", "fullurl": "https://w/Silo_TV",
+                        "extract": "A 2023 dystopian series.", "index": 2},
+            }
+        }
+    }
+    cands = parse_wikipedia_query_extracts(payload)
+    # Ordered by search index, snippets preserved.
+    assert [c.title for c in cands] == ["Silo", "Silo (TV series)"]
+    assert cands[1].snippet == "A 2023 dystopian series."
+
+
+def test_parse_wikipedia_query_extracts_empty_payload() -> None:
+    assert parse_wikipedia_query_extracts({}) == []
+    assert parse_wikipedia_query_extracts({"query": {"pages": {}}}) == []
