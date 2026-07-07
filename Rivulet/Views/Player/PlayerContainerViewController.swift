@@ -37,6 +37,9 @@ class PlayerContainerViewController: UIViewController {
     /// reads this when it comes online; Task 3 only derives the rail
     /// button's availability from it.
     private var upNextEpisodesCache: [PlexMetadata] = []
+    /// Snapshot of the last `$insightsCast` emission, read when the rail's
+    /// Insights panel is presented.
+    private var insightsCastCache: [MediaPerson] = []
     /// True while `activeRailPanel` is showing Up Next content, so the
     /// `$upNextEpisodes` sink can dismiss a now-stale list without
     /// touching the CC/audio/info panels, which don't go stale off that
@@ -302,6 +305,13 @@ class PlayerContainerViewController: UIViewController {
     /// Override dismiss to intercept system-triggered dismissals (e.g., from Menu button)
     /// and only allow dismissal when we've explicitly decided to dismiss.
     override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        // A presented page (person detail) is being dismissed — let UIKit
+        // handle it; the ladder below is only for the player's own chrome.
+        if presentedViewController != nil {
+            super.dismiss(animated: flag, completion: completion)
+            return
+        }
+
         // If we just handled a menu action that closed something, block this dismiss
         if blockNextDismiss {
             blockNextDismiss = false
@@ -845,6 +855,25 @@ class PlayerContainerViewController: UIViewController {
             }
             .store(in: &cancellables)
 
+        vm.$insightsCast
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] cast in
+                guard let self else { return }
+                self.insightsCastCache = cast
+                self.rail?.setInsightsAvailable(!cast.isEmpty)
+            }
+            .store(in: &cancellables)
+
+        // Kick the cast load per item. @Published replays the current value on
+        // subscribe, so this also fires once at bind time for the first item.
+        vm.$itemGeneration
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak vm] _ in
+                Task { await vm?.loadInsightsCast() }
+            }
+            .store(in: &cancellables)
+
         vm.$controlsFocusActive
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
@@ -900,6 +929,15 @@ class PlayerContainerViewController: UIViewController {
                 width: 452, from: rail.upNextButton)
             self.isShowingUpNextPanel = presented
         }
+
+        rail.onInsights = { [weak self] in
+            guard let self, !self.insightsCastCache.isEmpty else { return }
+            self.presentRailPanel(
+                content: InsightsCastListView(
+                    cast: self.insightsCastCache,
+                    onSelect: { [weak self] person in self?.presentPersonPage(person) }),
+                width: 480, from: rail.insightsButton)
+        }
     }
 
     /// Shared presenter for the CC/audio/info/Up Next rail panel. Only
@@ -941,6 +979,20 @@ class PlayerContainerViewController: UIViewController {
         activeRailPanel = panel
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
         return true
+    }
+
+    /// Cast row Select → person detail page over paused playback. The rail
+    /// panel is dismissed first (its focus fence would fight the presented
+    /// page), and playback resumes when the page is dismissed. Filmography
+    /// posters are intentionally inert from the player (onSelectItem unset)
+    /// — navigating to another title mid-playback is out of scope for P1.
+    private func presentPersonPage(_ person: MediaPerson) {
+        guard let vm = viewModel else { return }
+        activeRailPanel?.dismissPanel()
+        vm.pause()
+        let page = PersonDetailViewController(person: person)
+        page.onDismiss = { [weak vm] in vm?.resume() }
+        present(page, animated: true)
     }
 
     /// Eyebrow + title + meta row from the current item, ported from the
