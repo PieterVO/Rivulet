@@ -194,25 +194,9 @@ class _FakeUploader:
 
 
 def test_run_assembles_writes_and_uploads_all_verified_items(tmp_path: Path) -> None:
-    from insights.config import Config
+    from tests.helpers import make_config as _make_cfg
 
-    config = Config(
-        llm_base_url="http://fake/v1",
-        llm_model="gemma4:31b-it-q4_K_M",
-        llm_timeout_secs=5.0,
-        llm_max_retries=1,
-        extract_model="test-extract",
-        verify_model="test-verify",
-        data_dir=tmp_path,
-        tmdb_proxy_base_url="https://tmdb-proxy.example",
-        library_only=False,
-        plex_base_url="",
-        plex_token="",
-        r2_endpoint_url="",
-        r2_bucket="",
-        r2_access_key_id="",
-        r2_secret_access_key="",
-    )
+    config = _make_cfg(data_dir=tmp_path)
 
     movie_item = WorkItem(tmdb_id=1, type="movie", title="Movie A", year=2020)
     episode_item = WorkItem(tmdb_id=2, type="tv", title="Show B", year=2021, season=1, episode=2)
@@ -243,25 +227,9 @@ def test_run_assembles_writes_and_uploads_all_verified_items(tmp_path: Path) -> 
 
 
 def test_run_skips_verified_item_with_no_matching_seed_entry(tmp_path: Path) -> None:
-    from insights.config import Config
+    from tests.helpers import make_config
 
-    config = Config(
-        llm_base_url="http://fake/v1",
-        llm_model="gemma4:31b-it-q4_K_M",
-        llm_timeout_secs=5.0,
-        llm_max_retries=1,
-        extract_model="test-extract",
-        verify_model="test-verify",
-        data_dir=tmp_path,
-        tmdb_proxy_base_url="https://tmdb-proxy.example",
-        library_only=False,
-        plex_base_url="",
-        plex_token="",
-        r2_endpoint_url="",
-        r2_bucket="",
-        r2_access_key_id="",
-        r2_secret_access_key="",
-    )
+    config = make_config(data_dir=tmp_path)
     write_seed_jsonl([], tmp_path / "seed.jsonl")  # empty seed, but facts_verified has an entry
     results = [VerifyBatchResult(key="movie:999", verified=[make_fact("Orphan fact.")], all_decisions=[])]
     write_facts_verified_jsonl(results, tmp_path / "facts_verified.jsonl")
@@ -274,25 +242,9 @@ def test_run_skips_verified_item_with_no_matching_seed_entry(tmp_path: Path) -> 
 
 
 def _make_config(data_dir: Path):
-    from insights.config import Config
+    from tests.helpers import make_config
 
-    return Config(
-        llm_base_url="http://fake/v1",
-        llm_model="gemma4:31b-it-q4_K_M",
-        llm_timeout_secs=5.0,
-        llm_max_retries=1,
-        extract_model="test-extract",
-        verify_model="test-verify",
-        data_dir=data_dir,
-        tmdb_proxy_base_url="https://tmdb-proxy.example",
-        library_only=False,
-        plex_base_url="",
-        plex_token="",
-        r2_endpoint_url="",
-        r2_bucket="",
-        r2_access_key_id="",
-        r2_secret_access_key="",
-    )
+    return make_config(data_dir=data_dir)
 
 
 def test_run_publishes_show_level_tv_item(tmp_path: Path) -> None:

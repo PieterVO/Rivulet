@@ -14,26 +14,11 @@ import pytest
 
 from insights.config import Config
 from insights.llm import LLMError, OllamaChatClient, extract_json_array
+from tests.helpers import make_config as _make_config
 
 
 def make_config() -> Config:
-    return Config(
-        llm_base_url="http://fake-ollama/v1",
-        llm_model="gemma4:31b-it-q4_K_M",
-        llm_timeout_secs=5.0,
-        llm_max_retries=1,
-        extract_model="test-extract",
-        verify_model="test-verify",
-        data_dir=Path("./data"),
-        tmdb_proxy_base_url="https://tmdb-proxy.example",
-        library_only=False,
-        plex_base_url="",
-        plex_token="",
-        r2_endpoint_url="",
-        r2_bucket="",
-        r2_access_key_id="",
-        r2_secret_access_key="",
-    )
+    return _make_config(llm_base_url="http://fake-ollama/v1", data_dir=Path("./data"))
 
 
 class FakeResponse:

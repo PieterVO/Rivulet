@@ -26,6 +26,20 @@ class Config:
     extract_model: str
     verify_model: str
 
+    # On-demand loop + scheduling cadence.
+    ondemand_poll_secs: float
+    ondemand_max_batch: int
+    scheduled_max_titles: int
+    # Age-aware freshness (see freshness.py). Settle window per type; a single
+    # young-refresh interval while young; per-type mature TTL once settled.
+    settle_movie_days: int
+    settle_show_days: int
+    settle_episode_days: int
+    young_refresh_days: int
+    ttl_movie_days: int
+    ttl_show_days: int
+    ttl_episode_days: int
+
     # Where each stage reads/writes its on-disk output.
     data_dir: Path
 
@@ -73,6 +87,16 @@ class Config:
                 os.environ.get("INSIGHTS_LLM_MODEL", "gemma4:31b-it-q4_K_M"),
             ),
             verify_model=os.environ.get("INSIGHTS_VERIFY_MODEL", "qwen3:8b"),
+            ondemand_poll_secs=float(os.environ.get("INSIGHTS_ONDEMAND_POLL_SECS", "120")),
+            ondemand_max_batch=int(os.environ.get("INSIGHTS_ONDEMAND_MAX_BATCH", "8")),
+            scheduled_max_titles=int(os.environ.get("INSIGHTS_SCHEDULED_MAX_TITLES", "200")),
+            settle_movie_days=int(os.environ.get("INSIGHTS_SETTLE_MOVIE_DAYS", "90")),
+            settle_show_days=int(os.environ.get("INSIGHTS_SETTLE_SHOW_DAYS", "60")),
+            settle_episode_days=int(os.environ.get("INSIGHTS_SETTLE_EPISODE_DAYS", "30")),
+            young_refresh_days=int(os.environ.get("INSIGHTS_YOUNG_REFRESH_DAYS", "14")),
+            ttl_movie_days=int(os.environ.get("INSIGHTS_TTL_MOVIE_DAYS", "180")),
+            ttl_show_days=int(os.environ.get("INSIGHTS_TTL_SHOW_DAYS", "45")),
+            ttl_episode_days=int(os.environ.get("INSIGHTS_TTL_EPISODE_DAYS", "90")),
             data_dir=Path(os.environ.get("INSIGHTS_DATA_DIR", "./data")),
             tmdb_proxy_base_url=os.environ.get(
                 "INSIGHTS_TMDB_PROXY_BASE_URL",

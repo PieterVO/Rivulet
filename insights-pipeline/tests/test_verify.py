@@ -354,26 +354,10 @@ def test_load_facts_verified_jsonl_missing_file_returns_empty(tmp_path: Path) ->
 
 
 def test_run_resumed_item_counts_as_kept_not_dropped_from_stats(tmp_path: Path) -> None:
-    from insights.config import Config
     from insights.stages.verify import run
+    from tests.helpers import make_config
 
-    config = Config(
-        llm_base_url="http://fake/v1",
-        llm_model="gemma4:31b-it-q4_K_M",
-        llm_timeout_secs=5.0,
-        llm_max_retries=1,
-        extract_model="test-extract",
-        verify_model="test-verify",
-        data_dir=tmp_path,
-        tmdb_proxy_base_url="https://tmdb-proxy.example",
-        library_only=False,
-        plex_base_url="",
-        plex_token="",
-        r2_endpoint_url="",
-        r2_bucket="",
-        r2_access_key_id="",
-        r2_secret_access_key="",
-    )
+    config = make_config(data_dir=tmp_path)
 
     # Simulate a prior run already having verified "movie:1".
     from insights.stages.verify import VerifyBatchResult as _VBR

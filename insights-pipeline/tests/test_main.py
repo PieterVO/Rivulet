@@ -11,26 +11,11 @@ import pytest
 
 import insights.__main__ as main_mod
 from insights.config import Config
+from tests.helpers import make_config as _make_config
 
 
 def make_config(tmp_path) -> Config:
-    return Config(
-        llm_base_url="http://fake/v1",
-        llm_model="gemma4:31b-it-q4_K_M",
-        llm_timeout_secs=5.0,
-        llm_max_retries=1,
-        extract_model="test-extract",
-        verify_model="test-verify",
-        data_dir=tmp_path,
-        tmdb_proxy_base_url="https://tmdb-proxy.example",
-        library_only=False,
-        plex_base_url="",
-        plex_token="",
-        r2_endpoint_url="",
-        r2_bucket="",
-        r2_access_key_id="",
-        r2_secret_access_key="",
-    )
+    return _make_config(data_dir=tmp_path)
 
 
 def test_main_no_args_returns_usage_error(capsys: pytest.CaptureFixture) -> None:
