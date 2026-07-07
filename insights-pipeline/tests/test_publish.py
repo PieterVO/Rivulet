@@ -22,7 +22,7 @@ from insights.stages.publish import (
     load_seed_index,
     run,
 )
-from insights.stages.seed import WorkItem, write_seed_jsonl
+from insights.stages.seed import WorkItem, load_published_keys, write_seed_jsonl
 from insights.stages.verify import VerifyBatchResult, write_facts_verified_jsonl
 
 WIKI = Source(name="Wikipedia", url="https://en.wikipedia.org/wiki/Inception")
@@ -340,3 +340,42 @@ def test_run_upload_failure_for_one_title_does_not_crash_the_batch(tmp_path: Pat
 
     assert [p.key for p in plans] == ["insights/movie/1.json"]
     assert len(uploader.uploaded) == 1
+
+
+# --- published.jsonl manifest wiring (feeds seed's episode-freshness filter) ---
+
+
+def test_run_appends_published_manifest_for_successful_uploads_only(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+
+    good_item = WorkItem(tmdb_id=1, type="movie", title="Good Movie", year=2020)
+    episode_item = WorkItem(tmdb_id=2, type="tv", title="Show B", year=2021, season=1, episode=2)
+    failing_item = WorkItem(tmdb_id=3, type="movie", title="Upload Fails", year=2021)
+    write_seed_jsonl([good_item, episode_item, failing_item], tmp_path / "seed.jsonl")
+
+    results = [
+        VerifyBatchResult(key=good_item.key, verified=[make_fact("A.")], all_decisions=[]),
+        VerifyBatchResult(key=episode_item.key, verified=[make_fact("B.", FANDOM)], all_decisions=[]),
+        VerifyBatchResult(key=failing_item.key, verified=[make_fact("C.")], all_decisions=[]),
+    ]
+    write_facts_verified_jsonl(results, tmp_path / "facts_verified.jsonl")
+
+    class _PartiallyFailingUploader:
+        def upload(self, local_path: Path, key: str) -> None:
+            if "3.json" in key:
+                raise PublishError("simulated upload failure")
+
+    run(config, uploader=_PartiallyFailingUploader(), generated_at="2026-07-07T00:00:00Z")
+
+    published_keys = load_published_keys(tmp_path / "published.jsonl")
+    assert published_keys == {good_item.key, episode_item.key}  # failing_item's upload never succeeded
+
+
+def test_run_with_no_published_items_does_not_create_manifest_file(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    write_seed_jsonl([], tmp_path / "seed.jsonl")
+    write_facts_verified_jsonl([], tmp_path / "facts_verified.jsonl")
+
+    run(config, uploader=_FakeUploader(), generated_at="2026-07-07T00:00:00Z")
+
+    assert not (tmp_path / "published.jsonl").exists()

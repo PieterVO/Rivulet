@@ -22,6 +22,12 @@ tested directly, no IO. The uploader is a small `Uploader` protocol so
 `run()`'s upload calls are shelled/mocked in tests — no real `wrangler`
 invocation or R2 credentials required to test payload assembly + key
 derivation, per the task instructions.
+
+After each successful upload, `run()` appends the work item's key to the
+`published.jsonl` manifest (`insights.stages.seed.append_published_keys`)
+so the seed stage's episode enumeration knows what already has trivia and
+never re-enqueues it — this is the freshness/idempotency mechanism for
+re-seeding as new episodes air (see `seed.py`'s module docstring).
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ from typing import Protocol
 
 from insights.config import PIPELINE_VERSION, Config
 from insights.models import Fact, Source, TitleTrivia
-from insights.stages.seed import WorkItem
+from insights.stages.seed import WorkItem, append_published_keys
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +276,12 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
             continue
 
         plans.append(plan)
+
+    append_published_keys(
+        [plan.work_item_key for plan in plans],
+        config.data_dir / "published.jsonl",
+        published_at=generated_at,
+    )
 
     logger.info("publish: %d work items published, %d skipped", len(plans), skipped)
     return plans
