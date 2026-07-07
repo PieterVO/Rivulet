@@ -20,6 +20,11 @@ class Config:
     llm_model: str
     llm_timeout_secs: float
     llm_max_retries: int
+    # Per-stage model overrides (default to llm_model when unset). Extract needs
+    # the strong model (gemma4) for spoiler-safe tagging; verify + discover
+    # adjudication are grounding/yes-no checks a faster model handles well.
+    extract_model: str
+    verify_model: str
 
     # Where each stage reads/writes its on-disk output.
     data_dir: Path
@@ -60,6 +65,14 @@ class Config:
             llm_model=os.environ.get("INSIGHTS_LLM_MODEL", "gemma4:31b-it-q4_K_M"),
             llm_timeout_secs=float(os.environ.get("INSIGHTS_LLM_TIMEOUT_SECS", "400")),
             llm_max_retries=int(os.environ.get("INSIGHTS_LLM_MAX_RETRIES", "2")),
+            # Extract defaults to the main (strong) model; verify defaults to a
+            # faster model — it does grounding + category only (spoiler is
+            # carried from extract, never re-derived by the fast model).
+            extract_model=os.environ.get(
+                "INSIGHTS_EXTRACT_MODEL",
+                os.environ.get("INSIGHTS_LLM_MODEL", "gemma4:31b-it-q4_K_M"),
+            ),
+            verify_model=os.environ.get("INSIGHTS_VERIFY_MODEL", "qwen3:8b"),
             data_dir=Path(os.environ.get("INSIGHTS_DATA_DIR", "./data")),
             tmdb_proxy_base_url=os.environ.get(
                 "INSIGHTS_TMDB_PROXY_BASE_URL",

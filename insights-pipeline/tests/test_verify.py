@@ -219,11 +219,15 @@ def test_apply_verify_reply_fixes_category_mistag() -> None:
     assert decision.fact.category == "production"  # corrected from casting
 
 
-def test_apply_verify_reply_fixes_spoiler_recheck() -> None:
-    fact = make_fact("A reveal.", category="lore", spoiler=0)
-    decision = apply_verify_reply(fact, {"grounded": True, "category": "lore", "spoiler": 2})
+def test_apply_verify_reply_carries_extract_spoiler_unchanged() -> None:
+    # Spoiler is NOT re-derived by the (fast) verify model — it is carried from
+    # the extract tag unchanged, even if the model's reply suggests a different
+    # level. A fast verify model measurably misses spoiler re-tagging, so it
+    # must never be allowed to alter the level (that would create leaks).
+    fact = make_fact("A reveal.", category="lore", spoiler=1)
+    decision = apply_verify_reply(fact, {"grounded": True, "category": "lore", "spoiler": 0})
     assert decision.kept is True
-    assert decision.fact.spoiler == 2  # corrected from 0
+    assert decision.fact.spoiler == 1  # extract's tag preserved, model's 0 ignored
 
 
 def test_apply_verify_reply_ignores_invalid_category_fix_keeps_original() -> None:
@@ -233,11 +237,12 @@ def test_apply_verify_reply_ignores_invalid_category_fix_keeps_original() -> Non
     assert decision.fact.category == "production"
 
 
-def test_apply_verify_reply_tolerates_string_spoiler() -> None:
-    fact = make_fact("A fact.", category="production", spoiler=0)
-    decision = apply_verify_reply(fact, {"grounded": True, "category": "production", "spoiler": "1"})
+def test_apply_verify_reply_ignores_model_spoiler_field_entirely() -> None:
+    # Even a well-formed spoiler in the reply is ignored — the extract tag wins.
+    fact = make_fact("A fact.", category="production", spoiler=2)
+    decision = apply_verify_reply(fact, {"grounded": True, "category": "production", "spoiler": "0"})
     assert decision.kept is True
-    assert decision.fact.spoiler == 1
+    assert decision.fact.spoiler == 2
 
 
 # --- batch orchestration (fake ChatClient) ---
@@ -357,6 +362,8 @@ def test_run_resumed_item_counts_as_kept_not_dropped_from_stats(tmp_path: Path) 
         llm_model="gemma4:31b-it-q4_K_M",
         llm_timeout_secs=5.0,
         llm_max_retries=1,
+        extract_model="test-extract",
+        verify_model="test-verify",
         data_dir=tmp_path,
         tmdb_proxy_base_url="https://tmdb-proxy.example",
         library_only=False,

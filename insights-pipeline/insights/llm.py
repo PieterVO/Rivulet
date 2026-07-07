@@ -97,16 +97,22 @@ def extract_json_array(text: str) -> list[Any] | None:
 
 @dataclass(slots=True)
 class OllamaChatClient:
-    """`ChatClient` backed by an OpenAI-compatible `/chat/completions` endpoint."""
+    """`ChatClient` backed by an OpenAI-compatible `/chat/completions` endpoint.
+
+    `model_override` lets a stage pick a different model than `config.llm_model`
+    (e.g. gemma4 for extract, a faster model for verify's grounding/category
+    check) without a separate client class.
+    """
 
     config: Config
     session: requests.Session | None = None
+    model_override: str | None = None
 
     def _post(self, messages: list[dict[str, str]]) -> str:
         session = self.session or requests
         url = f"{self.config.llm_base_url}/chat/completions"
         payload = {
-            "model": self.config.llm_model,
+            "model": self.model_override or self.config.llm_model,
             "messages": messages,
             "stream": False,
         }

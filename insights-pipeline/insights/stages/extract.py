@@ -182,7 +182,7 @@ def run(
     already_extracted = load_facts_raw_jsonl(facts_raw_path)
 
     system_prompt = load_extract_prompt()
-    chat_client = OllamaChatClient(config=config)
+    chat_client = OllamaChatClient(config=config, model_override=config.extract_model)
 
     result: dict[str, list[Fact]] = dict(already_extracted)
     for key, pages in pages_by_key.items():

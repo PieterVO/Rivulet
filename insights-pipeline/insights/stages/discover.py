@@ -443,7 +443,9 @@ def run(config: Config) -> list[SourceMapEntry]:
     work_items = load_seed_jsonl(seed_path)
     already_resolved = load_sourcemap_jsonl(sourcemap_path)
 
-    chat_client = OllamaChatClient(config=config)
+    # Adjudication is a yes/no "is this page about X?" check — use the faster
+    # verify model, not the heavy extract model.
+    chat_client = OllamaChatClient(config=config, model_override=config.verify_model)
     entries = list(already_resolved.values())
 
     resolved_count = 0

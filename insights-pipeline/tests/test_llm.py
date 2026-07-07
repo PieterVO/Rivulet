@@ -22,6 +22,8 @@ def make_config() -> Config:
         llm_model="gemma4:31b-it-q4_K_M",
         llm_timeout_secs=5.0,
         llm_max_retries=1,
+        extract_model="test-extract",
+        verify_model="test-verify",
         data_dir=Path("./data"),
         tmdb_proxy_base_url="https://tmdb-proxy.example",
         library_only=False,

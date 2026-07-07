@@ -58,19 +58,18 @@ _TRUNCATION_SUFFIXES = (",", ";", ":", "-", "and", "or", "but", "the", "a", "an"
 
 VERIFY_SYSTEM_PROMPT = (
     "You are the quality-control pass for a movie/TV trivia extraction pipeline. "
-    "You are given one previously-extracted fact, the exact source snippet it was "
-    "extracted from, and its current category/spoiler tags. Judge three things and "
-    "reply with ONLY a single JSON object (no markdown, no prose):\n"
-    '{"grounded": true|false, "category": "<one of the enum values>", "spoiler": 0|1|2}\n\n'
+    "You are given one previously-extracted fact and the exact source snippet it "
+    "was extracted from. Judge two things and reply with ONLY a single JSON object "
+    "(no markdown, no prose):\n"
+    '{"grounded": true|false, "category": "<one of the enum values>"}\n\n'
     "- grounded: true only if every part of the fact is directly and explicitly "
     "supported by the source snippet (rewording is fine; invented or unsupported "
     "detail is not).\n"
     "- category: the single best-fitting category from this enum, re-deriving it "
     "yourself rather than trusting the given tag — production | casting | adaptation | "
     "reference | lore | goof | music.\n"
-    "- spoiler: 0 (no spoiler risk), 1 (reveals a plot event/twist/outcome of THIS "
-    "title), or 2 (reveals something about a LATER episode/season, or beyond this "
-    "title's own story) — re-derive this yourself too.\n"
+    # NOTE: spoiler level is deliberately NOT judged here — it is carried from
+    # the (strong) extract model unchanged. See apply_verify_reply.
 )
 
 
@@ -279,16 +278,16 @@ def apply_verify_reply(fact: Fact, reply: dict[str, Any] | None) -> VerifyDecisi
     if category not in CATEGORIES:
         category = fact.category  # keep original if the model's fix is itself invalid
 
-    spoiler = reply.get("spoiler")
-    if isinstance(spoiler, str) and spoiler.isdigit():
-        spoiler = int(spoiler)
-    if spoiler not in SPOILER_LEVELS:
-        spoiler = fact.spoiler
-
+    # Spoiler is CARRIED FROM EXTRACT unchanged, never re-derived here. The
+    # verify model is a fast/light model that measurably misses spoiler
+    # re-tagging (it left a season-finale reveal at spoiler 0), so letting it
+    # touch the spoiler level would create leaks. Spoiler-safety rests on the
+    # strong extract model (council-validated, zero leaks) + the client's
+    # fail-closed default — not on this pass.
     corrected = Fact(
         text=fact.text,
         category=category,
-        spoiler=spoiler,
+        spoiler=fact.spoiler,
         source=fact.source,
         source_snippet=fact.source_snippet,
     )
@@ -462,7 +461,7 @@ def run(
     facts_verified_path = config.data_dir / "facts_verified.jsonl"
     already_verified = load_facts_verified_jsonl(facts_verified_path)
 
-    chat_client = OllamaChatClient(config=config)
+    chat_client = OllamaChatClient(config=config, model_override=config.verify_model)
     results: list[VerifyBatchResult] = []
 
     for key, facts in facts_by_key.items():
