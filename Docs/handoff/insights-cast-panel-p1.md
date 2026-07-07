@@ -1,7 +1,24 @@
 # HANDOFF: Insights Cast Panel P1 (feature/insights-cast-panel)
 
 **Date:** 2026-07-07. **For:** any agent resuming this work fresh.
-**State in one line:** Tasks 1–5 of 7 done, committed, and review-approved; Task 6 is ~90% present but UNCOMMITTED in the working tree and **does not compile** until one missing helper is added (details below); Task 7 (sim verification) and a final whole-branch review remain.
+
+## UPDATE (2026-07-07, later): Tasks 1–6 COMPLETE + final review done; only Task 7 (sim) remains
+
+All code is committed and the branch builds + passes 8/8 tests at HEAD `05fedce`. Task 6 was finished (the missing `presentPersonPage` helper was added, commit `9f4cdfe`). A whole-branch review ran on Opus; its one Important finding was FIXED:
+- `9f4cdfe` — Task 6 wiring
+- `80230e6` — fix: don't auto-resume person page if playback was already paused (review Minor, promoted)
+- `05fedce` — fix: resolve episode cast via SHOW tmdb id, not the episode's own guid (review Important — some Plex agents put a per-episode tmdb:// id in the episode Guid, which resolved wrong and silently dropped TMDB cast)
+
+**Only remaining work: Task 7 simulator verification** (checklist below) then merge to main (local only; do not push until user says wrap up).
+
+**Deferred follow-ups (review rated all non-blocking; NOT done):**
+1. `TMDBClient.mergedEpisodeCast` — guests-vs-guests dedup gap + `$0.id ?? -1` sentinel; reviewer gave a clean rewrite using `Set(cast.compactMap(\.id))`. Cosmetic (dup row at worst, only on nil-id credits).
+2. `tmdb-proxy` caches upstream 404/5xx for 7 days (pre-existing on ALL routes, not just episode_credits) — skip `cache.put` unless `upstreamResp.ok`.
+3. `person.crop.circle` rail icon vs "Cast" label — `person.2` reads better for a list. **User's taste call.**
+
+---
+
+**Original state (now superseded — kept for context):** Tasks 1–5 of 7 done, committed, and review-approved; Task 6 was ~90% present but UNCOMMITTED and did not compile until the missing helper was added.
 
 ---
 
