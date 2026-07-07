@@ -926,9 +926,7 @@ class PlayerContainerViewController: UIViewController {
         rail.onInsights = { [weak self] in
             guard let self, !self.insightsCastCache.isEmpty else { return }
             self.presentRailPanel(
-                content: InsightsCastListView(
-                    cast: self.insightsCastCache,
-                    onSelect: { _ in }),  // TODO(Task D): wire in-panel actor crossfade
+                content: InsightsPanelContainerView(cast: self.insightsCastCache),
                 width: 480, from: rail.insightsButton)
         }
     }
