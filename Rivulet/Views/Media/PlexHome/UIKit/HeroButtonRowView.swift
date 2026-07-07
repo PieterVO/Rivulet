@@ -80,12 +80,6 @@ final class HeroButtonRowView: UIView {
         }
     }
 
-    var isResolvingPlay: Bool = false {
-        didSet {
-            playButton.isShowingSpinner = isResolvingPlay
-        }
-    }
-
     // MARK: - Callbacks
 
     var onPlay: (() -> Void)?
@@ -179,8 +173,7 @@ final class HeroButtonRowView: UIView {
 
 // MARK: - Pill button (Play)
 
-/// 66pt-tall pill button with an SF Symbol icon + label. Switches the icon
-/// for a `UIActivityIndicatorView` while `isShowingSpinner` is true.
+/// 66pt-tall pill button with an SF Symbol icon + label.
 @MainActor
 final class HeroPillButton: UIControl {
 
@@ -200,17 +193,6 @@ final class HeroPillButton: UIControl {
         }
     }
 
-    var isShowingSpinner: Bool = false {
-        didSet {
-            iconView.isHidden = isShowingSpinner
-            if isShowingSpinner {
-                spinner.startAnimating()
-            } else {
-                spinner.stopAnimating()
-            }
-        }
-    }
-
     private let background = UIView()
     /// Real Liquid Glass material, the second background under the solid
     /// fill (it shows through when unfocused, fades out on focus).
@@ -219,7 +201,6 @@ final class HeroPillButton: UIControl {
     private let contentStack = UIStackView()
     private let iconView = UIImageView()
     private let titleLabel = UILabel()
-    private let spinner = UIActivityIndicatorView(style: .medium)
 
     private let cornerRadius: CGFloat = 33  // height/2 (height=66)
 
@@ -249,9 +230,6 @@ final class HeroPillButton: UIControl {
 
         iconView.tintColor = .white
         iconView.contentMode = .scaleAspectFit
-        spinner.color = .white
-        spinner.hidesWhenStopped = true
-        spinner.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.text = title
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
@@ -262,7 +240,6 @@ final class HeroPillButton: UIControl {
         contentStack.alignment = .center
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.isUserInteractionEnabled = false
-        contentStack.addArrangedSubview(spinner)
         contentStack.addArrangedSubview(iconView)
         contentStack.addArrangedSubview(titleLabel)
         addSubview(contentStack)
@@ -289,8 +266,6 @@ final class HeroPillButton: UIControl {
             iconView.widthAnchor.constraint(equalToConstant: 24),
             iconView.heightAnchor.constraint(equalToConstant: 24)
         ])
-
-        iconView.isHidden = isShowingSpinner
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -329,7 +304,6 @@ final class HeroPillButton: UIControl {
             self.strokeLayer.opacity = focused ? 0 : 1
             self.titleLabel.textColor = focused ? .black : .white
             self.iconView.tintColor = focused ? .black : .white
-            self.spinner.color = focused ? .black : .white
         }
     }
 

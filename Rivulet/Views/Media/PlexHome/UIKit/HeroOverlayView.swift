@@ -286,7 +286,6 @@ final class HeroOverlayView: UIView {
         } else {
             buttonRow.isOnWatchlist = false
         }
-        buttonRow.isResolvingPlay = isResolvingPlay
     }
 
     private func handlePlay() {
@@ -299,8 +298,9 @@ final class HeroOverlayView: UIView {
             onPlay?(item)
             return
         }
+        // Re-entrancy guard only (no UI): resolving a show's next-up episode
+        // is async, and a second Play press mid-resolve would double-fire.
         isResolvingPlay = true
-        buttonRow.isResolvingPlay = true
         Task { @MainActor in
             let resolved = await HeroPlaySession.resolvePlaybackTarget(
                 for: item,
@@ -311,7 +311,6 @@ final class HeroOverlayView: UIView {
                 resolvedPlayTargets[key] = resolved
             }
             isResolvingPlay = false
-            buttonRow.isResolvingPlay = false
             onPlay?(resolved)
         }
     }
