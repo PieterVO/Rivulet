@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 WIKIPEDIA_API = "https://en.wikipedia.org/w/api.php"
 FANDOM_SEARCH_TEMPLATE = "https://{wiki}.fandom.com/api.php"
 
+# Wikipedia/Fandom (MediaWiki) require a descriptive User-Agent identifying the
+# client + a contact; requests without one get 403 Forbidden. See
+# https://meta.wikimedia.org/wiki/User-Agent_policy
+USER_AGENT = "RivuletInsights/1.0 (https://github.com/l984-451/Rivulet; trivia pipeline)"
+HTTP_HEADERS = {"User-Agent": USER_AGENT}
+
 ADJUDICATION_SYSTEM_PROMPT = (
     "You are confirming whether an encyclopedia page is about a specific film or TV "
     "show. Answer with exactly one word: yes or no. Do not explain your reasoning."
@@ -100,14 +106,27 @@ def rank_candidates(
         s = 0
         title_lower = c.title.lower()
         snippet_lower = c.snippet.lower()
-        if title_lower == work_item.title.lower():
-            s += 3
+        base_lower = work_item.title.lower()
+        type_hints = ("film", "movie") if work_item.type == "movie" else ("tv series", "tv show")
+        has_type_hint = any(hint in title_lower for hint in type_hints)
+
+        # A type-disambiguated exact match ("Silo (TV series)") is the real
+        # article and must outscore a bare exact match ("Silo", the grain
+        # structure). Wikipedia only disambiguates when the base title is
+        # taken, so "<title> (TV series)" is a strong, specific signal.
+        if has_type_hint and title_lower.startswith(base_lower + " ("):
+            s += 5
+        elif title_lower == base_lower:
+            s += 3  # bare exact match — right only when the title isn't taken
         if work_item.year is not None:
             match = _YEAR_RE.search(c.title)
             if match and int(match.group(1)) == work_item.year:
                 s += 2
-        type_hints = ("film", "movie") if work_item.type == "movie" else ("tv series", "tv show")
-        if any(hint in title_lower for hint in type_hints):
+        if has_type_hint:
+            s += 1
+        # Confirm the snippet corroborates the medium (guards a bare-title
+        # exact match that is actually the wrong subject).
+        if any(hint in snippet_lower for hint in type_hints):
             s += 1
         if any(marker in title_lower or marker in snippet_lower for marker in _DISAMBIG_MARKERS):
             s -= 5
@@ -179,6 +198,25 @@ def parse_wikipedia_opensearch(payload: list[Any]) -> list[SourceCandidate]:
     return candidates
 
 
+def parse_wikipedia_query_extracts(payload: dict[str, Any]) -> list[SourceCandidate]:
+    """Wikipedia `action=query&generator=search&prop=extracts|info` returns
+    `{"query": {"pages": {<pageid>: {title, fullurl, extract, index}}}}`.
+    Pages are keyed by id in arbitrary order; `index` preserves search rank.
+    """
+    pages = payload.get("query", {}).get("pages", {})
+    if not isinstance(pages, dict):
+        return []
+    entries = sorted(pages.values(), key=lambda p: p.get("index", 1_000_000))
+    candidates = []
+    for p in entries:
+        title = p.get("title", "")
+        url = p.get("fullurl") or p.get("canonicalurl") or ""
+        snippet = (p.get("extract") or "").strip()
+        if title and url:
+            candidates.append(SourceCandidate(title=title, url=url, snippet=snippet))
+    return candidates
+
+
 def parse_fandom_search(payload: dict[str, Any], wiki: str) -> list[SourceCandidate]:
     """Fandom's MediaWiki `list=search` response -> candidates with page URLs."""
     results = payload.get("query", {}).get("search", [])
@@ -192,19 +230,31 @@ def parse_fandom_search(payload: dict[str, Any], wiki: str) -> list[SourceCandid
 
 
 def _fetch_wikipedia_candidates(work_item: WorkItem) -> list[SourceCandidate]:
+    # Use the generator=search + extracts API rather than opensearch: modern
+    # opensearch returns EMPTY descriptions, which left the LLM adjudicator with
+    # only a bare title (e.g. "Silo") and no way to confirm the subject — it
+    # correctly answered "no" and every title came back ambiguous. extracts
+    # gives the article intro as a real snippet to adjudicate against.
     resp = requests.get(
         WIKIPEDIA_API,
         params={
-            "action": "opensearch",
-            "search": work_item.title,
-            "limit": "5",
-            "namespace": "0",
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": work_item.title,
+            "gsrlimit": "5",
+            "gsrnamespace": "0",
+            "prop": "extracts|info",
+            "exintro": "1",
+            "explaintext": "1",
+            "exchars": "500",
+            "inprop": "url",
             "format": "json",
         },
+        headers=HTTP_HEADERS,
         timeout=30,
     )
     resp.raise_for_status()
-    return parse_wikipedia_opensearch(resp.json())
+    return parse_wikipedia_query_extracts(resp.json())
 
 
 def _guess_fandom_wiki_slug(work_item: WorkItem) -> str:
@@ -227,6 +277,7 @@ def _fetch_fandom_candidates(work_item: WorkItem) -> tuple[str, list[SourceCandi
             "srlimit": "5",
             "format": "json",
         },
+        headers=HTTP_HEADERS,
         timeout=30,
     )
     resp.raise_for_status()
