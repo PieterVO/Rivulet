@@ -20,7 +20,7 @@ no pip install. Config below is env-overridable.
 
 Usage:
     python3 run_bakeoff.py
-    OLLAMA_BASE_URL=http://192.168.1.140:11434/v1 python3 run_bakeoff.py
+    OLLAMA_BASE_URL=http://your-ollama-host:11434/v1 python3 run_bakeoff.py
 """
 
 from __future__ import annotations

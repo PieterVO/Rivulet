@@ -29,8 +29,8 @@ BW_TEST_URL=http://127.0.0.1:18420/testfile.bin swift bw_test.swift
 # Full scenario sweep with the mock server
 ./run_scenarios.sh
 
-# Against the real Plex static endpoint (needs LAN access to 192.168.1.140)
-AVIO_TEST_URL="http://192.168.1.140:32400/web/js/main-...-plex-4.156.0-...js" \
+# Against the real Plex static endpoint (needs LAN access to your Plex host)
+AVIO_TEST_URL="http://127.0.0.1:32400/web/js/main-...-plex-4.156.0-...js" \
 AVIO_TEST_BYTES=3499000 AVIO_TEST_VERIFY=0 \
 swift avio_seek_test.swift healthy
 ```

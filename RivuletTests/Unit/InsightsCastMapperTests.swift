@@ -28,14 +28,14 @@ final class InsightsCastMapperTests: XCTestCase {
         // serverURL onto them breaks the URL.
         let url = InsightsCastMapper.personThumbURL(
             "https://metadata-static.plex.tv/people/x.jpg",
-            serverURL: "http://192.168.1.140:32400", authToken: "tok")
+            serverURL: "http://127.0.0.1:32400", authToken: "tok")
         XCTAssertEqual(url?.absoluteString, "https://metadata-static.plex.tv/people/x.jpg")
     }
 
     func testPlexRelativeThumbGetsServerAndToken() {
         let url = InsightsCastMapper.personThumbURL(
             "/library/metadata/1/thumb/2",
-            serverURL: "http://192.168.1.140:32400", authToken: "tok")
-        XCTAssertEqual(url?.absoluteString, "http://192.168.1.140:32400/library/metadata/1/thumb/2?X-Plex-Token=tok")
+            serverURL: "http://127.0.0.1:32400", authToken: "tok")
+        XCTAssertEqual(url?.absoluteString, "http://127.0.0.1:32400/library/metadata/1/thumb/2?X-Plex-Token=tok")
     }
 }

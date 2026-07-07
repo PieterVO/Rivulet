@@ -11,7 +11,7 @@ and already built. This spec is the **trivia** — the differentiator.
 ## What we're building
 
 Deep trivia (production facts, casting stories, adaptation notes, lore, references, goofs) for a
-title/episode, generated offline by a local LLM pipeline on the Unraid + RTX 5090 box, published
+title/episode, generated offline by a local LLM pipeline on a local GPU host, published
 as static JSON on Cloudflare R2, and surfaced as a **Trivia section in the Insights panel** (the
 same panel that shows Cast) and on pause. Each fact carries a spoiler level and a source
 attribution. Users can **report** a bad fact; enough reports auto-hide it pending re-curation.
@@ -23,7 +23,7 @@ on pause, not timed to the playhead) — deferred, layered on the same fact stor
 
 | Question | Decision |
 |---|---|
-| Extraction model | **Local only** — Ollama on the 5090 does ALL bulk extraction, unattended, zero cost. No hosted API in the loop. |
+| Extraction model | **Local only** — Ollama on the local GPU host does ALL bulk extraction, unattended, zero cost. No hosted API in the loop. |
 | Claude's role | **Spot-check auditor**, not bulk extractor. Claude Code (Max seat) reviews the HTML spot-check reports and pulls bad titles — a human-in-the-loop that happens to be an LLM, run interactively, not wired into the headless pipeline. |
 | Curation gate | **Auto-publish** gated by the pipeline's own LLM verify-pass + a **sampled** spot-check. Titles go live without per-title human sign-off; the sample + user reports catch escapes. |
 | Display | **Panel + pause only.** Trivia section in the Insights panel; no per-fact playhead timing. |
@@ -33,7 +33,7 @@ on pause, not timed to the playhead) — deferred, layered on the same fact stor
 | Report sink | Cloudflare **Worker `POST /report`** → append to an R2 reports prefix (or Queue). Drained into the pipeline's re-curation priority list. |
 | Report effect | **Auto-hide at a threshold**: once N distinct users report a fact, the client suppresses it via a small Worker-served suppression list; the fact is queued for review. |
 
-## Pipeline (`insights-pipeline/`, runs in Docker on Unraid)
+## Pipeline (`insights-pipeline/`, runs in Docker on the GPU host)
 
 Six idempotent, resumable stages. Each writes its output to disk so a batch resumes from any
 point. Runs as a Docker container with the repo dir mounted, talking to Ollama over the host
@@ -68,7 +68,7 @@ Reception / Trivia / Continuity sections; skip navboxes, infobox dumps, referenc
 
 ### 4. extract — Ollama, prose → schema facts
 A strong local instruct model (target: a 27–32B-class model, e.g. Qwen2.5-32B-Instruct or
-Llama-3.3-70B q4 — pick per VRAM headroom on the 5090's ~27GB free) in **strict
+Llama-3.3-70B q4 — pick per VRAM headroom on the GPU's available VRAM) in **strict
 extract-and-rewrite mode**: for each source section, emit schema facts, each with `category`,
 `spoiler` level, and the exact `source` (name + URL) and a `sourceSnippet` (the sentence(s) the
 fact came from — retained only for the verify pass, not published). The model NEVER invents;
@@ -89,7 +89,7 @@ re-curation bumps `generatedAt` and invalidates the edge cache for that key.
 
 **Model config:** OpenAI-compatible endpoint (Ollama's `/v1`); model name in pipeline config so the
 extract/verify model can be swapped without code changes. The `ollama` container already exists on
-the box (GPU passthrough, port 11434, `/mnt/user/appdata/ollama`) but has never been started —
+the box (GPU passthrough, port 11434, an ollama data volume) but has never been started —
 setup is `docker start ollama` + `ollama pull <model>`.
 
 ## Fact store schema

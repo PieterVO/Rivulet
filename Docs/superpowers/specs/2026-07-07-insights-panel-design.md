@@ -27,13 +27,13 @@ generation, ShazamKit music ID, auto-show-on-pause.
 | Coverage strategy | Batch-generate by popularity (TMDB popular/trending), validate against Bain's library first, expand outward; on-demand later if needed |
 | Spoiler policy | Extract everything, tag each fact with a spoiler level, client setting filters |
 | UI entry point | Rail panel only (like Up Next). No auto-show on pause — keeps pause calm per design guide |
-| Processing location | Cast: fully in-app (TMDB via existing tmdb-proxy). Trivia: offline pipeline on Unraid + RTX 5090; **no in-app LLM is possible** (Foundation Models framework does not exist on tvOS) |
+| Processing location | Cast: fully in-app (TMDB via existing tmdb-proxy). Trivia: offline pipeline on a local GPU host; **no in-app LLM is possible** (Foundation Models framework does not exist on tvOS) |
 | Hosting | Cloudflare Worker + R2, same pattern/repo style as tmdb-proxy. Unraid is never in the serving path |
 
 ## Architecture
 
 ```
-                OFFLINE (Unraid + 5090)                              ONLINE
+                OFFLINE (local GPU host)                              ONLINE
 ┌──────────────────────────────────────────────────┐   ┌─────────────────────────────────┐
 │ seed → discover → fetch → extract → verify →      │   │ Cloudflare Worker + R2          │
 │ publish                                           │──▶│  GET /insights/movie/{tmdbId}   │
@@ -113,13 +113,13 @@ from any point:
    report (fact ↔ source link) per batch for human eyeballing.
 6. **publish** — upload JSON to R2 (S3-compatible API), invalidate edge cache if re-publishing.
 
-**Model:** model-agnostic via an OpenAI-compatible endpoint. Default: Ollama on the 5090
+**Model:** model-agnostic via an OpenAI-compatible endpoint. Default: Ollama on the local GPU host
 (a 27–32B-class instruct model suits extract-and-rewrite). The same pipeline can point at a
 hosted API (e.g. Claude Haiku batch, rough estimate ~$0.02/title) if local quality disappoints.
 Quality is judged from the spot-check reports on the library-validation batch before scaling out.
 
-**Unraid environment (surveyed 2026-07-07):** RTX 5090 32GB (driver 580.95.05), ~27GB VRAM free.
-An `ollama` container already exists pre-configured (GPU passthrough, `/mnt/user/appdata/ollama`
+**GPU host environment:** a CUDA GPU with ~32GB VRAM running an Ollama container.
+An `ollama` container already exists pre-configured (GPU passthrough, an ollama data volume
 volume, port 11434) but has never been started — setup is `docker start ollama` + pull a model.
 A llama.cpp CUDA server (`llama-gemma`, port 5809, Gemma 4 E2B, 131k ctx) is already running and
 proves the OpenAI-compatible local-serving pattern; the pipeline should target Ollama's

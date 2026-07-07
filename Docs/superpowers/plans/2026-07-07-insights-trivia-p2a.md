@@ -14,7 +14,7 @@
 - **Extraction is strict extract-and-rewrite.** The prompt MUST forbid any fact not grounded in the provided source text. Every fact carries `sourceSnippet` (the source sentence(s)) through verify; `publish` strips it.
 - **Stages are idempotent and resumable** — each reads the prior stage's on-disk output and writes its own; re-running a stage is safe.
 - **`fact.id` is stable** = short hash of `text` + `source.url`, so reports/suppression survive re-publish.
-- **Unraid facts:** Python 3.11.15, Docker 27.5.1, NO `docker compose` plugin (use `docker build` + `docker run`). ollama container is up on port 11434 with `qwen2.5:32b-instruct`, `qwen3.5:27b-q4_K_M`, `gemma4:31b-it-q4_K_M` present. GPU ~27GB free. SSH: `root@192.168.1.140`. Plex runs on the same box for the library dump.
+- **GPU host facts:** Python 3.11, Docker (no `docker compose` plugin — use `docker build` + `docker run`). An Ollama container serves an OpenAI-compatible endpoint on port 11434 with a strong local instruct model. Host address, model name, and Plex access all come from env (`.env`), never hardcoded. Plex may run on the same host for the library dump.
 - **Secrets never committed.** R2 keys, any tokens → `.env` (gitignored) + `.env.example` documenting the keys. `Docs/` is gitignored in this repo; docs commits use `git add -f`.
 - Branch: `feature/insights-trivia-p2a` off `feature/insights-cast-panel` (so it has the P1/actor Insights panel to hang the Trivia section on). Commit locally; do not push.
 - Python: type-hinted, `ruff`-clean, tested with `pytest`. Each stage is a module with a pure core (testable without network/LLM) + a thin IO shell.
