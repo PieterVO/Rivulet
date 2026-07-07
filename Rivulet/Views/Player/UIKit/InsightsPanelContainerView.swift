@@ -34,7 +34,13 @@ final class InsightsPanelContainerView: UIView {
     private let cast: [MediaPerson]
     private let provider: PersonFilmographyProviding
 
-    private let listView: InsightsCastListView
+    // `lazy` so the init closure can capture `self` directly — evaluated on
+    // first access (from `init`, after `super.init()` has returned), so
+    // `self` is fully formed by the time `InsightsCastListView`'s own init
+    // runs. Simpler than routing through an intermediate box.
+    private lazy var listView = InsightsCastListView(cast: cast, onSelect: { [weak self] person in
+        self?.crossfadeToActor(person)
+    })
     private var actorView: InsightsActorView?
     private let coordinator = InsightsActorLoadCoordinator()
     private var state: State = .list
@@ -44,20 +50,7 @@ final class InsightsPanelContainerView: UIView {
     init(cast: [MediaPerson], provider: PersonFilmographyProviding = PersonFilmographyProvider()) {
         self.cast = cast
         self.provider = provider
-        // InsightsCastListView takes its onSelect closure at init, so the
-        // container can't capture `self` there directly (not yet fully
-        // initialized). Indirect through a box that's filled in right after
-        // super.init() — the closure itself is never invoked before then
-        // (it only fires on a user Select press on a row).
-        let selectionBox = PersonSelectionBox()
-        self.listView = InsightsCastListView(cast: cast, onSelect: { person in
-            selectionBox.onSelect?(person)
-        })
         super.init(frame: .zero)
-
-        selectionBox.onSelect = { [weak self] person in
-            self?.crossfadeToActor(person)
-        }
 
         listView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(listView)
@@ -172,13 +165,4 @@ final class InsightsPanelContainerView: UIView {
         }
         super.pressesBegan(presses, with: event)
     }
-}
-
-/// Indirection so `InsightsPanelContainerView.init` can hand
-/// `InsightsCastListView` an `onSelect` closure before `self` exists yet
-/// (Swift forbids capturing `self` before `super.init()` returns). The real
-/// handler is filled in immediately after `super.init()`; the row closure
-/// only ever fires later, on a user Select press.
-private final class PersonSelectionBox {
-    var onSelect: ((MediaPerson) -> Void)?
 }
