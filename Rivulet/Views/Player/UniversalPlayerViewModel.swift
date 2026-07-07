@@ -391,6 +391,16 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// for home media / unmatched items. Loaded once per item by the
     /// container's $itemGeneration sink; reset on item swap.
     @Published private(set) var insightsCast: [MediaPerson] = []
+    /// Trivia for the Insights rail panel's Trivia section (P2a, read-only).
+    /// `nil` = no trivia available (title uncovered / network failure) —
+    /// the panel renders no Trivia section at all, same graceful-absent
+    /// rule as `insightsCast`. Loaded in the same per-item flow as cast by
+    /// `loadInsightsTrivia()`; reset on item swap.
+    @Published private(set) var insightsTrivia: TitleTrivia?
+    /// Fact ids the Worker has auto-hidden after enough user reports.
+    /// Fetched alongside trivia; empty on any failure (fail-open — showing
+    /// a fact is acceptable, failing closed is not required for this list).
+    @Published private(set) var suppressedTriviaIDs: Set<String> = []
     @Published private(set) var recommendations: [PlexMetadata] = []
     @Published var countdownSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
@@ -3823,6 +3833,39 @@ final class UniversalPlayerViewModel: ObservableObject {
         insightsCast = people
     }
 
+    /// Load trivia for the Insights panel's Trivia section. Mirrors
+    /// `loadInsightsCast()`'s tmdb-id resolution exactly (episodes use the
+    /// SHOW's tmdb id, never the episode's own guid) so both sections agree
+    /// on which title they're describing. All failures are soft — the
+    /// client already returns nil/empty on 404/network/decode failure, so
+    /// there is no error branch here, only "no trivia" (`insightsTrivia`
+    /// stays nil and the panel shows no Trivia section).
+    func loadInsightsTrivia() async {
+        let generation = itemGeneration
+        let tmdbId = metadata.type == "episode"
+            ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
+            : metadata.tmdbId
+
+        guard let tmdbId else {
+            guard generation == itemGeneration else { return }
+            insightsTrivia = nil
+            suppressedTriviaIDs = []
+            return
+        }
+
+        var trivia: TitleTrivia?
+        if metadata.type == "episode", let season = metadata.parentIndex, let episode = metadata.index {
+            trivia = await InsightsTriviaClient.shared.episodeTrivia(showTmdbId: tmdbId, season: season, episode: episode)
+        } else {
+            trivia = await InsightsTriviaClient.shared.movieTrivia(tmdbId: tmdbId)
+        }
+        let suppressed = await InsightsTriviaClient.shared.suppressedFactIDs()
+
+        guard generation == itemGeneration else { return }
+        insightsTrivia = trivia
+        suppressedTriviaIDs = suppressed
+    }
+
     /// Fetch the next episode for TV shows
     func fetchNextEpisode() async -> PlexMetadata? {
         // Shuffled queue: return next shuffled episode instead of sequential
@@ -4072,6 +4115,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Clear the outgoing item's cast; the container's $itemGeneration
         // sink reloads it for the new episode.
         insightsCast = []
+        // Same for trivia — the container's $itemGeneration sink reloads
+        // it for the new episode via loadInsightsTrivia().
+        insightsTrivia = nil
+        suppressedTriviaIDs = []
 
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
