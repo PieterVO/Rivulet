@@ -155,8 +155,9 @@ New Worker route(s) fronting the R2 bucket, in the same style as `tmdb-proxy`:
 - **Data flow:** on player load (not on pause), resolve TMDB ID → fire both fetches
   (trivia JSON; TMDB credits) → cache in memory for the session. Panel opens instantly.
 - **Failure handling:** no TMDB guid, 404, or network failure → trivia section absent; cast
-  falls back to Plex metadata roles; if nothing at all, the rail item shows a quiet empty state.
-  No retries beyond URLSession defaults, no error dialogs.
+  falls back to Plex metadata roles; if nothing at all, the rail button hides entirely
+  (mirroring Up Next's availability behavior). No retries beyond URLSession defaults, no
+  error dialogs.
 
 ## Phasing
 
