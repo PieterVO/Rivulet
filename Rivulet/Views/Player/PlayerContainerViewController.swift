@@ -947,7 +947,7 @@ class PlayerContainerViewController: UIViewController {
                     cast: self.insightsCastCache,
                     trivia: self.insightsTriviaCache,
                     suppressedTriviaIDs: self.suppressedTriviaIDsCache,
-                    hideSpoilers: SettingsStore.bool("hideSpoilersForUnwatched", default: false)),
+                    hideSpoilers: SettingsStore.bool("hideTriviaSpoilers", default: true)),
                 width: 480, from: rail.insightsButton)
         }
     }
@@ -959,7 +959,7 @@ class PlayerContainerViewController: UIViewController {
     private var insightsButtonShouldBeAvailable: Bool {
         if !insightsCastCache.isEmpty { return true }
         guard let trivia = insightsTriviaCache else { return false }
-        let hideSpoilers = SettingsStore.bool("hideSpoilersForUnwatched", default: false)
+        let hideSpoilers = SettingsStore.bool("hideTriviaSpoilers", default: true)
         return !trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDsCache).isEmpty
     }
 

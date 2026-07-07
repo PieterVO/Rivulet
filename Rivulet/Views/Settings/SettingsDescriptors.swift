@@ -110,7 +110,12 @@ enum SettingsDescriptorStore {
         "hideSpoilersForUnwatched": SettingDescriptor(
             icon: "eye.slash",
             iconColor: .indigo,
-            description: "Blurs descriptions and thumbnails for unwatched movies and episodes, and hides spoiler-tagged trivia facts in the player's Insights panel. Press the info button on a detail page to read the full description."
+            description: "Blurs descriptions and thumbnails for unwatched movies and episodes. Press the info button on a detail page to read the full description."
+        ),
+        "hideTriviaSpoilers": SettingDescriptor(
+            icon: "sparkles",
+            iconColor: .indigo,
+            description: "Hides spoiler-tagged trivia facts in the player's Insights panel so a later reveal never appears over what you're watching. On by default."
         ),
 
         // MARK: Playback
