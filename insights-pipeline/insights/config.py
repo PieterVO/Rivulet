@@ -53,7 +53,7 @@ class Config:
             llm_base_url=os.environ.get(
                 "INSIGHTS_LLM_BASE_URL", "http://localhost:11434/v1"
             ).rstrip("/"),
-            llm_model=os.environ.get("INSIGHTS_LLM_MODEL", "qwen2.5:32b-instruct"),
+            llm_model=os.environ.get("INSIGHTS_LLM_MODEL", "gemma4:31b-it-q4_K_M"),
             llm_timeout_secs=float(os.environ.get("INSIGHTS_LLM_TIMEOUT_SECS", "400")),
             llm_max_retries=int(os.environ.get("INSIGHTS_LLM_MAX_RETRIES", "2")),
             data_dir=Path(os.environ.get("INSIGHTS_DATA_DIR", "./data")),
