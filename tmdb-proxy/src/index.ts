@@ -88,6 +88,15 @@ export default {
       case "credits":
         upstreamPath = `${type}/${tmdbId}/credits`;
         break;
+      case "episode_credits": {
+        const season = url.searchParams.get("season");
+        const episode = url.searchParams.get("episode");
+        if (!/^\d+$/.test(season ?? "") || !/^\d+$/.test(episode ?? "")) {
+          return addCors(new Response("Missing or invalid season/episode", { status: 400 }));
+        }
+        upstreamPath = `tv/${tmdbId}/season/${season}/episode/${episode}/credits`;
+        break;
+      }
       case "details":
         upstreamPath = `${type}/${tmdbId}`;
         // Flatten credits (cast/crew) into the details response so clients
