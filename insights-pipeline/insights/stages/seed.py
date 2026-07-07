@@ -195,6 +195,21 @@ def write_seed_jsonl(items: list[WorkItem], path: Path) -> None:
             f.write(json.dumps(item.to_dict()) + "\n")
 
 
+def load_seed_jsonl(path: Path) -> list[WorkItem]:
+    """Read seed.jsonl back — used by downstream stages (discover, publish)
+    that need the full WorkItem (title/year/season/episode), not just facts.
+    """
+    if not path.exists():
+        return []
+    items: list[WorkItem] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                items.append(WorkItem.from_dict(json.loads(line)))
+    return items
+
+
 def _fetch_tmdb_list(config: Config, section: str, media_type: MediaType) -> dict[str, Any]:
     url = f"{config.tmdb_proxy_base_url}/tmdb/list/{section}"
     resp = requests.get(url, params={"type": media_type}, timeout=30)

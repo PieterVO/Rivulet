@@ -30,7 +30,7 @@ import requests
 
 from insights.config import Config
 from insights.llm import ChatClient, OllamaChatClient
-from insights.stages.seed import WorkItem
+from insights.stages.seed import WorkItem, load_seed_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -290,16 +290,6 @@ def resolve_one(
         fandom_page_url=fandom_page_url,
         status=status,
     )
-
-
-def load_seed_jsonl(path: Path) -> list[WorkItem]:
-    items = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                items.append(WorkItem.from_dict(json.loads(line)))
-    return items
 
 
 def write_sourcemap_jsonl(entries: list[SourceMapEntry], path: Path) -> None:
