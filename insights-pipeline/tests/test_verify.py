@@ -143,6 +143,19 @@ def test_dedup_facts_keeps_distinct_facts() -> None:
     assert rejected == []
 
 
+def test_dedup_facts_keeps_distinct_short_facts_sharing_scaffold() -> None:
+    # Regression: two DISTINCT short facts that share sentence scaffolding
+    # ("the score was ... by X") must not be deduped. With raw tokens these
+    # scored ~0.75 and the second was wrongly dropped; stopword-stripping
+    # reduces them to {score, composed, hans, zimmer} vs {score, recorded,
+    # hans, zimmer} → Jaccard 0.5, correctly kept.
+    a = make_fact("The score was composed by Hans Zimmer.")
+    b = make_fact("The score was recorded by Hans Zimmer.")
+    kept, rejected = dedup_facts([a, b])
+    assert kept == [a, b]
+    assert rejected == []
+
+
 def test_dedup_facts_empty_list() -> None:
     assert dedup_facts([]) == ([], [])
 

@@ -162,8 +162,25 @@ def _normalize_for_dedup(text: str) -> str:
     return re.sub(r"\s+", " ", lowered)
 
 
+# Scaffold words that inflate short-fact similarity. A pair like "the score
+# was composed by X" / "the score was recorded by X" differs only in one
+# content word; without stripping these the shared scaffold pushes Jaccard
+# past the threshold and the (distinct) second fact is wrongly dropped.
+_DEDUP_STOPWORDS: frozenset[str] = frozenset(
+    (
+        "the", "a", "an", "and", "or", "but", "of", "to", "in", "on", "at",
+        "by", "for", "with", "from", "as", "into", "was", "were", "is", "are",
+        "be", "been", "being", "that", "this", "it", "its", "his", "her",
+        "their", "he", "she", "they", "who", "which", "had", "has", "have",
+    )
+)
+
+
 def _token_set(text: str) -> set[str]:
-    return set(_normalize_for_dedup(text).split())
+    """Content-word token set for dedup similarity. Stopwords are dropped so
+    similarity reflects the actual claim, not shared sentence scaffolding.
+    """
+    return {t for t in _normalize_for_dedup(text).split() if t not in _DEDUP_STOPWORDS}
 
 
 def _jaccard_similarity(a: set[str], b: set[str]) -> float:
@@ -174,19 +191,18 @@ def _jaccard_similarity(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def dedup_facts(facts: list[Fact], *, similarity_threshold: float = 0.6) -> tuple[list[Fact], list[VerifyDecision]]:
+def dedup_facts(facts: list[Fact], *, similarity_threshold: float = 0.75) -> tuple[list[Fact], list[VerifyDecision]]:
     """Pure: drop near-duplicate facts (same claim restated, or an
     over-split single production choice covered by an earlier fact).
 
     Exact normalized-text duplicates always dedup. Near-duplicates use
-    token-set Jaccard similarity above `similarity_threshold`. A true
-    restatement of the same claim ("X shot Y using Z instead of W" vs.
-    "Y was shot using Z rather than W by X") lands around 0.6-0.7 once
-    reworded, while two genuinely distinct facts about the same title
-    typically share only stray function words (well under 0.2) — the
-    threshold sits between those two clusters, calibrated against the
-    bake-off's actual duplicate examples. First occurrence wins (keeps the
-    earliest section's phrasing).
+    Jaccard similarity over CONTENT-word token sets (stopwords stripped, see
+    `_token_set`) above `similarity_threshold`. Stripping scaffold words is
+    what makes short facts safe: "the score was composed by X" and "the score
+    was recorded by X" reduce to {score, composed, X} vs {score, recorded, X}
+    — Jaccard 0.5, correctly kept as distinct, where the raw-token version
+    scored ~0.75 and wrongly dropped the second. A genuine restatement still
+    shares nearly all content words and clears 0.75. First occurrence wins.
     """
     kept: list[Fact] = []
     kept_norms: list[set[str]] = []
