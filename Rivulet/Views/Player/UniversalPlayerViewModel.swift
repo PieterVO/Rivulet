@@ -386,6 +386,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// `loadUpNextEpisodes()`, hooked off `resolveNextEpisodeEarlyIfNeeded()`;
     /// cleared on episode swap in `playNextEpisode()`.
     @Published private(set) var upNextEpisodes: [PlexMetadata] = []
+    /// Cast for the Insights rail panel. TMDB credits primary (headshots +
+    /// character names for anything with a tmdb guid), Plex Role fallback
+    /// for home media / unmatched items. Loaded once per item by the
+    /// container's $itemGeneration sink; reset on item swap.
+    @Published private(set) var insightsCast: [MediaPerson] = []
     @Published private(set) var recommendations: [PlexMetadata] = []
     @Published var countdownSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
@@ -3767,6 +3772,52 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Load cast for the Insights rail panel. TMDB credits are primary
+    /// (headshots + character names) when the item resolves to a TMDB id;
+    /// falls back to Plex `Role` data (own metadata, then the show's, for
+    /// episodes) when TMDB has nothing. No-ops to [] if neither source
+    /// has cast.
+    func loadInsightsCast() async {
+        let generation = itemGeneration
+        let isMovie = metadata.type == "movie"
+        let tmdbId = metadata.tmdbId ?? metadata.parentShowTmdbId ?? metadata.showTmdbId
+
+        var people: [MediaPerson] = []
+
+        if let tmdbId {
+            if metadata.type == "episode",
+               let season = metadata.parentIndex, let episode = metadata.index,
+               let episodeCast = await TMDBClient.shared.episodeCastCredits(
+                   showTmdbId: tmdbId, season: season, episode: episode) {
+                people = InsightsCastMapper.mediaPeople(fromTMDB: episodeCast, titleTmdbId: tmdbId, titleIsMovie: false)
+            } else {
+                let credits = await TMDBClient.shared.castCredits(tmdbId: tmdbId, type: isMovie ? .movie : .tv)
+                people = InsightsCastMapper.mediaPeople(fromTMDB: credits, titleTmdbId: tmdbId, titleIsMovie: isMovie)
+            }
+        }
+
+        // Plex Role fallback: item's own roles, then (episodes) the show's roles.
+        if people.isEmpty {
+            var roles = metadata.Role ?? []
+            if roles.isEmpty, let key = metadata.ratingKey,
+               let full = try? await PlexNetworkManager.shared.getFullMetadata(
+                   serverURL: serverURL, authToken: authToken, ratingKey: key) {
+                roles = full.Role ?? []
+            }
+            if roles.isEmpty, metadata.type == "episode", let showKey = metadata.grandparentRatingKey,
+               let show = try? await PlexNetworkManager.shared.getFullMetadata(
+                   serverURL: serverURL, authToken: authToken, ratingKey: showKey) {
+                roles = show.Role ?? []
+            }
+            people = InsightsCastMapper.mediaPeople(
+                fromPlexRoles: roles, serverURL: serverURL, authToken: authToken,
+                titleTmdbId: tmdbId, titleIsMovie: isMovie)
+        }
+
+        guard generation == itemGeneration else { return }
+        insightsCast = people
+    }
+
     /// Fetch the next episode for TV shows
     func fetchNextEpisode() async -> PlexMetadata? {
         // Shuffled queue: return next shuffled episode instead of sequential
@@ -4013,6 +4064,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Clear stale Up Next rows from the outgoing episode's season; the
         // resolve-early hook repopulates them for the new episode.
         upNextEpisodes = []
+        // Clear the outgoing item's cast; the container's $itemGeneration
+        // sink reloads it for the new episode.
+        insightsCast = []
 
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
