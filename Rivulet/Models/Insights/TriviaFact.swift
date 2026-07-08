@@ -66,9 +66,11 @@ nonisolated struct TitleTrivia: Codable, Sendable {
     let pipelineVersion: Int
     let attribution: [TriviaSource]
     let facts: [TriviaFact]
+    let covered: Bool
+    let releaseDate: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, generatedAt, pipelineVersion, attribution, facts
+        case id, type, generatedAt, pipelineVersion, attribution, facts, covered, releaseDate
     }
 
     init(from decoder: Decoder) throws {
@@ -79,7 +81,18 @@ nonisolated struct TitleTrivia: Codable, Sendable {
         pipelineVersion = (try? c.decode(Int.self, forKey: .pipelineVersion)) ?? 0
         attribution = (try? c.decode([TriviaSource].self, forKey: .attribution)) ?? []
         facts = (try? c.decode([TriviaFact].self, forKey: .facts)) ?? []
+        // Absent `covered` ⇒ true (backward-compat with objects published before
+        // the tombstone field existed). A present `false` is a definitive
+        // "generated, nothing to share" — the trigger must not re-request it.
+        covered = (try? c.decode(Bool.self, forKey: .covered)) ?? true
+        releaseDate = try? c.decode(String.self, forKey: .releaseDate)
     }
+}
+
+extension TitleTrivia {
+    /// A present-but-empty object: the pipeline ran and found nothing. The panel
+    /// shows no trivia section and the client stops re-requesting.
+    var isTombstone: Bool { !covered }
 }
 
 extension TitleTrivia {
