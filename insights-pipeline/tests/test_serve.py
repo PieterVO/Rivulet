@@ -7,6 +7,7 @@ network calls.
 
 from __future__ import annotations
 
+from insights.stages.seed import load_seed_jsonl
 from insights.stages.serve import queue_to_work_items
 from tests.helpers import make_config
 
@@ -74,6 +75,12 @@ def test_run_drains_queue_through_pipeline_and_deletes_served(tmp_path, monkeypa
     assert set(served) == {"movie:1", "movie:2"}
     assert calls == ["discover", "fetch", "extract", "verify", "publish"]
     assert set(queue.deleted) == {"movie:1", "movie:2"}
+
+    # Prove the seed itself, not just call order: seed.jsonl on disk contains
+    # exactly the mapped work items serve.run built from the queue requests.
+    seeded = load_seed_jsonl(config.data_dir / "seed.jsonl")
+    assert {item.key for item in seeded} == {"movie:1", "movie:2"}
+    assert {item.title for item in seeded} == {"A", "B"}
 
 
 def test_run_returns_empty_immediately_when_queue_empty(tmp_path, monkeypatch):

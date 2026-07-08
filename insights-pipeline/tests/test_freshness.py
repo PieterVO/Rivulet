@@ -89,6 +89,20 @@ def test_pipeline_version_bump_forces_stale():
     ) is True
 
 
+def test_young_movie_exactly_at_boundary_is_not_stale():
+    # Spec: stale = (now - generatedAt) > refreshInterval (strict). Exactly
+    # at the 14d boundary -- no more, no less -- must NOT be stale yet.
+    assert is_stale(
+        generated_at="2026-06-23T00:00:00Z",  # exactly 14 days before NOW
+        release_date="2026-06-20",  # young: 17d old, settle window is 90d
+        kind="movie",
+        now=NOW,
+        config=_cfg(),
+        pipeline_version=1,
+        current_pipeline_version=1,
+    ) is False
+
+
 def test_unparseable_dates_not_stale():
     # defensive: bad generated_at -> not stale (don't churn on corrupt data)
     assert is_stale(

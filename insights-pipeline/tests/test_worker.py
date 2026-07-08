@@ -8,8 +8,11 @@ separately below with a fake clock and a fake `seed_fn`.
 
 from __future__ import annotations
 
+import fcntl
+
 import pytest
 
+import insights.worker as worker_mod
 from insights.worker import ScheduledSource, run_forever
 from tests.helpers import make_config
 
@@ -142,3 +145,31 @@ def test_scheduled_source_recurs_after_cadence():
     clock["t"] = 101.0
     assert source.next() == "X"
     assert seed_calls["n"] == 2
+
+
+# --- worker_main: the flock must be released even if the queue client's
+# constructor raises (e.g. R2 not configured) ---
+
+
+def test_worker_main_releases_lock_when_queue_construction_fails(tmp_path, monkeypatch):
+    real_flock = fcntl.flock
+    unlock_calls = {"n": 0}
+
+    def fake_flock(fd, op):
+        if op == fcntl.LOCK_UN:
+            unlock_calls["n"] += 1
+        return real_flock(fd, op)
+
+    monkeypatch.setattr(worker_mod.fcntl, "flock", fake_flock)
+    monkeypatch.setattr(
+        worker_mod,
+        "Boto3QueueClient",
+        lambda config: (_ for _ in ()).throw(RuntimeError("R2 not configured")),
+    )
+
+    config = make_config(data_dir=tmp_path)
+
+    with pytest.raises(RuntimeError):
+        worker_mod.worker_main(config)
+
+    assert unlock_calls["n"] == 1

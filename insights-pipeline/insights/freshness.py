@@ -80,4 +80,4 @@ def is_stale(
     rel = _parse_date(release_date)
     age_days = (now.date() - rel).days if rel is not None else _settle_days(kind, config)
     interval = refresh_interval_days(kind, max(age_days, 0), config)
-    return (now - gen).days >= interval
+    return (now - gen).days > interval

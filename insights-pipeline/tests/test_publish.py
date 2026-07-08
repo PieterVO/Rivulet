@@ -22,7 +22,7 @@ from insights.stages.publish import (
     load_seed_index,
     run,
 )
-from insights.stages.seed import WorkItem, load_published_keys, write_seed_jsonl
+from insights.stages.seed import WorkItem, load_published_keys, load_published_records, write_seed_jsonl
 from insights.stages.verify import VerifyBatchResult, write_facts_verified_jsonl
 
 WIKI = Source(name="Wikipedia", url="https://en.wikipedia.org/wiki/Inception")
@@ -376,3 +376,25 @@ def test_run_with_no_published_items_does_not_create_manifest_file(tmp_path: Pat
     run(config, uploader=_FakeUploader(), generated_at="2026-07-07T00:00:00Z")
 
     assert not (tmp_path / "published.jsonl").exists()
+
+
+def test_tombstone_publish_appends_manifest(tmp_path: Path) -> None:
+    """A title with zero verified facts still publishes (a tombstone) and
+    still gets a published.jsonl record -- with covered:false -- so the
+    scheduled TTL-refresh's staleness check (and the client's 404 handling)
+    see it as answered, not missing.
+    """
+    config = _make_config(tmp_path)
+
+    no_facts_item = WorkItem(tmdb_id=1, type="movie", title="Nothing Found", year=2019)
+    write_seed_jsonl([no_facts_item], tmp_path / "seed.jsonl")
+    results = [VerifyBatchResult(key=no_facts_item.key, verified=[], all_decisions=[])]
+    write_facts_verified_jsonl(results, tmp_path / "facts_verified.jsonl")
+
+    run(config, uploader=_FakeUploader(), generated_at="2026-07-07T00:00:00Z")
+
+    records = load_published_records(tmp_path / "published.jsonl")
+    assert len(records) == 1
+    assert records[0]["key"] == no_facts_item.key
+    assert records[0]["covered"] is False
+    assert records[0]["published_at"] == "2026-07-07T00:00:00Z"

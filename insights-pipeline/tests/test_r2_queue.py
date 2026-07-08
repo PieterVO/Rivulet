@@ -75,6 +75,28 @@ def test_boto3_queue_client_get_request(monkeypatch):
     assert result == {"key": "movie:1"}
 
 
+def test_get_request_missing_returns_none(monkeypatch):
+    config = make_config(
+        r2_endpoint_url="https://example.r2.cloudflarestorage.com",
+        r2_bucket="rivulet-insights",
+        r2_access_key_id="key",
+        r2_secret_access_key="secret",
+    )
+
+    class NoSuchKey(Exception):
+        pass
+
+    fake_s3 = MagicMock()
+    fake_s3.exceptions.NoSuchKey = NoSuchKey
+    fake_s3.get_object.side_effect = NoSuchKey("not found")
+    monkeypatch.setattr("boto3.client", lambda *a, **kw: fake_s3)
+
+    client = Boto3QueueClient(config)
+    result = client.get_request("movie:404")
+
+    assert result is None
+
+
 def test_boto3_queue_client_delete_request(monkeypatch):
     config = make_config(
         r2_endpoint_url="https://example.r2.cloudflarestorage.com",

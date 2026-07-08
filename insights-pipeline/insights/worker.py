@@ -105,8 +105,8 @@ def worker_main(config: Config) -> int:
         lock_file.close()
         return 1
 
-    queue = Boto3QueueClient(config)
     try:
+        queue = Boto3QueueClient(config)
         source = ScheduledSource(
             config, seed_fn=lambda: seed.run(config), monotonic_fn=time.monotonic
         )
