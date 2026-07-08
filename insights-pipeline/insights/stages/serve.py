@@ -52,6 +52,28 @@ def queue_to_work_items(requests: list[dict], published_keys: set[str]) -> list[
     return out
 
 
+def run_work_items(config: Config, work_items: list[WorkItem]) -> list[str]:
+    """Write `work_items` as this run's seed and run discover->publish on just
+    them, returning the served `WorkItem.key` strings.
+
+    Shared single-batch core: the on-demand drain (`run`, below) calls this
+    with a bounded batch of queued requests; the scheduled worker's
+    `ScheduledSource` (see `insights.worker`) calls this with exactly one
+    title per loop iteration, so a live on-demand request is never stuck
+    behind a whole scheduled batch. Returns `[]` immediately -- no LLM call --
+    when there is nothing to do.
+    """
+    if not work_items:
+        return []
+    write_seed_jsonl(work_items, config.data_dir / "seed.jsonl")
+    discover.run(config)
+    pages_by_key = fetch.run(config)
+    facts_by_key = extract.run(config, pages_by_key)
+    verify.run(config, facts_by_key)
+    publish.run(config)
+    return [w.key for w in work_items]
+
+
 def run(config: Config, queue: R2QueueClient | None = None) -> list[str]:
     """IO shell: drain up to `ondemand_max_batch` pending requests through the pipeline.
 
@@ -67,15 +89,10 @@ def run(config: Config, queue: R2QueueClient | None = None) -> list[str]:
     published_keys = load_published_keys(config.data_dir / "published.jsonl")
     work_items = queue_to_work_items(requests, published_keys)
 
-    write_seed_jsonl(work_items, config.data_dir / "seed.jsonl")
-    discover.run(config)
-    pages_by_key = fetch.run(config)
-    facts_by_key = extract.run(config, pages_by_key)
-    verify.run(config, facts_by_key)
-    plans = publish.run(config)
+    run_work_items(config, work_items)
 
     for key in keys:
         queue.delete_request(key)
 
-    logger.info("serve: drained %d on-demand request(s), published %d", len(keys), len(plans))
+    logger.info("serve: drained %d on-demand request(s)", len(keys))
     return keys

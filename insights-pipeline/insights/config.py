@@ -30,6 +30,10 @@ class Config:
     ondemand_poll_secs: float
     ondemand_max_batch: int
     scheduled_max_titles: int
+    # How often the long-lived worker's scheduled source re-evaluates
+    # stale/new-episode/popular work (re-runs seed.run()) once its in-memory
+    # batch has been drained one title at a time.
+    reseed_interval_secs: float
     # Age-aware freshness (see freshness.py). Settle window per type; a single
     # young-refresh interval while young; per-type mature TTL once settled.
     settle_movie_days: int
@@ -90,6 +94,7 @@ class Config:
             ondemand_poll_secs=float(os.environ.get("INSIGHTS_ONDEMAND_POLL_SECS", "120")),
             ondemand_max_batch=int(os.environ.get("INSIGHTS_ONDEMAND_MAX_BATCH", "8")),
             scheduled_max_titles=int(os.environ.get("INSIGHTS_SCHEDULED_MAX_TITLES", "200")),
+            reseed_interval_secs=float(os.environ.get("INSIGHTS_RESEED_INTERVAL_SECS", "21600")),
             settle_movie_days=int(os.environ.get("INSIGHTS_SETTLE_MOVIE_DAYS", "90")),
             settle_show_days=int(os.environ.get("INSIGHTS_SETTLE_SHOW_DAYS", "60")),
             settle_episode_days=int(os.environ.get("INSIGHTS_SETTLE_EPISODE_DAYS", "30")),

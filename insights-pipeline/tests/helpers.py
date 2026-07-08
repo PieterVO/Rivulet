@@ -35,6 +35,7 @@ def make_config(**overrides: Any) -> Config:
         ondemand_poll_secs=120.0,
         ondemand_max_batch=8,
         scheduled_max_titles=200,
+        reseed_interval_secs=21600.0,
         settle_movie_days=90,
         settle_show_days=60,
         settle_episode_days=30,
