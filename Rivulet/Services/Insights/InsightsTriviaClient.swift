@@ -114,7 +114,7 @@ enum TriviaFetchResult {
 /// Generation request body posted to `insights/request` (camelCase, per the
 /// insights-api contract). Carries only TMDB ids + title/year — no Plex
 /// token, no account id, no personal data (Global Constraints).
-struct InsightsGenerationRequest: Encodable {
+nonisolated struct InsightsGenerationRequest: Encodable, Sendable {
     let type: String
     let tmdbId: Int
     let season: Int?

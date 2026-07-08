@@ -3934,7 +3934,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         insightsRecheckTask = Task { [weak self] in
             for delay in [90, 180, 300] {
                 try? await Task.sleep(for: .seconds(delay))
-                guard let self, !Task.isCancelled, await self.itemGeneration == generation else { return }
+                guard let self, !Task.isCancelled, self.itemGeneration == generation else { return }
                 let result: TriviaFetchResult
                 if let season, let episode {
                     result = await InsightsTriviaClient.shared.episodeTriviaResult(
