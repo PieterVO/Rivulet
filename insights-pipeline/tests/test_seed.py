@@ -10,6 +10,7 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import insights.stages.seed as seed_mod
 from insights.stages.seed import (
     WorkItem,
     append_published_keys,
@@ -19,6 +20,7 @@ from insights.stages.seed import (
     load_published_keys,
     load_published_records,
     load_recurate_list,
+    load_seed_jsonl,
     parse_plex_library_response,
     parse_tmdb_list_response,
     parse_tmdb_season_response,
@@ -488,3 +490,96 @@ def test_stale_selection_skips_legacy_lines() -> None:
     ]
     out = stale_workitems_from_records(records, now=now, config=_cfg(), current_pipeline_version=1)
     assert [w.tmdb_id for w in out] == [2]
+
+
+# --- seed.run(): end-to-end scheduled wiring (priority order + dedup + cap) ---
+
+
+def _tmdb_list_fixture(config, section, media_type):
+    fixtures = {
+        ("popular", "movie"): {
+            "results": [
+                # Same tmdb_id as the stale record below -- must be deduped
+                # away in favor of the stale (higher-priority) item.
+                {"id": 1, "title": "Dup Movie", "release_date": "2019-01-01"},
+                {"id": 2, "title": "Popular Movie", "release_date": "2024-01-01"},
+            ]
+        },
+        ("popular", "tv"): {"results": []},
+        ("trending", "movie"): {"results": []},
+        ("trending", "tv"): {
+            "results": [{"id": 4, "name": "New Show", "first_air_date": "2023-01-01"}]
+        },
+    }
+    return fixtures[(section, media_type)]
+
+
+def _fetch_episodes_fixture(config, show_item, today):
+    if show_item.tmdb_id == 4:
+        return [
+            WorkItem(
+                tmdb_id=4,
+                type="tv",
+                title="New Show",
+                year=2023,
+                season=1,
+                episode=5,
+                reason="episode",
+                release_date="2026-01-01",
+            )
+        ]
+    return []
+
+
+def _setup_scheduled_seed_fixtures(monkeypatch, tmp_path):
+    (tmp_path / "recurate.jsonl").write_text(
+        json.dumps({"tmdb_id": 99, "type": "movie", "title": "Recurated Pick", "year": 2018}) + "\n",
+        encoding="utf-8",
+    )
+    append_published_keys(
+        [
+            {
+                "key": "movie:1",
+                "type": "movie",
+                "tmdb_id": 1,
+                "title": "Stale Movie",
+                "year": 2019,
+                "release_date": "2019-01-01",
+                "covered": True,
+                "pipeline_version": 1,
+            }
+        ],
+        tmp_path / "published.jsonl",
+        published_at="2020-01-01T00:00:00Z",  # mature, ages past the 180d TTL long ago -> stale
+    )
+    monkeypatch.setattr(seed_mod, "_fetch_tmdb_list", _tmdb_list_fixture)
+    monkeypatch.setattr(seed_mod, "_fetch_episodes_for_show", _fetch_episodes_fixture)
+
+
+def test_seed_run_scheduled_priority_order_and_dedup(tmp_path, monkeypatch) -> None:
+    _setup_scheduled_seed_fixtures(monkeypatch, tmp_path)
+    config = _cfg(data_dir=tmp_path, scheduled_max_titles=200)
+
+    result = seed_mod.run(config)
+
+    # recurate (99) + stale-refresh (1, deduped against the "Dup Movie" TMDB
+    # candidate with the same tmdb_id) first, then the new-episode pickup
+    # (show 4's aired S1E5), then the rest of the popular/trending merge
+    # (2, and show 4's own show-level item -- a different key than its
+    # episode, so both survive).
+    assert [w.key for w in result] == ["movie:99", "movie:1", "tv:4:S1E5", "movie:2", "tv:4"]
+    assert result[1].title == "Stale Movie"  # stale record's title wins the dedup, not "Dup Movie"
+    assert result[1].reason == "recurate"  # stale items are tagged "recurate" priority
+
+    # seed.jsonl on disk reflects exactly what was returned.
+    assert load_seed_jsonl(config.data_dir / "seed.jsonl") == result
+
+
+def test_seed_run_scheduled_applies_max_titles_cap(tmp_path, monkeypatch) -> None:
+    _setup_scheduled_seed_fixtures(monkeypatch, tmp_path)
+    config = _cfg(data_dir=tmp_path, scheduled_max_titles=3)
+
+    result = seed_mod.run(config)
+
+    assert len(result) == 3
+    assert [w.key for w in result] == ["movie:99", "movie:1", "tv:4:S1E5"]
