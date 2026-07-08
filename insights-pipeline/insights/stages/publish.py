@@ -275,18 +275,16 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
     plans: list[PublishPlan] = []
     records: list[dict[str, Any]] = []
     skipped = 0
-    for key, facts in facts_by_key.items():
-        work_item = work_items_by_key.get(key)
-        if work_item is None:
-            logger.warning("publish: %s has verified facts but no matching seed entry; skipping", key)
-            skipped += 1
-            continue
-        # NOTE: zero verified facts is NOT skipped here -- build_publish_plan
-        # publishes a tombstone (covered=False, empty facts) for it, which is
-        # a successful publish: it uploads and gets a manifest entry just
-        # like a covered title, so "nothing to share" is definitive and the
-        # client stops re-requesting generation for this title.
-
+    # Iterate the SEED (the items we were asked to generate), NOT the verified
+    # facts. Two reasons: (1) a seed item with zero verified facts -- or one
+    # dropped before verify because it had no source at all -- must still get a
+    # tombstone (covered=False), which is a successful publish (uploads + manifest
+    # entry) so "nothing to share" is definitive and the client/worker stop
+    # re-attempting it; (2) verified facts for a key NOT in this seed (left over
+    # in facts_verified.jsonl from a prior batch's on-disk output) must be
+    # ignored, never published against the wrong title.
+    for key, work_item in work_items_by_key.items():
+        facts = facts_by_key.get(key, [])
         try:
             plan = build_publish_plan(work_item, facts, generated_at)
         except ValueError as exc:

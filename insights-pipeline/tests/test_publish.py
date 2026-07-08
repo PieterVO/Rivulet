@@ -426,3 +426,32 @@ def test_select_uploader_wrangler_when_not_configured() -> None:
     # No R2 S3 creds -> interactive wrangler-OAuth path (the box default).
     up = select_uploader(_make_config(Path("/tmp/x")), None, "rivulet-insights")
     assert isinstance(up, WranglerUploader)
+
+
+def test_run_tombstones_seed_item_absent_from_verified(tmp_path: Path) -> None:
+    # A no-source item is dropped before verify (fetch produces no sections), so
+    # it never appears in facts_verified. publish must STILL tombstone it -- it
+    # iterates the SEED, not the verified facts -- so "nothing to share" is
+    # definitive and the client/worker stop re-attempting it.
+    config = _make_config(tmp_path)
+    item = WorkItem(tmdb_id=125988, type="tv", title="Silo", year=2023, season=1, episode=2)
+    write_seed_jsonl([item], tmp_path / "seed.jsonl")
+    # No facts_verified.jsonl written at all (the no-source case).
+    run(config, uploader=_FakeUploader(), generated_at="2026-07-07T00:00:00Z")
+    records = load_published_records(tmp_path / "published.jsonl")
+    assert [r["key"] for r in records] == [item.key]
+    assert records[0]["covered"] is False
+
+
+def test_run_ignores_verified_key_not_in_seed(tmp_path: Path) -> None:
+    # Leftover verified facts for a key NOT in this batch's seed (accumulated
+    # prior-run on-disk state) must NOT be published -- only seed items are.
+    config = _make_config(tmp_path)
+    item = WorkItem(tmdb_id=1, type="movie", title="A", year=2020)
+    write_seed_jsonl([item], tmp_path / "seed.jsonl")
+    leftover = VerifyBatchResult(key="tv:999:S1E1", verified=[make_fact("stale")], all_decisions=[])
+    write_facts_verified_jsonl([leftover], tmp_path / "facts_verified.jsonl")
+    run(config, uploader=_FakeUploader(), generated_at="2026-07-07T00:00:00Z")
+    records = load_published_records(tmp_path / "published.jsonl")
+    assert [r["key"] for r in records] == [item.key]   # only the seed item...
+    assert records[0]["covered"] is False               # ...tombstoned (no verified facts of its own)
