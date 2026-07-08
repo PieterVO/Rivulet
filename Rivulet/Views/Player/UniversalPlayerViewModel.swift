@@ -497,6 +497,21 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let pausedPosterDelay: TimeInterval = 5.0
     private var pausedPosterDimTimer: Timer?
     private let pausedPosterDimDelay: TimeInterval = 120.0
+    /// True while a rail panel (Subtitles/Audio/Info/Up Next/Insights) is
+    /// presented. The ambient-pause backdrop is a full-screen visual that
+    /// otherwise shows through/around an open panel — set by
+    /// `PlayerContainerViewController` around `presentRailPanel`/dismiss so
+    /// the timer below can suppress itself while a panel is up.
+    var isRailPanelOpen = false {
+        didSet {
+            guard isRailPanelOpen != oldValue else { return }
+            if isRailPanelOpen {
+                cancelPausedPosterTimer()
+            } else if playbackState == .paused {
+                startPausedPosterTimer()
+            }
+        }
+    }
     private var aetherStallWatchdogTask: Task<Void, Never>?
     private let aetherStallRecoveryDelay: TimeInterval = 20
     private let aetherStallFailureDelay: TimeInterval = 20
@@ -3201,12 +3216,15 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Start timers for the ambient pause presentation: `.ambient` after
     /// `pausedPosterDelay` seconds paused, `.dimmed` after
-    /// `pausedPosterDimDelay` seconds paused.
+    /// `pausedPosterDimDelay` seconds paused. No-ops while a rail panel is
+    /// open (`isRailPanelOpen`) — the ambient backdrop is a full-screen
+    /// visual that would otherwise show through/around the panel.
     private func startPausedPosterTimer() {
+        guard !isRailPanelOpen else { return }
         pausedPosterTimer?.invalidate()
         pausedPosterTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused else { return }
+                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
                 withAnimation(.easeIn(duration: 1.0)) {
                     self.pausePresentation = .ambient
                 }
@@ -3216,7 +3234,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         pausedPosterDimTimer?.invalidate()
         pausedPosterDimTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDimDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused else { return }
+                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
                 withAnimation(.easeInOut(duration: 1.0)) {
                     self.pausePresentation = .dimmed
                 }

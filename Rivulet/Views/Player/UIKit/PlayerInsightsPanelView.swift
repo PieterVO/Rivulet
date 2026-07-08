@@ -100,6 +100,14 @@ final class InsightsCastListView: UIView {
         stack.spacing = 8
         scrollView.addSubview(stack)
         scrollView.clipsToBounds = true
+        // The focus engine's own default scroll-to-visible fights a
+        // self-driven offset (see InsightsFilmographyRowView's identical
+        // rationale) — and critically, leaving this enabled traps Up/Down
+        // spatial focus search inside the scroll view, so it can never
+        // escape to a sibling like the tab bar above. Disabling it and
+        // driving contentOffset ourselves from didUpdateFocus (below) is
+        // both the scroll fix and the fix for focus escaping upward.
+        scrollView.isScrollEnabled = false
 
         [scrollView, stack].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -219,6 +227,35 @@ final class InsightsCastListView: UIView {
         if let next = context.nextFocusedView, focusableRows.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
             hasPinnedInitialFocus = true
         }
+        guard let next = context.nextFocusedView,
+              let row = focusableRows.first(where: { next.isDescendant(of: $0) || next === $0 })
+        else { return }
+        scrollFocusedRowIntoView(row, coordinator: coordinator)
+    }
+
+    /// Self-driven vertical scroll (scrollView.isScrollEnabled = false above)
+    /// — keeps the focused row inside the visible window. Mirrors
+    /// InsightsFilmographyRowView's identical pattern for a horizontal
+    /// collection, adapted here for a vertical UIStackView of arbitrarily
+    /// tall rows (trivia rows vary in height with wrapped text).
+    private func scrollFocusedRowIntoView(_ row: UIView, coordinator: UIFocusAnimationCoordinator) {
+        let rowFrameInScroll = row.convert(row.bounds, to: scrollView)
+        let visibleTop = scrollView.contentOffset.y
+        let visibleBottom = visibleTop + scrollView.bounds.height
+        var targetY = scrollView.contentOffset.y
+        if rowFrameInScroll.minY < visibleTop {
+            targetY = rowFrameInScroll.minY
+        } else if rowFrameInScroll.maxY > visibleBottom {
+            targetY = rowFrameInScroll.maxY - scrollView.bounds.height
+        } else {
+            return
+        }
+        let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+        let clamped = min(max(0, targetY), maxY)
+        guard abs(clamped - scrollView.contentOffset.y) > 0.5 else { return }
+        coordinator.addCoordinatedAnimations({
+            self.scrollView.contentOffset.y = clamped
+        }, completion: nil)
     }
 }
 

@@ -14,8 +14,10 @@
 //
 //  Non-focusable, like `PersonHeaderCell` — focus falls straight through to
 //  the filmography rows below. No MORE affordance / full-bio popup: the
-//  spec for this flow is "no VC presentation," so the bio is just a
-//  multi-line label; the panel itself already scrolls vertically.
+//  spec for this flow is "no VC presentation," so the bio is just an
+//  unbounded multi-line label; the panel's own vertical scroll (see
+//  InsightsActorView's self-driven contentOffset) reveals a bio longer
+//  than fits on first paint, rather than truncating it.
 //
 
 import UIKit
@@ -27,7 +29,6 @@ final class InsightsActorHeaderView: UIView {
         static let portraitSide: CGFloat = 112
         static let nameFont = UIFont.systemFont(ofSize: 28, weight: .semibold)
         static let bioFont = UIFont.systemFont(ofSize: 20, weight: .regular)
-        static let bioLineLimit = 8
     }
 
     private let portraitContainer = UIView()
@@ -80,8 +81,11 @@ final class InsightsActorHeaderView: UIView {
         bioLabel.translatesAutoresizingMaskIntoConstraints = false
         bioLabel.font = Metrics.bioFont
         bioLabel.textColor = UIColor.white.withAlphaComponent(0.75)
-        bioLabel.numberOfLines = Metrics.bioLineLimit
-        bioLabel.lineBreakMode = .byTruncatingTail
+        // Unbounded — the panel scrolls (InsightsActorView's self-driven
+        // vertical scroll) to reveal a bio longer than what fits on first
+        // paint, rather than truncating it. Previously capped at a fixed 8
+        // lines with no way to read the rest.
+        bioLabel.numberOfLines = 0
         addSubview(bioLabel)
 
         loadingSpinner.translatesAutoresizingMaskIntoConstraints = false
@@ -113,10 +117,13 @@ final class InsightsActorHeaderView: UIView {
             bioLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 8),
             bioLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             bioLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            // Fixed line-limit height so the header is its FINAL size from
-            // first paint (loading or a short bio won't shrink/grow it —
-            // same rationale as PersonHeaderCell's bioBlockHeight).
-            bioLabel.heightAnchor.constraint(equalToConstant: Self.bioBlockHeight),
+            // A MINIMUM (not fixed) height: loading/empty/short-bio states
+            // still get a stable, non-collapsed block (no first-paint jump),
+            // but a longer bio is free to grow past it — the panel's own
+            // vertical scroll (InsightsActorView) reveals the rest rather
+            // than truncating it. Previously a fixed height hard-capped the
+            // bio at 8 lines with no way to read further.
+            bioLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.bioMinBlockHeight),
             bioLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             loadingSpinner.centerXAnchor.constraint(equalTo: bioLabel.centerXAnchor),
@@ -126,10 +133,10 @@ final class InsightsActorHeaderView: UIView {
         bioLabel.textAlignment = .center
     }
 
-    /// Fixed height of the line-limited bio block — keeps the header a
-    /// constant size whether loading, empty, or showing a bio.
-    private static let bioBlockHeight: CGFloat =
-        ceil(Metrics.bioFont.lineHeight * CGFloat(Metrics.bioLineLimit))
+    /// Minimum height of the bio block — enough for a short bio (or the
+    /// loading spinner) to not look collapsed, without capping how far a
+    /// long bio can grow.
+    private static let bioMinBlockHeight: CGFloat = ceil(Metrics.bioFont.lineHeight * 3)
 
     // MARK: - Configure
 

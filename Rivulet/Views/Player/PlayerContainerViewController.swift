@@ -1004,10 +1004,19 @@ class PlayerContainerViewController: UIViewController {
             if self.activeRailPanel === panel {
                 self.activeRailPanel = nil
                 self.isShowingUpNextPanel = false
+                // Only clear the ambient-suppression flag if nothing
+                // superseded this panel (the identity guard above already
+                // confirms that) — a superseding presentRailPanel() call
+                // sets it back to true right below before this can fire.
+                self.viewModel?.isRailPanelOpen = false
             }
             self.setNeedsFocusUpdate(); self.updateFocusIfNeeded()
         }
         activeRailPanel = panel
+        // A rail panel is a full-screen-adjacent overlay the ambient-pause
+        // backdrop must not show through/around — see
+        // UniversalPlayerViewModel.isRailPanelOpen.
+        viewModel?.isRailPanelOpen = true
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
         return true
     }

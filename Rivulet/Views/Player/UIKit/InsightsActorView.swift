@@ -123,6 +123,12 @@ final class InsightsActorView: UIView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.clipsToBounds = false
         scrollView.showsVerticalScrollIndicator = false
+        // Same rationale as InsightsCastListView/InsightsFilmographyRowView:
+        // the focus engine's own scroll-to-visible fights a self-driven
+        // offset, and with header+movies+shows exceeding the panel's
+        // actorHeightCap, this must drive its own vertical scroll from
+        // didUpdateFocus (below) rather than rely on the disabled default.
+        scrollView.isScrollEnabled = false
         addSubview(scrollView)
 
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -188,8 +194,32 @@ final class InsightsActorView: UIView {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        if let next = context.nextFocusedView, next.isDescendant(of: scrollView) {
-            hasPinnedInitialFocus = true
+        guard let next = context.nextFocusedView, next.isDescendant(of: scrollView) else { return }
+        hasPinnedInitialFocus = true
+        scrollFocusedContentIntoView(next, coordinator: coordinator)
+    }
+
+    /// Self-driven vertical scroll (scrollView.isScrollEnabled = false
+    /// above) — keeps whatever just took focus (a filmography tile, most
+    /// often) inside the visible window. Mirrors InsightsCastListView's
+    /// identical pattern.
+    private func scrollFocusedContentIntoView(_ focused: UIView, coordinator: UIFocusAnimationCoordinator) {
+        let focusedFrameInScroll = focused.convert(focused.bounds, to: scrollView)
+        let visibleTop = scrollView.contentOffset.y
+        let visibleBottom = visibleTop + scrollView.bounds.height
+        var targetY = scrollView.contentOffset.y
+        if focusedFrameInScroll.minY < visibleTop {
+            targetY = focusedFrameInScroll.minY
+        } else if focusedFrameInScroll.maxY > visibleBottom {
+            targetY = focusedFrameInScroll.maxY - scrollView.bounds.height
+        } else {
+            return
         }
+        let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+        let clamped = min(max(0, targetY), maxY)
+        guard abs(clamped - scrollView.contentOffset.y) > 0.5 else { return }
+        coordinator.addCoordinatedAnimations({
+            self.scrollView.contentOffset.y = clamped
+        }, completion: nil)
     }
 }

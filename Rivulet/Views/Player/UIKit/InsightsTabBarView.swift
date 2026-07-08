@@ -50,6 +50,13 @@ final class InsightsTabBarView: UIView {
         translatesAutoresizingMaskIntoConstraints = false
         scrollView.showsHorizontalScrollIndicator = false
         scrollView.clipsToBounds = false
+        // Same rationale as InsightsFilmographyRowView/InsightsCastListView:
+        // the focus engine's own scroll-to-visible fights a self-driven
+        // offset, and with more pills than fit the panel's fixed width
+        // (confirmed bug: pills ran off the popup edge with no way to
+        // reach them), this bar must drive its own horizontal scroll from
+        // didUpdateFocus rather than rely on the disabled default.
+        scrollView.isScrollEnabled = false
         stack.axis = .horizontal
         stack.spacing = Metrics.pillSpacing
 
@@ -75,9 +82,32 @@ final class InsightsTabBarView: UIView {
             let pill = InsightsTabPillView()
             pill.configure(title: Self.title(for: tab), isSelected: tab == selected)
             pill.onSelected = { [weak self] in self?.handlePillSelected(tab) }
+            pill.onFocused = { [weak self] coordinator in self?.scrollPillIntoView(pill, coordinator: coordinator) }
             stack.addArrangedSubview(pill)
             pills.append((tab, pill))
         }
+    }
+
+    /// Self-driven horizontal scroll (scrollView.isScrollEnabled = false
+    /// above) — keeps the focused pill inside the bar's visible width.
+    private func scrollPillIntoView(_ pill: InsightsTabPillView, coordinator: UIFocusAnimationCoordinator) {
+        let pillFrameInScroll = pill.convert(pill.bounds, to: scrollView)
+        let visibleLeft = scrollView.contentOffset.x
+        let visibleRight = visibleLeft + scrollView.bounds.width
+        var targetX = scrollView.contentOffset.x
+        if pillFrameInScroll.minX < visibleLeft {
+            targetX = pillFrameInScroll.minX
+        } else if pillFrameInScroll.maxX > visibleRight {
+            targetX = pillFrameInScroll.maxX - scrollView.bounds.width
+        } else {
+            return
+        }
+        let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
+        let clamped = min(max(0, targetX), maxX)
+        guard abs(clamped - scrollView.contentOffset.x) > 0.5 else { return }
+        coordinator.addCoordinatedAnimations({
+            self.scrollView.contentOffset.x = clamped
+        }, completion: nil)
     }
 
     private func handlePillSelected(_ tab: InsightsTab) {
@@ -147,6 +177,10 @@ private final class InsightsTabPillView: UIControl {
     private var isFocusedPill = false
 
     var onSelected: (() -> Void)?
+    /// Invoked whenever this pill takes focus — lets the host `InsightsTabBarView`
+    /// scroll it into view, since this pill has no awareness of its own
+    /// scroll container.
+    var onFocused: ((UIFocusAnimationCoordinator) -> Void)?
 
     override var canBecomeFocused: Bool { true }
 
@@ -191,6 +225,9 @@ private final class InsightsTabPillView: UIControl {
             self.applyStyle()
             self.transform = self.isFocusedPill ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity
         }, completion: nil)
+        if isFocusedPill {
+            onFocused?(coordinator)
+        }
     }
 
     private func applyStyle() {

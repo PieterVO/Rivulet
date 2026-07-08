@@ -155,6 +155,16 @@ final class InsightsPanelContainerView: UIView {
         actorView = actor
         state = .actor
 
+        // The outgoing list/tab bar are only alpha-faded, not removed (the
+        // reverse crossfade needs them intact to fade back in) — without
+        // this, they stay focusable and hit-testable while invisible, so a
+        // directional focus search from inside the actor view could land on
+        // a hidden row: the user would see the actor view but actually be
+        // focused underneath it. Matches this codebase's fullScreenCover-
+        // style focus isolation principle for any overlay state.
+        listView.isUserInteractionEnabled = false
+        tabBar?.isUserInteractionEnabled = false
+
         heightConstraint.constant = Metrics.actorHeightCap
         heightConstraint.isActive = true
         setNeedsFocusUpdate()
@@ -192,6 +202,8 @@ final class InsightsPanelContainerView: UIView {
         guard state == .actor, let actor = actorView else { return }
         coordinator.cancel()
         state = .list
+        listView.isUserInteractionEnabled = true
+        tabBar?.isUserInteractionEnabled = true
 
         heightConstraint.isActive = false
         setNeedsFocusUpdate()
