@@ -138,3 +138,19 @@ extension TitleTrivia {
             .map { $0 }
     }
 }
+
+extension TriviaCategory {
+    /// Short display label for the category's row tag and tab pill. Calm, no icons.
+    var tabDisplayName: String {
+        switch self {
+        case .production: return "Production"
+        case .casting: return "Casting"
+        case .adaptation: return "Adaptation"
+        case .reference: return "Reference"
+        case .lore: return "Lore"
+        case .goof: return "Goof"
+        case .music: return "Music"
+        case .other: return "Trivia"
+        }
+    }
+}

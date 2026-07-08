@@ -369,7 +369,7 @@ final class InsightsTriviaRowView: UIView {
         textLabel.numberOfLines = 0
 
         categoryLabel.attributedText = NSAttributedString(
-            string: fact.category.displayName.uppercased(),
+            string: fact.category.tabDisplayName.uppercased(),
             attributes: [
                 .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
                 .foregroundColor: UIColor.white.withAlphaComponent(0.45),
@@ -406,21 +406,5 @@ final class InsightsTriviaRowView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-}
-
-private extension TriviaCategory {
-    /// Short display label for the row's category tag. Calm, no icons.
-    var displayName: String {
-        switch self {
-        case .production: return "Production"
-        case .casting: return "Casting"
-        case .adaptation: return "Adaptation"
-        case .reference: return "Reference"
-        case .lore: return "Lore"
-        case .goof: return "Goof"
-        case .music: return "Music"
-        case .other: return "Trivia"
-        }
     }
 }
