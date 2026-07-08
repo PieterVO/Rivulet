@@ -77,7 +77,7 @@ def test_assemble_title_trivia_movie_shape() -> None:
     assert trivia.id == "tmdb://27205"
     assert trivia.type == "movie"
     assert trivia.generated_at == "2026-07-07T00:00:00Z"
-    assert trivia.pipeline_version == 1
+    assert trivia.pipeline_version == 2
     assert trivia.attribution == [WIKI, FANDOM]
     assert trivia.facts == facts
 
@@ -262,7 +262,7 @@ def test_run_assembles_writes_and_uploads_all_verified_items(tmp_path: Path) -> 
         assert local_path.exists()
         payload = json.loads(local_path.read_text(encoding="utf-8"))
         assert payload["generatedAt"] == "2026-07-07T00:00:00Z"
-        assert payload["pipelineVersion"] == 1
+        assert payload["pipelineVersion"] == 2
 
 
 def test_run_skips_verified_item_with_no_matching_seed_entry(tmp_path: Path) -> None:

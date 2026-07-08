@@ -57,6 +57,11 @@ class Fact:
     # Retained only through verify; NOT published. The exact source
     # sentence(s) the fact was extracted from, for the verify re-check.
     source_snippet: str = ""
+    # How surprising/specific/non-generic the fact is, 1-10, scored by the
+    # extract LLM in the same call as category/spoiler. 0 = not scored
+    # (old-schema data, or the LLM omitted it/gave an out-of-range value) —
+    # a distinct from real low score of 1, never eligible for Top 10.
+    interest: int = 0
 
     @property
     def id(self) -> str:
@@ -78,6 +83,7 @@ class Fact:
             "category": self.category,
             "spoiler": self.spoiler,
             "source": self.source.to_dict(),
+            "interest": self.interest,
         }
 
     def to_working_dict(self) -> dict[str, Any]:
@@ -94,6 +100,7 @@ class Fact:
             spoiler=int(d["spoiler"]),
             source=Source.from_dict(d["source"]),
             source_snippet=d.get("source_snippet", ""),
+            interest=int(d.get("interest", 0)),
         )
 
 

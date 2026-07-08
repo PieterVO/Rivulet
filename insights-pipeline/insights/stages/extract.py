@@ -83,12 +83,19 @@ def raw_fact_to_fact(raw: object, source: Source, source_snippet: str) -> Fact |
     if spoiler not in SPOILER_LEVELS:
         return None
 
+    interest = raw.get("interest", 0)
+    if isinstance(interest, str) and interest.isdigit():
+        interest = int(interest)
+    if not isinstance(interest, int) or not (1 <= interest <= 10):
+        interest = 0
+
     return Fact(
         text=text.strip(),
         category=category,
         spoiler=spoiler,
         source=source,
         source_snippet=source_snippet,
+        interest=interest,
     )
 
 

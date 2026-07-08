@@ -70,7 +70,7 @@ def test_title_trivia_published_shape_matches_client_schema() -> None:
         "attribution",
         "facts",
     }
-    assert set(d["facts"][0].keys()) == {"id", "text", "category", "spoiler", "source"}
+    assert set(d["facts"][0].keys()) == {"id", "text", "category", "spoiler", "source", "interest"}
 
 
 def test_published_dict_includes_covered_and_release_date() -> None:
@@ -115,3 +115,24 @@ def test_tombstone_is_covered_false_empty() -> None:
     assert d["covered"] is False
     assert d["releaseDate"] == "2025-01-01"
     assert d["facts"] == []
+
+
+def test_fact_interest_defaults_zero() -> None:
+    """Fact.interest defaults to 0; positional constructions stay working."""
+    f = Fact("A fact.", "production", 0, Source("Wikipedia", "https://w/x"))
+    assert f.interest == 0
+
+
+def test_fact_interest_in_published_dict() -> None:
+    """to_published_dict includes interest in output."""
+    f = Fact(
+        "A fact.",
+        "casting",
+        1,
+        Source("Fandom", "https://fandom/x"),
+        source_snippet="The original sentence.",
+        interest=8,
+    )
+    pub = f.to_published_dict()
+    assert pub["interest"] == 8
+    assert "source_snippet" not in pub

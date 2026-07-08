@@ -110,6 +110,28 @@ def test_raw_fact_to_fact_rejects_non_dict() -> None:
     assert raw_fact_to_fact(None, source, "s") is None
 
 
+def test_raw_fact_to_fact_carries_through_valid_interest() -> None:
+    source = Source(name="Wikipedia", url="https://w/x")
+    raw = {
+        "text": "A fact.",
+        "category": "production",
+        "spoiler": 0,
+        "source": "X",
+        "interest": 8,
+    }
+    fact = raw_fact_to_fact(raw, source, "s")
+    assert fact is not None
+    assert fact.interest == 8
+
+
+def test_raw_fact_to_fact_defaults_interest_missing() -> None:
+    source = Source(name="Wikipedia", url="https://w/x")
+    raw = {"text": "A fact.", "category": "production", "spoiler": 0, "source": "X"}
+    fact = raw_fact_to_fact(raw, source, "s")
+    assert fact is not None
+    assert fact.interest == 0
+
+
 def test_extract_section_maps_llm_facts_and_attaches_snippet() -> None:
     section = WikiSection(heading="Production", level=2, body="The set rotated 360 degrees.")
     source = Source(name="Wikipedia", url="https://w/x")

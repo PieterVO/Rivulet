@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
