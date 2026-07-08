@@ -398,3 +398,31 @@ def test_tombstone_publish_appends_manifest(tmp_path: Path) -> None:
     assert records[0]["key"] == no_facts_item.key
     assert records[0]["covered"] is False
     assert records[0]["published_at"] == "2026-07-07T00:00:00Z"
+
+
+def test_select_uploader_prefers_explicit() -> None:
+    from insights.stages.publish import select_uploader
+
+    explicit = _FakeUploader()
+    assert select_uploader(_make_config(Path("/tmp/x")), explicit, "bucket") is explicit
+
+
+def test_select_uploader_boto3_when_r2_configured() -> None:
+    from insights.stages.publish import Boto3Uploader, select_uploader
+    from tests.helpers import make_config
+
+    cfg = make_config(
+        r2_endpoint_url="https://acct.r2.cloudflarestorage.com",
+        r2_bucket="rivulet-insights",
+        r2_access_key_id="key",
+        r2_secret_access_key="secret",
+    )
+    assert isinstance(select_uploader(cfg, None, "rivulet-insights"), Boto3Uploader)
+
+
+def test_select_uploader_wrangler_when_not_configured() -> None:
+    from insights.stages.publish import WranglerUploader, select_uploader
+
+    # No R2 S3 creds -> interactive wrangler-OAuth path (the box default).
+    up = select_uploader(_make_config(Path("/tmp/x")), None, "rivulet-insights")
+    assert isinstance(up, WranglerUploader)

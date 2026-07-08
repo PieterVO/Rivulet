@@ -239,6 +239,19 @@ def load_seed_index(path: Path) -> dict[str, WorkItem]:
 DEFAULT_R2_BUCKET = "rivulet-insights"
 
 
+def select_uploader(config: Config, uploader: Uploader | None, bucket: str) -> Uploader:
+    """Pick the R2 uploader: an explicit one (tests) wins; otherwise boto3 when
+    S3 creds are configured (the unattended worker container has no wrangler
+    OAuth session and can't shell out to wrangler), else wrangler (interactive
+    box runs, authed via wrangler's own OAuth, no R2 token needed).
+    """
+    if uploader is not None:
+        return uploader
+    if config.r2_configured:
+        return Boto3Uploader(config)
+    return WranglerUploader(bucket=bucket)
+
+
 def run(config: Config, *, uploader: Uploader | None = None, generated_at: str | None = None) -> list[PublishPlan]:
     """IO shell: assemble + write local JSON + upload every verified work item to R2.
 
@@ -254,7 +267,7 @@ def run(config: Config, *, uploader: Uploader | None = None, generated_at: str |
     work_items_by_key = load_seed_index(config.data_dir / "seed.jsonl")
 
     bucket = config.r2_bucket or DEFAULT_R2_BUCKET
-    active_uploader: Uploader = uploader or WranglerUploader(bucket=bucket)
+    active_uploader: Uploader = select_uploader(config, uploader, bucket)
 
     publish_dir = config.data_dir / "published"
     publish_dir.mkdir(parents=True, exist_ok=True)
