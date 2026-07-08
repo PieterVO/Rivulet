@@ -310,7 +310,14 @@ def stale_workitems_from_records(
     now"); the actual priority ORDER is set by the caller via
     `build_scheduled_seed_list`, not by this function.
     """
-    out: list[WorkItem] = []
+    # The manifest is append-only: a title republished by a prior TTL refresh
+    # has several lines with the same key. Collapse to the LATEST publish per
+    # key before the staleness check -- otherwise an old line keeps the title
+    # perpetually stale and it re-generates every scheduled pass instead of at
+    # its TTL, filling the scheduled cap with stale re-runs and starving
+    # new-episode/popular coverage. `published_at` is ISO8601, so string
+    # comparison orders chronologically.
+    latest_by_key: dict[str, dict] = {}
     for record in records:
         if record.get("tmdb_id") is None:
             # Legacy manifest line (pre-enriched-record shape) -- {"key",
@@ -320,6 +327,13 @@ def stale_workitems_from_records(
             # can't reach WorkItem construction below.
             logger.debug("stale check: skipping legacy manifest line without tmdb_id: %r", record.get("key"))
             continue
+        key = record.get("key")
+        prev = latest_by_key.get(key)
+        if prev is None or record.get("published_at", "") > prev.get("published_at", ""):
+            latest_by_key[key] = record
+
+    out: list[WorkItem] = []
+    for record in latest_by_key.values():
         kind = object_kind(record.get("type", "movie"))
         stale = is_stale(
             generated_at=record.get("published_at", ""),

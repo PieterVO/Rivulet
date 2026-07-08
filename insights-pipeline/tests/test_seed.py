@@ -492,6 +492,37 @@ def test_stale_selection_skips_legacy_lines() -> None:
     assert [w.tmdb_id for w in out] == [2]
 
 
+def test_stale_selection_uses_latest_publish_per_key() -> None:
+    # The manifest is append-only, so a title refreshed by a prior TTL pass has
+    # several lines with the same key. Staleness must be judged on the LATEST
+    # publish only -- otherwise the old line keeps the title perpetually stale
+    # and it re-generates every scheduled pass instead of at its TTL.
+    now = datetime(2026, 7, 7, tzinfo=timezone.utc)
+
+    def _rec(published_at: str) -> dict:
+        return {
+            "key": "movie:1",
+            "type": "movie",
+            "tmdb_id": 1,
+            "title": "A",
+            "year": 2020,  # mature title -> 180d TTL
+            "release_date": "2020-01-01",
+            "covered": True,
+            "published_at": published_at,
+            "pipeline_version": 1,
+        }
+
+    # Oldest line is >180d stale; newest line is 1d fresh. Collapsed to latest
+    # -> NOT stale. (Before the fix, the old line made it perpetually stale.)
+    fresh = [_rec("2026-01-01T00:00:00Z"), _rec("2026-07-06T00:00:00Z")]
+    assert stale_workitems_from_records(fresh, now=now, config=_cfg(), current_pipeline_version=1) == []
+
+    # Control: only an old line -> genuinely stale, still returned.
+    stale = [_rec("2026-01-01T00:00:00Z")]
+    out = stale_workitems_from_records(stale, now=now, config=_cfg(), current_pipeline_version=1)
+    assert [w.tmdb_id for w in out] == [1]
+
+
 # --- seed.run(): end-to-end scheduled wiring (priority order + dedup + cap) ---
 
 
