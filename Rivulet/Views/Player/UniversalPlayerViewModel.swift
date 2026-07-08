@@ -401,6 +401,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Fetched alongside trivia; empty on any failure (fail-open — showing
     /// a fact is acceptable, failing closed is not required for this list).
     @Published private(set) var suppressedTriviaIDs: Set<String> = []
+    /// Item keys we've already asked the pipeline to generate this session — fire once.
+    private var requestedInsightKeys: Set<String> = []
+    /// Cancels the mid-playback trivia re-check on item swaps or player teardown.
+    private var insightsRecheckTask: Task<Void, Never>?
     @Published private(set) var recommendations: [PlexMetadata] = []
     @Published var countdownSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
@@ -3853,28 +3857,102 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        var trivia: TitleTrivia?
+        let season = metadata.type == "episode" ? metadata.parentIndex : nil
+        let episode = metadata.type == "episode" ? metadata.index : nil
+        let requestType = (metadata.type == "episode" || metadata.type == "show" || metadata.type == "season")
+            ? "tv" : "movie"
+
+        // Resolve the primary result using the 404-vs-error-aware API so we can
+        // tell "genuinely uncovered" (safe to trigger generation) apart from a
+        // transient network hiccup (never trigger; just retry naturally later).
+        var primary: TriviaFetchResult = .unavailable
         switch metadata.type {
         case "episode":
-            if let season = metadata.parentIndex, let episode = metadata.index {
-                trivia = await InsightsTriviaClient.shared.episodeTrivia(
+            if let season, let episode {
+                primary = await InsightsTriviaClient.shared.episodeTriviaResult(
                     showTmdbId: tmdbId, season: season, episode: episode)
             }
-            // Fall back to the show's overall trivia when this episode has none
-            // yet — production/casting facts are still relevant to the viewer.
-            if trivia == nil {
-                trivia = await InsightsTriviaClient.shared.showTrivia(showTmdbId: tmdbId)
-            }
         case "show", "season":
-            trivia = await InsightsTriviaClient.shared.showTrivia(showTmdbId: tmdbId)
+            primary = await InsightsTriviaClient.shared.showTriviaResult(showTmdbId: tmdbId)
         default:
-            trivia = await InsightsTriviaClient.shared.movieTrivia(tmdbId: tmdbId)
+            primary = await InsightsTriviaClient.shared.movieTriviaResult(tmdbId: tmdbId)
+        }
+
+        var trivia: TitleTrivia?
+        if case .found(let t) = primary, !t.isTombstone {
+            trivia = t
+        } else {
+            // Uncovered (tombstone) or genuinely missing. For episodes, fall
+            // back to the show's overall trivia — production/casting facts
+            // are still relevant to the viewer even without episode-specific
+            // coverage yet.
+            if metadata.type == "episode",
+               case .found(let showTrivia) = await InsightsTriviaClient.shared.showTriviaResult(showTmdbId: tmdbId),
+               !showTrivia.isTombstone {
+                trivia = showTrivia
+            }
+            // Only a genuine 404 warrants asking the pipeline to generate —
+            // a tombstone is a definitive "nothing to share" (never
+            // re-request it) and a network failure should retry naturally
+            // later, never fire a request (Global Constraints).
+            if case .notFound = primary {
+                triggerGenerationIfNeeded(type: requestType, tmdbId: tmdbId, season: season, episode: episode)
+                scheduleInsightsRecheck(type: requestType, tmdbId: tmdbId, season: season, episode: episode)
+            }
         }
         let suppressed = await InsightsTriviaClient.shared.suppressedFactIDs()
 
         guard generation == itemGeneration else { return }
         insightsTrivia = trivia
         suppressedTriviaIDs = suppressed
+    }
+
+    /// Fire a one-shot generation request to the pipeline for a title/episode
+    /// that returned a genuine 404. Deduped per item-key for the life of this
+    /// view model (session) — never re-fires for the same key even across
+    /// multiple `loadInsightsTrivia()` calls (e.g. re-entering the panel).
+    private func triggerGenerationIfNeeded(type: String, tmdbId: Int, season: Int?, episode: Int?) {
+        let key = season != nil && episode != nil
+            ? "tv:\(tmdbId):S\(season!)E\(episode!)"
+            : "\(type == "movie" ? "movie" : "tv"):\(tmdbId)"
+        guard !requestedInsightKeys.contains(key) else { return }
+        requestedInsightKeys.insert(key)
+        let req = InsightsGenerationRequest(
+            type: type == "movie" ? "movie" : "tv", tmdbId: tmdbId,
+            season: season, episode: episode,
+            title: metadata.title ?? "", year: metadata.year)
+        Task { await InsightsTriviaClient.shared.requestGeneration(req) }
+    }
+
+    /// Re-poll a few times so freshly-generated trivia populates the open
+    /// panel before the episode ends. Stops on success or tombstone; cancelled
+    /// on item swap / teardown. No visible "loading" state — the panel stays
+    /// calm whether or not this ever finds something.
+    private func scheduleInsightsRecheck(type: String, tmdbId: Int, season: Int?, episode: Int?) {
+        insightsRecheckTask?.cancel()
+        let generation = itemGeneration
+        insightsRecheckTask = Task { [weak self] in
+            for delay in [90, 180, 300] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !Task.isCancelled, await self.itemGeneration == generation else { return }
+                let result: TriviaFetchResult
+                if let season, let episode {
+                    result = await InsightsTriviaClient.shared.episodeTriviaResult(
+                        showTmdbId: tmdbId, season: season, episode: episode)
+                } else if type == "tv" {
+                    result = await InsightsTriviaClient.shared.showTriviaResult(showTmdbId: tmdbId)
+                } else {
+                    result = await InsightsTriviaClient.shared.movieTriviaResult(tmdbId: tmdbId)
+                }
+                if case .found(let t) = result {
+                    await MainActor.run {
+                        guard self.itemGeneration == generation else { return }
+                        if !t.isTombstone { self.insightsTrivia = t }
+                    }
+                    return // covered or tombstone: done either way
+                }
+            }
+        }
     }
 
     /// Fetch the next episode for TV shows
@@ -4130,6 +4208,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // it for the new episode via loadInsightsTrivia().
         insightsTrivia = nil
         suppressedTriviaIDs = []
+        // Cancel any in-flight re-check for the outgoing item; loadInsightsTrivia()
+        // schedules a fresh one for the new item if needed.
+        insightsRecheckTask?.cancel()
+        insightsRecheckTask = nil
 
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
@@ -4269,6 +4351,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         seekIndicatorTimer?.invalidate()
         introSkipCountdownTimer?.invalidate()
         aetherStallWatchdogTask?.cancel()
+        insightsRecheckTask?.cancel()
         if let observer = appBackgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
