@@ -91,6 +91,65 @@ def test_run_returns_empty_immediately_when_queue_empty(tmp_path, monkeypatch):
     assert called == []  # no LLM/pipeline work when nothing is pending
 
 
+class _PoisonQueue:
+    """FakeQueue where some pending keys' requests can't be read/mapped.
+
+    `good` maps cleanly. `poison_raises`'s `get_request` throws (simulating a
+    corrupt/malformed R2 object body). `poison_malformed`'s `get_request`
+    returns a dict missing `tmdb_id` (simulating a badly-shaped-but-readable
+    request object).
+    """
+
+    def __init__(self):
+        self._pending_keys = ["good", "poison_raises", "poison_malformed"]
+        self.deleted: list[str] = []
+
+    def list_pending(self, max_items):
+        return self._pending_keys[:max_items]
+
+    def get_request(self, work_item_key):
+        if work_item_key == "good":
+            return {"key": "good", "type": "movie", "tmdb_id": 1, "title": "Good", "year": 2020}
+        if work_item_key == "poison_raises":
+            raise ValueError("corrupt request object body")
+        if work_item_key == "poison_malformed":
+            return {"key": "poison_malformed", "type": "movie", "title": "No tmdb_id"}
+        return None
+
+    def delete_request(self, work_item_key):
+        self.deleted.append(work_item_key)
+
+    def object_exists(self, published_key):
+        return False
+
+
+def test_serve_isolates_poison_request(tmp_path, monkeypatch):
+    config = make_config(data_dir=tmp_path)
+    queue = _PoisonQueue()
+
+    import insights.stages.serve as serve_mod
+
+    seeded_keys: list[str] = []
+    monkeypatch.setattr(
+        serve_mod,
+        "write_seed_jsonl",
+        lambda items, path: seeded_keys.extend(w.key for w in items),
+    )
+    monkeypatch.setattr(serve_mod.discover, "run", lambda cfg: [])
+    monkeypatch.setattr(serve_mod.fetch, "run", lambda cfg: {})
+    monkeypatch.setattr(serve_mod.extract, "run", lambda cfg, pages: {})
+    monkeypatch.setattr(serve_mod.verify, "run", lambda cfg, facts: [])
+    monkeypatch.setattr(serve_mod.publish, "run", lambda cfg: [])
+
+    served = serve_mod.run(config, queue=queue)  # must not raise
+
+    # Only the good request reached the pipeline.
+    assert seeded_keys == ["movie:1"]
+    # Every pending key is removed from the queue -- poison objects never wedge it.
+    assert set(queue.deleted) == {"good", "poison_raises", "poison_malformed"}
+    assert set(served) == {"good", "poison_raises", "poison_malformed"}
+
+
 def test_run_bounds_batch_to_ondemand_max_batch(tmp_path, monkeypatch):
     config = make_config(data_dir=tmp_path, ondemand_max_batch=8)
 

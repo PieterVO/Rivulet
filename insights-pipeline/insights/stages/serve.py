@@ -31,24 +31,31 @@ def queue_to_work_items(requests: list[dict], published_keys: set[str]) -> list[
 
     Request dicts are the snake_case queue object shape the Worker writes
     (see the shared contract): `key`, `type`, `tmdb_id`, optional
-    `season`/`episode`, `title`, `year`.
+    `season`/`episode`, `title`, `year`. A malformed request (missing/
+    unusable `tmdb_id` or `type`) is skipped and logged rather than raising
+    -- `run()` below still deletes it from the queue so one bad object can't
+    wedge the on-demand drain for everything behind it.
     """
     out: list[WorkItem] = []
     for req in requests:
         key = req.get("key")
         if key in published_keys:
             continue
-        out.append(
-            WorkItem(
-                tmdb_id=int(req["tmdb_id"]),
-                type=req["type"],
-                title=req.get("title", ""),
-                year=req.get("year"),
-                season=req.get("season"),
-                episode=req.get("episode"),
-                reason="ondemand",
+        try:
+            out.append(
+                WorkItem(
+                    tmdb_id=int(req["tmdb_id"]),
+                    type=req["type"],
+                    title=req.get("title", ""),
+                    year=req.get("year"),
+                    season=req.get("season"),
+                    episode=req.get("episode"),
+                    reason="ondemand",
+                )
             )
-        )
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("serve: dropping malformed request %r: %s", key, exc)
+            continue
     return out
 
 
@@ -85,14 +92,29 @@ def run(config: Config, queue: R2QueueClient | None = None) -> list[str]:
     if not keys:
         return []
 
-    requests = [r for k in keys if (r := queue.get_request(k)) is not None]
+    requests = [r for k in keys if (r := _safe_get_request(queue, k)) is not None]
     published_keys = load_published_keys(config.data_dir / "published.jsonl")
     work_items = queue_to_work_items(requests, published_keys)
 
     run_work_items(config, work_items)
 
+    # Every listed key is deleted regardless of outcome -- covered publish,
+    # tombstone, already-published no-op, or an unreadable/malformed poison
+    # object (isolated above): each is "answered" and must not wedge the
+    # on-demand queue for the next drain.
     for key in keys:
         queue.delete_request(key)
 
     logger.info("serve: drained %d on-demand request(s)", len(keys))
     return keys
+
+
+def _safe_get_request(queue: R2QueueClient, key: str) -> dict | None:
+    """Read one queue request, isolating a corrupt/unreadable object so it
+    can't abort the whole batch before the delete loop runs (see `run`).
+    """
+    try:
+        return queue.get_request(key)
+    except Exception as exc:  # any read/parse failure is poison, not fatal
+        logger.warning("serve: dropping unreadable request %r: %s", key, exc)
+        return None
