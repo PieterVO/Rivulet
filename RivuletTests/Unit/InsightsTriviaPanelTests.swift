@@ -2,12 +2,15 @@
 //  InsightsTriviaPanelTests.swift
 //  RivuletTests
 //
-//  Panel-level coverage for the Trivia section (P2a, Task 3.2) appended
-//  below the cast list in `InsightsCastListView`. `TriviaFactTests` already
-//  covers `visibleFacts` filtering in isolation; this proves the panel wires
-//  that filtered result into the view correctly — including the
-//  graceful-absent rule (no trivia / everything filtered out → section is
-//  not shown at all, same as cast's empty state).
+//  Panel-level coverage for the Trivia rows rendered by a single tab of
+//  `InsightsCastListView` (Docs/superpowers/specs/
+//  2026-07-08-insights-toptrivia-tabs-design.md). `TriviaFactTests` already
+//  covers `visibleFacts`/`topTenFacts` filtering in isolation; this proves
+//  a tab's filtered result wires into the view correctly — including the
+//  graceful-absent rule (no trivia / everything filtered out for this tab
+//  -> zero rows, same as cast's empty state). Each test drives an explicit
+//  `initialTab` so it is independent of `InsightsPanelContainerView`'s own
+//  tab-selection defaulting (covered by `InsightsCastListViewTests`).
 //
 
 import XCTest
@@ -33,21 +36,25 @@ final class InsightsTriviaPanelTests: XCTestCase {
         }.joined(separator: ",")
         let attributionJSON = attribution.map { "{ \"name\": \"\($0.name)\", \"url\": \"\($0.url)\" }" }.joined(separator: ",")
         let json = """
-        { "id": "tmdb://1", "type": "movie", "generatedAt": "2026-07-07T00:00:00Z", "pipelineVersion": 1,
+        { "id": "tmdb://1", "type": "movie", "generatedAt": "2026-07-07T00:00:00Z", "pipelineVersion": 2,
           "attribution": [\(attributionJSON)], "facts": [\(factsJSON)] }
         """.data(using: .utf8)!
         return try! JSONDecoder().decode(TitleTrivia.self, from: json)
     }
 
     func test_noTrivia_sectionAbsent() {
-        let list = InsightsCastListView(cast: [], trivia: nil, onSelect: { _ in })
+        let list = InsightsCastListView(
+            cast: [], trivia: nil, suppressedTriviaIDs: [], hideSpoilers: true,
+            initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(list.triviaRowCount, 0)
         XCTAssertFalse(list.hasTriviaSection)
     }
 
     func test_triviaWithNoFacts_sectionAbsent() {
         let trivia = makeTrivia(facts: [])
-        let list = InsightsCastListView(cast: [], trivia: trivia, onSelect: { _ in })
+        let list = InsightsCastListView(
+            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(list.triviaRowCount, 0)
         XCTAssertFalse(list.hasTriviaSection)
     }
@@ -56,33 +63,45 @@ final class InsightsTriviaPanelTests: XCTestCase {
         // Every fact is spoiler-tagged; hiding spoilers should leave nothing,
         // so the whole section (not just the rows) must vanish gracefully.
         let trivia = makeTrivia(facts: [makeFact("f1", spoiler: 1), makeFact("f2", spoiler: 2)])
-        let list = InsightsCastListView(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true, onSelect: { _ in })
+        let list = InsightsCastListView(
+            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(list.triviaRowCount, 0)
         XCTAssertFalse(list.hasTriviaSection)
     }
 
     func test_visibleFacts_renderAsRows() {
         let trivia = makeTrivia(facts: [makeFact("f1", spoiler: 0), makeFact("f2", spoiler: 0)])
-        let list = InsightsCastListView(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true, onSelect: { _ in })
+        let list = InsightsCastListView(
+            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(list.triviaRowCount, 2)
         XCTAssertTrue(list.hasTriviaSection)
     }
 
     func test_suppressedFactIsExcludedFromRows() {
         let trivia = makeTrivia(facts: [makeFact("f1", spoiler: 0), makeFact("f2", spoiler: 0)])
-        let list = InsightsCastListView(cast: [], trivia: trivia, suppressedTriviaIDs: ["f2"], hideSpoilers: false, onSelect: { _ in })
+        let list = InsightsCastListView(
+            cast: [], trivia: trivia, suppressedTriviaIDs: ["f2"], hideSpoilers: false,
+            initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(list.triviaRowCount, 1, "the suppressed fact must not render as a row")
     }
 
     func test_hideSpoilersOff_showsSpoilerFacts() {
         let trivia = makeTrivia(facts: [makeFact("f1", spoiler: 1)])
-        let list = InsightsCastListView(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: false, onSelect: { _ in })
+        let list = InsightsCastListView(
+            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: false,
+            initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(list.triviaRowCount, 1, "with hide-spoilers off, a spoiler-tagged fact must still render")
     }
 
     /// The container forwards its trivia args through to the list view
     /// unchanged — a thin plumbing check that the two-state container
-    /// doesn't drop or mistranslate them.
+    /// doesn't drop or mistranslate them. A single production-category fact
+    /// with no interest score means the container's default-tab logic lands
+    /// on `.category(.production)` (no Top 10 pill, since nothing scored
+    /// >=7; Cast is also absent since cast is empty) — so this exercises the
+    /// container's real default-tab wiring end to end, not a hand-picked tab.
     func test_containerForwardsTriviaToListView() {
         let trivia = makeTrivia(facts: [makeFact("f1", spoiler: 0)])
         let container = InsightsPanelContainerView(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: false)

@@ -20,46 +20,74 @@ final class InsightsCastListView: UIView {
         // focused row's 1.02 scale doesn't overflow the clipping scroll
         // view's left/right edges. Matches UpNextListView.
         static let rowInset: CGFloat = 8
-        static let sectionSpacing: CGFloat = 24
     }
 
-    private let headerLabel = UILabel()
+    /// The panel's overall width is a fixed constant (`PlayerRailPanelView`
+    /// presents Insights at width 640 — see `PlayerContainerViewController`),
+    /// so the trivia row's final text width is knowable up front rather than
+    /// discovered from a layout pass: 640 - 2*20 (PlayerRailPanelView content
+    /// padding) - 2*rowInset (this stack's own inset) - 2*18 (row's own
+    /// internal padding, `InsightsTriviaRowView`). Computing the row's
+    /// intrinsic height from this fixed width up front (instead of waiting
+    /// for `layoutSubviews`) avoids the width-before-height circular
+    /// dependency that left every trivia row pinned to UIStackView's ~44pt
+    /// ambiguous-layout fallback regardless of actual text length.
+    static let triviaRowContentWidth: CGFloat = 640 - 2 * 20 - 2 * Metrics.rowInset - 2 * 18
+
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
-    private var rows: [InsightsCastRowButton] = []
-    /// Every focusable row in display order (trivia rows THEN cast rows). The
-    /// trivia rows are focusable purely so the tvOS focus engine can scroll to
-    /// them; without them here the panel can't scroll past the cast.
+    private var castRows: [InsightsCastRowButton] = []
+    /// Every focusable row in the CURRENTLY DISPLAYED tab's content, in
+    /// display order. Rebuilt on every `setTab`/`init`. Trivia rows are
+    /// focusable purely so the tvOS focus engine can scroll to them; without
+    /// them here the panel can't scroll past a single-tab's trivia list.
     private var focusableRows: [UIView] = []
-    /// Pin focus to the first row only on the FIRST landing; afterwards
-    /// express no preference so the focus engine leaves focus where the
-    /// user navigated (no bounce back). Matching flag in UpNextListView.
+    /// Pin focus to the first row only on the FIRST landing of the CURRENT
+    /// tab; reset to false on every `setTab` so switching tabs re-lands
+    /// focus on that tab's first row rather than leaving it stranded on a
+    /// now-hidden row from the previous tab.
     private var hasPinnedInitialFocus = false
 
-    /// Number of trivia fact rows currently in the stack. Internal (not
-    /// private) so `@testable import Rivulet` tests can assert the
-    /// graceful-absent rule (no trivia / all-filtered → 0) and the
-    /// visible-count-after-filtering wiring without reaching into UIKit's
-    /// `UIStackView.arrangedSubviews` directly.
+    private let cast: [MediaPerson]
+    private let trivia: TitleTrivia?
+    private let suppressedTriviaIDs: Set<String>
+    private let hideSpoilers: Bool
+    private let onSelectCast: (MediaPerson) -> Void
+
+    /// Number of trivia fact rows currently in the stack (i.e. for the
+    /// currently displayed tab). Internal (not private) so `@testable import
+    /// Rivulet` tests can assert tab-scoped row counts without reaching into
+    /// UIKit's `UIStackView.arrangedSubviews` directly.
     var triviaRowCount: Int {
         stack.arrangedSubviews.filter { $0 is InsightsTriviaRowView }.count
     }
-    /// Whether the trivia section's header/footer chrome was added. Internal
-    /// for the same testing reason as `triviaRowCount`.
+    /// Whether the current tab's trivia section has any rows. Kept for the
+    /// pre-existing `InsightsTriviaPanelTests` graceful-absent assertions
+    /// (Task 4 Step 9 rewrites that file for the new tab-scoped API, but
+    /// keeps this exact property name/meaning).
     var hasTriviaSection: Bool { triviaRowCount > 0 }
+    /// Number of cast rows currently in the stack. Internal for the same
+    /// testing reason as `triviaRowCount`.
+    var castRowCount: Int {
+        stack.arrangedSubviews.filter { $0 is InsightsCastRowButton }.count
+    }
 
     init(
         cast: [MediaPerson],
-        trivia: TitleTrivia? = nil,
-        suppressedTriviaIDs: Set<String> = [],
-        hideSpoilers: Bool = true,
-        onSelect: @escaping (MediaPerson) -> Void
+        trivia: TitleTrivia?,
+        suppressedTriviaIDs: Set<String>,
+        hideSpoilers: Bool,
+        initialTab: InsightsTab,
+        onSelectCast: @escaping (MediaPerson) -> Void
     ) {
+        self.cast = cast
+        self.trivia = trivia
+        self.suppressedTriviaIDs = suppressedTriviaIDs
+        self.hideSpoilers = hideSpoilers
+        self.onSelectCast = onSelectCast
         super.init(frame: .zero)
         setupContent()
-        // Trivia leads the panel; cast is the secondary section below it.
-        buildTriviaSection(trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs, hideSpoilers: hideSpoilers)
-        buildCastSection(cast: cast, onSelect: onSelect)
+        buildRows(for: initialTab)
     }
 
     @available(*, unavailable)
@@ -73,28 +101,18 @@ final class InsightsCastListView: UIView {
         scrollView.addSubview(stack)
         scrollView.clipsToBounds = true
 
-        [headerLabel, scrollView, stack].forEach {
+        [scrollView, stack].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
-        addSubview(headerLabel)
         addSubview(scrollView)
 
-        headerLabel.attributedText = Self.sectionHeaderText("INSIGHTS")
-
-        // Scroll view caps content up to a maxHeight, so a short cast
-        // hugs its rows while a long one scrolls.
+        // Scroll view caps content up to a maxHeight, so a short tab's
+        // content hugs its rows while a long one scrolls.
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
         scrollHeight.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
-            headerLabel.topAnchor.constraint(equalTo: topAnchor),
-            // Header stays flush with the rows' own (inset) content, not
-            // the outer view edge, so it aligns with row text/thumbnails
-            // rather than the scroll view's outer bounds.
-            headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.rowInset),
-            headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-
-            scrollView.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 16),
+            scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -109,75 +127,80 @@ final class InsightsCastListView: UIView {
         ])
     }
 
-    /// The cast section, secondary to trivia. If trivia leads above, it's set
-    /// off with extra space and a "CAST" subheader; cast-only (no trivia) shows
-    /// the rows directly under the fixed "INSIGHTS" header (no redundant label).
-    private func buildCastSection(cast: [MediaPerson], onSelect: @escaping (MediaPerson) -> Void) {
-        guard !cast.isEmpty else { return }
-        if let last = stack.arrangedSubviews.last {
-            stack.setCustomSpacing(Metrics.sectionSpacing, after: last)
-            let castHeader = UILabel()
-            castHeader.attributedText = Self.sectionHeaderText("CAST")
-            stack.addArrangedSubview(castHeader)
-            stack.setCustomSpacing(16, after: castHeader)
+    /// Tears down the current tab's rows and builds the given tab's rows in
+    /// their place. Resets scroll position and focus-pinning so the existing
+    /// pin-first-focus-then-free landing behavior re-runs for the new
+    /// content (mirrors how a fresh `UpNextListView` lands focus on reload).
+    func setTab(_ tab: InsightsTab) {
+        castRows.forEach { $0.cancelImageLoad() }
+        castRows.removeAll()
+        focusableRows.removeAll()
+        stack.arrangedSubviews.forEach {
+            stack.removeArrangedSubview($0)
+            $0.removeFromSuperview()
         }
+        hasPinnedInitialFocus = false
+        scrollView.setContentOffset(.zero, animated: false)
+        buildRows(for: tab)
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    private func buildRows(for tab: InsightsTab) {
+        switch tab {
+        case .topTen:
+            let facts = trivia?.topTenFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs) ?? []
+            buildTriviaRows(facts)
+            addAttributionFooterIfNeeded()
+        case .cast:
+            buildCastRows(cast)
+        case .category(let category):
+            let facts = (trivia?.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs) ?? [])
+                .filter { $0.category == category }
+            buildTriviaRows(facts)
+            addAttributionFooterIfNeeded()
+        }
+    }
+
+    private func buildTriviaRows(_ facts: [TriviaFact]) {
+        for fact in facts {
+            let row = InsightsTriviaRowView(fact: fact, contentWidth: Self.triviaRowContentWidth)
+            stack.addArrangedSubview(row)
+            focusableRows.append(row)
+        }
+    }
+
+    private func buildCastRows(_ cast: [MediaPerson]) {
         for person in cast {
             let row = InsightsCastRowButton(person: person)
-            row.onTap = { onSelect(person) }
+            row.onTap = { [onSelectCast] in onSelectCast(person) }
             stack.addArrangedSubview(row)
-            rows.append(row)
+            castRows.append(row)
             focusableRows.append(row)
         }
     }
 
-    /// Trivia LEADS the panel (its primary content). Read-only fact rows, each
-    /// focusable so the tvOS focus engine can scroll through them, followed by a
-    /// source attribution footer. Graceful absent: nil trivia, or no facts left
-    /// after hide-spoilers/suppression filtering, adds nothing at all.
-    private func buildTriviaSection(trivia: TitleTrivia?, suppressedTriviaIDs: Set<String>, hideSpoilers: Bool) {
-        guard let trivia else { return }
-        let facts = trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs)
-        guard !facts.isEmpty else { return }
-
-        for fact in facts {
-            let row = InsightsTriviaRowView(fact: fact)
-            stack.addArrangedSubview(row)
-            focusableRows.append(row)
-        }
-
-        if !trivia.attribution.isEmpty {
-            let footer = UILabel()
-            footer.numberOfLines = 1
-            footer.font = .systemFont(ofSize: 15, weight: .regular)
-            footer.textColor = UIColor.white.withAlphaComponent(0.35)
-            let names = trivia.attribution.map(\.name).joined(separator: " · ")
-            footer.text = "Info from \(names)"
-            if let last = stack.arrangedSubviews.last {
-                stack.setCustomSpacing(12, after: last)
-            }
-            stack.addArrangedSubview(footer)
-        }
-    }
-
-    /// Uppercase section-header style shared by the fixed "INSIGHTS" header and
-    /// the inline "CAST" subheader.
-    static func sectionHeaderText(_ title: String) -> NSAttributedString {
-        NSAttributedString(string: title, attributes: [
-            .font: UIFont.systemFont(ofSize: 20, weight: .bold),
-            .foregroundColor: UIColor.white.withAlphaComponent(0.5),
-            .kern: 1.5,
-        ])
+    private func addAttributionFooterIfNeeded() {
+        guard let trivia, !trivia.attribution.isEmpty, let last = stack.arrangedSubviews.last else { return }
+        let footer = UILabel()
+        footer.numberOfLines = 1
+        footer.font = .systemFont(ofSize: 15, weight: .regular)
+        footer.textColor = UIColor.white.withAlphaComponent(0.35)
+        let names = trivia.attribution.map(\.name).joined(separator: " · ")
+        footer.text = "Info from \(names)"
+        stack.setCustomSpacing(12, after: last)
+        stack.addArrangedSubview(footer)
     }
 
     // MARK: - Teardown
 
     override func removeFromSuperview() {
-        rows.forEach { $0.cancelImageLoad() }
+        castRows.forEach { $0.cancelImageLoad() }
         super.removeFromSuperview()
     }
 
     deinit {
-        rows.forEach { $0.cancelImageLoad() }
+        castRows.forEach { $0.cancelImageLoad() }
     }
 
     // MARK: - Focus
@@ -354,7 +377,15 @@ final class InsightsTriviaRowView: UIView {
     private static let focusedBackground = UIColor.white.withAlphaComponent(0.16)
     private static let focusedBorder = UIColor.white.withAlphaComponent(0.25).cgColor
 
-    init(fact: TriviaFact) {
+    /// - Parameter contentWidth: the row's final text width, known up front
+    ///   by the caller (see `InsightsCastListView.triviaRowContentWidth`).
+    ///   Set as `textLabel.preferredMaxLayoutWidth` so the multi-line label's
+    ///   intrinsic height is computed from the real wrap width immediately,
+    ///   rather than from a `layoutSubviews` pass that hasn't happened yet —
+    ///   avoiding the width-before-height circular dependency that otherwise
+    ///   leaves the row pinned to UIStackView's ambiguous-layout fallback
+    ///   height regardless of actual text length.
+    init(fact: TriviaFact, contentWidth: CGFloat) {
         super.init(frame: .zero)
 
         backgroundColor = Self.restBackground
@@ -367,6 +398,7 @@ final class InsightsTriviaRowView: UIView {
         textLabel.font = .systemFont(ofSize: 25, weight: .regular)
         textLabel.textColor = .white
         textLabel.numberOfLines = 0
+        textLabel.preferredMaxLayoutWidth = contentWidth
 
         categoryLabel.attributedText = NSAttributedString(
             string: fact.category.tabDisplayName.uppercased(),

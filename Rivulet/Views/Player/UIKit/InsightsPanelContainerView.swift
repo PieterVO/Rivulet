@@ -2,11 +2,13 @@
 //  InsightsPanelContainerView.swift
 //  Rivulet
 //
-//  Two-state content for the Insights rail panel (Docs/superpowers/plans/
-//  2026-07-07-insights-in-panel-actor.md, Task D). Replaces the old
+//  Two-state content for the Insights rail panel (Docs/superpowers/specs/
+//  2026-07-08-insights-toptrivia-tabs-design.md). Replaces the old
 //  person-page deep link: selecting a cast member CROSSFADES IN PLACE from
 //  the cast list to an actor view (portrait + bio + filmography) while video
 //  keeps playing — no pause/resume, no VC presentation anywhere in this flow.
+//  Above the list/actor content sits a pill tab bar (Top 10 | Cast |
+//  category pills) that switches which tab-scoped row set the list shows.
 //
 //  Menu handling (mirrors the panel's own Menu ownership rather than
 //  fighting it): in `.actor` state Menu is CONSUMED here (reverse-crossfade
@@ -24,6 +26,7 @@ final class InsightsPanelContainerView: UIView {
         /// bottom), so the panel never exceeds its own ceiling.
         static let actorHeightCap: CGFloat = 520
         static let crossfadeDuration: TimeInterval = 0.2
+        static let tabBarSpacing: CGFloat = 16
     }
 
     private enum State {
@@ -37,6 +40,16 @@ final class InsightsPanelContainerView: UIView {
     private let hideSpoilers: Bool
     private let provider: PersonFilmographyProviding
 
+    private let availableTabs: [InsightsTab]
+    private var currentTab: InsightsTab
+
+    private lazy var tabBar: InsightsTabBarView? = {
+        guard !availableTabs.isEmpty else { return nil }
+        let bar = InsightsTabBarView(tabs: availableTabs, selected: currentTab)
+        bar.onSelect = { [weak self] tab in self?.handleTabSelected(tab) }
+        return bar
+    }()
+
     // `lazy` so the init closure can capture `self` directly — evaluated on
     // first access (from `init`, after `super.init()` has returned), so
     // `self` is fully formed by the time `InsightsCastListView`'s own init
@@ -46,7 +59,8 @@ final class InsightsPanelContainerView: UIView {
         trivia: trivia,
         suppressedTriviaIDs: suppressedTriviaIDs,
         hideSpoilers: hideSpoilers,
-        onSelect: { [weak self] person in
+        initialTab: currentTab,
+        onSelectCast: { [weak self] person in
             self?.crossfadeToActor(person)
         })
     /// Internal (not private) visibility so `@testable import Rivulet` tests
@@ -70,16 +84,38 @@ final class InsightsPanelContainerView: UIView {
         self.suppressedTriviaIDs = suppressedTriviaIDs
         self.hideSpoilers = hideSpoilers
         self.provider = provider
+        let tabs = InsightsTabBarView.availableTabs(
+            cast: cast, trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs, hideSpoilers: hideSpoilers)
+        self.availableTabs = tabs
+        // Prefer Top 10 as the landing tab when available (it's the curated
+        // highlight reel); otherwise Cast; otherwise the first category.
+        self.currentTab = tabs.first(where: { $0 == .topTen }) ?? tabs.first ?? .cast
         super.init(frame: .zero)
 
         listView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(listView)
-        NSLayoutConstraint.activate([
-            listView.topAnchor.constraint(equalTo: topAnchor),
-            listView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            listView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            listView.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
+
+        if let tabBar {
+            tabBar.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(tabBar)
+            NSLayoutConstraint.activate([
+                tabBar.topAnchor.constraint(equalTo: topAnchor),
+                tabBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+                tabBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+                listView.topAnchor.constraint(equalTo: tabBar.bottomAnchor, constant: Metrics.tabBarSpacing),
+                listView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                listView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                listView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                listView.topAnchor.constraint(equalTo: topAnchor),
+                listView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                listView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                listView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+        }
 
         heightConstraint = heightAnchor.constraint(equalToConstant: 0)
         heightConstraint.priority = .defaultHigh
@@ -88,6 +124,14 @@ final class InsightsPanelContainerView: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    // MARK: - Tab switching
+
+    private func handleTabSelected(_ tab: InsightsTab) {
+        guard tab != currentTab, state == .list else { return }
+        currentTab = tab
+        listView.setTab(tab)
+    }
 
     // MARK: - Crossfade
 
@@ -118,6 +162,7 @@ final class InsightsPanelContainerView: UIView {
 
         UIView.animate(withDuration: Metrics.crossfadeDuration, animations: {
             self.listView.alpha = 0
+            self.tabBar?.alpha = 0
             actor.alpha = 1
             self.superview?.layoutIfNeeded()
         }, completion: { [weak self] _ in
@@ -155,6 +200,7 @@ final class InsightsPanelContainerView: UIView {
         UIView.animate(withDuration: Metrics.crossfadeDuration, animations: {
             actor.alpha = 0
             self.listView.alpha = 1
+            self.tabBar?.alpha = 1
             self.superview?.layoutIfNeeded()
         }, completion: { [weak self] _ in
             actor.removeFromSuperview()
