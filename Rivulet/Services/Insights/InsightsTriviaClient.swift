@@ -45,6 +45,23 @@ actor InsightsTriviaClient {
         await fetchTrivia(path: "insights/tv/\(showTmdbId)/show")
     }
 
+    /// Rich result variants that distinguish a genuine 404 ("not covered yet" —
+    /// safe to trigger generation) from any other failure (network, timeout,
+    /// decode error — "unavailable", never trigger generation). Callers that
+    /// only need the soft-fail `TitleTrivia?` shape should keep using the
+    /// `*Trivia` methods above.
+    func movieTriviaResult(tmdbId: Int) async -> TriviaFetchResult {
+        await fetchResult(path: "insights/movie/\(tmdbId)")
+    }
+
+    func episodeTriviaResult(showTmdbId: Int, season: Int, episode: Int) async -> TriviaFetchResult {
+        await fetchResult(path: "insights/tv/\(showTmdbId)/\(season)/\(episode)")
+    }
+
+    func showTriviaResult(showTmdbId: Int) async -> TriviaFetchResult {
+        await fetchResult(path: "insights/tv/\(showTmdbId)/show")
+    }
+
     /// The set of suppressed fact ids (auto-hidden after enough reports).
     /// Empty set on any failure — suppression is a safety overlay, and failing
     /// open (showing a fact) is acceptable; failing closed is not required.
@@ -58,12 +75,50 @@ actor InsightsTriviaClient {
         return Set(ids)
     }
 
+    /// Fire-and-forget request asking the pipeline to generate trivia for a
+    /// title/episode it doesn't have yet. All failures ignored — this is a
+    /// best-effort nudge, never a blocking or error-surfacing call.
+    func requestGeneration(_ req: InsightsGenerationRequest) async {
+        let url = baseURL.appendingPathComponent("insights/request")
+        var r = URLRequest(url: url); r.httpMethod = "POST"
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.httpBody = try? JSONEncoder().encode(req)
+        _ = try? await session.data(for: r)   // fire-and-forget; all failures ignored
+    }
+
     private func fetchTrivia(path: String) async -> TitleTrivia? {
+        if case .found(let t) = await fetchResult(path: path) { return t }
+        return nil
+    }
+
+    private func fetchResult(path: String) async -> TriviaFetchResult {
         let url = baseURL.appendingPathComponent(path)
         guard let (data, response) = try? await session.data(from: url),
-              let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            return nil
-        }
-        return try? JSONDecoder().decode(TitleTrivia.self, from: data)
+              let http = response as? HTTPURLResponse else { return .unavailable }
+        if http.statusCode == 404 { return .notFound }
+        guard http.statusCode == 200,
+              let t = try? JSONDecoder().decode(TitleTrivia.self, from: data) else { return .unavailable }
+        return .found(t)
     }
+}
+
+/// Result of a trivia fetch, distinguishing a genuine 404 (title/episode not
+/// yet covered — safe to trigger generation) from any other failure (network,
+/// timeout, decode error — retry naturally later, never fire generation).
+enum TriviaFetchResult {
+    case found(TitleTrivia)
+    case notFound
+    case unavailable
+}
+
+/// Generation request body posted to `insights/request` (camelCase, per the
+/// insights-api contract). Carries only TMDB ids + title/year — no Plex
+/// token, no account id, no personal data (Global Constraints).
+struct InsightsGenerationRequest: Encodable {
+    let type: String
+    let tmdbId: Int
+    let season: Int?
+    let episode: Int?
+    let title: String
+    let year: Int?
 }
