@@ -15,6 +15,8 @@ Usage:
     python -m insights verify
     python -m insights publish
     python -m insights all
+    python -m insights serve
+    python -m insights worker
 """
 
 from __future__ import annotations
@@ -24,7 +26,17 @@ import sys
 
 from insights.config import Config
 
-STAGE_NAMES = ("seed", "discover", "fetch", "extract", "verify", "publish", "all")
+STAGE_NAMES = (
+    "seed",
+    "discover",
+    "fetch",
+    "extract",
+    "verify",
+    "publish",
+    "all",
+    "serve",
+    "worker",
+)
 
 
 def _configure_logging() -> None:
@@ -61,6 +73,15 @@ def run_stage(stage: str, config: Config) -> int:
         publish.run(config)
     elif stage == "all":
         return run_all(config)
+    elif stage == "serve":
+        from insights.stages import serve
+
+        served = serve.run(config)
+        logging.getLogger("insights.serve").info("serve: drained %d request(s)", len(served))
+    elif stage == "worker":
+        from insights.worker import worker_main
+
+        return worker_main(config)
     else:
         print(f"Unknown stage: {stage!r}. Choose from: {', '.join(STAGE_NAMES)}", file=sys.stderr)
         return 2
