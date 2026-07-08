@@ -24,10 +24,10 @@ final class InsightsActorHeaderView: UIView {
 
     private enum Metrics {
         /// Circular portrait — a sidebar avatar, not the 215pt full-page one.
-        static let portraitSide: CGFloat = 96
-        static let nameFont = UIFont.systemFont(ofSize: 24, weight: .semibold)
-        static let bioFont = UIFont.systemFont(ofSize: 17, weight: .regular)
-        static let bioLineLimit = 4
+        static let portraitSide: CGFloat = 112
+        static let nameFont = UIFont.systemFont(ofSize: 28, weight: .semibold)
+        static let bioFont = UIFont.systemFont(ofSize: 20, weight: .regular)
+        static let bioLineLimit = 8
     }
 
     private let portraitContainer = UIView()

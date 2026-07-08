@@ -905,7 +905,7 @@ class PlayerContainerViewController: UIViewController {
                         vm?.selectSubtitleTrack(id: id)
                         self?.activeRailPanel?.dismissPanel()
                     }),
-                width: 452, from: rail.subtitlesButton)
+                width: 520, from: rail.subtitlesButton)
         }
         rail.onAudio = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
@@ -917,13 +917,13 @@ class PlayerContainerViewController: UIViewController {
                         if let id { vm?.selectAudioTrack(id: id) }
                         self?.activeRailPanel?.dismissPanel()
                     }),
-                width: 452, from: rail.audioButton)
+                width: 520, from: rail.audioButton)
         }
         rail.onInfo = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             self.presentRailPanel(
                 content: CardInfoView(metadata: vm.metadata, liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() }),
-                width: 480, from: rail.infoButton)
+                width: 560, from: rail.infoButton)
         }
         rail.onUpNext = { [weak self] in
             guard let self, let vm = self.viewModel, !self.upNextEpisodesCache.isEmpty else { return }
@@ -936,7 +936,7 @@ class PlayerContainerViewController: UIViewController {
                         Task { await vm?.playEpisode(episode) }
                         self?.activeRailPanel?.dismissPanel()
                     }),
-                width: 452, from: rail.upNextButton)
+                width: 520, from: rail.upNextButton)
             self.isShowingUpNextPanel = presented
         }
 
@@ -948,7 +948,7 @@ class PlayerContainerViewController: UIViewController {
                     trivia: self.insightsTriviaCache,
                     suppressedTriviaIDs: self.suppressedTriviaIDsCache,
                     hideSpoilers: SettingsStore.bool("hideTriviaSpoilers", default: true)),
-                width: 480, from: rail.insightsButton)
+                width: 640, from: rail.insightsButton)
         }
     }
 

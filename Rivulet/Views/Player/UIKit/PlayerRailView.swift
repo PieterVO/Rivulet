@@ -35,7 +35,7 @@ final class PlayerRailView: UIView {
         icon: UIImage(systemName: "info.circle"), accessibilityLabel: "Info",
         diameter: Metrics.buttonDiameter)
     let insightsButton = TransportControlButton(
-        icon: UIImage(systemName: "person.crop.circle"), accessibilityLabel: "Cast",
+        icon: UIImage(systemName: "sparkles"), accessibilityLabel: "Insights",
         diameter: Metrics.buttonDiameter)
     let upNextButton = TransportControlButton(
         icon: UIImage(systemName: "list.and.film"), accessibilityLabel: "Up Next",

@@ -3928,11 +3928,20 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// panel before the episode ends. Stops on success or tombstone; cancelled
     /// on item swap / teardown. No visible "loading" state — the panel stays
     /// calm whether or not this ever finds something.
+    /// Back-off for the mid-playback trivia re-check: a quick first probe (in
+    /// case the title was already generated), then a steady ~2-min cadence out
+    /// to ~20 min. Generation is on-demand and can wait behind an in-flight
+    /// scheduled title on the box, so a cold title can take 10-15 min to land;
+    /// the wide window lets the panel populate during THIS playback instead of
+    /// only on the next play. Stops early the instant trivia (or a tombstone)
+    /// arrives, and is cancelled on item swap / teardown.
+    private static let insightsRecheckDelays: [Int] = [20] + Array(repeating: 120, count: 10)
+
     private func scheduleInsightsRecheck(type: String, tmdbId: Int, season: Int?, episode: Int?) {
         insightsRecheckTask?.cancel()
         let generation = itemGeneration
         insightsRecheckTask = Task { [weak self] in
-            for delay in [90, 180, 300] {
+            for delay in Self.insightsRecheckDelays {
                 try? await Task.sleep(for: .seconds(delay))
                 guard let self, !Task.isCancelled, self.itemGeneration == generation else { return }
                 let result: TriviaFetchResult

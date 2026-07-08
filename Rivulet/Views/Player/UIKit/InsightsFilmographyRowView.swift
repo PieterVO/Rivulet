@@ -59,7 +59,7 @@ final class InsightsFilmographyRowView: UIView {
         clipsToBounds = false
 
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
-        headerLabel.font = .systemFont(ofSize: 19, weight: .semibold)
+        headerLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         headerLabel.textColor = .white
         addSubview(headerLabel)
 

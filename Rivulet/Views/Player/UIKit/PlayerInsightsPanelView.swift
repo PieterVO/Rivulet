@@ -15,7 +15,7 @@ import UIKit
 final class InsightsCastListView: UIView {
 
     private enum Metrics {
-        static let maxHeight: CGFloat = 520
+        static let maxHeight: CGFloat = 620
         // Horizontal inset for the row stack inside the scroll view so the
         // focused row's 1.02 scale doesn't overflow the clipping scroll
         // view's left/right edges. Matches UpNextListView.
@@ -27,6 +27,10 @@ final class InsightsCastListView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var rows: [InsightsCastRowButton] = []
+    /// Every focusable row in display order (trivia rows THEN cast rows). The
+    /// trivia rows are focusable purely so the tvOS focus engine can scroll to
+    /// them; without them here the panel can't scroll past the cast.
+    private var focusableRows: [UIView] = []
     /// Pin focus to the first row only on the FIRST landing; afterwards
     /// express no preference so the focus engine leaves focus where the
     /// user navigated (no bounce back). Matching flag in UpNextListView.
@@ -53,8 +57,9 @@ final class InsightsCastListView: UIView {
     ) {
         super.init(frame: .zero)
         setupContent()
-        buildRows(cast: cast, onSelect: onSelect)
+        // Trivia leads the panel; cast is the secondary section below it.
         buildTriviaSection(trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs, hideSpoilers: hideSpoilers)
+        buildCastSection(cast: cast, onSelect: onSelect)
     }
 
     @available(*, unavailable)
@@ -74,14 +79,7 @@ final class InsightsCastListView: UIView {
         addSubview(headerLabel)
         addSubview(scrollView)
 
-        headerLabel.attributedText = NSAttributedString(
-            string: "CAST",
-            attributes: [
-                .font: UIFont.systemFont(ofSize: 15, weight: .bold),
-                .foregroundColor: UIColor.white.withAlphaComponent(0.5),
-                .kern: 1.5,
-            ]
-        )
+        headerLabel.attributedText = Self.sectionHeaderText("INSIGHTS")
 
         // Scroll view caps content up to a maxHeight, so a short cast
         // hugs its rows while a long one scrolls.
@@ -111,59 +109,64 @@ final class InsightsCastListView: UIView {
         ])
     }
 
-    private func buildRows(cast: [MediaPerson], onSelect: @escaping (MediaPerson) -> Void) {
+    /// The cast section, secondary to trivia. If trivia leads above, it's set
+    /// off with extra space and a "CAST" subheader; cast-only (no trivia) shows
+    /// the rows directly under the fixed "INSIGHTS" header (no redundant label).
+    private func buildCastSection(cast: [MediaPerson], onSelect: @escaping (MediaPerson) -> Void) {
+        guard !cast.isEmpty else { return }
+        if let last = stack.arrangedSubviews.last {
+            stack.setCustomSpacing(Metrics.sectionSpacing, after: last)
+            let castHeader = UILabel()
+            castHeader.attributedText = Self.sectionHeaderText("CAST")
+            stack.addArrangedSubview(castHeader)
+            stack.setCustomSpacing(16, after: castHeader)
+        }
         for person in cast {
             let row = InsightsCastRowButton(person: person)
             row.onTap = { onSelect(person) }
             stack.addArrangedSubview(row)
             rows.append(row)
+            focusableRows.append(row)
         }
     }
 
-    /// Appends the read-only Trivia section below the cast rows in the SAME
-    /// stack/scroll view — no separate panel state, per the spec (Trivia
-    /// lives in the panel's existing cast-list state). Graceful absent: nil
-    /// trivia, or a trivia payload with no facts left after
-    /// hide-spoilers/suppression filtering, adds nothing at all — same rule
-    /// as cast's empty state.
+    /// Trivia LEADS the panel (its primary content). Read-only fact rows, each
+    /// focusable so the tvOS focus engine can scroll through them, followed by a
+    /// source attribution footer. Graceful absent: nil trivia, or no facts left
+    /// after hide-spoilers/suppression filtering, adds nothing at all.
     private func buildTriviaSection(trivia: TitleTrivia?, suppressedTriviaIDs: Set<String>, hideSpoilers: Bool) {
         guard let trivia else { return }
         let facts = trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs)
         guard !facts.isEmpty else { return }
 
-        // Extra breathing room between the cast rows and the trivia header,
-        // beyond the stack's uniform inter-row spacing (matches the gap the
-        // fixed "CAST" header keeps above the scroll view).
-        if !rows.isEmpty {
-            stack.setCustomSpacing(Metrics.sectionSpacing, after: rows[rows.count - 1])
-        }
-
-        let triviaHeader = UILabel()
-        triviaHeader.attributedText = NSAttributedString(
-            string: "TRIVIA",
-            attributes: [
-                .font: UIFont.systemFont(ofSize: 15, weight: .bold),
-                .foregroundColor: UIColor.white.withAlphaComponent(0.5),
-                .kern: 1.5,
-            ]
-        )
-        stack.addArrangedSubview(triviaHeader)
-        stack.setCustomSpacing(16, after: triviaHeader)
-
         for fact in facts {
-            stack.addArrangedSubview(InsightsTriviaRowView(fact: fact))
+            let row = InsightsTriviaRowView(fact: fact)
+            stack.addArrangedSubview(row)
+            focusableRows.append(row)
         }
 
         if !trivia.attribution.isEmpty {
             let footer = UILabel()
             footer.numberOfLines = 1
-            footer.font = .systemFont(ofSize: 13, weight: .regular)
+            footer.font = .systemFont(ofSize: 15, weight: .regular)
             footer.textColor = UIColor.white.withAlphaComponent(0.35)
             let names = trivia.attribution.map(\.name).joined(separator: " · ")
             footer.text = "Info from \(names)"
-            stack.setCustomSpacing(12, after: stack.arrangedSubviews.last ?? footer)
+            if let last = stack.arrangedSubviews.last {
+                stack.setCustomSpacing(12, after: last)
+            }
             stack.addArrangedSubview(footer)
         }
+    }
+
+    /// Uppercase section-header style shared by the fixed "INSIGHTS" header and
+    /// the inline "CAST" subheader.
+    static func sectionHeaderText(_ title: String) -> NSAttributedString {
+        NSAttributedString(string: title, attributes: [
+            .font: UIFont.systemFont(ofSize: 20, weight: .bold),
+            .foregroundColor: UIColor.white.withAlphaComponent(0.5),
+            .kern: 1.5,
+        ])
     }
 
     // MARK: - Teardown
@@ -183,14 +186,14 @@ final class InsightsCastListView: UIView {
         // Once focus has landed, express no preference so the engine keeps
         // focus on the current row (no bounce back to the first row).
         guard !hasPinnedInitialFocus else { return [] }
-        if let first = rows.first { return [first] }
+        if let first = focusableRows.first { return [first] }
         return [self]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         // Once focus enters any of our rows, stop pinning the first row.
-        if let next = context.nextFocusedView, rows.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
+        if let next = context.nextFocusedView, focusableRows.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
             hasPinnedInitialFocus = true
         }
     }
@@ -212,7 +215,7 @@ final class InsightsCastRowButton: UIControl {
     private static let focusedBackground = UIColor.white.withAlphaComponent(0.16)
     private static let restBorder = UIColor.clear.cgColor
     private static let focusedBorder = UIColor.white.withAlphaComponent(0.25).cgColor
-    private static let headshotSide: CGFloat = 68
+    private static let headshotSide: CGFloat = 82
 
     init(person: MediaPerson) {
         super.init(frame: .zero)
@@ -249,13 +252,13 @@ final class InsightsCastRowButton: UIControl {
         headshotView.addSubview(fallbackIcon)
 
         nameLabel.text = person.name
-        nameLabel.font = .systemFont(ofSize: 19, weight: .semibold)
+        nameLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         nameLabel.textColor = .white
         nameLabel.numberOfLines = 1
 
         let role = person.role ?? ""
         roleLabel.text = role
-        roleLabel.font = .systemFont(ofSize: 15, weight: .regular)
+        roleLabel.font = .systemFont(ofSize: 18, weight: .regular)
         roleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         roleLabel.numberOfLines = 1
         roleLabel.isHidden = role.isEmpty
@@ -336,34 +339,40 @@ final class InsightsCastRowButton: UIControl {
 
 // MARK: - InsightsTriviaRowView
 
-/// One trivia fact row: fact text + a small category label. Read-only —
-/// NOT focusable (no per-fact action exists yet; Report is P2b), so it
-/// carries none of `InsightsCastRowButton`'s focus/press machinery. Matches
-/// the cast rows' glass aesthetic (same rest background/corner radius) at
-/// rest, just without the focus-reactive state.
+/// One trivia fact row: fact text + a small category label. Read-only, but
+/// FOCUSABLE — on tvOS a non-focusable row is unreachable in a focus-driven
+/// scroll view, so making the fact rows focusable is what lets the panel scroll
+/// through the trivia at all. Focus gives a subtle highlight (no scale, to stay
+/// calm and read as read-only vs. the interactive cast rows); Select does
+/// nothing yet (Report is P2b).
 final class InsightsTriviaRowView: UIView {
 
     private let textLabel = UILabel()
     private let categoryLabel = UILabel()
 
+    private static let restBackground = UIColor.white.withAlphaComponent(0.06)
+    private static let focusedBackground = UIColor.white.withAlphaComponent(0.16)
+    private static let focusedBorder = UIColor.white.withAlphaComponent(0.25).cgColor
+
     init(fact: TriviaFact) {
         super.init(frame: .zero)
-        isUserInteractionEnabled = false
 
-        backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        backgroundColor = Self.restBackground
         layer.cornerRadius = 14
         layer.cornerCurve = .continuous
+        layer.borderWidth = 1
+        layer.borderColor = UIColor.clear.cgColor
 
         textLabel.text = fact.text
-        textLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        textLabel.font = .systemFont(ofSize: 25, weight: .regular)
         textLabel.textColor = .white
         textLabel.numberOfLines = 0
 
         categoryLabel.attributedText = NSAttributedString(
             string: fact.category.displayName.uppercased(),
             attributes: [
-                .font: UIFont.systemFont(ofSize: 12, weight: .semibold),
-                .foregroundColor: UIColor.white.withAlphaComponent(0.4),
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.45),
                 .kern: 1.0,
             ]
         )
@@ -371,15 +380,27 @@ final class InsightsTriviaRowView: UIView {
         let contentStack = UIStackView(arrangedSubviews: [textLabel, categoryLabel])
         contentStack.axis = .vertical
         contentStack.spacing = 8
+        contentStack.isUserInteractionEnabled = false
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(contentStack)
 
         NSLayoutConstraint.activate([
-            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
-            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: 18),
+            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -18),
+            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
         ])
+    }
+
+    override var canBecomeFocused: Bool { true }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let isFocused = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations({
+            self.backgroundColor = isFocused ? Self.focusedBackground : Self.restBackground
+            self.layer.borderColor = isFocused ? Self.focusedBorder : UIColor.clear.cgColor
+        }, completion: nil)
     }
 
     @available(*, unavailable)
