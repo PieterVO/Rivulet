@@ -19,5 +19,9 @@ services:
     restart: unless-stopped
     command: ["worker"]          # -> python -m insights worker (ENTRYPOINT is python -m insights)
     env_file: .env
+    # Lets the container reach an Ollama running on the Docker host — set
+    # INSIGHTS_LLM_BASE_URL=http://host.docker.internal:11434/v1 in .env.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data         # published.jsonl manifest, seed scratch, worker.lock
