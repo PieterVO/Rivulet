@@ -312,6 +312,14 @@ def stale_workitems_from_records(
     """
     out: list[WorkItem] = []
     for record in records:
+        if record.get("tmdb_id") is None:
+            # Legacy manifest line (pre-enriched-record shape) -- {"key",
+            # "published_at"} only. Can't be rebuilt into a WorkItem, so it
+            # doesn't participate in TTL refresh; it re-enters the new format
+            # once republished. Skip BEFORE is_stale so a stale old line
+            # can't reach WorkItem construction below.
+            logger.debug("stale check: skipping legacy manifest line without tmdb_id: %r", record.get("key"))
+            continue
         kind = object_kind(record.get("type", "movie"))
         stale = is_stale(
             generated_at=record.get("published_at", ""),

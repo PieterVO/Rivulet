@@ -465,3 +465,26 @@ def test_stale_selection_from_records() -> None:
     ]
     out = stale_workitems_from_records(records, now=now, config=_cfg(), current_pipeline_version=1)
     assert [w.tmdb_id for w in out] == [1]
+
+
+def test_stale_selection_skips_legacy_lines() -> None:
+    # Legacy manifest lines (written by earlier commits, before the enriched
+    # record shape existed) are just {"key", "published_at"} -- no tmdb_id.
+    # Once old enough to be stale, these must not crash the scheduled seed.
+    now = datetime(2026, 7, 7, tzinfo=timezone.utc)
+    records = [
+        {"key": "movie:1", "published_at": "2020-01-01T00:00:00Z"},  # legacy, no tmdb_id
+        {
+            "key": "movie:2",
+            "type": "movie",
+            "tmdb_id": 2,
+            "title": "B",
+            "year": 2026,
+            "release_date": "2026-06-17",
+            "covered": True,
+            "published_at": "2026-06-22T00:00:00Z",
+            "pipeline_version": 1,
+        },  # young, 15d old -> stale
+    ]
+    out = stale_workitems_from_records(records, now=now, config=_cfg(), current_pipeline_version=1)
+    assert [w.tmdb_id for w in out] == [2]
