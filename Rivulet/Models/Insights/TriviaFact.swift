@@ -19,9 +19,13 @@ nonisolated struct TriviaFact: Codable, Identifiable, Sendable, Hashable {
     /// 0 = no spoiler · 1 = this title's plot · 2 = later episodes/seasons.
     let spoiler: Int
     let source: TriviaSource
+    /// How interesting the fact is, 1-10, scored by the pipeline's extraction
+    /// LLM. `nil` when absent (facts published before the field existed) — a
+    /// distinct from a real low score, never eligible for Top 10 tab.
+    let interest: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, text, category, spoiler, source
+        case id, text, category, spoiler, source, interest
     }
 
     init(from decoder: Decoder) throws {
@@ -38,6 +42,7 @@ nonisolated struct TriviaFact: Codable, Identifiable, Sendable, Hashable {
         // or a future schema change, where showing-by-default is the wrong risk.
         spoiler = (try? c.decode(Int.self, forKey: .spoiler)) ?? 2
         source = try c.decode(TriviaSource.self, forKey: .source)
+        interest = try? c.decode(Int.self, forKey: .interest)
     }
 }
 
@@ -113,5 +118,23 @@ extension TitleTrivia {
                 let ri = TriviaCategory.allCases.firstIndex(of: rhs.category) ?? Int.max
                 return li < ri
             }
+    }
+
+    /// Curated "Top 10" tab: facts scoring >= 7 interest, sorted highest
+    /// first, capped at 10. A `nil` interest (old-schema fact, not yet
+    /// regenerated under the scoring pipeline) is never eligible.
+    ///
+    /// - `hideSpoilers`: when true, drop any fact with `spoiler >= 1`.
+    /// - `suppressed`: fact ids to exclude (auto-hidden by Worker).
+    func topTenFacts(hideSpoilers: Bool, suppressed: Set<String>) -> [TriviaFact] {
+        facts
+            .filter { !suppressed.contains($0.id) }
+            .filter { hideSpoilers ? $0.spoiler == 0 : true }
+            .filter { $0.interest != nil && $0.interest! >= 7 }
+            .sorted { lhs, rhs in
+                (lhs.interest ?? 0) > (rhs.interest ?? 0)
+            }
+            .prefix(10)
+            .map { $0 }
     }
 }

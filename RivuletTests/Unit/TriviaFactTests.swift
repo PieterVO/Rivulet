@@ -90,4 +90,102 @@ final class TriviaFactTests: XCTestCase {
         let cats = visible.map { $0.category }
         XCTAssertEqual(cats, [.production, .casting, .reference, .other])
     }
+
+    // MARK: - interest / topTenFacts
+
+    private let payloadWithInterest = """
+    {
+      "id": "tmdb://27205",
+      "type": "movie",
+      "generatedAt": "2026-07-07T00:00:00Z",
+      "pipelineVersion": 2,
+      "attribution": [ { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } ],
+      "facts": [
+        { "id": "f_high1", "text": "Highest interest fact.",
+          "category": "production", "spoiler": 0, "interest": 10,
+          "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } },
+        { "id": "f_high2", "text": "Second highest interest fact.",
+          "category": "casting", "spoiler": 0, "interest": 9,
+          "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } },
+        { "id": "f_borderline", "text": "Borderline interest fact.",
+          "category": "reference", "spoiler": 0, "interest": 7,
+          "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } },
+        { "id": "f_low", "text": "Low interest fact.",
+          "category": "goof", "spoiler": 0, "interest": 3,
+          "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } },
+        { "id": "f_nointerest", "text": "No interest field at all (old-schema fact).",
+          "category": "lore", "spoiler": 0,
+          "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } },
+        { "id": "f_spoiler_high", "text": "High interest but a spoiler.",
+          "category": "production", "spoiler": 1, "interest": 10,
+          "source": { "name": "Wikipedia", "url": "https://en.wikipedia.org/wiki/Inception" } }
+      ]
+    }
+    """.data(using: .utf8)!
+
+    func testMissingInterestFieldDecodesAsNilNotAThrow() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let noInterestFact = trivia.facts.first { $0.id == "f_nointerest" }
+        XCTAssertNotNil(noInterestFact, "decode must not throw or drop the fact")
+        XCTAssertNil(noInterestFact?.interest)
+    }
+
+    func testInterestFieldDecodesPresentValue() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let highFact = trivia.facts.first { $0.id == "f_high1" }
+        XCTAssertEqual(highFact?.interest, 10)
+    }
+
+    func testTopTenFactsExcludesNilAndBelowThresholdInterest() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        let ids = topTen.map(\.id)
+        XCTAssertFalse(ids.contains("f_low"), "interest 3 is below the >=7 threshold")
+        XCTAssertFalse(ids.contains("f_nointerest"), "nil interest is never eligible for Top 10")
+    }
+
+    func testTopTenFactsRespectsHideSpoilers() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let topTenHidden = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        XCTAssertFalse(topTenHidden.map(\.id).contains("f_spoiler_high"), "spoiler facts must be excluded when hideSpoilers is true, even at interest 10")
+
+        let topTenShown = trivia.topTenFacts(hideSpoilers: false, suppressed: [])
+        XCTAssertTrue(topTenShown.map(\.id).contains("f_spoiler_high"))
+    }
+
+    func testTopTenFactsSortedDescendingByInterest() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        let scores = topTen.map { $0.interest ?? 0 }
+        XCTAssertEqual(scores, scores.sorted(by: >), "must be sorted descending by interest")
+        XCTAssertEqual(topTen.first?.id, "f_high1")
+    }
+
+    func testTopTenFactsCapsAtTen() throws {
+        let manyHighFactsJSON = """
+        {
+          "id": "tmdb://1", "type": "movie", "generatedAt": "", "pipelineVersion": 2,
+          "attribution": [],
+          "facts": [
+            \((1...15).map { "{ \"id\": \"f_\($0)\", \"text\": \"Fact \($0).\", \"category\": \"production\", \"spoiler\": 0, \"interest\": 8, \"source\": { \"name\": \"Wikipedia\", \"url\": \"https://w/x\" } }" }.joined(separator: ",\n"))
+          ]
+        }
+        """.data(using: .utf8)!
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: manyHighFactsJSON)
+        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        XCTAssertEqual(topTen.count, 10, "15 qualifying facts must cap at 10")
+    }
+
+    func testTopTenFactsReturnsFewerThanTenWhenFewQualify() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        // Only f_high1 (10), f_high2 (9), f_borderline (7) qualify with hideSpoilers=true.
+        XCTAssertEqual(topTen.count, 3)
+    }
+
+    func testTopTenFactsRespectsSuppression() throws {
+        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
+        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: ["f_high1"])
+        XCTAssertFalse(topTen.map(\.id).contains("f_high1"))
+    }
 }
