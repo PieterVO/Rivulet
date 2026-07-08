@@ -178,3 +178,31 @@ def test_run_bounds_batch_to_ondemand_max_batch(tmp_path, monkeypatch):
 
     assert len(served) <= 8
     assert queue.list_pending_calls == [8]
+
+
+def test_run_work_items_resets_intermediate_state(tmp_path, monkeypatch):
+    # The batch stages are resumable (they merge prior on-disk output), so the
+    # worker's repeated single-title run_work_items calls would otherwise bleed a
+    # prior title's fetched/extracted/verified state into the next. run_work_items
+    # must start each batch from a clean intermediate slate -- but keep the
+    # persistent published.jsonl manifest.
+    config = make_config(data_dir=tmp_path)
+    intermediates = ("sourcemap.jsonl", "fetched_pages.jsonl", "facts_raw.jsonl", "facts_verified.jsonl")
+    for name in intermediates:
+        (tmp_path / name).write_text('{"key": "stale:1"}\n')
+    (tmp_path / "published.jsonl").write_text('{"key": "keep:1", "published_at": "2026-01-01T00:00:00Z"}\n')
+
+    import insights.stages.serve as serve_mod
+    from insights.stages.seed import WorkItem
+
+    monkeypatch.setattr(serve_mod.discover, "run", lambda cfg: [])
+    monkeypatch.setattr(serve_mod.fetch, "run", lambda cfg: {})
+    monkeypatch.setattr(serve_mod.extract, "run", lambda cfg, pages: {})
+    monkeypatch.setattr(serve_mod.verify, "run", lambda cfg, facts: [])
+    monkeypatch.setattr(serve_mod.publish, "run", lambda cfg: [])
+
+    serve_mod.run_work_items(config, [WorkItem(tmdb_id=1, type="movie", title="A", year=2020)])
+
+    for name in intermediates:
+        assert not (tmp_path / name).exists(), f"{name} should be reset per batch"
+    assert "keep:1" in (tmp_path / "published.jsonl").read_text()  # manifest preserved

@@ -59,6 +59,27 @@ def queue_to_work_items(requests: list[dict], published_keys: set[str]) -> list[
     return out
 
 
+# Per-batch stage outputs. The batch stages are resumable -- each merges its
+# prior on-disk output (`dict(already_*)`) -- which is correct for one big batch
+# but bleeds state across the worker's repeated single-title run_work_items calls
+# (a prior title's fetched/extracted/verified rows would be re-processed and, in
+# publish, mis-attributed). Reset them per batch. published.jsonl (the persistent
+# manifest) and reports/ are deliberately NOT in this list.
+_INTERMEDIATE_FILES = (
+    "sourcemap.jsonl",
+    "fetched_pages.jsonl",
+    "facts_raw.jsonl",
+    "facts_verified.jsonl",
+)
+
+
+def _reset_intermediate_state(config: Config) -> None:
+    """Delete the per-batch intermediate stage outputs so each run_work_items
+    call processes ONLY its own work items (no cross-title bleed)."""
+    for name in _INTERMEDIATE_FILES:
+        (config.data_dir / name).unlink(missing_ok=True)
+
+
 def run_work_items(config: Config, work_items: list[WorkItem]) -> list[str]:
     """Write `work_items` as this run's seed and run discover->publish on just
     them, returning the served `WorkItem.key` strings.
@@ -72,6 +93,7 @@ def run_work_items(config: Config, work_items: list[WorkItem]) -> list[str]:
     """
     if not work_items:
         return []
+    _reset_intermediate_state(config)
     write_seed_jsonl(work_items, config.data_dir / "seed.jsonl")
     discover.run(config)
     pages_by_key = fetch.run(config)
