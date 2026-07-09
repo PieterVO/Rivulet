@@ -20,8 +20,9 @@ enum TopShelfImageCompositor {
         return renderer.image { ctx in
             let canvasRect = CGRect(origin: .zero, size: canvasSize)
 
-            // Backdrop: aspect-fill.
-            drawAspectFill(backdrop, in: canvasRect)
+            // Backdrop: aspect-fill. Clip is scoped so it can't affect the
+            // gradient/logo draws that follow.
+            drawAspectFill(backdrop, in: canvasRect, cgContext: ctx.cgContext)
 
             // Subtle bottom gradient for caption legibility.
             if let gradient = CGGradient(
@@ -44,7 +45,8 @@ enum TopShelfImageCompositor {
     }
 
     /// Draws `image` into `rect`, aspect-filling (cropping to fill, no letterboxing).
-    private static func drawAspectFill(_ image: UIImage, in rect: CGRect) {
+    /// The clip is scoped to a saved graphics state so it can't affect later draws.
+    private static func drawAspectFill(_ image: UIImage, in rect: CGRect, cgContext: CGContext) {
         let imageSize = image.size
         guard imageSize.width > 0, imageSize.height > 0 else { return }
 
@@ -70,8 +72,10 @@ enum TopShelfImageCompositor {
                 height: scaledHeight)
         }
 
-        UIRectClip(rect)
+        cgContext.saveGState()
+        cgContext.clip(to: rect)
         image.draw(in: drawRect)
+        cgContext.restoreGState()
     }
 
     /// Computes the logo's draw rect: top-center, area-budgeted to the logo's own aspect ratio,

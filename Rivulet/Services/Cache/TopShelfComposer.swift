@@ -24,8 +24,8 @@ enum TopShelfComposer {
             var compositeFileName: String? = nil
 
             // 1. Resolve clearLogo URL (via full/grandparent metadata, cached).
-            if let sourceKey = sourceRatingKey(for: item),
-               let full = await fullMetadata(for: sourceKey, serverURL: serverURL, token: token) {
+            //    fullMetadata() handles episode → grandparent (show) resolution.
+            if let full = await fullMetadata(for: item.ratingKey, serverURL: serverURL, token: token) {
                 logoURLString = TopShelfLogoResolver.logoURLString(from: full, serverURL: serverURL, token: token)
             }
 
@@ -69,13 +69,10 @@ enum TopShelfComposer {
 
     // MARK: - Helpers
 
-    private static func sourceRatingKey(for item: TopShelfItem) -> String? {
-        // TopShelfItem doesn't carry grandparentRatingKey; for episodes we resolve
-        // the show via the item's own full metadata (which carries grandparent keys).
-        // Fetch the item's own metadata first, then use TopShelfLogoResolver.
-        item.ratingKey
-    }
-
+    /// Full metadata carrying the clearLogo. `TopShelfItem` doesn't carry
+    /// `grandparentRatingKey`, so for episodes we fetch the item's own metadata
+    /// first (which carries the grandparent key), then resolve the grandparent
+    /// (show) metadata where the show logo lives.
     private static func fullMetadata(for ratingKey: String, serverURL: String, token: String) async -> PlexMetadata? {
         if let cached = PlexDataStore.shared.getCachedFullMetadata(for: ratingKey) {
             // For episodes, the show logo lives on the grandparent — resolve that.
