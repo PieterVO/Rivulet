@@ -10,15 +10,16 @@
 //  Above the list/actor content sits a pill tab bar (Top 10 | Cast |
 //  category pills) that switches which tab-scoped row set the list shows.
 //
-//  Menu handling (mirrors the panel's own Menu ownership rather than
-//  fighting it): in `.actor` state Menu is CONSUMED here (reverse-crossfade
-//  back to `.list`); in `.list` state Menu is NOT consumed, so it bubbles to
-//  `PlayerRailPanelView.pressesBegan`, which dismisses the whole panel.
+//  Menu handling: `PlayerRailPanelView.pressesBegan` owns Menu for the whole
+//  panel and gives this content first refusal via `RailPanelMenuHandling` —
+//  in `.actor` state `handleMenuPress()` reverse-crossfades back to `.list`
+//  and the panel stays open; in `.list` state it declines and the panel
+//  dismisses.
 //
 
 import UIKit
 
-final class InsightsPanelContainerView: UIView {
+final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
 
     private enum Metrics {
         /// Height cap for the `.actor` state — matches PlayerRailPanelView's
@@ -226,25 +227,65 @@ final class InsightsPanelContainerView: UIView {
 
     // MARK: - Focus
 
+    /// Transient directional-escape target. The tvOS focus engine ignores a
+    /// `setNeedsFocusUpdate()` from an environment that does not CONTAIN the
+    /// currently-focused item, so the tab bar can never pull focus to itself
+    /// — the request must come from this container (the common ancestor of
+    /// the focused row and the tab bar), with `preferredFocusEnvironments`
+    /// pointing at the escape target for the duration of that one update.
+    private var focusEscapeTarget: UIView?
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let focusEscapeTarget { return [focusEscapeTarget] }
         switch state {
         case .list: return [listView]
         case .actor: return actorView.map { [$0] } ?? [listView]
         }
     }
 
-    // MARK: - Menu handling
+    private func moveFocus(to target: UIView) {
+        focusEscapeTarget = target
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        focusEscapeTarget = nil
+    }
 
+    /// Directional escapes across the list/tab-bar boundary. Presses are
+    /// delivered to the focused view and bubble UP the responder chain, so
+    /// this override runs for any press while focus is on a row or pill
+    /// (both are descendants). The focus engine's own directional search
+    /// does not reliably cross the scroll-view boundaries between the two,
+    /// so both crossings are driven explicitly:
+    /// - Up on the list's first row → the tab bar (its own
+    ///   `preferredFocusEnvironments` picks the selected pill).
+    /// - Down from a pill → the list (lands per the list's own preference).
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses where press.type == .menu {
-            if state == .actor {
-                reverseCrossfadeToList()
-                return  // consumed — stays open, back to the cast list
+        if state == .list, let tabBar {
+            for press in presses {
+                if press.type == .upArrow, listView.isFocusOnFirstRow() {
+                    moveFocus(to: tabBar)
+                    return
+                }
+                if press.type == .downArrow, tabBar.containsFocus {
+                    moveFocus(to: listView)
+                    return
+                }
             }
-            // .list state: fall through to super so this bubbles to
-            // PlayerRailPanelView, which owns closing the whole panel.
-            break
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    // MARK: - Menu handling
+
+    /// Content-first-refusal on Menu, called from
+    /// `PlayerRailPanelView.pressesBegan` (see `RailPanelMenuHandling`).
+    /// Not a `pressesBegan` override here: in `.actor` state nothing inside
+    /// this view may be focusable (bio header, filmography still loading),
+    /// so focus falls to the panel view itself — and a press delivered to
+    /// the panel bubbles UP from it, never down into its children.
+    func handleMenuPress() -> Bool {
+        guard state == .actor else { return false }
+        reverseCrossfadeToList()
+        return true
     }
 }

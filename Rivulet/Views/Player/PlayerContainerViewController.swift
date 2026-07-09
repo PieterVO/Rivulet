@@ -285,7 +285,9 @@ class PlayerContainerViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Ensure we're first responder to intercept all button events
+        // Fallback press target for when NOTHING holds focus. Presses go to
+        // the focused view and bubble up the responder chain; the first
+        // responder only receives them directly in the focusless case.
         becomeFirstResponder()
     }
 
@@ -479,7 +481,15 @@ class PlayerContainerViewController: UIViewController {
             } else if vm.isScrubbing {
                 vm.cancelScrub()
             } else if let panel = activeRailPanel {
-                panel.dismissPanel()
+                // Edge case only: while focus is inside the panel, Menu is
+                // consumed by PlayerRailPanelView.pressesBegan (presses go
+                // to the focused view and bubble up — they reach the panel
+                // before this VC). This branch covers a Menu press arriving
+                // with focus OUTSIDE the panel; same content-first-refusal
+                // contract, see RailPanelMenuHandling.
+                if !panel.contentHandlesMenuPress() {
+                    panel.dismissPanel()
+                }
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {

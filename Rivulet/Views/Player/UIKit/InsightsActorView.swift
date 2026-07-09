@@ -46,6 +46,9 @@ final class InsightsActorView: UIView {
     private enum Metrics {
         static let rowSpacing: CGFloat = 20
         static let rowInset: CGFloat = 8
+        /// Offset per Up/Down edge click while the header holds focus —
+        /// same step CardInfoView's InfoScrollView uses.
+        static let clickStep: CGFloat = 240
     }
 
     private let person: MediaPerson
@@ -184,12 +187,13 @@ final class InsightsActorView: UIView {
     // MARK: - Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // Pin to the header/first row on first landing only; once focus has
-        // moved into the content, express no preference so the container's
-        // own re-presentation of this view (e.g. rapid actor switch) doesn't
+        // Pin to the header on first landing only (it is always focusable,
+        // even before the filmography loads); once focus has moved into the
+        // content, express no preference so the container's own
+        // re-presentation of this view (e.g. rapid actor switch) doesn't
         // yank focus back to the top.
         guard !hasPinnedInitialFocus else { return [] }
-        return [scrollView]
+        return [headerView]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
@@ -197,6 +201,44 @@ final class InsightsActorView: UIView {
         guard let next = context.nextFocusedView, next.isDescendant(of: scrollView) else { return }
         hasPinnedInitialFocus = true
         scrollFocusedContentIntoView(next, coordinator: coordinator)
+    }
+
+    /// While the header holds focus, Up/Down edge clicks step the panel's
+    /// scroll instead of moving focus — this is what makes a bio taller
+    /// than the panel readable at all (a single focusable block can't be
+    /// revealed by focus-driven row-hopping). Runs here because presses are
+    /// delivered to the focused view (the header) and bubble up through
+    /// this ancestor. Down stops consuming once the header's bottom is
+    /// visible, so the press falls through to the focus engine and focus
+    /// moves on to the filmography rows; Up stops consuming at the top.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .upArrow || press.type == .downArrow {
+            if headerView.isFocused, step(up: press.type == .upArrow) {
+                return
+            }
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    /// Steps the scroll one click in the given direction. Returns false —
+    /// leaving the press to the focus engine — when there is nothing left
+    /// to reveal in that direction.
+    private func step(up: Bool) -> Bool {
+        let target: CGFloat
+        if up {
+            guard scrollView.contentOffset.y > 0.5 else { return false }
+            target = scrollView.contentOffset.y - Metrics.clickStep
+        } else {
+            let headerFrame = headerView.convert(headerView.bounds, to: scrollView)
+            let visibleBottom = scrollView.contentOffset.y + scrollView.bounds.height
+            guard headerFrame.maxY > visibleBottom + 0.5 else { return false }
+            target = scrollView.contentOffset.y + Metrics.clickStep
+        }
+        let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+        let clamped = min(max(0, target), maxY)
+        guard abs(clamped - scrollView.contentOffset.y) > 0.5 else { return false }
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: clamped), animated: true)
+        return true
     }
 
     /// Self-driven vertical scroll (scrollView.isScrollEnabled = false
@@ -209,7 +251,15 @@ final class InsightsActorView: UIView {
         let visibleBottom = visibleTop + scrollView.bounds.height
         var targetY = scrollView.contentOffset.y
         if focusedFrameInScroll.minY < visibleTop {
-            targetY = focusedFrameInScroll.minY
+            // A view taller than the viewport (the header with a long bio)
+            // regaining focus from below: align its BOTTOM, not its top —
+            // jumping to the bio's first line would lose the reading
+            // position right above the filmography the user came from.
+            if focusedFrameInScroll.height > scrollView.bounds.height {
+                targetY = focusedFrameInScroll.maxY - scrollView.bounds.height
+            } else {
+                targetY = focusedFrameInScroll.minY
+            }
         } else if focusedFrameInScroll.maxY > visibleBottom {
             targetY = focusedFrameInScroll.maxY - scrollView.bounds.height
         } else {

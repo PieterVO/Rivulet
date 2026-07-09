@@ -82,7 +82,9 @@ final class InsightsTabBarView: UIView {
             let pill = InsightsTabPillView()
             pill.configure(title: Self.title(for: tab), isSelected: tab == selected)
             pill.onSelected = { [weak self] in self?.handlePillSelected(tab) }
-            pill.onFocused = { [weak self] coordinator in self?.scrollPillIntoView(pill, coordinator: coordinator) }
+            pill.onFocused = { [weak self] coordinator in
+                self?.scrollPillIntoView(pill, coordinator: coordinator)
+            }
             stack.addArrangedSubview(pill)
             pills.append((tab, pill))
         }
@@ -160,6 +162,23 @@ final class InsightsTabBarView: UIView {
         case .cast: return "Cast"
         case .category(let category): return category.tabDisplayName
         }
+    }
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let selectedPill = pills.first(where: { $0.tab == selected })?.view {
+            return [selectedPill]
+        }
+        return pills.first.map { [$0.view] } ?? []
+    }
+
+    /// Whether focus currently sits on one of this bar's pills. Consulted
+    /// by `InsightsPanelContainerView.pressesBegan` to decide whether a
+    /// Down press should escape back into the list below (the reverse of
+    /// the Up escape — the focus engine's own directional search does not
+    /// reliably cross the scroll-view boundaries between the two).
+    var containsFocus: Bool {
+        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return false }
+        return focused.isDescendant(of: self)
     }
 }
 

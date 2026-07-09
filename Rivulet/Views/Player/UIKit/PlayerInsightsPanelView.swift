@@ -233,6 +233,18 @@ final class InsightsCastListView: UIView {
         scrollFocusedRowIntoView(row, coordinator: coordinator)
     }
 
+    /// Consulted by `InsightsPanelContainerView.pressesBegan` to decide
+    /// whether an Up press should escape to the tab bar above (the focus
+    /// engine's own directional search does not reliably cross this list's
+    /// scroll-view boundary). True only when focus is currently on this
+    /// list's first row.
+    func isFocusOnFirstRow() -> Bool {
+        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView,
+              let first = focusableRows.first
+        else { return false }
+        return focused === first || focused.isDescendant(of: first)
+    }
+
     /// Self-driven vertical scroll (scrollView.isScrollEnabled = false above)
     /// — keeps the focused row inside the visible window. Mirrors
     /// InsightsFilmographyRowView's identical pattern for a horizontal

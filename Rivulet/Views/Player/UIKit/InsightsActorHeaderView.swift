@@ -12,12 +12,15 @@
 //  this is a small, purpose-built sidebar header that never renders wider
 //  than the panel gives it.
 //
-//  Non-focusable, like `PersonHeaderCell` — focus falls straight through to
-//  the filmography rows below. No MORE affordance / full-bio popup: the
-//  spec for this flow is "no VC presentation," so the bio is just an
-//  unbounded multi-line label; the panel's own vertical scroll (see
-//  InsightsActorView's self-driven contentOffset) reveals a bio longer
-//  than fits on first paint, rather than truncating it.
+//  FOCUSABLE, unlike `PersonHeaderCell` — on tvOS a non-focusable block in
+//  a focus-driven scroll view is unreachable, and with the filmography rows
+//  hidden until data loads there would otherwise be NOTHING focusable in the
+//  actor state at all (focus would fall out to the hosting panel view). The
+//  focus treatment is a quiet wash (no scale — read-only, like the trivia
+//  rows). No MORE affordance / full-bio popup: the spec for this flow is
+//  "no VC presentation," so the bio is just an unbounded multi-line label;
+//  while the header is focused, Up/Down clicks step the panel's scroll
+//  (see InsightsActorView.pressesBegan) to reveal a bio longer than fits.
 //
 
 import UIKit
@@ -51,6 +54,8 @@ final class InsightsActorHeaderView: UIView {
 
     private func setUp() {
         clipsToBounds = false
+        layer.cornerRadius = 14
+        layer.cornerCurve = .continuous
 
         portraitContainer.translatesAutoresizingMaskIntoConstraints = false
         portraitContainer.clipsToBounds = true
@@ -178,7 +183,18 @@ final class InsightsActorHeaderView: UIView {
         }
     }
 
-    // Plain content view: never a focus target itself, matching
-    // PersonHeaderCell — focus falls through to the filmography rows.
-    override var canBecomeFocused: Bool { false }
+    // MARK: - Focus
+
+    // Focusable so the actor state always has a focus target (filmography
+    // rows are hidden until data loads) and so Up/Down clicks can step the
+    // bio scroll while it holds focus — see the header comment.
+    override var canBecomeFocused: Bool { true }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let isFocused = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations({
+            self.backgroundColor = isFocused ? UIColor.white.withAlphaComponent(0.08) : .clear
+        }, completion: nil)
+    }
 }

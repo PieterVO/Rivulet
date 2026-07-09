@@ -12,6 +12,31 @@
 
 import UIKit
 
+/// Conformed to by rail-panel content that has its own internal Menu
+/// handling (e.g. `InsightsPanelContainerView`'s actor-crossfade
+/// reverse-navigation) rather than always wanting Menu to close the whole
+/// panel outright.
+///
+/// tvOS delivers presses to the FOCUSED view and bubbles them UP the
+/// responder chain (first-responder status is irrelevant while something is
+/// focused). While the panel is open its focus fence keeps focus inside it,
+/// so `.menu` lands on `PlayerRailPanelView.pressesBegan` — an ancestor of
+/// every focused descendant — before it could ever reach
+/// `PlayerContainerViewController`. That override, and (for the
+/// focus-outside-panel edge case) `handleMenuButton()`, both consult this
+/// protocol first and only dismiss the whole panel if the content declines.
+///
+/// The content itself can't own this in its own `pressesBegan`: in states
+/// where nothing inside the content is focusable, focus falls onto the
+/// panel view itself, and a press delivered to the panel never visits its
+/// CHILDREN — bubbling goes up, not down.
+protocol RailPanelMenuHandling {
+    /// Return true if this content fully handled Menu itself (e.g. animated
+    /// back to a sub-list) and the panel should stay open. Return false to
+    /// let the panel dismiss as normal.
+    func handleMenuPress() -> Bool
+}
+
 final class PlayerRailPanelView: UIView {
 
     private enum Metrics {
@@ -25,6 +50,16 @@ final class PlayerRailPanelView: UIView {
     }
 
     var onDismiss: (() -> Void)?
+
+    /// Gives the hosted content first refusal on Menu — see
+    /// `RailPanelMenuHandling`'s doc comment for why this exists. Called
+    /// from this panel's own `pressesBegan` (the live path while focus is
+    /// inside the panel) and from
+    /// `PlayerContainerViewController.handleMenuButton()` (the edge case
+    /// where a Menu press arrives with focus outside the panel).
+    func contentHandlesMenuPress() -> Bool {
+        (content as? RailPanelMenuHandling)?.handleMenuPress() ?? false
+    }
 
     private let backgroundEffectView: UIVisualEffectView
     private let tintView = UIView()
@@ -197,7 +232,16 @@ final class PlayerRailPanelView: UIView {
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .menu {
-            dismissPanel()
+            // This is where Menu genuinely arrives while the panel is open:
+            // tvOS delivers presses to the FOCUSED view and bubbles them up,
+            // and the panel fences focus inside itself, so this override sits
+            // on the chain between every focused descendant and the container
+            // VC. Content gets first refusal (e.g. Insights' actor state
+            // reverse-crossfades back to its list) before the whole panel
+            // dismisses.
+            if !contentHandlesMenuPress() {
+                dismissPanel()
+            }
             return
         }
         super.pressesBegan(presses, with: event)
