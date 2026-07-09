@@ -86,4 +86,41 @@ final class TopShelfCache: Sendable {
     func clear() {
         sharedDefaults?.removeObject(forKey: userDefaultsKey)
     }
+
+    // MARK: - Composite image files (AppGroup/TopShelf/*.jpg)
+
+    private var compositeDirName: String { "TopShelf" }
+
+    /// The TopShelf composites directory, created if needed. nil if no container.
+    func compositeDirectoryURL() -> URL? {
+        guard let base = containerURL else { return nil }
+        let dir = base.appendingPathComponent(compositeDirName, isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    func compositeFileURL(fileName: String) -> URL? {
+        compositeDirectoryURL()?.appendingPathComponent(fileName)
+    }
+
+    @discardableResult
+    func writeComposite(_ data: Data, fileName: String) -> Bool {
+        guard let url = compositeFileURL(fileName: fileName) else { return false }
+        do { try data.write(to: url, options: .atomic); return true }
+        catch { print("TopShelfCache: failed to write composite \(fileName): \(error)"); return false }
+    }
+
+    /// Delete any *.jpg in the composites dir whose name is not in `fileNames`.
+    func pruneComposites(keeping fileNames: Set<String>) {
+        guard let dir = compositeDirectoryURL(),
+              let contents = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        else { return }
+        for url in contents where url.pathExtension.lowercased() == "jpg" {
+            if !fileNames.contains(url.lastPathComponent) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+    }
 }

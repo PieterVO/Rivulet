@@ -16,6 +16,12 @@ final class TopShelfCache: Sendable {
 
     private init() {}
 
+    // MARK: - Container Access
+
+    private var containerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+    }
+
     // MARK: - UserDefaults Suite (more reliable than file access)
 
     private var sharedDefaults: UserDefaults? {
@@ -85,5 +91,15 @@ final class TopShelfCache: Sendable {
     /// Remove all cached Top Shelf items
     func clear() {
         sharedDefaults?.removeObject(forKey: userDefaultsKey)
+    }
+
+    // MARK: - Composite image files (AppGroup/TopShelf/*.jpg)
+
+    private var compositeDirName: String { "TopShelf" }
+
+    func compositeFileURL(fileName: String) -> URL? {
+        containerURL?
+            .appendingPathComponent(compositeDirName, isDirectory: true)
+            .appendingPathComponent(fileName)
     }
 }
