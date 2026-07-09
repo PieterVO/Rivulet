@@ -47,6 +47,10 @@ final class InsightsCastListView: UIView {
     /// focus on that tab's first row rather than leaving it stranded on a
     /// now-hidden row from the previous tab.
     private var hasPinnedInitialFocus = false
+    /// The row focus is currently on, held by `preferredFocusEnvironments`
+    /// so a denied edge move re-resolves in place instead of looping to the
+    /// first row (see there).
+    private weak var lastFocusedRow: UIView?
 
     private let cast: [MediaPerson]
     private let trivia: TitleTrivia?
@@ -214,22 +218,26 @@ final class InsightsCastListView: UIView {
     // MARK: - Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // Once focus has landed, express no preference so the engine keeps
-        // focus on the current row (no bounce back to the first row).
-        guard !hasPinnedInitialFocus else { return [] }
+        // After the first landing, hold the CURRENT row so a denied edge move
+        // re-resolves in place instead of looping to the first row (see
+        // CardTrackListView for the full rationale). Directional row-to-row
+        // moves never consult this.
+        if hasPinnedInitialFocus {
+            return lastFocusedRow.map { [$0] } ?? []
+        }
         if let first = focusableRows.first { return [first] }
         return [self]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        // Once focus enters any of our rows, stop pinning the first row.
-        if let next = context.nextFocusedView, focusableRows.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
-            hasPinnedInitialFocus = true
-        }
         guard let next = context.nextFocusedView,
               let row = focusableRows.first(where: { next.isDescendant(of: $0) || next === $0 })
         else { return }
+        // Once focus enters any of our rows, stop pinning the first row and
+        // remember which row holds focus (see preferredFocusEnvironments).
+        hasPinnedInitialFocus = true
+        lastFocusedRow = row
         scrollFocusedRowIntoView(row, coordinator: coordinator)
     }
 
@@ -448,6 +456,17 @@ final class InsightsTriviaRowView: UIView {
         textLabel.textColor = .white
         textLabel.numberOfLines = 0
         textLabel.preferredMaxLayoutWidth = contentWidth
+        // Required vertical compression resistance so the row NEVER collapses
+        // below its wrapped text. The hosting scroll view couples its own
+        // (panel-capped) height to the row stack's height at .defaultHigh
+        // (see InsightsCastListView.setupContent); on a tab with many facts
+        // that coupling tries to shrink the stack to the capped height, and
+        // at the label's default resistance (also .defaultHigh) the tie
+        // collapsed every row to UIStackView's ~44pt ambiguous fallback —
+        // the "same-sized empty containers" bug. Beating that coupling here
+        // makes it break instead, so the content stays full-height and
+        // scrolls. (Cast rows never hit this: they pin a required height.)
+        textLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         categoryLabel.attributedText = NSAttributedString(
             string: fact.category.tabDisplayName.uppercased(),

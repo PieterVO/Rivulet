@@ -135,6 +135,22 @@ final class InsightsFilmographyRowView: UIView {
     // The row container itself never takes focus — its tiles do (mirrors
     // ShelfRowCell).
     override var canBecomeFocused: Bool { false }
+
+    /// Keeps Left/Right focus INSIDE this row so a press off the last tile
+    /// stops there instead of the engine's diagonal search cone bouncing to
+    /// a sibling section (Movies ↔ Shows) or the header. Up/Down still move
+    /// between sections. This is the authoritative stop — a `pressesBegan`
+    /// guard can't work, since the engine consumes the directional press the
+    /// moment it finds any candidate.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        guard context.focusHeading == .left || context.focusHeading == .right else {
+            return super.shouldUpdateFocus(in: context)
+        }
+        let prevInRow = context.previouslyFocusedView?.isDescendant(of: collectionView) ?? false
+        let nextInRow = context.nextFocusedView?.isDescendant(of: collectionView) ?? false
+        if prevInRow && !nextInRow { return false }
+        return super.shouldUpdateFocus(in: context)
+    }
 }
 
 extension InsightsFilmographyRowView: UICollectionViewDataSource, UICollectionViewDelegate {

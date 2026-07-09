@@ -111,6 +111,64 @@ final class InsightsTriviaRowLayoutTests: XCTestCase {
         list.map { assertTextDrivenHeights($0, path: "panel+setTab") }
     }
 
+    /// Ratatouille-shaped repro: a category with MANY long facts (52
+    /// production facts on device), which is the difference between the
+    /// tabs that rendered empty and Adaptation (3 short facts) which did
+    /// not. Builds the panel, lands on the many-fact category, and asserts
+    /// the rows actually resolved text-driven heights rather than the
+    /// uniform ambiguous-layout fallback.
+    func test_manyLongFacts_rowsHaveTextDrivenHeights() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        self.window = window
+        let root = UIView(frame: window.bounds)
+        window.addSubview(root)
+        window.isHidden = false
+
+        // 30 production facts of realistic length (60-160 chars).
+        let facts = (0..<30).map { i -> String in
+            let n = 60 + (i * 7) % 100
+            return "Fact \(i): " + String(repeating: "word ", count: n / 5)
+        }
+        let factsJSON = facts.enumerated().map { i, t in
+            """
+            { "id": "p\(i)", "text": "\(t.trimmingCharacters(in: .whitespaces))", "category": "production", "spoiler": 0,
+              "source": { "name": "Wikipedia", "url": "https://w/x" } }
+            """
+        }.joined(separator: ",")
+        let json = """
+        { "id": "tmdb://2062", "type": "movie", "generatedAt": "2026-07-07T00:00:00Z", "pipelineVersion": 2,
+          "attribution": [{ "name": "Wikipedia", "url": "https://w/x" }], "facts": [\(factsJSON)] }
+        """.data(using: .utf8)!
+        let trivia = try! JSONDecoder().decode(TitleTrivia.self, from: json)
+
+        let rail = UIView()
+        root.addSubview(rail)
+        rail.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            rail.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 132),
+            rail.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -132),
+            rail.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -60),
+            rail.heightAnchor.constraint(equalToConstant: 120),
+        ])
+
+        let container = InsightsPanelContainerView(
+            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true)
+        PlayerRailPanelView.present(content: container, width: 640, in: root, aboveRail: rail, towards: rail)
+        window.layoutIfNeeded()
+
+        let list = container.subviews.compactMap { $0 as? InsightsCastListView }.first
+        XCTAssertNotNil(list)
+        list.map { $0.setTab(.category(.production)) }
+        window.layoutIfNeeded()
+
+        let rows = triviaRows(in: list!)
+        XCTAssertEqual(rows.count, 30)
+        let zeroHeight = rows.filter { $0.bounds.height < 1 }.count
+        XCTAssertEqual(zeroHeight, 0, "\(zeroHeight)/30 rows collapsed to zero height (the empty-container bug)")
+        let heights = Set(rows.map { Int($0.bounds.height.rounded()) })
+        XCTAssertGreaterThan(heights.count, 1, "all rows identical height = ambiguous-layout fallback, not text-driven: \(heights)")
+    }
+
     func test_initPath_rowsHaveTextDrivenHeights() {
         let list = InsightsCastListView(
             cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [], hideSpoilers: true,

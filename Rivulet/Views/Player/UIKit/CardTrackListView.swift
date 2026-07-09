@@ -27,6 +27,9 @@ final class CardTrackListView: UIView {
     /// navigated to — otherwise reaching the bottom and pressing Down would
     /// re-resolve focus back up to the selected row (the "bounce").
     private var hasPinnedInitialFocus = false
+    /// The row focus is currently on, tracked so `preferredFocusEnvironments`
+    /// can hold it (see there).
+    private weak var lastFocusedRow: CardTrackRowButton?
 
     init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool, onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
@@ -102,9 +105,18 @@ final class CardTrackListView: UIView {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // Once focus has landed in the list, express no preference so the
-        // engine keeps focus on the current row (no bottom-of-list bounce).
-        guard !hasPinnedInitialFocus else { return [] }
+        // After the first landing, hold the CURRENT row (not `[]`, not the
+        // selected row). When Down at the last row / Up at the first finds
+        // no in-panel candidate, the panel's focus fence denies the exit and
+        // the engine re-resolves focus via this preference — returning `[]`
+        // let it fall back to the first focusable, so the list "looped" from
+        // bottom to top. Returning the row focus already sits on makes that
+        // re-resolution a no-op: focus simply STOPS at the edge. It doesn't
+        // interfere with row-to-row moves (directional focus never consults
+        // preferredFocusEnvironments).
+        if hasPinnedInitialFocus {
+            return lastFocusedRow.map { [$0] } ?? []
+        }
         if let first = rowButtons.first(where: { $0.row.isSelected }) {
             return [first]
         }
@@ -113,9 +125,12 @@ final class CardTrackListView: UIView {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        // Once focus enters any of our rows, stop pinning the selected row.
-        if let next = context.nextFocusedView, rowButtons.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
+        // Once focus enters any of our rows, stop pinning the selected row
+        // and remember which row holds focus (see preferredFocusEnvironments).
+        if let next = context.nextFocusedView,
+           let row = rowButtons.first(where: { next.isDescendant(of: $0) || next === $0 }) {
             hasPinnedInitialFocus = true
+            lastFocusedRow = row
         }
     }
 }

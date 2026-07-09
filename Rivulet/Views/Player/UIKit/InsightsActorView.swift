@@ -268,8 +268,15 @@ final class InsightsActorView: UIView {
         let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
         let clamped = min(max(0, targetY), maxY)
         guard abs(clamped - scrollView.contentOffset.y) > 0.5 else { return }
-        coordinator.addCoordinatedAnimations({
+        // Driven on the shared focus-scroll duration/curve rather than the
+        // focus coordinator's own ~0.2s animation, which read as an abrupt
+        // snap between sections. Matches the home/detail focus-scroll feel.
+        // (Plain scroll view, no cell recycling — a UIView animation on the
+        // offset is enough; no CADisplayLink needed as in the filmography
+        // collection.)
+        UIView.animate(withDuration: FocusScrollMotion.settleDuration, delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
             self.scrollView.contentOffset.y = clamped
-        }, completion: nil)
+        }
     }
 }

@@ -126,20 +126,26 @@ final class InsightsTabBarView: UIView {
         }, completion: nil)
     }
 
-    /// Left/Right at the row's edges are consumed so focus HOLDS on the
-    /// first/last pill — otherwise the focus engine's directional search
-    /// cone finds a list row below-diagonal and focus falls out of the bar.
-    /// Runs here because presses are delivered to the focused pill and
-    /// bubble up through this ancestor.
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses where press.type == .leftArrow || press.type == .rightArrow {
-            guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView,
-                  let index = pills.firstIndex(where: { focused === $0.view || focused.isDescendant(of: $0.view) })
-            else { continue }
-            let atEdge = press.type == .leftArrow ? index == 0 : index == pills.count - 1
-            if atEdge { return }
+    /// Keeps Left/Right focus INSIDE the bar. A `pressesBegan` guard can't
+    /// do this: the focus engine consumes a directional press the instant it
+    /// finds any candidate, so an off-the-end Right (whose diagonal search
+    /// cone finds a list row below) moves focus and never delivers the press
+    /// here. `shouldUpdateFocus` is the authoritative veto — the engine calls
+    /// it on the ancestors of the currently-focused item (this bar is one),
+    /// and any `false` cancels the move, so focus holds on the edge pill.
+    /// Only horizontal exits are vetoed; Down (pill → list) passes through.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        guard context.focusHeading == .left || context.focusHeading == .right else {
+            return super.shouldUpdateFocus(in: context)
         }
-        super.pressesBegan(presses, with: event)
+        let prevIsPill = context.previouslyFocusedView.map(containsPill) ?? false
+        let nextIsPill = context.nextFocusedView.map(containsPill) ?? false
+        if prevIsPill && !nextIsPill { return false }
+        return super.shouldUpdateFocus(in: context)
+    }
+
+    private func containsPill(_ view: UIView) -> Bool {
+        pills.contains { view === $0.view || view.isDescendant(of: $0.view) }
     }
 
     private func handlePillSelected(_ tab: InsightsTab) {
