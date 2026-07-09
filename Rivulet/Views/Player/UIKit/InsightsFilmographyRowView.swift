@@ -27,11 +27,12 @@ import UIKit
 final class InsightsFilmographyRowView: UIView {
 
     enum Metrics {
-        static let tileWidth: CGFloat = 132
-        static let tileHeight: CGFloat = 198   // 2:3 poster ratio
-        static let gap: CGFloat = 12
+        // Larger posters for TV viewing distance (2:3 ratio preserved).
+        static let tileWidth: CGFloat = 168
+        static let tileHeight: CGFloat = 252   // 2:3 poster ratio
+        static let gap: CGFloat = 14
         static let inset: CGFloat = 4
-        static let headerHeight: CGFloat = 32
+        static let headerHeight: CGFloat = 36
         static let focusGrowthPadding: CGFloat = 20
 
         static var rowHeight: CGFloat { headerHeight + tileHeight + focusGrowthPadding }
@@ -72,7 +73,7 @@ final class InsightsFilmographyRowView: UIView {
         clipsToBounds = false
 
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
-        headerLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        headerLabel.font = .systemFont(ofSize: 25, weight: .semibold)
         headerLabel.textColor = .white
         addSubview(headerLabel)
 

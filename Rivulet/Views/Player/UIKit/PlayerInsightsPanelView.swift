@@ -332,13 +332,13 @@ final class InsightsCastRowButton: UIControl {
         headshotView.addSubview(fallbackIcon)
 
         nameLabel.text = person.name
-        nameLabel.font = .systemFont(ofSize: 24, weight: .semibold)
+        nameLabel.font = .systemFont(ofSize: 27, weight: .semibold)
         nameLabel.textColor = .white
         nameLabel.numberOfLines = 1
 
         let role = person.role ?? ""
         roleLabel.text = role
-        roleLabel.font = .systemFont(ofSize: 18, weight: .regular)
+        roleLabel.font = .systemFont(ofSize: 21, weight: .regular)
         roleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         roleLabel.numberOfLines = 1
         roleLabel.isHidden = role.isEmpty

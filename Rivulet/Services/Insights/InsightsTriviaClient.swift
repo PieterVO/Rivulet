@@ -23,6 +23,14 @@ actor InsightsTriviaClient {
             let cfg = URLSessionConfiguration.default
             cfg.timeoutIntervalForRequest = 10
             cfg.timeoutIntervalForResource = 20
+            // Trivia at a given URL is MUTABLE — the pipeline regenerates it
+            // in place (new facts, interest scores, etc.). The API sends a
+            // 24h `Cache-Control`, so the default policy would pin the first
+            // response fetched on-device for a full day and never show a
+            // regenerated Top 10. Always revalidate against the origin (the
+            // Cloudflare edge cache still absorbs the load); the payload is
+            // small and fetched once per playback.
+            cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
             self.session = URLSession(configuration: cfg)
         }
     }

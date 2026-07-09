@@ -90,7 +90,7 @@ final class InsightsTabBarView: UIView {
 
         // Uniform pill width: size every pill to the widest title so the
         // bar reads as a consistent row of tabs rather than ragged chips.
-        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .semibold)
+        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .bold)
         let widestTitle = tabs
             .map { ceil((Self.title(for: $0) as NSString).size(withAttributes: [.font: measuringFont]).width) }
             .max() ?? 0
@@ -262,7 +262,7 @@ private final class InsightsTabPillView: UIControl {
         addSubview(glassView)
 
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .systemFont(ofSize: 20, weight: .medium)
+        label.font = .systemFont(ofSize: 20, weight: .bold)
         // Pills share one uniform width (sized to the widest title by the
         // hosting bar), so shorter titles center within it.
         label.textAlignment = .center
@@ -320,7 +320,8 @@ private final class InsightsTabPillView: UIControl {
     }
 
     private func applyStyle() {
-        label.font = .systemFont(ofSize: 20, weight: (isFocusedPill || isSelectedTab) ? .semibold : .medium)
+        // Bold throughout (TV legibility); the active pill goes heavier still.
+        label.font = .systemFont(ofSize: 20, weight: (isFocusedPill || isSelectedTab) ? .heavy : .bold)
         if isFocusedPill {
             // Bright, opaque — the unambiguous focus target.
             glassView.isHidden = true
