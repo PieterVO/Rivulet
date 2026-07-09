@@ -88,9 +88,15 @@ final class InsightsTabBarView: UIView {
             stack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
         ])
 
-        // Uniform pill width: size every pill to the widest title so the
-        // bar reads as a consistent row of tabs rather than ragged chips.
-        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .bold)
+        // Uniform pill width: size every pill to the widest title so the bar
+        // reads as a consistent row of tabs rather than ragged chips. Measure
+        // at the HEAVIEST weight a pill ever renders (.heavy, the active
+        // state) so the active pill's bolder text never overflows the width
+        // computed from a lighter weight (that truncated a lone "Cast" to
+        // "C…"). The width is a floor (>=), and the label keeps required
+        // compression resistance, so a pill can never be narrower than its
+        // own text regardless of the measurement.
+        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .heavy)
         let widestTitle = tabs
             .map { ceil((Self.title(for: $0) as NSString).size(withAttributes: [.font: measuringFont]).width) }
             .max() ?? 0
@@ -103,7 +109,7 @@ final class InsightsTabBarView: UIView {
             pill.onFocused = { [weak self] coordinator in
                 self?.scrollPillToCenter(pill, coordinator: coordinator)
             }
-            pill.widthAnchor.constraint(equalToConstant: pillWidth).isActive = true
+            pill.widthAnchor.constraint(greaterThanOrEqualToConstant: pillWidth).isActive = true
             stack.addArrangedSubview(pill)
             pills.append((tab, pill))
         }
@@ -266,6 +272,8 @@ private final class InsightsTabPillView: UIControl {
         // Pills share one uniform width (sized to the widest title by the
         // hosting bar), so shorter titles center within it.
         label.textAlignment = .center
+        // Never truncate a pill's own title — the pill grows to fit it.
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(label)
         NSLayoutConstraint.activate([
             glassView.topAnchor.constraint(equalTo: topAnchor),
