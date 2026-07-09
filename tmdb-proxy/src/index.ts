@@ -88,6 +88,25 @@ export default {
       case "credits":
         upstreamPath = `${type}/${tmdbId}/credits`;
         break;
+      case "episode_credits": {
+        const season = url.searchParams.get("season");
+        const episode = url.searchParams.get("episode");
+        if (!/^\d+$/.test(season ?? "") || !/^\d+$/.test(episode ?? "")) {
+          return addCors(new Response("Missing or invalid season/episode", { status: 400 }));
+        }
+        upstreamPath = `tv/${tmdbId}/season/${season}/episode/${episode}/credits`;
+        break;
+      }
+      case "season": {
+        // Episode list for one season of a show — used by the insights
+        // pipeline's seed stage to enumerate episodes for trivia generation.
+        const season = url.searchParams.get("season");
+        if (!/^\d+$/.test(season ?? "")) {
+          return addCors(new Response("Missing or invalid season", { status: 400 }));
+        }
+        upstreamPath = `tv/${tmdbId}/season/${season}`;
+        break;
+      }
       case "details":
         upstreamPath = `${type}/${tmdbId}`;
         // Flatten credits (cast/crew) into the details response so clients
@@ -122,7 +141,12 @@ export default {
 
     // Details route flattens credits; other routes pass through.
     const transform = kind === "details" ? flattenDetailsCredits : null;
-    return proxyAndCache(upstreamUrl, request.url, TTL_SECONDS, ctx, transform);
+    // Season episode lists get the shorter list TTL, not the 7-day default —
+    // a currently-airing show's episode list changes as new episodes air, and
+    // the insights pipeline's re-seed cron relies on this route to notice
+    // them promptly rather than waiting out a week-long cache.
+    const ttl = kind === "season" ? LIST_TTL_SECONDS : TTL_SECONDS;
+    return proxyAndCache(upstreamUrl, request.url, ttl, ctx, transform);
   },
 };
 

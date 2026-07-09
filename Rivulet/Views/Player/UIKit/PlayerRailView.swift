@@ -34,6 +34,9 @@ final class PlayerRailView: UIView {
     let infoButton = TransportControlButton(
         icon: UIImage(systemName: "info.circle"), accessibilityLabel: "Info",
         diameter: Metrics.buttonDiameter)
+    let insightsButton = TransportControlButton(
+        icon: UIImage(systemName: "sparkles"), accessibilityLabel: "Insights",
+        diameter: Metrics.buttonDiameter)
     let upNextButton = TransportControlButton(
         icon: UIImage(systemName: "list.and.film"), accessibilityLabel: "Up Next",
         diameter: Metrics.buttonDiameter)
@@ -41,6 +44,7 @@ final class PlayerRailView: UIView {
     var onSubtitles: (() -> Void)?
     var onAudio: (() -> Void)?
     var onInfo: (() -> Void)?
+    var onInsights: (() -> Void)?
     var onUpNext: (() -> Void)?
     var onReplayLongPress: (() -> Void)?
 
@@ -111,7 +115,7 @@ final class PlayerRailView: UIView {
         cluster.axis = .horizontal
         cluster.spacing = Metrics.buttonGap
         cluster.alignment = .center
-        [subtitlesButton, audioButton, infoButton, upNextButton].forEach {
+        [subtitlesButton, audioButton, infoButton, insightsButton, upNextButton].forEach {
             cluster.addArrangedSubview($0)
         }
 
@@ -151,7 +155,9 @@ final class PlayerRailView: UIView {
         subtitlesButton.onLongPress = { [weak self] in self?.onReplayLongPress?() }
         audioButton.onPress = { [weak self] in self?.onAudio?() }
         infoButton.onPress = { [weak self] in self?.onInfo?() }
+        insightsButton.onPress = { [weak self] in self?.onInsights?() }
         upNextButton.onPress = { [weak self] in self?.onUpNext?() }
+        insightsButton.isHidden = true
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -180,6 +186,10 @@ final class PlayerRailView: UIView {
 
     func setUpNextAvailable(_ available: Bool) {
         upNextButton.isHidden = !available
+    }
+
+    func setInsightsAvailable(_ available: Bool) {
+        insightsButton.isHidden = !available
     }
 
     // MARK: - Ambient pause

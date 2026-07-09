@@ -465,13 +465,9 @@ private final class ContinueWatchingTitleLogoView: UIView {
               let token = PlexAuthManager.shared.selectedServerToken else {
             return nil
         }
-        let sourceRatingKey: String?
-        if item.type == "episode" {
-            sourceRatingKey = item.grandparentRatingKey
-        } else {
-            sourceRatingKey = item.ratingKey
-        }
-        guard let ratingKey = sourceRatingKey else { return nil }
+        // The hub item already carries grandparentRatingKey, so resolve the
+        // source key directly (one metadata fetch) via the shared resolver.
+        guard let ratingKey = TopShelfLogoResolver.sourceRatingKey(for: item) else { return nil }
 
         let sourceMetadata: PlexMetadata
         if let cached = PlexDataStore.shared.getCachedFullMetadata(for: ratingKey) {
@@ -490,8 +486,8 @@ private final class ContinueWatchingTitleLogoView: UIView {
             }
         }
 
-        guard let path = sourceMetadata.clearLogoPath else { return nil }
-        return URL(string: "\(serverURL)\(path)?X-Plex-Token=\(token)")
+        let urlString = TopShelfLogoResolver.logoURLString(from: sourceMetadata, serverURL: serverURL, token: token)
+        return urlString.isEmpty ? nil : URL(string: urlString)
     }
 }
 

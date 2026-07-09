@@ -362,13 +362,17 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var skippedCommercialIds: Set<Int> = []  // Track skipped commercials by ID
     private var hasTriggeredPostVideo = false
 
-    // MARK: - Intro Skip Countdown State
-    /// Current countdown value (5...4...3...2...1), 0 means no countdown active
-    @Published var introSkipCountdownSeconds: Int = 0
-    private var introSkipCountdownTimer: Timer?
-    private let introSkipDelaySeconds: Int = 5
-    /// Tracks if user cancelled auto-skip for current intro (prevents restarting countdown)
-    private var userDeclinedIntroAutoSkip = false
+    // MARK: - Auto-Skip Countdown State
+    /// Current countdown value (5...4...3...2...1), 0 means no countdown active.
+    /// Runs only when the matching Auto-Skip setting (Intro/Credits/Ads) is on;
+    /// drives the pill's "· N" suffix and auto-skips the active marker at 0.
+    @Published var skipCountdownSeconds: Int = 0
+    private var skipCountdownTimer: Timer?
+    private let skipCountdownDelaySeconds: Int = 5
+    /// Tracks if the user cancelled the auto-skip countdown for the CURRENT
+    /// marker (Menu press): keeps the manual pill up without restarting the
+    /// countdown. Reset when the active marker clears or the user seeks back.
+    private var userDeclinedAutoSkip = false
     @Published var scrubTime: TimeInterval = 0
 
     // MARK: - Post-Video State
@@ -386,6 +390,25 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// `loadUpNextEpisodes()`, hooked off `resolveNextEpisodeEarlyIfNeeded()`;
     /// cleared on episode swap in `playNextEpisode()`.
     @Published private(set) var upNextEpisodes: [PlexMetadata] = []
+    /// Cast for the Insights rail panel. TMDB credits primary (headshots +
+    /// character names for anything with a tmdb guid), Plex Role fallback
+    /// for home media / unmatched items. Loaded once per item by the
+    /// container's $itemGeneration sink; reset on item swap.
+    @Published private(set) var insightsCast: [MediaPerson] = []
+    /// Trivia for the Insights rail panel's Trivia section (P2a, read-only).
+    /// `nil` = no trivia available (title uncovered / network failure) —
+    /// the panel renders no Trivia section at all, same graceful-absent
+    /// rule as `insightsCast`. Loaded in the same per-item flow as cast by
+    /// `loadInsightsTrivia()`; reset on item swap.
+    @Published private(set) var insightsTrivia: TitleTrivia?
+    /// Fact ids the Worker has auto-hidden after enough user reports.
+    /// Fetched alongside trivia; empty on any failure (fail-open — showing
+    /// a fact is acceptable, failing closed is not required for this list).
+    @Published private(set) var suppressedTriviaIDs: Set<String> = []
+    /// Item keys we've already asked the pipeline to generate this session — fire once.
+    private var requestedInsightKeys: Set<String> = []
+    /// Cancels the mid-playback trivia re-check on item swaps or player teardown.
+    private var insightsRecheckTask: Task<Void, Never>?
     @Published private(set) var recommendations: [PlexMetadata] = []
     @Published var countdownSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
@@ -478,6 +501,21 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let pausedPosterDelay: TimeInterval = 5.0
     private var pausedPosterDimTimer: Timer?
     private let pausedPosterDimDelay: TimeInterval = 120.0
+    /// True while a rail panel (Subtitles/Audio/Info/Up Next/Insights) is
+    /// presented. The ambient-pause backdrop is a full-screen visual that
+    /// otherwise shows through/around an open panel — set by
+    /// `PlayerContainerViewController` around `presentRailPanel`/dismiss so
+    /// the timer below can suppress itself while a panel is up.
+    var isRailPanelOpen = false {
+        didSet {
+            guard isRailPanelOpen != oldValue else { return }
+            if isRailPanelOpen {
+                cancelPausedPosterTimer()
+            } else if playbackState == .paused {
+                startPausedPosterTimer()
+            }
+        }
+    }
     private var aetherStallWatchdogTask: Task<Void, Never>?
     private let aetherStallRecoveryDelay: TimeInterval = 20
     private let aetherStallFailureDelay: TimeInterval = 20
@@ -2292,14 +2330,18 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    func seek(to time: TimeInterval) async {
+    /// - Parameter revealsControls: whether the seek should surface the
+    ///   transport chrome (the normal reveal-the-scrubber affordance). A marker
+    ///   skip taken while the chrome is hidden passes `false` so the jump
+    ///   doesn't pop the rail open.
+    func seek(to time: TimeInterval, revealsControls: Bool = true) async {
         if let ap = aetherPlayer {
             await ap.seek(to: time)
         } else {
             await player?.seek(to: CMTime(seconds: time, preferredTimescale: 600))
         }
         subtitleClockSync.didSeek()
-        showControlsTemporarily()
+        if revealsControls { showControlsTemporarily() }
     }
 
     func seekRelative(by seconds: TimeInterval) async {
@@ -3182,12 +3224,15 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Start timers for the ambient pause presentation: `.ambient` after
     /// `pausedPosterDelay` seconds paused, `.dimmed` after
-    /// `pausedPosterDimDelay` seconds paused.
+    /// `pausedPosterDimDelay` seconds paused. No-ops while a rail panel is
+    /// open (`isRailPanelOpen`) — the ambient backdrop is a full-screen
+    /// visual that would otherwise show through/around the panel.
     private func startPausedPosterTimer() {
+        guard !isRailPanelOpen else { return }
         pausedPosterTimer?.invalidate()
         pausedPosterTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused else { return }
+                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
                 withAnimation(.easeIn(duration: 1.0)) {
                     self.pausePresentation = .ambient
                 }
@@ -3197,7 +3242,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         pausedPosterDimTimer?.invalidate()
         pausedPosterDimTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDimDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused else { return }
+                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
                 withAnimation(.easeInOut(duration: 1.0)) {
                     self.pausePresentation = .dimmed
                 }
@@ -3250,20 +3295,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             // 2. We've already left the marker region (activeMarker is nil)
             // This allows re-triggering after seeking back without causing repeated skips
             // during initial playback.
-            if hasSkippedIntro || userDeclinedIntroAutoSkip {
+            if hasSkippedIntro || userDeclinedAutoSkip {
                 if time < previewStart {
                     hasSkippedIntro = false
-                    userDeclinedIntroAutoSkip = false
+                    userDeclinedAutoSkip = false
                     // Cancel any running countdown
-                    introSkipCountdownTimer?.invalidate()
-                    introSkipCountdownTimer = nil
-                    introSkipCountdownSeconds = 0
+                    cancelSkipCountdownTimer()
                 } else if previewStart == 0 && time < intro.startTimeSeconds + 1.0 && activeMarker == nil {
                     hasSkippedIntro = false
-                    userDeclinedIntroAutoSkip = false
-                    introSkipCountdownTimer?.invalidate()
-                    introSkipCountdownTimer = nil
-                    introSkipCountdownSeconds = 0
+                    userDeclinedAutoSkip = false
+                    cancelSkipCountdownTimer()
                 }
             }
 
@@ -3366,10 +3407,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // No active marker
+        // No active marker: clear the pill and reset the per-marker auto-skip
+        // decline/countdown so the next marker starts fresh.
         if activeMarker != nil {
             activeMarker = nil
             showSkipButton = false
+            userDeclinedAutoSkip = false
+            cancelSkipCountdownTimer()
         }
     }
 
@@ -3384,16 +3428,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // This ensures we use Plex's exact marker timing and don't cut off content
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // Check for auto-skip with countdown (only when inside actual marker range)
-        if isIntro && autoSkipIntro && !hasSkippedIntro && insideMarker && !userDeclinedIntroAutoSkip {
-            // Start countdown timer if not already running
-            if introSkipCountdownTimer == nil && introSkipCountdownSeconds == 0 {
-                startIntroSkipCountdown(for: marker)
-            }
-            // Show skip button during countdown
+        // Auto-skip with a visible countdown when the setting is on. Show the
+        // pill first so the countdown has something to render "· N" onto.
+        if isIntro && autoSkipIntro && !hasSkippedIntro && insideMarker && !userDeclinedAutoSkip {
             if activeMarker == nil {
                 activeMarker = marker
                 showSkipButton = true
+            }
+            if skipCountdownTimer == nil && skipCountdownSeconds == 0 {
+                startSkipCountdown(for: marker)
             }
             return
         }
@@ -3405,37 +3448,46 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Start countdown timer for auto-skip intro
-    private func startIntroSkipCountdown(for marker: PlexMarker) {
-        introSkipCountdownSeconds = introSkipDelaySeconds
+    /// Start the auto-skip countdown for `marker`. Shared by intro/credits/ads;
+    /// at 0 it funnels through `skipMarker` (which marks the right skipped set
+    /// per type). The pill shows a live "· N" suffix while this runs.
+    private func startSkipCountdown(for marker: PlexMarker) {
+        skipCountdownSeconds = skipCountdownDelaySeconds
 
-        introSkipCountdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        skipCountdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             Task { @MainActor in
                 guard let self = self else {
                     timer.invalidate()
                     return
                 }
 
-                self.introSkipCountdownSeconds -= 1
+                self.skipCountdownSeconds -= 1
 
-                if self.introSkipCountdownSeconds <= 0 {
+                if self.skipCountdownSeconds <= 0 {
                     timer.invalidate()
-                    self.introSkipCountdownTimer = nil
-                    self.hasSkippedIntro = true
+                    self.skipCountdownTimer = nil
+                    self.skipCountdownSeconds = 0
                     await self.skipMarker(marker)
                 }
             }
         }
     }
 
-    /// Cancel the intro skip countdown (called when user presses Menu during countdown)
-    func cancelIntroSkipCountdown() {
-        guard introSkipCountdownTimer != nil || introSkipCountdownSeconds > 0 else { return }
+    /// Tear down the countdown timer without marking the marker declined —
+    /// used by seek-back resets and when the active marker clears.
+    private func cancelSkipCountdownTimer() {
+        skipCountdownTimer?.invalidate()
+        skipCountdownTimer = nil
+        skipCountdownSeconds = 0
+    }
 
-        introSkipCountdownTimer?.invalidate()
-        introSkipCountdownTimer = nil
-        introSkipCountdownSeconds = 0
-        userDeclinedIntroAutoSkip = true  // Don't restart countdown for this intro
+    /// Cancel the auto-skip countdown (user pressed Menu during the countdown).
+    /// Leaves the manual pill up but declines auto-skip for the current marker.
+    func cancelSkipCountdown() {
+        guard skipCountdownTimer != nil || skipCountdownSeconds > 0 else { return }
+
+        cancelSkipCountdownTimer()
+        userDeclinedAutoSkip = true  // Don't restart the countdown for this marker
     }
 
     /// Handle when playback enters a credits marker range (or preview window)
@@ -3448,10 +3500,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // Check for auto-skip (only when inside actual marker range)
-        if autoSkipCredits && !skippedCreditsIds.contains(creditsId) && insideMarker {
-            skippedCreditsIds.insert(creditsId)
-            Task { await skipMarker(marker) }
+        // Auto-skip with a visible countdown when the setting is on.
+        if autoSkipCredits && !skippedCreditsIds.contains(creditsId) && insideMarker && !userDeclinedAutoSkip {
+            if activeMarker == nil {
+                activeMarker = marker
+                showSkipButton = true
+            }
+            if skipCountdownTimer == nil && skipCountdownSeconds == 0 {
+                startSkipCountdown(for: marker)
+            }
             return
         }
 
@@ -3472,10 +3529,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // Check for auto-skip (only when inside actual marker range)
-        if autoSkipAds && !skippedCommercialIds.contains(commercialId) && insideMarker {
-            skippedCommercialIds.insert(commercialId)
-            Task { await skipMarker(marker) }
+        // Auto-skip with a visible countdown when the setting is on.
+        if autoSkipAds && !skippedCommercialIds.contains(commercialId) && insideMarker && !userDeclinedAutoSkip {
+            if activeMarker == nil {
+                activeMarker = marker
+                showSkipButton = true
+            }
+            if skipCountdownTimer == nil && skipCountdownSeconds == 0 {
+                startSkipCountdown(for: marker)
+            }
             return
         }
 
@@ -3494,13 +3556,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Skip to end of a specific marker
     private func skipMarker(_ marker: PlexMarker) async {
+        // Stop any running auto-skip countdown — this funnels both the manual
+        // skip (user clicked the pill) and the countdown reaching 0.
+        cancelSkipCountdownTimer()
         // Mark as skipped to prevent re-showing button if user seeks back
         if marker.isIntro {
             hasSkippedIntro = true
-            // Cancel any running countdown (user clicked skip button manually)
-            introSkipCountdownTimer?.invalidate()
-            introSkipCountdownTimer = nil
-            introSkipCountdownSeconds = 0
         } else if marker.isCredits, let creditsId = marker.id {
             skippedCreditsIds.insert(creditsId)
         } else if marker.isCommercial, let commercialId = marker.id {
@@ -3525,7 +3586,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // stale invocation point can't spuriously revert subtitles later,
         // disconnected from where playback actually landed post-skip.
         clearReplayWindow()
-        await seek(to: target)
+        // Preserve the chrome state across the skip: if the controls were
+        // hidden (the pill owned focus), the jump must NOT pop the rail open;
+        // if they were already up, keep them up.
+        await seek(to: target, revealsControls: showControls)
 
         // Hide button
         activeMarker = nil
@@ -3543,6 +3607,25 @@ final class UniversalPlayerViewModel: ObservableObject {
             return "Skip Ad"
         }
         return "Skip"
+    }
+
+    /// Pill title including the live auto-skip countdown when one is running
+    /// (e.g. "Skip Intro · 5"). Without a countdown it is just the base label.
+    var skipButtonDisplayLabel: String {
+        skipCountdownSeconds > 0 ? "\(skipButtonLabel) · \(skipCountdownSeconds)" : skipButtonLabel
+    }
+
+    /// True when the skip pill is the lone on-screen affordance — chrome
+    /// hidden, not scrubbing, no post-video, live video frame — and should
+    /// own focus so a single Select jumps forward. Mirrors
+    /// `controlsFocusActive`: while true the SwiftUI content layer releases
+    /// focus and `PlayerContainerViewController` routes it to the pill.
+    var skipPillOwnsFocus: Bool {
+        showSkipButton
+            && !showControls
+            && !isScrubbing
+            && postVideoState == .hidden
+            && pausePresentation == .frame
     }
 
     /// Fetch detailed metadata with markers if not already present
@@ -3764,6 +3847,184 @@ final class UniversalPlayerViewModel: ObservableObject {
         } catch {
             guard generation == itemGeneration else { return }
             upNextEpisodes = []
+        }
+    }
+
+    /// Load cast for the Insights rail panel. TMDB credits are primary
+    /// (headshots + character names) when the item resolves to a TMDB id;
+    /// falls back to Plex `Role` data (own metadata, then the show's, for
+    /// episodes) when TMDB has nothing. No-ops to [] if neither source
+    /// has cast.
+    func loadInsightsCast() async {
+        let generation = itemGeneration
+        let isMovie = metadata.type == "movie"
+        // Episodes: use the SHOW's tmdb id, never the episode's own guid. Some
+        // Plex agents put a per-episode tmdb:// id in the episode's Guid array,
+        // which would resolve to the wrong id and silently drop TMDB cast.
+        let tmdbId = metadata.type == "episode"
+            ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
+            : metadata.tmdbId
+
+        var people: [MediaPerson] = []
+
+        if let tmdbId {
+            if metadata.type == "episode",
+               let season = metadata.parentIndex, let episode = metadata.index,
+               let episodeCast = await TMDBClient.shared.episodeCastCredits(
+                   showTmdbId: tmdbId, season: season, episode: episode) {
+                people = InsightsCastMapper.mediaPeople(fromTMDB: episodeCast, titleTmdbId: tmdbId, titleIsMovie: false)
+            } else {
+                let credits = await TMDBClient.shared.castCredits(tmdbId: tmdbId, type: isMovie ? .movie : .tv)
+                people = InsightsCastMapper.mediaPeople(fromTMDB: credits, titleTmdbId: tmdbId, titleIsMovie: isMovie)
+            }
+        }
+
+        // Plex Role fallback: item's own roles, then (episodes) the show's roles.
+        if people.isEmpty {
+            var roles = metadata.Role ?? []
+            if roles.isEmpty, let key = metadata.ratingKey,
+               let full = try? await PlexNetworkManager.shared.getFullMetadata(
+                   serverURL: serverURL, authToken: authToken, ratingKey: key) {
+                roles = full.Role ?? []
+            }
+            if roles.isEmpty, metadata.type == "episode", let showKey = metadata.grandparentRatingKey,
+               let show = try? await PlexNetworkManager.shared.getFullMetadata(
+                   serverURL: serverURL, authToken: authToken, ratingKey: showKey) {
+                roles = show.Role ?? []
+            }
+            people = InsightsCastMapper.mediaPeople(
+                fromPlexRoles: roles, serverURL: serverURL, authToken: authToken,
+                titleTmdbId: tmdbId, titleIsMovie: isMovie)
+        }
+
+        guard generation == itemGeneration else { return }
+        insightsCast = people
+    }
+
+    /// Load trivia for the Insights panel's Trivia section. Mirrors
+    /// `loadInsightsCast()`'s tmdb-id resolution exactly (episodes use the
+    /// SHOW's tmdb id, never the episode's own guid) so both sections agree
+    /// on which title they're describing. All failures are soft — the
+    /// client already returns nil/empty on 404/network/decode failure, so
+    /// there is no error branch here, only "no trivia" (`insightsTrivia`
+    /// stays nil and the panel shows no Trivia section).
+    func loadInsightsTrivia() async {
+        let generation = itemGeneration
+        let tmdbId = metadata.type == "episode"
+            ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
+            : metadata.tmdbId
+
+        guard let tmdbId else {
+            guard generation == itemGeneration else { return }
+            insightsTrivia = nil
+            suppressedTriviaIDs = []
+            return
+        }
+
+        let season = metadata.type == "episode" ? metadata.parentIndex : nil
+        let episode = metadata.type == "episode" ? metadata.index : nil
+        let requestType = (metadata.type == "episode" || metadata.type == "show" || metadata.type == "season")
+            ? "tv" : "movie"
+
+        // Resolve the primary result using the 404-vs-error-aware API so we can
+        // tell "genuinely uncovered" (safe to trigger generation) apart from a
+        // transient network hiccup (never trigger; just retry naturally later).
+        var primary: TriviaFetchResult = .unavailable
+        switch metadata.type {
+        case "episode":
+            if let season, let episode {
+                primary = await InsightsTriviaClient.shared.episodeTriviaResult(
+                    showTmdbId: tmdbId, season: season, episode: episode)
+            }
+        case "show", "season":
+            primary = await InsightsTriviaClient.shared.showTriviaResult(showTmdbId: tmdbId)
+        default:
+            primary = await InsightsTriviaClient.shared.movieTriviaResult(tmdbId: tmdbId)
+        }
+
+        var trivia: TitleTrivia?
+        if case .found(let t) = primary, !t.isTombstone {
+            trivia = t
+        } else {
+            // Uncovered (tombstone) or genuinely missing. For episodes, fall
+            // back to the show's overall trivia — production/casting facts
+            // are still relevant to the viewer even without episode-specific
+            // coverage yet.
+            if metadata.type == "episode",
+               case .found(let showTrivia) = await InsightsTriviaClient.shared.showTriviaResult(showTmdbId: tmdbId),
+               !showTrivia.isTombstone {
+                trivia = showTrivia
+            }
+            // Only a genuine 404 warrants asking the pipeline to generate —
+            // a tombstone is a definitive "nothing to share" (never
+            // re-request it) and a network failure should retry naturally
+            // later, never fire a request (Global Constraints).
+            if case .notFound = primary {
+                triggerGenerationIfNeeded(type: requestType, tmdbId: tmdbId, season: season, episode: episode)
+                scheduleInsightsRecheck(type: requestType, tmdbId: tmdbId, season: season, episode: episode)
+            }
+        }
+        let suppressed = await InsightsTriviaClient.shared.suppressedFactIDs()
+
+        guard generation == itemGeneration else { return }
+        insightsTrivia = trivia
+        suppressedTriviaIDs = suppressed
+    }
+
+    /// Fire a one-shot generation request to the pipeline for a title/episode
+    /// that returned a genuine 404. Deduped per item-key for the life of this
+    /// view model (session) — never re-fires for the same key even across
+    /// multiple `loadInsightsTrivia()` calls (e.g. re-entering the panel).
+    private func triggerGenerationIfNeeded(type: String, tmdbId: Int, season: Int?, episode: Int?) {
+        let key = season != nil && episode != nil
+            ? "tv:\(tmdbId):S\(season!)E\(episode!)"
+            : "\(type == "movie" ? "movie" : "tv"):\(tmdbId)"
+        guard !requestedInsightKeys.contains(key) else { return }
+        requestedInsightKeys.insert(key)
+        let req = InsightsGenerationRequest(
+            type: type == "movie" ? "movie" : "tv", tmdbId: tmdbId,
+            season: season, episode: episode,
+            title: metadata.title ?? "", year: metadata.year)
+        Task { await InsightsTriviaClient.shared.requestGeneration(req) }
+    }
+
+    /// Re-poll a few times so freshly-generated trivia populates the open
+    /// panel before the episode ends. Stops on success or tombstone; cancelled
+    /// on item swap / teardown. No visible "loading" state — the panel stays
+    /// calm whether or not this ever finds something.
+    /// Back-off for the mid-playback trivia re-check: a quick first probe (in
+    /// case the title was already generated), then a steady ~2-min cadence out
+    /// to ~20 min. Generation is on-demand and can wait behind an in-flight
+    /// scheduled title on the box, so a cold title can take 10-15 min to land;
+    /// the wide window lets the panel populate during THIS playback instead of
+    /// only on the next play. Stops early the instant trivia (or a tombstone)
+    /// arrives, and is cancelled on item swap / teardown.
+    private static let insightsRecheckDelays: [Int] = [20] + Array(repeating: 120, count: 10)
+
+    private func scheduleInsightsRecheck(type: String, tmdbId: Int, season: Int?, episode: Int?) {
+        insightsRecheckTask?.cancel()
+        let generation = itemGeneration
+        insightsRecheckTask = Task { [weak self] in
+            for delay in Self.insightsRecheckDelays {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !Task.isCancelled, self.itemGeneration == generation else { return }
+                let result: TriviaFetchResult
+                if let season, let episode {
+                    result = await InsightsTriviaClient.shared.episodeTriviaResult(
+                        showTmdbId: tmdbId, season: season, episode: episode)
+                } else if type == "tv" {
+                    result = await InsightsTriviaClient.shared.showTriviaResult(showTmdbId: tmdbId)
+                } else {
+                    result = await InsightsTriviaClient.shared.movieTriviaResult(tmdbId: tmdbId)
+                }
+                if case .found(let t) = result {
+                    await MainActor.run {
+                        guard self.itemGeneration == generation else { return }
+                        if !t.isTombstone { self.insightsTrivia = t }
+                    }
+                    return // covered or tombstone: done either way
+                }
+            }
         }
     }
 
@@ -4013,6 +4274,17 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Clear stale Up Next rows from the outgoing episode's season; the
         // resolve-early hook repopulates them for the new episode.
         upNextEpisodes = []
+        // Clear the outgoing item's cast; the container's $itemGeneration
+        // sink reloads it for the new episode.
+        insightsCast = []
+        // Same for trivia — the container's $itemGeneration sink reloads
+        // it for the new episode via loadInsightsTrivia().
+        insightsTrivia = nil
+        suppressedTriviaIDs = []
+        // Cancel any in-flight re-check for the outgoing item; loadInsightsTrivia()
+        // schedules a fresh one for the new item if needed.
+        insightsRecheckTask?.cancel()
+        insightsRecheckTask = nil
 
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
@@ -4036,11 +4308,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // action the user took in the new episode.
         clearReplayWindow()
 
-        // Reset intro skip countdown state
-        introSkipCountdownTimer?.invalidate()
-        introSkipCountdownTimer = nil
-        introSkipCountdownSeconds = 0
-        userDeclinedIntroAutoSkip = false
+        // Reset auto-skip countdown state
+        cancelSkipCountdownTimer()
+        userDeclinedAutoSkip = false
         nextEpisode = nil
 
         // New episode: allow the early next-episode resolve to run again.
@@ -4150,8 +4420,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         wheelScrubbingTimer?.invalidate()
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
-        introSkipCountdownTimer?.invalidate()
+        skipCountdownTimer?.invalidate()
         aetherStallWatchdogTask?.cancel()
+        insightsRecheckTask?.cancel()
         if let observer = appBackgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }

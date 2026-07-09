@@ -1,0 +1,7 @@
+name = "insights-api"
+main = "src/index.ts"
+compatibility_date = "2024-11-07"
+
+[[r2_buckets]]
+binding = "INSIGHTS"
+bucket_name = "rivulet-insights"

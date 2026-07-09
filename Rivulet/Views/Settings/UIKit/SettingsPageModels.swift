@@ -219,6 +219,7 @@ enum SettingsContent {
             rows.append(toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true))
         }
         rows.append(toggle("hideSpoilersForUnwatched", "Hide Spoilers", key: "hideSpoilersForUnwatched", default: false))
+        rows.append(toggle("hideTriviaSpoilers", "Hide Trivia Spoilers", key: "hideTriviaSpoilers", default: true))
         return rows
     }
 

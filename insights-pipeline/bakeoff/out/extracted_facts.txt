@@ -1,0 +1,131 @@
+================================================================================
+FIXTURE: 01_the_office_production
+================================================================================
+qwen2.5:32b-instruct | The Office is an American adaptation of the British series created by Ricky Gervais and Stephen Merchant. | adaptation | 0 | yes
+ | The first season of The Office was based on the British original and received mixed reviews. | production | 0 | yes
+ | Starting from the second season, The Office developed its American characters independently from the British series. | adaptation | 0 | yes
+ | The Office was filmed using a single-camera setup without a studio audience or laugh track to simulate a documentary style. | production | 0 | yes
+ | Exterior shots of the office building were filmed in Scranton, Pennsylvania, while interior scenes were shot on a soundstage in California. | production | 0 | yes
+ | Steve Carell left The Office mid-seventh season under circumstances that are difficult to verify. | casting | 0 | yes
+ | Rainn Wilson originally auditioned for the role of Michael Scott before being cast as Dwight Schrute. | casting | 0 | yes
+ | John Krasinski filmed some early establishing shots of Scranton himself while visiting the city. | production | 0 | yes
+gemma4:31b-it-q4_K_M | NBC broadcast The Office from March 24, 2005, until May 16, 2013. | production | 0 | yes
+ | The show is based on a 2001 UK series developed by Stephen Merchant and Ricky Gervais. | adaptation | 0 | yes
+ | Greg Daniels was responsible for developing the American version of the show. | production | 0 | yes
+ | The series is set at a branch of the fictional Dunder Mifflin Paper Company located in Scranton, Pennsylvania. | lore | 0 | yes
+ | The first episode of the American series was heavily influenced by the original British version. | adaptation | 0 | yes
+ | NBC initially commissioned only six episodes for the show's first season. | production | 0 | yes
+ | Starting with the second season, writers stopped adapting British scripts to create original directions for the American characters. | adaptation | 0 | yes
+ | The decision to move away from British source material in season two is widely seen as the reason for the show's improved reception. | production | 0 | yes
+ | To mimic a real documentary, the series used a single-camera filming setup. | production | 0 | yes
+ | The production avoided using a laugh track or a studio audience. | production | 0 | yes
+ | Exterior establishing shots were filmed on location in Scranton. | production | 0 | yes
+ | Interior office scenes were recorded at Chandler Valley Center Studios in Van Nuys, California. | production | 0 | yes
+ | The use of talking-head interviews was a technique adopted from the British series. | adaptation | 0 | yes
+ | Steve Carell portrayed the character Michael Scott. | casting | 0 | yes
+ | Steve Carell left the series in 2011 during the seventh season. | casting | 1 | yes
+ | While some reports claim Steve Carell wanted to renew his contract, accounts of these negotiations vary and are considered difficult to verify. | casting | 0 | yes
+ | Following the exit of Steve Carell, the show continued for two more seasons with an ensemble cast. | production | 1 | yes
+ | Rainn Wilson auditioned for the role of Michael Scott before being cast as Dwight Schrute. | casting | 0 | no
+ | John Krasinski played Jim Halpert. | casting | 0 | yes
+ | Actor John Krasinski personally filmed some of the early establishing shots of Scranton while visiting the city. | production | 0 | yes
+ | The series concluded with an episode titled "Finale," which aired on May 16, 2013. | production | 0 | yes
+ | In the final episode, characters gather for the wedding of Angela and Dwight. | production | 1 | yes
+ | Michael Scott makes a surprise appearance as Dwight's best man in the series finale. | production | 1 | yes
+ | To prevent leaks, Michael Scott's cameo in the finale was kept off official call sheets despite months of rumors. | production | 1 | yes
+
+================================================================================
+FIXTURE: 02_silo_production
+================================================================================
+qwen2.5:32b-instruct | Silo is based on Hugh Howey's novel series and premiered on Apple TV+ on May 5, 2023. | adaptation | 0 | yes
+ | Rebecca Ferguson stars as Juliette Nichols and also serves as an executive producer on the series. | casting | 0 | yes
+ | The silo's interior was designed to emphasize its enormous vertical scale with a central spiral staircase. | production | 0 | yes
+ | Filming took place in the United Kingdom and large sets were built to convey claustrophobia and depth. | production | 0 | yes
+ | The lighting was kept dim and industrial to reinforce the enclosed and resource-limited world of the silo. | production | 0 | yes
+ | Apple renewed Silo for a second season before the first had finished airing due to strong early viewership. | production | 0 | yes
+ | Cleaning is a recurring visual motif in which those who express a desire to leave are sent outside and die in toxic air. | lore | 1 | yes
+gemma4:31b-it-q4_K_M | Graham Yost is the creator of the television series Silo. | production | 0 | yes
+ | The show is based on a series of novels written by Hugh Howey. | adaptation | 0 | yes
+ | Silo first premiered on Apple TV+ on May 5, 2023. | production | 0 | yes
+ | The story is set in a future where the remaining human population resides in a massive underground silo that is hundreds of stories deep. | lore | 0 | yes
+ | In the series, citizens are informed that the world outside their silo is toxic and cannot be inhabited. | lore | 0 | yes
+ | The first season of the series consists of ten episodes. | production | 0 | yes
+ | Season one is based mostly on the first book in Hugh Howey's novel series. | adaptation | 0 | yes
+ | The first novel in the Silo series was originally a short story titled "Wool" that Hugh Howey self-published in 2011. | adaptation | 0 | yes
+ | Rebecca Ferguson portrays the character Juliette Nichols. | casting | 0 | yes
+ | Juliette Nichols is an engineer employed in the mechanical levels of the silo. | lore | 0 | yes
+ | Rebecca Ferguson serves as an executive producer for the series. | production | 0 | yes
+ | To highlight the vertical scale of the setting, production designed a central spiral staircase that spans dozens of levels. | production | 0 | yes
+ | The series was filmed in the United Kingdom. | production | 0 | yes
+ | Large sets were constructed to help the camera capture a sense of depth and claustrophobia within the underground structure. | production | 0 | yes
+ | Production used dim, industrial lighting to suggest that the world is enclosed and limited in resources. | production | 0 | yes
+ | Apple ordered a second season of the show before the first season had finished its broadcast run. | production | 0 | yes
+ | While some reports suggest high early viewership led to the quick renewal, this is difficult to confirm because Apple does not release specific streaming data. | production | 0 | yes
+ | A punishment known as "cleaning" involves sending people who want to leave the silo outside in protective suits. | lore | 0 | yes
+ | As part of a silo custom, those sent to clean always wipe the exterior sensor lens before they die in the toxic air. | lore | 0 | yes
+ | A primary mystery of the first season is why individuals agree to perform the cleaning ritual despite previously claiming they would not. | lore | 0 | yes
+
+================================================================================
+FIXTURE: 03_the_office_episode_dinner_party
+================================================================================
+qwen2.5:32b-instruct | The episode 'Dinner Party' is the thirteenth episode of The Office's fourth season. | production | 0 | yes
+ | 'Dinner Party' originally aired on NBC on April 10, 2008. | production | 0 | yes
+ | The episode was written by Lee Eisenberg and Gene Stupnitsky. | production | 0 | yes
+ | 'Dinner Party' was directed by Paul Feig. | production | 0 | yes
+ | The episode is frequently ranked among the best episodes of The Office by critics and fans. | production | 0 | yes
+ | Michael Scott invites Jim and Pam to a dinner party at his condo shared with Jan Levinson. | lore | 1 | yes
+ | The episode reveals the dysfunction of Michael and Jan's relationship through small details in their home. | lore | 1 | yes
+ | Jan throws one of Michael's Dundie awards through a television screen during an argument. | lore | 1 | yes
+ | The episode was designed to keep all characters in a single location for nearly the entire runtime. | production | 0 | yes
+ | 'Dinner Party' contains no talking-head interviews filmed at the office, unlike other episodes. | production | 0 | yes
+ | Steve Carell has cited 'Dinner Party' as one of his favorite episodes to film. | production | 0 | no
+ | 'Dinner Party' was reportedly one of the most physically and emotionally exhausting episodes to film due to sustained tension in long dinner scenes. | production | 0 | yes
+gemma4:31b-it-q4_K_M | The episode "Dinner Party" is the thirteenth installment of The Office's fourth season. | production | 0 | yes
+ | NBC first broadcast the episode on April 10, 2008. | production | 0 | yes
+ | Gene Stupnitsky and Lee Eisenberg were the writers for this episode. | production | 0 | yes
+ | Paul Feig served as the director for "Dinner Party." | production | 0 | yes
+ | Fans and critics frequently list this episode among the highest-rated in the series. | production | 0 | yes
+ | Michael Scott lives in a condo with his former manager and girlfriend, Jan Levinson. | lore | 0 | yes
+ | The dinner party guests include Angela, Andy, Jim, Pam, Dwight, and Dwight's former babysitter. | lore | 0 | yes
+ | Jan Levinson owns a candle company called Serenity by Jan. | lore | 0 | no
+ | Michael Scott placed a small plasma television at the foot of the couple's bed. | lore | 0 | yes
+ | Jan possesses an expensive Dundie award that is kept in a glass case. | lore | 0 | yes
+ | Due to conflicts over Michael's money and Jan's business, Jan throws one of Michael's Dundie awards through the television. | lore | 1 | yes
+ | The writers intentionally kept characters in a single location for most of the episode to increase the sense of discomfort. | production | 0 | yes
+ | Using a confined setting was a conscious choice by the writers to deviate from the show's typical office backdrop. | production | 0 | yes
+ | This episode breaks series tradition by featuring no talking-head interviews filmed within the office. | production | 0 | yes
+ | Steve Carell has named this episode as one of his personal favorites. | casting | 0 | yes
+ | The long dinner scenes required sustained tension from the actors, making it reportedly one of the most emotionally and physically draining episodes to film. | production | 0 | yes
+
+================================================================================
+FIXTURE: 04_silo_lore_spoilers
+================================================================================
+qwen2.5:32b-instruct | The silo is a self-contained underground society with ten thousand people governed by laws called the Pact. | lore | 1 | no
+ | Knowledge of the world before the silo and its origins is strictly controlled within the silo. | lore | 1 | yes
+ | Juliette Nichols becomes sheriff after Holston chooses to go out to clean following his wife Allison's death. | lore | 1 | yes
+ | Allison believed that the view of the toxic outside world shown on screens was a lie. | lore | 1 | yes
+ | Juliette discovers that the image of the dead landscape displayed on the silo's screen is fabricated. | lore | 1 | yes
+ | When Juliette refuses to wipe the lens and walks over a hill during her cleaning, she reveals there are many other silos across the landscape. | lore | 1 | yes
+ | The broader mythology from Hugh Howey's source novels explains that the deception about the outside world is central to keeping each silo's population contained. | adaptation | 2 | yes
+ | Fan theories exist about the true purpose of the cleaning ritual and the identity of those who designed the silos, but these are not confirmed by the show or its creators. | lore | 1 | yes
+gemma4:31b-it-q4_K_M | The underground society within the silo consists of approximately ten thousand inhabitants. | lore | 0 | yes
+ | The population of the silo is governed by a legal code called the Pact. | lore | 0 | yes
+ | Information about the origin of the silo and the world that existed prior to it is tightly restricted. | lore | 0 | yes
+ | The ownership of objects from the old world, referred to as relics, is subject to regulation. | lore | 0 | yes
+ | Asking specific types of questions in the silo can be treated as a criminal act. | lore | 0 | yes
+ | Juliette Nichols assumes the role of sheriff after the previous sheriff, Holston, departs to clean following his wife Allison's passing. | lore | 1 | yes
+ | Allison believed that the images of a toxic and barren exterior shown on the silo's screens were fraudulent. | lore | 1 | yes
+ | Juliette learns that the poisoned landscape displayed on the silo's large screen is fake. | lore | 1 | yes
+ | The helmets worn by those sent to clean display a fraudulent image of a lethal environment. | lore | 1 | yes
+ | Juliette breaks custom by refusing to clean the lens while outside. | lore | 1 | yes
+ | While outside, Juliette discovers that there are numerous other silos across the landscape. | lore | 1 | yes
+ | In Hugh Howey's novels, it is revealed that the silos were constructed as part of an intentional project. | adaptation | 2 | yes
+ | The source novels explain that deceiving residents about the exterior world is essential for keeping them within their respective silos. | adaptation | 2 | yes
+ | Some fans have speculated about who designed the silos and the true meaning of the cleaning ritual. | lore | 0 | yes
+
+================================================================================
+FIXTURE: 05_silo_thin_stub
+================================================================================
+qwen2.5:32b-instruct | Atli Örvarsson composed the score for Silo. | music | 0 | yes
+gemma4:31b-it-q4_K_M | Atli Örvarsson composed the musical score for Silo. | music | 0 | yes
+

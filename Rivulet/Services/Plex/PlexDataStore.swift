@@ -610,8 +610,8 @@ class PlexDataStore: ObservableObject {
                 }
             }
 
-            // Always update Top Shelf cache after fetching (lightweight, idempotent)
-            updateTopShelfCache()
+            // Always update Top Shelf cache after fetching (composites logo art)
+            await updateTopShelfCache()
             self.hubsError = nil
             if updateLoading {
                 self.isLoadingHubs = false
@@ -681,7 +681,7 @@ class PlexDataStore: ObservableObject {
         guard !continueWatchingHubsAreEqual(self.continueWatchingHub, fetched) else { return }
         self.continueWatchingHub = fetched
         self.hubsVersion = UUID()
-        updateTopShelfCache()
+        await updateTopShelfCache()
         projectHomeItems()
     }
 
@@ -1556,7 +1556,7 @@ class PlexDataStore: ObservableObject {
 
     /// Update the Top Shelf cache with Continue Watching items
     /// Called after hubs are fetched to keep Top Shelf in sync
-    private func updateTopShelfCache() {
+    private func updateTopShelfCache() async {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
             print("TopShelf: No server URL or token available")
@@ -1567,7 +1567,12 @@ class PlexDataStore: ObservableObject {
         // the in-app Continue Watching row trusts. The old global-/hubs scrape
         // dropped movies (GitHub #194); the dedicated hub returns movies + episodes.
         let metadata = continueWatchingHub?.Metadata ?? []
-        let items = TopShelfMapper.items(from: metadata, serverURL: serverURL, token: token, limit: 5)
+        let baseItems = TopShelfMapper.items(from: metadata, serverURL: serverURL, token: token, limit: 5)
+
+        // Composite backdrop + clearLogo in-app (Apple TV+ look); the extension
+        // only reads the finished files. Never throws; falls back to the plain
+        // backdrop per item when no logo or on any failure.
+        let items = await TopShelfComposer.composite(items: baseItems, serverURL: serverURL, token: token)
 
         TopShelfCache.shared.writeItems(items)
     }

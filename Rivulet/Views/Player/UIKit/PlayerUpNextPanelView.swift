@@ -34,6 +34,7 @@ final class UpNextListView: UIView {
     /// navigated (no bounce back up from the bottom of the list). See the
     /// matching flag in CardTrackListView.
     private var hasPinnedInitialFocus = false
+    private weak var lastFocusedRow: UpNextRowButton?
 
     init(episodes: [PlexMetadata], currentRatingKey: String?, seasonNumber: Int?,
          serverURL: String, authToken: String, onSelect: @escaping (PlexMetadata) -> Void) {
@@ -152,9 +153,15 @@ final class UpNextListView: UIView {
     // MARK: - Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // Once focus has landed, express no preference so the engine keeps
-        // focus on the current row (no bottom-of-list bounce back up).
-        guard !hasPinnedInitialFocus else { return [] }
+        // After the first landing, hold the CURRENT row so a denied edge move
+        // (Down at the last row / Up at the first, once the panel fence
+        // refuses to let focus leave) re-resolves onto the row focus already
+        // sits on rather than falling back to the first focusable — which
+        // otherwise "looped" focus to the top. See CardTrackListView for the
+        // full rationale; directional row-to-row moves never consult this.
+        if hasPinnedInitialFocus {
+            return lastFocusedRow.map { [$0] } ?? []
+        }
         // Land on the up-next row first (the collapsed row), then free movement.
         if let target = rows.first(where: { $0.rowState == .upNext }) ?? rows.first { return [target] }
         return [self]
@@ -162,9 +169,12 @@ final class UpNextListView: UIView {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        // Once focus enters any of our rows, stop pinning the up-next row.
-        if let next = context.nextFocusedView, rows.contains(where: { next.isDescendant(of: $0) || next === $0 }) {
+        // Once focus enters any of our rows, stop pinning the up-next row and
+        // remember which row holds focus (see preferredFocusEnvironments).
+        if let next = context.nextFocusedView,
+           let row = rows.first(where: { next.isDescendant(of: $0) || next === $0 }) {
             hasPinnedInitialFocus = true
+            lastFocusedRow = row
         }
     }
 }
