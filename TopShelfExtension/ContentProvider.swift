@@ -34,11 +34,20 @@ class ContentProvider: TVTopShelfContentProvider {
                 cItem.contextTitle = subtitle   // show name (episodes)
             }
 
-            // 16:9 backdrop art; fall back to the poster so an item is NEVER dropped.
-            let art = item.wideImageURL.isEmpty ? item.imageURL : item.wideImageURL
-            if let url = URL(string: art) {
-                cItem.setImageURL(url, for: .screenScale1x)
-                cItem.setImageURL(url, for: .screenScale2x)
+            // Prefer the in-app composite (backdrop + logo) file when present.
+            // Fall back to the network backdrop so an item is NEVER dropped.
+            if let fileName = item.compositeFileName,
+               let fileURL = TopShelfCache.shared.compositeFileURL(fileName: fileName),
+               FileManager.default.fileExists(atPath: fileURL.path) {
+                cItem.setImageURL(fileURL, for: .screenScale1x)
+                cItem.setImageURL(fileURL, for: .screenScale2x)
+            } else {
+                // 16:9 backdrop art; fall back to the poster so an item is NEVER dropped.
+                let art = item.wideImageURL.isEmpty ? item.imageURL : item.wideImageURL
+                if let url = URL(string: art) {
+                    cItem.setImageURL(url, for: .screenScale1x)
+                    cItem.setImageURL(url, for: .screenScale2x)
+                }
             }
 
             // Deep link to resume playback.
