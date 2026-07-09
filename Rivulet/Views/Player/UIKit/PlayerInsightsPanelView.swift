@@ -253,23 +253,17 @@ final class InsightsCastListView: UIView {
         return focused === first || focused.isDescendant(of: first)
     }
 
-    /// Self-driven vertical scroll (scrollView.isScrollEnabled = false above)
-    /// — keeps the focused row inside the visible window. Mirrors
-    /// InsightsFilmographyRowView's identical pattern for a horizontal
-    /// collection, adapted here for a vertical UIStackView of arbitrarily
-    /// tall rows (trivia rows vary in height with wrapped text).
+    /// Self-driven vertical scroll (scrollView.isScrollEnabled = false above),
+    /// CENTER-anchored — the same feel as the tab bar's pill scroll, adapted
+    /// to a vertical list. The focused row is pulled toward the middle of the
+    /// visible window, clamped at the content edges: near the top, focus walks
+    /// down through the first rows while the list holds still; through the
+    /// middle, rows stream up through the centre so a partially-visible next
+    /// row always signals there's more below; at the end the list settles on
+    /// the true bottom for the last row.
     private func scrollFocusedRowIntoView(_ row: UIView, coordinator: UIFocusAnimationCoordinator) {
         let rowFrameInScroll = row.convert(row.bounds, to: scrollView)
-        let visibleTop = scrollView.contentOffset.y
-        let visibleBottom = visibleTop + scrollView.bounds.height
-        var targetY = scrollView.contentOffset.y
-        if rowFrameInScroll.minY < visibleTop {
-            targetY = rowFrameInScroll.minY
-        } else if rowFrameInScroll.maxY > visibleBottom {
-            targetY = rowFrameInScroll.maxY - scrollView.bounds.height
-        } else {
-            return
-        }
+        let targetY = rowFrameInScroll.midY - scrollView.bounds.height / 2
         let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
         let clamped = min(max(0, targetY), maxY)
         guard abs(clamped - scrollView.contentOffset.y) > 0.5 else { return }
