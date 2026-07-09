@@ -35,11 +35,23 @@ workflows:
       - name: Initialize keychain
         script: keychain initialize
 
-      - name: Generate a private key for the distribution certificate
+      - name: Provide the distribution certificate private key
         script: |
-          # fetch-signing-files --create needs a private key to back the new
-          # distribution certificate. Generate a fresh RSA key for this build.
-          openssl genrsa -out "$CM_BUILD_DIR/cert_key.pem" 2048
+          # Persist ONE distribution certificate across builds. Regenerating the
+          # key every build made `fetch-signing-files --create` mint a NEW cert
+          # each run, which eventually hit Apple's distribution-cert cap (HTTP
+          # 409 "you already have a current Distribution certificate"). Store a
+          # stable PEM key as CERTIFICATE_PRIVATE_KEY (secure env group) so
+          # --create binds to it once and REUSES that same cert forever after.
+          if [ -n "${CERTIFICATE_PRIVATE_KEY:-}" ]; then
+            printf '%s' "$CERTIFICATE_PRIVATE_KEY" > "$CM_BUILD_DIR/cert_key.pem"
+            echo "Using persistent CERTIFICATE_PRIVATE_KEY."
+          else
+            echo "WARNING: CERTIFICATE_PRIVATE_KEY is not set, generating an"
+            echo "ephemeral key. This mints a NEW distribution certificate every"
+            echo "build and will hit Apple's cert cap. Set CERTIFICATE_PRIVATE_KEY."
+            openssl genrsa -out "$CM_BUILD_DIR/cert_key.pem" 2048
+          fi
 
       - name: Fetch or create signing files (tvOS App Store)
         script: |
