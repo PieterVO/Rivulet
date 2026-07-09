@@ -61,6 +61,8 @@ enum TopShelfMapper {
                 subtitle: subtitle,
                 imageURL: absoluteURL(posterPath, serverURL: serverURL, token: token),
                 wideImageURL: absoluteURL(widePath, serverURL: serverURL, token: token),
+                logoImageURL: "",
+                compositeFileName: nil,
                 progress: m.watchProgress ?? 0,
                 type: m.type ?? "movie",
                 lastWatched: lastWatched,
