@@ -95,7 +95,10 @@ final class InsightsFilmographyRowView: UIView {
         // Same rationale as ShelfRowCell: the row owns its own small window,
         // not the focus engine's default scroll-to-visible.
         collectionView.isScrollEnabled = false
-        collectionView.remembersLastFocusedIndexPath = false
+        // True so that if the focus engine ever re-resolves focus into this
+        // row (e.g. after a vetoed off-the-edge move), it returns to the tile
+        // that was focused instead of bouncing back to a default cell.
+        collectionView.remembersLastFocusedIndexPath = true
         // Clipped: the culling boundary and the visual boundary must be the
         // same edge, or cells drawn past the bounds pop out mid-slide when
         // the collection recycles them.
@@ -137,6 +140,12 @@ final class InsightsFilmographyRowView: UIView {
     // ShelfRowCell).
     override var canBecomeFocused: Bool { false }
 
+    /// Host-gated focusability. The actor view turns the tiles OFF while the
+    /// bio above is still being read (so Down click-steps the bio instead of
+    /// the focus engine snatching focus down into the filmography), then ON
+    /// once the bio is fully scrolled.
+    var tilesFocusable: Bool = true
+
     /// Keeps Left/Right focus INSIDE this row so a press off the last tile
     /// stops there instead of the engine's diagonal search cone bouncing to
     /// a sibling section (Movies ↔ Shows) or the header. Up/Down still move
@@ -155,6 +164,10 @@ final class InsightsFilmographyRowView: UIView {
 }
 
 extension InsightsFilmographyRowView: UICollectionViewDataSource, UICollectionViewDelegate {
+    func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {
+        tilesFocusable
+    }
+
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
         entries.count
     }

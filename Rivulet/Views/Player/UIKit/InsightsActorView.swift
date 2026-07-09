@@ -203,9 +203,29 @@ final class InsightsActorView: UIView {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
+        // When focus lands on the header, gate the filmography off if the bio
+        // extends below the fold, so Down click-steps the bio (info-popup
+        // style) rather than the engine snatching focus down into the movie
+        // list. A short bio that already fits leaves the tiles reachable.
+        if context.nextFocusedView === headerView {
+            setFilmographyFocusable(headerFullyVisible(at: scrollView.contentOffset.y))
+        }
         guard let next = context.nextFocusedView, next.isDescendant(of: scrollView) else { return }
         hasPinnedInitialFocus = true
         scrollFocusedContentIntoView(next, coordinator: coordinator)
+    }
+
+    private func setFilmographyFocusable(_ on: Bool) {
+        moviesRow.tilesFocusable = on
+        showsRow.tilesFocusable = on
+    }
+
+    /// Whether the header (portrait + name + bio) is fully within the visible
+    /// window at the given vertical offset — i.e. there is no more bio to
+    /// scroll into view.
+    private func headerFullyVisible(at offsetY: CGFloat) -> Bool {
+        let headerFrame = headerView.convert(headerView.bounds, to: scrollView)
+        return headerFrame.maxY <= offsetY + scrollView.bounds.height + 0.5
     }
 
     /// While the header holds focus, Up/Down edge clicks step the panel's
@@ -234,15 +254,27 @@ final class InsightsActorView: UIView {
             guard scrollView.contentOffset.y > 0.5 else { return false }
             target = scrollView.contentOffset.y - Metrics.clickStep
         } else {
-            let headerFrame = headerView.convert(headerView.bounds, to: scrollView)
-            let visibleBottom = scrollView.contentOffset.y + scrollView.bounds.height
-            guard headerFrame.maxY > visibleBottom + 0.5 else { return false }
+            // Bio already fully read — unlock the filmography and let the
+            // press reach the focus engine so Down moves into the movie list.
+            guard !headerFullyVisible(at: scrollView.contentOffset.y) else {
+                setFilmographyFocusable(true)
+                return false
+            }
             target = scrollView.contentOffset.y + Metrics.clickStep
         }
         let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
         let clamped = min(max(0, target), maxY)
-        guard abs(clamped - scrollView.contentOffset.y) > 0.5 else { return false }
+        guard abs(clamped - scrollView.contentOffset.y) > 0.5 else {
+            if !up { setFilmographyFocusable(true) }   // hit the bottom exactly
+            return false
+        }
         scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: clamped), animated: true)
+        // If this click brings the bio's bottom into view, unlock the
+        // filmography so the *next* Down lands on the movie list with no
+        // wasted press.
+        if !up, headerFullyVisible(at: clamped) {
+            setFilmographyFocusable(true)
+        }
         return true
     }
 
