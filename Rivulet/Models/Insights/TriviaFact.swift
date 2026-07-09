@@ -111,6 +111,7 @@ extension TitleTrivia {
     ///   threshold crossed). Always dropped regardless of the toggle.
     func visibleFacts(hideSpoilers: Bool, suppressed: Set<String>) -> [TriviaFact] {
         facts
+            .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter { !suppressed.contains($0.id) }
             .filter { hideSpoilers ? $0.spoiler == 0 : true }
             .sorted { lhs, rhs in
@@ -128,6 +129,7 @@ extension TitleTrivia {
     /// - `suppressed`: fact ids to exclude (auto-hidden by Worker).
     func topTenFacts(hideSpoilers: Bool, suppressed: Set<String>) -> [TriviaFact] {
         facts
+            .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter { !suppressed.contains($0.id) }
             .filter { hideSpoilers ? $0.spoiler == 0 : true }
             .filter { $0.interest != nil && $0.interest! >= 7 }

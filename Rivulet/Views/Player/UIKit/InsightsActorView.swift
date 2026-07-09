@@ -247,28 +247,23 @@ final class InsightsActorView: UIView {
     }
 
     /// Self-driven vertical scroll (scrollView.isScrollEnabled = false
-    /// above) — keeps whatever just took focus (a filmography tile, most
-    /// often) inside the visible window. Mirrors InsightsCastListView's
-    /// identical pattern.
+    /// above), paged by section rather than minimally — see body.
     private func scrollFocusedContentIntoView(_ focused: UIView, coordinator: UIFocusAnimationCoordinator) {
-        let focusedFrameInScroll = focused.convert(focused.bounds, to: scrollView)
-        let visibleTop = scrollView.contentOffset.y
-        let visibleBottom = visibleTop + scrollView.bounds.height
-        var targetY = scrollView.contentOffset.y
-        if focusedFrameInScroll.minY < visibleTop {
-            // A view taller than the viewport (the header with a long bio)
-            // regaining focus from below: align its BOTTOM, not its top —
-            // jumping to the bio's first line would lose the reading
-            // position right above the filmography the user came from.
-            if focusedFrameInScroll.height > scrollView.bounds.height {
-                targetY = focusedFrameInScroll.maxY - scrollView.bounds.height
-            } else {
-                targetY = focusedFrameInScroll.minY
-            }
-        } else if focusedFrameInScroll.maxY > visibleBottom {
-            targetY = focusedFrameInScroll.maxY - scrollView.bounds.height
-        } else {
-            return
+        // SECTIONED paging: align the top of the arranged section that
+        // contains the newly-focused view (header / Movies / Shows) to the
+        // viewport top, so each focus hop reads as "next section" — never a
+        // partial jumble of two sections.
+        guard let section = stack.arrangedSubviews.first(where: { focused === $0 || focused.isDescendant(of: $0) })
+        else { return }
+        let sectionFrame = section.convert(section.bounds, to: scrollView)
+        var targetY = sectionFrame.minY
+        // The header with a long bio is taller than the viewport: when it
+        // regains focus from the filmography below, align its BOTTOM — the
+        // reading position right above where the user came from — and let
+        // Up-clicks step back through the bio. Aligning its top would
+        // teleport to the bio's first line.
+        if sectionFrame.height > scrollView.bounds.height, sectionFrame.minY < scrollView.contentOffset.y {
+            targetY = sectionFrame.maxY - scrollView.bounds.height
         }
         let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
         let clamped = min(max(0, targetY), maxY)

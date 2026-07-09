@@ -88,38 +88,58 @@ final class InsightsTabBarView: UIView {
             stack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
         ])
 
+        // Uniform pill width: size every pill to the widest title so the
+        // bar reads as a consistent row of tabs rather than ragged chips.
+        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .semibold)
+        let widestTitle = tabs
+            .map { ceil((Self.title(for: $0) as NSString).size(withAttributes: [.font: measuringFont]).width) }
+            .max() ?? 0
+        let pillWidth = widestTitle + 40
+
         for tab in tabs {
             let pill = InsightsTabPillView()
             pill.configure(title: Self.title(for: tab), isSelected: tab == selected)
             pill.onSelected = { [weak self] in self?.handlePillSelected(tab) }
             pill.onFocused = { [weak self] coordinator in
-                self?.scrollPillIntoView(pill, coordinator: coordinator)
+                self?.scrollPillToCenter(pill, coordinator: coordinator)
             }
+            pill.widthAnchor.constraint(equalToConstant: pillWidth).isActive = true
             stack.addArrangedSubview(pill)
             pills.append((tab, pill))
         }
     }
 
     /// Self-driven horizontal scroll (scrollView.isScrollEnabled = false
-    /// above) — keeps the focused pill inside the bar's visible width.
-    private func scrollPillIntoView(_ pill: InsightsTabPillView, coordinator: UIFocusAnimationCoordinator) {
+    /// above), center-anchored: the focused pill is pulled toward the bar's
+    /// midpoint, clamped at the content edges. Near the start/end of the
+    /// row focus visibly walks pill-to-pill; in the middle the pills stream
+    /// under a stationary focus position — so a partially-visible neighbor
+    /// always signals that more tabs exist off-edge.
+    private func scrollPillToCenter(_ pill: InsightsTabPillView, coordinator: UIFocusAnimationCoordinator) {
         let pillFrameInScroll = pill.convert(pill.bounds, to: scrollView)
-        let visibleLeft = scrollView.contentOffset.x
-        let visibleRight = visibleLeft + scrollView.bounds.width
-        var targetX = scrollView.contentOffset.x
-        if pillFrameInScroll.minX < visibleLeft {
-            targetX = pillFrameInScroll.minX
-        } else if pillFrameInScroll.maxX > visibleRight {
-            targetX = pillFrameInScroll.maxX - scrollView.bounds.width
-        } else {
-            return
-        }
+        let targetX = pillFrameInScroll.midX - scrollView.bounds.width / 2
         let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
         let clamped = min(max(0, targetX), maxX)
         guard abs(clamped - scrollView.contentOffset.x) > 0.5 else { return }
         coordinator.addCoordinatedAnimations({
             self.scrollView.contentOffset.x = clamped
         }, completion: nil)
+    }
+
+    /// Left/Right at the row's edges are consumed so focus HOLDS on the
+    /// first/last pill — otherwise the focus engine's directional search
+    /// cone finds a list row below-diagonal and focus falls out of the bar.
+    /// Runs here because presses are delivered to the focused pill and
+    /// bubble up through this ancestor.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .leftArrow || press.type == .rightArrow {
+            guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView,
+                  let index = pills.firstIndex(where: { focused === $0.view || focused.isDescendant(of: $0.view) })
+            else { continue }
+            let atEdge = press.type == .leftArrow ? index == 0 : index == pills.count - 1
+            if atEdge { return }
+        }
+        super.pressesBegan(presses, with: event)
     }
 
     private func handlePillSelected(_ tab: InsightsTab) {
@@ -220,6 +240,9 @@ private final class InsightsTabPillView: UIControl {
 
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 20, weight: .medium)
+        // Pills share one uniform width (sized to the widest title by the
+        // hosting bar), so shorter titles center within it.
+        label.textAlignment = .center
         addSubview(label)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),

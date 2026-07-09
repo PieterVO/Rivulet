@@ -47,6 +47,19 @@ final class InsightsFilmographyRowView: UIView {
     /// focus-safe).
     private var contentToken: Int?
 
+    // Per-frame horizontal scroll driver state.
+    //
+    // `UIView.animate { contentOffset.x = … }` animates only the
+    // PRESENTATION layer: the model offset jumps to the target immediately,
+    // so the collection recycles cells against the FINAL rect and outgoing
+    // tiles pop out before they visually reach the edge (same artifact —
+    // and same CADisplayLink fix — as PlexHomeViewController's vertical
+    // driver). Advancing the real offset per frame recycles progressively.
+    fileprivate var offsetLink: CADisplayLink?
+    fileprivate var offsetStartX: CGFloat = 0
+    fileprivate var offsetTargetX: CGFloat = 0
+    fileprivate var offsetStartTime: CFTimeInterval = 0
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setUp()
@@ -67,7 +80,11 @@ final class InsightsFilmographyRowView: UIView {
         flow.itemSize = CGSize(width: Metrics.tileWidth, height: Metrics.tileHeight)
         flow.minimumLineSpacing = Metrics.gap
         flow.minimumInteritemSpacing = Metrics.gap
-        flow.sectionInset = UIEdgeInsets(top: 0, left: Metrics.inset, bottom: 0, right: Metrics.inset)
+        // Vertical insets center the tiles in the row's focusGrowthPadding
+        // so the focused 1.06 scale stays inside the clipping bounds.
+        flow.sectionInset = UIEdgeInsets(
+            top: Metrics.focusGrowthPadding / 2, left: Metrics.inset,
+            bottom: Metrics.focusGrowthPadding / 2, right: Metrics.inset)
 
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: flow)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -78,7 +95,10 @@ final class InsightsFilmographyRowView: UIView {
         // not the focus engine's default scroll-to-visible.
         collectionView.isScrollEnabled = false
         collectionView.remembersLastFocusedIndexPath = false
-        collectionView.clipsToBounds = false
+        // Clipped: the culling boundary and the visual boundary must be the
+        // same edge, or cells drawn past the bounds pop out mid-slide when
+        // the collection recycles them.
+        collectionView.clipsToBounds = true
         collectionView.register(InsightsFilmographyPosterCell.self, forCellWithReuseIdentifier: InsightsFilmographyPosterCell.reuseID)
         addSubview(collectionView)
 
@@ -100,6 +120,8 @@ final class InsightsFilmographyRowView: UIView {
         guard token != contentToken else { return }
         contentToken = token
         self.entries = entries
+        offsetLink?.invalidate()
+        offsetLink = nil
         collectionView.reloadData()
         collectionView.setContentOffset(.zero, animated: false)
     }
@@ -128,20 +150,60 @@ extension InsightsFilmographyRowView: UICollectionViewDataSource, UICollectionVi
         return cell
     }
 
-    /// Keep the focused tile inside the small window — same one-driver
-    /// pattern as ShelfRowCell, tuned for a ~1.5-tile-visible panel row
-    /// instead of the 6-wide full-screen shelf.
+    /// Keep the focused tile inside the small window — minimal scroll, not
+    /// tile-to-left-edge alignment: only move when the focused tile is
+    /// actually cut off, and only far enough to reveal it (aligning every
+    /// focused tile to the left edge made the row visibly auto-scroll the
+    /// moment focus entered it).
     func collectionView(_ collectionView: UICollectionView,
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
-        guard let next = context.nextFocusedIndexPath else { return }
-        let pitch = Metrics.tileWidth + Metrics.gap
-        let targetX = CGFloat(next.item) * pitch - Metrics.inset
+        guard let next = context.nextFocusedIndexPath,
+              let attrs = collectionView.layoutAttributesForItem(at: next) else { return }
+        let visibleLeft = collectionView.contentOffset.x
+        let visibleRight = visibleLeft + collectionView.bounds.width
+        var targetX = collectionView.contentOffset.x
+        if attrs.frame.minX - Metrics.inset < visibleLeft {
+            targetX = attrs.frame.minX - Metrics.inset
+        } else if attrs.frame.maxX + Metrics.inset > visibleRight {
+            targetX = attrs.frame.maxX + Metrics.inset - collectionView.bounds.width
+        } else {
+            return
+        }
         let maxX = max(0, collectionView.contentSize.width - collectionView.bounds.width)
-        let clamped = min(max(0, targetX), maxX)
-        guard abs(clamped - collectionView.contentOffset.x) > 0.5 else { return }
-        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
-            collectionView.contentOffset.x = clamped
+        animateOffset(toX: min(max(0, targetX), maxX))
+    }
+
+    private func animateOffset(toX targetX: CGFloat) {
+        guard abs(targetX - collectionView.contentOffset.x) > 0.5 else { return }
+        offsetLink?.invalidate()
+        offsetStartX = collectionView.contentOffset.x
+        offsetTargetX = targetX
+        offsetStartTime = CACurrentMediaTime()
+        // Weak proxy: CADisplayLink retains its target strongly, and this
+        // view has no reliable teardown hook while a link holds it alive —
+        // the proxy self-invalidates once the row deallocates.
+        let link = CADisplayLink(target: OffsetLinkProxy(self), selector: #selector(OffsetLinkProxy.tick(_:)))
+        link.add(to: .main, forMode: .common)
+        offsetLink = link
+    }
+
+    fileprivate func tickOffset(_ link: CADisplayLink) {
+        let t = min(1, (CACurrentMediaTime() - offsetStartTime) / FocusScrollMotion.settleDuration)
+        let e = FocusScrollMotion.ease(t)
+        collectionView.contentOffset.x = offsetStartX + (offsetTargetX - offsetStartX) * CGFloat(e)
+        if t >= 1 {
+            link.invalidate()
+            offsetLink = nil
+        }
+    }
+
+    private final class OffsetLinkProxy: NSObject {
+        private weak var target: InsightsFilmographyRowView?
+        init(_ target: InsightsFilmographyRowView) { self.target = target }
+        @objc func tick(_ link: CADisplayLink) {
+            guard let target else { link.invalidate(); return }
+            target.tickOffset(link)
         }
     }
 }
