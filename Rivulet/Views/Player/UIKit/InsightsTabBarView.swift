@@ -218,16 +218,27 @@ final class InsightsTabBarView: UIView {
     }
 }
 
-/// Capsule pill, one per tab. Visual/interaction pattern mirrors
-/// `SeasonPillView` (Views/Media/MediaDetail/UIKit/Cells/SeasonPillView.swift):
-/// bright frosted capsule when selected OR focused, clear/dim otherwise,
-/// 1.05x focus scale, select (not mere focus) commits the change. Kept as
-/// its own type rather than reusing `SeasonPillView` directly since that
-/// type's `focusEnabled` gating and `MediaDetail`-specific label sizing
-/// (31pt) don't fit this bar's always-focusable, more compact context.
+/// Capsule pill, one per tab. Three visual states, distinct on purpose:
+///   • rest        — clear, dim label.
+///   • selected    — a translucent liquid-glass capsule (the current tab
+///                    reads as present without competing with focus).
+///   • focused     — a bright opaque white capsule, black label, 1.05 scale.
+/// Selection and focus are independent, so the selected tab keeps its glass
+/// chip while focus is on a different pill. Select (not mere focus) commits
+/// the change. Kept as its own type rather than reusing `SeasonPillView`
+/// (that type's `focusEnabled` gating and 31pt sizing don't fit this
+/// always-focusable, compact bar).
 private final class InsightsTabPillView: UIControl {
 
     private let label = UILabel()
+    /// Liquid-glass background shown only in the selected-not-focused state.
+    private let glassView: UIVisualEffectView = {
+        if #available(tvOS 26.0, *) {
+            return UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        } else {
+            return UIVisualEffectView(effect: UIBlurEffect(style: .light))
+        }
+    }()
     private var isSelectedTab = false
     private var isFocusedPill = false
 
@@ -244,6 +255,12 @@ private final class InsightsTabPillView: UIControl {
         translatesAutoresizingMaskIntoConstraints = false
         layer.cornerCurve = .continuous
 
+        glassView.translatesAutoresizingMaskIntoConstraints = false
+        glassView.clipsToBounds = true
+        glassView.isUserInteractionEnabled = false
+        glassView.isHidden = true
+        addSubview(glassView)
+
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 20, weight: .medium)
         // Pills share one uniform width (sized to the widest title by the
@@ -251,6 +268,11 @@ private final class InsightsTabPillView: UIControl {
         label.textAlignment = .center
         addSubview(label)
         NSLayoutConstraint.activate([
+            glassView.topAnchor.constraint(equalTo: topAnchor),
+            glassView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glassView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glassView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             label.topAnchor.constraint(equalTo: topAnchor, constant: 10),
@@ -265,6 +287,7 @@ private final class InsightsTabPillView: UIControl {
     override func layoutSubviews() {
         super.layoutSubviews()
         layer.cornerRadius = bounds.height / 2
+        glassView.layer.cornerRadius = bounds.height / 2
     }
 
     // Select does not fire .primaryActionTriggered on a plain UIControl on
@@ -298,10 +321,18 @@ private final class InsightsTabPillView: UIControl {
 
     private func applyStyle() {
         label.font = .systemFont(ofSize: 20, weight: (isFocusedPill || isSelectedTab) ? .semibold : .medium)
-        if isFocusedPill || isSelectedTab {
-            backgroundColor = UIColor.white.withAlphaComponent(0.88)
+        if isFocusedPill {
+            // Bright, opaque — the unambiguous focus target.
+            glassView.isHidden = true
+            backgroundColor = UIColor.white.withAlphaComponent(0.9)
             label.textColor = .black
+        } else if isSelectedTab {
+            // Current tab: translucent liquid glass, softer than focus.
+            glassView.isHidden = false
+            backgroundColor = .clear
+            label.textColor = .white
         } else {
+            glassView.isHidden = true
             backgroundColor = .clear
             label.textColor = UIColor.white.withAlphaComponent(0.72)
         }
