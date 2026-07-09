@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2 (Build 59)
+
+- New Insights panel while you watch: open it during playback to see the cast and trivia for the current movie or show.
+- Reworked the Skip button (Intro, Credits, Ads): one click to skip, it no longer overlaps the other controls, and it can show a countdown and auto-skip when you enable that in Settings.
+- Continue Watching on the Apple TV Home top shelf now shows the title logo over its backdrop art.
+- Bug fixes.
+
 ## 1.0.0 (Build 53)
 
 - Fixed the Aether player not playing any content (black screen, no audio) for some users. Updated AetherEngine to pick up upstream playback fixes.
