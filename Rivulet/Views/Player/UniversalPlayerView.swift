@@ -48,6 +48,13 @@ final class RemoteInputHandler: ObservableObject {
     /// seek input then belongs to the focus engine, not this handler.
     var isControlsFocusCheck: (() -> Bool)?
 
+    /// True while the Skip pill owns focus (chrome hidden). The pill handles
+    /// Select itself as a UIPress, so this handler must swallow the keyboard/
+    /// Menu MIRRORS of that same press (Enter→play/pause, Esc→back) that would
+    /// otherwise pause the video and pop the chrome. Seek and real play/pause
+    /// still pass through, so left/right keeps scrubbing behind the pill.
+    var isSkipPillFocusCheck: (() -> Bool)?
+
     var onAction: ((PlaybackInputAction, PlaybackInputSource) -> Void)?
 
     private var controllerObserver: NSObjectProtocol?
@@ -395,6 +402,22 @@ final class RemoteInputHandler: ObservableObject {
                 return
             default:
                 return
+            }
+        } else if isSkipPillFocusCheck?() == true {
+            // The Skip pill owns focus and handles Select itself as a UIPress.
+            // Swallow only the MIRRORS of that press — the keyboard's Enter
+            // (which would toggle play/pause and pop the chrome) and Menu/back
+            // (owned by the responder chain). Seek and real play/pause buttons
+            // pass through, so left/right still scrubs behind the pill.
+            switch action {
+            case .play, .pause, .playPause:
+                if source == .keyboard {
+                    return
+                }
+            case .back:
+                return
+            default:
+                break
             }
         }
         onAction?(action, source)
@@ -850,6 +873,9 @@ struct UniversalPlayerView: View {
             remoteInput.isControlsFocusCheck = { [weak viewModel] in
                 viewModel?.controlsFocusActive ?? false
             }
+            remoteInput.isSkipPillFocusCheck = { [weak viewModel] in
+                viewModel?.skipPillOwnsFocus ?? false
+            }
             remoteInput.onAction = { [inputCoordinator] action, source in
                 inputCoordinator.handle(action: action, source: source)
             }
@@ -984,9 +1010,13 @@ struct UniversalPlayerView: View {
         // Not focusable while controlsFocusActive: releasing focus here
         // is what lets the focus engine land on the UIKit transport
         // bar's buttons (PlayerContainerViewController routes it there).
+        // Also release focus when the skip pill owns it (chrome hidden + a
+        // marker up): that lets the focus engine land on the UIKit pill so a
+        // single Select jumps forward. PlayerContainerViewController routes it.
         .focusable(viewModel.postVideoState == .hidden
                    && !viewModel.playbackState.isFailed
-                   && !viewModel.controlsFocusActive)
+                   && !viewModel.controlsFocusActive
+                   && !viewModel.skipPillOwnsFocus)
         .contentShape(Rectangle())
         .onTapGesture {
             // Don't toggle controls if in error state

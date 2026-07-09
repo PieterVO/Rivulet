@@ -261,3 +261,25 @@ has already been removed (confirmed the user saw it, then it was deleted).
 5. Only after 1-4 are resolved, revisit bugs 1/2/3 with whatever corrected understanding emerges
    — the current fixes for them are built on the same theory as bug 4's fix, so if that theory
    needs revision, all three need to be revisited together, not independently.
+
+---
+
+## RESOLVED 2026-07-08 (commit 88731f7) — the theory above was backwards
+
+tvOS delivers presses to the **focused view** and bubbles them **up** the responder
+chain. `becomeFirstResponder()` is irrelevant while anything holds focus (proven
+in-repo: `CardInfoView`'s `InfoScrollView` is a nested view whose `pressesBegan`
+works in production). Every fix above was correct logic installed at a dead address:
+
+- Bug 4: `PlayerRailPanelView.pressesBegan` consumed `.menu` and dismissed the whole
+  panel before the VC's `handleMenuButton()` fix could ever run. Fixed in the panel.
+- Bug 1: the applied fix consumed Up, then called `setNeedsFocusUpdate()` on the tab
+  bar — ignored by UIKit because the bar does not contain the focused item. That is
+  the "press vanishes, zero focus events" symptom. Fixed by driving focus from the
+  container (common ancestor) via a transient preferredFocusEnvironments override.
+- Bug 3 + why the container's original `pressesBegan` "never ran": nothing in the
+  actor state was focusable (header non-focusable, filmography hidden until load),
+  so focus fell to the panel view itself, and presses bubble up from it, never down
+  into children. Header is now focusable; Up/Down clicks step the bio scroll.
+
+Do not reuse the first-responder press-routing theory from this document.

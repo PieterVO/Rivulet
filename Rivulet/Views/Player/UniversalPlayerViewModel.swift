@@ -362,13 +362,17 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var skippedCommercialIds: Set<Int> = []  // Track skipped commercials by ID
     private var hasTriggeredPostVideo = false
 
-    // MARK: - Intro Skip Countdown State
-    /// Current countdown value (5...4...3...2...1), 0 means no countdown active
-    @Published var introSkipCountdownSeconds: Int = 0
-    private var introSkipCountdownTimer: Timer?
-    private let introSkipDelaySeconds: Int = 5
-    /// Tracks if user cancelled auto-skip for current intro (prevents restarting countdown)
-    private var userDeclinedIntroAutoSkip = false
+    // MARK: - Auto-Skip Countdown State
+    /// Current countdown value (5...4...3...2...1), 0 means no countdown active.
+    /// Runs only when the matching Auto-Skip setting (Intro/Credits/Ads) is on;
+    /// drives the pill's "· N" suffix and auto-skips the active marker at 0.
+    @Published var skipCountdownSeconds: Int = 0
+    private var skipCountdownTimer: Timer?
+    private let skipCountdownDelaySeconds: Int = 5
+    /// Tracks if the user cancelled the auto-skip countdown for the CURRENT
+    /// marker (Menu press): keeps the manual pill up without restarting the
+    /// countdown. Reset when the active marker clears or the user seeks back.
+    private var userDeclinedAutoSkip = false
     @Published var scrubTime: TimeInterval = 0
 
     // MARK: - Post-Video State
@@ -2326,14 +2330,18 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    func seek(to time: TimeInterval) async {
+    /// - Parameter revealsControls: whether the seek should surface the
+    ///   transport chrome (the normal reveal-the-scrubber affordance). A marker
+    ///   skip taken while the chrome is hidden passes `false` so the jump
+    ///   doesn't pop the rail open.
+    func seek(to time: TimeInterval, revealsControls: Bool = true) async {
         if let ap = aetherPlayer {
             await ap.seek(to: time)
         } else {
             await player?.seek(to: CMTime(seconds: time, preferredTimescale: 600))
         }
         subtitleClockSync.didSeek()
-        showControlsTemporarily()
+        if revealsControls { showControlsTemporarily() }
     }
 
     func seekRelative(by seconds: TimeInterval) async {
@@ -3287,20 +3295,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             // 2. We've already left the marker region (activeMarker is nil)
             // This allows re-triggering after seeking back without causing repeated skips
             // during initial playback.
-            if hasSkippedIntro || userDeclinedIntroAutoSkip {
+            if hasSkippedIntro || userDeclinedAutoSkip {
                 if time < previewStart {
                     hasSkippedIntro = false
-                    userDeclinedIntroAutoSkip = false
+                    userDeclinedAutoSkip = false
                     // Cancel any running countdown
-                    introSkipCountdownTimer?.invalidate()
-                    introSkipCountdownTimer = nil
-                    introSkipCountdownSeconds = 0
+                    cancelSkipCountdownTimer()
                 } else if previewStart == 0 && time < intro.startTimeSeconds + 1.0 && activeMarker == nil {
                     hasSkippedIntro = false
-                    userDeclinedIntroAutoSkip = false
-                    introSkipCountdownTimer?.invalidate()
-                    introSkipCountdownTimer = nil
-                    introSkipCountdownSeconds = 0
+                    userDeclinedAutoSkip = false
+                    cancelSkipCountdownTimer()
                 }
             }
 
@@ -3403,10 +3407,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // No active marker
+        // No active marker: clear the pill and reset the per-marker auto-skip
+        // decline/countdown so the next marker starts fresh.
         if activeMarker != nil {
             activeMarker = nil
             showSkipButton = false
+            userDeclinedAutoSkip = false
+            cancelSkipCountdownTimer()
         }
     }
 
@@ -3421,16 +3428,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // This ensures we use Plex's exact marker timing and don't cut off content
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // Check for auto-skip with countdown (only when inside actual marker range)
-        if isIntro && autoSkipIntro && !hasSkippedIntro && insideMarker && !userDeclinedIntroAutoSkip {
-            // Start countdown timer if not already running
-            if introSkipCountdownTimer == nil && introSkipCountdownSeconds == 0 {
-                startIntroSkipCountdown(for: marker)
-            }
-            // Show skip button during countdown
+        // Auto-skip with a visible countdown when the setting is on. Show the
+        // pill first so the countdown has something to render "· N" onto.
+        if isIntro && autoSkipIntro && !hasSkippedIntro && insideMarker && !userDeclinedAutoSkip {
             if activeMarker == nil {
                 activeMarker = marker
                 showSkipButton = true
+            }
+            if skipCountdownTimer == nil && skipCountdownSeconds == 0 {
+                startSkipCountdown(for: marker)
             }
             return
         }
@@ -3442,37 +3448,46 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Start countdown timer for auto-skip intro
-    private func startIntroSkipCountdown(for marker: PlexMarker) {
-        introSkipCountdownSeconds = introSkipDelaySeconds
+    /// Start the auto-skip countdown for `marker`. Shared by intro/credits/ads;
+    /// at 0 it funnels through `skipMarker` (which marks the right skipped set
+    /// per type). The pill shows a live "· N" suffix while this runs.
+    private func startSkipCountdown(for marker: PlexMarker) {
+        skipCountdownSeconds = skipCountdownDelaySeconds
 
-        introSkipCountdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        skipCountdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
             Task { @MainActor in
                 guard let self = self else {
                     timer.invalidate()
                     return
                 }
 
-                self.introSkipCountdownSeconds -= 1
+                self.skipCountdownSeconds -= 1
 
-                if self.introSkipCountdownSeconds <= 0 {
+                if self.skipCountdownSeconds <= 0 {
                     timer.invalidate()
-                    self.introSkipCountdownTimer = nil
-                    self.hasSkippedIntro = true
+                    self.skipCountdownTimer = nil
+                    self.skipCountdownSeconds = 0
                     await self.skipMarker(marker)
                 }
             }
         }
     }
 
-    /// Cancel the intro skip countdown (called when user presses Menu during countdown)
-    func cancelIntroSkipCountdown() {
-        guard introSkipCountdownTimer != nil || introSkipCountdownSeconds > 0 else { return }
+    /// Tear down the countdown timer without marking the marker declined —
+    /// used by seek-back resets and when the active marker clears.
+    private func cancelSkipCountdownTimer() {
+        skipCountdownTimer?.invalidate()
+        skipCountdownTimer = nil
+        skipCountdownSeconds = 0
+    }
 
-        introSkipCountdownTimer?.invalidate()
-        introSkipCountdownTimer = nil
-        introSkipCountdownSeconds = 0
-        userDeclinedIntroAutoSkip = true  // Don't restart countdown for this intro
+    /// Cancel the auto-skip countdown (user pressed Menu during the countdown).
+    /// Leaves the manual pill up but declines auto-skip for the current marker.
+    func cancelSkipCountdown() {
+        guard skipCountdownTimer != nil || skipCountdownSeconds > 0 else { return }
+
+        cancelSkipCountdownTimer()
+        userDeclinedAutoSkip = true  // Don't restart the countdown for this marker
     }
 
     /// Handle when playback enters a credits marker range (or preview window)
@@ -3485,10 +3500,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // Check for auto-skip (only when inside actual marker range)
-        if autoSkipCredits && !skippedCreditsIds.contains(creditsId) && insideMarker {
-            skippedCreditsIds.insert(creditsId)
-            Task { await skipMarker(marker) }
+        // Auto-skip with a visible countdown when the setting is on.
+        if autoSkipCredits && !skippedCreditsIds.contains(creditsId) && insideMarker && !userDeclinedAutoSkip {
+            if activeMarker == nil {
+                activeMarker = marker
+                showSkipButton = true
+            }
+            if skipCountdownTimer == nil && skipCountdownSeconds == 0 {
+                startSkipCountdown(for: marker)
+            }
             return
         }
 
@@ -3509,10 +3529,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
 
-        // Check for auto-skip (only when inside actual marker range)
-        if autoSkipAds && !skippedCommercialIds.contains(commercialId) && insideMarker {
-            skippedCommercialIds.insert(commercialId)
-            Task { await skipMarker(marker) }
+        // Auto-skip with a visible countdown when the setting is on.
+        if autoSkipAds && !skippedCommercialIds.contains(commercialId) && insideMarker && !userDeclinedAutoSkip {
+            if activeMarker == nil {
+                activeMarker = marker
+                showSkipButton = true
+            }
+            if skipCountdownTimer == nil && skipCountdownSeconds == 0 {
+                startSkipCountdown(for: marker)
+            }
             return
         }
 
@@ -3531,13 +3556,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Skip to end of a specific marker
     private func skipMarker(_ marker: PlexMarker) async {
+        // Stop any running auto-skip countdown — this funnels both the manual
+        // skip (user clicked the pill) and the countdown reaching 0.
+        cancelSkipCountdownTimer()
         // Mark as skipped to prevent re-showing button if user seeks back
         if marker.isIntro {
             hasSkippedIntro = true
-            // Cancel any running countdown (user clicked skip button manually)
-            introSkipCountdownTimer?.invalidate()
-            introSkipCountdownTimer = nil
-            introSkipCountdownSeconds = 0
         } else if marker.isCredits, let creditsId = marker.id {
             skippedCreditsIds.insert(creditsId)
         } else if marker.isCommercial, let commercialId = marker.id {
@@ -3562,7 +3586,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // stale invocation point can't spuriously revert subtitles later,
         // disconnected from where playback actually landed post-skip.
         clearReplayWindow()
-        await seek(to: target)
+        // Preserve the chrome state across the skip: if the controls were
+        // hidden (the pill owned focus), the jump must NOT pop the rail open;
+        // if they were already up, keep them up.
+        await seek(to: target, revealsControls: showControls)
 
         // Hide button
         activeMarker = nil
@@ -3580,6 +3607,25 @@ final class UniversalPlayerViewModel: ObservableObject {
             return "Skip Ad"
         }
         return "Skip"
+    }
+
+    /// Pill title including the live auto-skip countdown when one is running
+    /// (e.g. "Skip Intro · 5"). Without a countdown it is just the base label.
+    var skipButtonDisplayLabel: String {
+        skipCountdownSeconds > 0 ? "\(skipButtonLabel) · \(skipCountdownSeconds)" : skipButtonLabel
+    }
+
+    /// True when the skip pill is the lone on-screen affordance — chrome
+    /// hidden, not scrubbing, no post-video, live video frame — and should
+    /// own focus so a single Select jumps forward. Mirrors
+    /// `controlsFocusActive`: while true the SwiftUI content layer releases
+    /// focus and `PlayerContainerViewController` routes it to the pill.
+    var skipPillOwnsFocus: Bool {
+        showSkipButton
+            && !showControls
+            && !isScrubbing
+            && postVideoState == .hidden
+            && pausePresentation == .frame
     }
 
     /// Fetch detailed metadata with markers if not already present
@@ -4262,11 +4308,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // action the user took in the new episode.
         clearReplayWindow()
 
-        // Reset intro skip countdown state
-        introSkipCountdownTimer?.invalidate()
-        introSkipCountdownTimer = nil
-        introSkipCountdownSeconds = 0
-        userDeclinedIntroAutoSkip = false
+        // Reset auto-skip countdown state
+        cancelSkipCountdownTimer()
+        userDeclinedAutoSkip = false
         nextEpisode = nil
 
         // New episode: allow the early next-episode resolve to run again.
@@ -4376,7 +4420,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         wheelScrubbingTimer?.invalidate()
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
-        introSkipCountdownTimer?.invalidate()
+        skipCountdownTimer?.invalidate()
         aetherStallWatchdogTask?.cancel()
         insightsRecheckTask?.cancel()
         if let observer = appBackgroundObserver {

@@ -124,8 +124,21 @@ class PlayerContainerViewController: UIViewController {
             let bar = PlayerProgressBarView()
             let proxy = ScrubberFocusProxyView()
             let pill = SkipPillButton()
-            pill.isHidden = true
-            pill.addTarget(self, action: #selector(skipPillTapped), for: .primaryActionTriggered)
+            // Alpha-driven visibility (see applyChromeVisibility): alpha 0 also
+            // makes the pill non-focusable, so it can't steal focus while hidden.
+            pill.alpha = 0
+            pill.onSelect = { [weak self] in
+                Task { await self?.viewModel?.skipActiveMarker() }
+            }
+            // Up/Down while the pill owns focus (chrome hidden) surfaces the
+            // controls; while the chrome is up, let the engine move focus back
+            // to the rail on Down (return false → not consumed).
+            pill.onDirectionalPress = { [weak self] _ in
+                guard let vm = self?.viewModel else { return false }
+                if vm.showControls { return false }
+                vm.showControlsTemporarily()
+                return true
+            }
 
             // Top-left pause indicator: two bars + "Paused · Xm left".
             let barsStack = UIStackView()
@@ -228,9 +241,11 @@ class PlayerContainerViewController: UIViewController {
                 proxy.topAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
                 proxy.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: 8),
 
-                // Skip pill floats above the scrubber's right end.
+                // Skip pill: right-aligned with the scrubber's right end. Its
+                // vertical position is driven from applyChromeVisibility (see
+                // skipPillBottomConstraint): just above the rail plate when the
+                // chrome is up, dropped lower over the video when it's hidden.
                 pill.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-                pill.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -28),
 
                 // Pause indicator: top 44 / leading 64.
                 indicator.topAnchor.constraint(equalTo: view.topAnchor, constant: 44),
@@ -242,6 +257,29 @@ class PlayerContainerViewController: UIViewController {
                 loadingLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 44),
                 loadingLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 64),
             ])
+            // Adjustable vertical position (constant retargeted in
+            // applyChromeVisibility). Starts in the rail-hidden (lower) spot.
+            let pillBottom = pill.bottomAnchor.constraint(
+                equalTo: railView.topAnchor, constant: Self.skipPillLoweredOffset)
+            pillBottom.isActive = true
+            skipPillBottomConstraint = pillBottom
+
+            // Focus bridge so an Up press from ANY rail button reaches the pill,
+            // not just the buttons that happen to sit under it. Spans the rail
+            // width in the gap between the button row and the pill; enabled only
+            // while the pill is visible (see applyChromeVisibility).
+            let skipGuide = UIFocusGuide()
+            view.addLayoutGuide(skipGuide)
+            skipGuide.preferredFocusEnvironments = [pill]
+            skipGuide.isEnabled = false
+            NSLayoutConstraint.activate([
+                skipGuide.leadingAnchor.constraint(equalTo: railView.leadingAnchor),
+                skipGuide.trailingAnchor.constraint(equalTo: railView.trailingAnchor),
+                skipGuide.bottomAnchor.constraint(equalTo: railView.topAnchor),
+                skipGuide.topAnchor.constraint(equalTo: pill.bottomAnchor),
+            ])
+            skipPillFocusGuide = skipGuide
+
             rail = railView
             progressBar = bar
             scrubberProxy = proxy
@@ -302,6 +340,12 @@ class PlayerContainerViewController: UIViewController {
         if let panel = activeRailPanel, panel.window != nil {
             return [panel]
         }
+        // Chrome hidden + a skip marker up: the pill is the lone affordance, so
+        // it owns focus and a single Select jumps forward. (Ownership is false
+        // whenever the rail/panel is up, so this never fights the checks above.)
+        if viewModel?.skipPillOwnsFocus == true, let skipPill {
+            return [skipPill]
+        }
         if viewModel?.controlsFocusActive == true, let rail {
             return [rail]
         }
@@ -319,9 +363,9 @@ class PlayerContainerViewController: UIViewController {
 
         // Check if we have something to close before allowing dismiss
         if let vm = viewModel {
-            // Cancel intro skip countdown if active
-            if vm.introSkipCountdownSeconds > 0 {
-                vm.cancelIntroSkipCountdown()
+            // Cancel auto-skip countdown if active
+            if vm.skipCountdownSeconds > 0 {
+                vm.cancelSkipCountdown()
                 return
             }
             if vm.postVideoState != .hidden {
@@ -375,6 +419,21 @@ class PlayerContainerViewController: UIViewController {
     /// paused presentation so a transient startup `.paused` never flashes
     /// "Paused" chrome before playback has begun.
     private var hasPlayedSinceLoad = false
+
+    /// Last-seen value of `viewModel.skipPillOwnsFocus`, so a change can
+    /// trigger a focus re-resolution toward/away from the pill exactly once.
+    private var lastSkipPillOwnsFocus = false
+
+    /// Pill's bottom-to-rail-top constraint, retargeted between the raised and
+    /// lowered offsets as the chrome shows/hides.
+    private var skipPillBottomConstraint: NSLayoutConstraint?
+    /// Redirects an Up press from any rail button to the pill.
+    private var skipPillFocusGuide: UIFocusGuide?
+    /// Just above the rail plate — used while the transport chrome is visible.
+    private static let skipPillRaisedOffset: CGFloat = -20
+    /// Dropped lower over the video — used while the chrome is hidden, so the
+    /// pill reads as a standalone lower affordance rather than a floating strip.
+    private static let skipPillLoweredOffset: CGFloat = 200
 
     /// Flag to block dismiss calls that occur immediately after we handled a menu action
     /// This prevents the double-handling issue where handleMenuButton() closes something,
@@ -454,7 +513,7 @@ class PlayerContainerViewController: UIViewController {
     }
 
     /// Handle Menu button press with priority:
-    /// 1. Cancel intro skip countdown if active
+    /// 1. Cancel auto-skip countdown if active
     /// 2. Dismiss post-video overlay if showing
     /// 3. Cancel scrubbing if active
     /// 4. Close an open pill popup (Subtitles/Audio/Info) if any
@@ -467,9 +526,9 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
-        // Cancel intro skip countdown if active (highest priority)
-        if vm.introSkipCountdownSeconds > 0 {
-            vm.cancelIntroSkipCountdown()
+        // Cancel auto-skip countdown if active (highest priority)
+        if vm.skipCountdownSeconds > 0 {
+            vm.cancelSkipCountdown()
             blockDismissTemporarily()
             return
         }
@@ -810,7 +869,6 @@ class PlayerContainerViewController: UIViewController {
                 self.rail?.setLoading(loading)
                 self.progressBar?.setSkeleton(loading)
                 self.progressBar?.setPausedDim(state == .paused && self.hasPlayedSinceLoad)
-                self.skipPill?.isHidden = loading || !vm.showSkipButton
 
                 // Mid-playback buffering (seek landings, engine stalls)
                 // borrows the same quiet cue — no skeleton, no centered
@@ -828,12 +886,19 @@ class PlayerContainerViewController: UIViewController {
             }
             .store(in: &cancellables)
 
+        // Pill title + visibility + focus-ownership all react to the skip
+        // button toggling and to the live countdown ticking.
         vm.$showSkipButton
+            .combineLatest(vm.$skipCountdownSeconds)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak vm] show in
-                self?.skipPill?.isHidden = !show
-                self?.skipPill?.setTitle(vm?.skipButtonLabel, for: .normal)
-            }
+            .sink { [weak self] _ in self?.refreshSkipPill() }
+            .store(in: &cancellables)
+
+        // Post-video takes its own focus layer and hides the pill; keep the
+        // pill's visibility/ownership in sync when it appears or dismisses.
+        vm.$postVideoState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
         vm.$subtitleTracks
@@ -1097,6 +1162,27 @@ class PlayerContainerViewController: UIViewController {
 
         scrubberProxy?.isFocusEnabled = railVisible && !isLoading && vm.controlsFocusActive
 
+        // The skip pill lives independently of the rail: it stays up whenever a
+        // marker is active (chrome shown OR hidden), so the user can jump forward
+        // without first surfacing the controls. Hidden only while loading, during
+        // ambient pause, or when post-video has taken over.
+        let skipVisible = vm.showSkipButton && !isLoading && !ambient && vm.postVideoState == .hidden
+
+        // Whether the pill owns focus (e.g. controls just hid with a marker up).
+        // The focus re-resolution happens AFTER the alpha write below: the engine
+        // only treats the pill as focusable once its model alpha is 1, so pushing
+        // focus before the fade write would land nowhere.
+        let ownsFocus = vm.skipPillOwnsFocus
+        let ownershipChanged = ownsFocus != lastSkipPillOwnsFocus
+        lastSkipPillOwnsFocus = ownsFocus
+
+        // Pill sits just above the rail plate while the chrome is up, and drops
+        // lower over the video when it hides.
+        let pillOffset = railVisible ? Self.skipPillRaisedOffset : Self.skipPillLoweredOffset
+        let pillOffsetChanged = skipPillBottomConstraint?.constant != pillOffset
+        skipPillBottomConstraint?.constant = pillOffset
+        refreshSkipGuideEnabled()
+
         // The panel floats above the rail — a scrub/ambient/hide that
         // takes the rail away must take the panel with it, since it
         // has nothing to anchor to and no route back to visible.
@@ -1109,7 +1195,7 @@ class PlayerContainerViewController: UIViewController {
             (progressBar, scrubberVisible ? 1 : 0),
             (ambientScrim, (ambient && !isLoading) ? 1 : 0),
             (rail, railAlpha),
-            (skipPill, railVisible && !isLoading ? 1 : 0),
+            (skipPill, skipVisible ? 1 : 0),
             (pauseIndicator, paused ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
             (loadingLabel, showsActivityCue && !ambient ? 1 : 0),
@@ -1122,15 +1208,46 @@ class PlayerContainerViewController: UIViewController {
         let targetsChanged = targets.contains(where: { view, alpha in
             view.map { abs($0.alpha - alpha) > 0.01 } == true
         })
-        guard targetsChanged || railAmbientChanged else { return }
+        guard targetsChanged || railAmbientChanged || ownershipChanged || pillOffsetChanged else { return }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
             self.rail?.setAmbient(ambient, keepTitle: keepRailTitle)
+            if pillOffsetChanged { self.view.layoutIfNeeded() }
+        }
+        // Model alpha is now 1 for a visible pill, so the engine will accept it
+        // as a focus target. Re-resolve toward/away from the pill exactly once.
+        if ownershipChanged {
+            setNeedsFocusUpdate()
+            updateFocusIfNeeded()
         }
     }
 
-    @objc private func skipPillTapped() {
-        Task { await viewModel?.skipActiveMarker() }
+    /// Sync the pill's title (including any live countdown suffix) and
+    /// re-evaluate its visibility + focus ownership.
+    private func refreshSkipPill() {
+        skipPill?.setTitle(viewModel?.skipButtonDisplayLabel, for: .normal)
+        applyChromeVisibility()
+    }
+
+    /// The Up→pill focus bridge is live only while the rail AND pill are on
+    /// screen and the pill isn't already focused — disabling it when the pill
+    /// holds focus keeps Down from being trapped straight back onto the pill.
+    private func refreshSkipGuideEnabled(pillFocusedOverride: Bool? = nil) {
+        guard let vm = viewModel else { skipPillFocusGuide?.isEnabled = false; return }
+        let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
+        let railVisible = vm.showControls && !vm.isScrubbing && vm.pausePresentation == .frame
+        let skipVisible = vm.showSkipButton && !isLoading
+            && vm.pausePresentation == .frame && vm.postVideoState == .hidden
+        let pillFocused = pillFocusedOverride ?? (skipPill?.isFocused ?? false)
+        skipPillFocusGuide?.isEnabled = railVisible && skipVisible && !pillFocused
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        // Focus moved to/from the pill: retoggle the Up→pill bridge so it never
+        // traps the pill's own Down press. Read the new focus from the context —
+        // `isFocused` isn't reliably updated yet mid-transition.
+        refreshSkipGuideEnabled(pillFocusedOverride: context.nextFocusedView === skipPill)
     }
 }
 
