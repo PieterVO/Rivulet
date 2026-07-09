@@ -2,9 +2,15 @@
 
 ## 1.0.2 (Build 59)
 
-- New Insights panel while you watch: open it during playback to see the cast and trivia for the current movie or show.
-- Reworked the Skip button (Intro, Credits, Ads): one click to skip, it no longer overlaps the other controls, and it can show a countdown and auto-skip when you enable that in Settings.
-- Continue Watching on the Apple TV Home top shelf now shows the title logo over its backdrop art.
+Everything new since 1.0.1 (54):
+
+- Insights (work in progress): while watching, open Insights to see the cast and trivia for the current movie or show. Still being built out, so coverage and accuracy will keep improving.
+- Redesigned the player controls: a cleaner glass control bar with subtitles, audio, info, and Up Next, plus smoother scrubbing with thumbnail previews.
+- Reworked the Skip button (Intro, Credits, Ads): one click to skip, it stays clear of the other controls, and it can count down and auto skip when you turn that on in Settings.
+- Redesigned the paused screen with full quality backdrop art and the title logo.
+- The Apple TV Home top shelf now shows Continue Watching as full bleed artwork with the title logo.
+- New Home hero that highlights trending movies and shows.
+- Playback fixes: subtitles keep their selection when you change the audio track, trick play thumbnails line up with the right moment, and fast forward and rewind speeds are steadier.
 - Bug fixes.
 
 ## 1.0.0 (Build 53)
