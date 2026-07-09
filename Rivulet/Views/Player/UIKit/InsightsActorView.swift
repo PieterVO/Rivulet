@@ -124,7 +124,12 @@ final class InsightsActorView: UIView {
         clipsToBounds = false
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.clipsToBounds = false
+        // UIScrollView clips by default — keep it, or the self-driven
+        // scroll draws the bio/filmography straight past the panel's
+        // bottom edge over the video (CardInfoView contains its content
+        // for exactly this reason). rowInset gives the focused rows'
+        // scale headroom inside the clip.
+        scrollView.clipsToBounds = true
         scrollView.showsVerticalScrollIndicator = false
         // Same rationale as InsightsCastListView/InsightsFilmographyRowView:
         // the focus engine's own scroll-to-visible fights a self-driven

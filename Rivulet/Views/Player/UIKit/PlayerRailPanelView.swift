@@ -51,6 +51,16 @@ final class PlayerRailPanelView: UIView {
 
     var onDismiss: (() -> Void)?
 
+    /// Fired whenever this panel consumes a `.menu` press (whether the
+    /// content handled it internally or the panel dismissed). tvOS ALSO
+    /// processes Menu through a system gesture recognizer that races
+    /// responder-chain consumption and calls `dismiss(animated:)` on the
+    /// presenting VC — the host uses this hook to arm its block-next-dismiss
+    /// guard so that system echo doesn't peel a second layer (it used to be
+    /// invisibly absorbed because the panel was already dismissing; now that
+    /// Menu can leave the panel open, it must be blocked explicitly).
+    var onMenuHandled: (() -> Void)?
+
     /// Gives the hosted content first refusal on Menu — see
     /// `RailPanelMenuHandling`'s doc comment for why this exists. Called
     /// from this panel's own `pressesBegan` (the live path while focus is
@@ -239,6 +249,7 @@ final class PlayerRailPanelView: UIView {
             // VC. Content gets first refusal (e.g. Insights' actor state
             // reverse-crossfades back to its list) before the whole panel
             // dismisses.
+            onMenuHandled?()
             if !contentHandlesMenuPress() {
                 dismissPanel()
             }

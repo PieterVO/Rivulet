@@ -28,6 +28,10 @@ final class InsightsTabBarView: UIView {
     private enum Metrics {
         static let pillSpacing: CGFloat = 8
         static let barHeight: CGFloat = 56
+        /// Horizontal inset inside the clipping scroll view so a focused
+        /// pill's 1.05 scale doesn't clip at the bar's edges — mirrors
+        /// InsightsCastListView's rowInset.
+        static let pillInset: CGFloat = 8
     }
 
     var onSelect: ((InsightsTab) -> Void)?
@@ -49,7 +53,10 @@ final class InsightsTabBarView: UIView {
     private func setUp(tabs: [InsightsTab]) {
         translatesAutoresizingMaskIntoConstraints = false
         scrollView.showsHorizontalScrollIndicator = false
-        scrollView.clipsToBounds = false
+        // UIScrollView clips by default (that's what keeps CardInfoView's
+        // content inside the panel); keep it so pills beyond the panel's
+        // width stay hidden until the self-driven scroll reveals them.
+        scrollView.clipsToBounds = true
         // Same rationale as InsightsFilmographyRowView/InsightsCastListView:
         // the focus engine's own scroll-to-visible fights a self-driven
         // offset, and with more pills than fit the panel's fixed width
@@ -59,6 +66,9 @@ final class InsightsTabBarView: UIView {
         scrollView.isScrollEnabled = false
         stack.axis = .horizontal
         stack.spacing = Metrics.pillSpacing
+        // Pills keep their intrinsic height, centered in the bar, so the
+        // focused 1.05 scale has vertical headroom inside the clip.
+        stack.alignment = .center
 
         [scrollView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         scrollView.addSubview(stack)
@@ -72,8 +82,8 @@ final class InsightsTabBarView: UIView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: Metrics.pillInset),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -Metrics.pillInset),
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
             stack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
         ])
@@ -206,7 +216,6 @@ private final class InsightsTabPillView: UIControl {
     override init(frame: CGRect) {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
-        addTarget(self, action: #selector(handleSelect), for: .primaryActionTriggered)
         layer.cornerCurve = .continuous
 
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -229,7 +238,16 @@ private final class InsightsTabPillView: UIControl {
         layer.cornerRadius = bounds.height / 2
     }
 
-    @objc private func handleSelect() { onSelected?() }
+    // Select does not fire .primaryActionTriggered on a plain UIControl on
+    // tvOS; handle the press directly (same trap as InsightsCastRowButton /
+    // UpNextRowButton).
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .select {
+            onSelected?()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
 
     func configure(title: String, isSelected: Bool) {
         label.text = title

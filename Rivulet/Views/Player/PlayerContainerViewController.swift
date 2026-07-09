@@ -1004,6 +1004,11 @@ class PlayerContainerViewController: UIViewController {
         activeRailPanel?.dismissPanel()
         let panel = PlayerRailPanelView.present(content: content, width: width,
                                                 in: view, aboveRail: rail, towards: button)
+        // The system's Menu gesture recognizer races the panel's own
+        // responder-chain consumption and calls dismiss(animated:) on this
+        // VC afterwards — arm the block so that echo is swallowed instead
+        // of force-dismissing a panel that just handled Menu internally.
+        panel.onMenuHandled = { [weak self] in self?.blockDismissTemporarily() }
         panel.onDismiss = { [weak self, weak panel] in
             guard let self else { return }
             // Guard on identity: a superseding presentRailPanel() call
