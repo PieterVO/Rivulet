@@ -122,7 +122,9 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-        # Leave beta groups empty for now; add internal/external group names
-        # here once you want auto-distribution to testers.
-        # beta_groups:
-        #   - Internal Testers
+        # Auto-distribute each TestFlight build to the internal and external
+        # tester groups. External groups go through Apple's Beta App Review on
+        # the first build; Codemagic just assigns the group.
+        beta_groups:
+          - Rivulet                        # internal testers
+          - Rivulet External Plex Forum    # external testers
