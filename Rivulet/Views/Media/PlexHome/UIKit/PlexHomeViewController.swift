@@ -1243,13 +1243,6 @@ final class PlexHomeViewController: UIViewController {
     /// directional move, so focus is never yanked mid-navigation.
     private var needsInitialHeroFocus = true
 
-    /// Section index of the currently-focused cell, tracked from
-    /// `didUpdateFocusIn`. Read by the Menu-press handler (`pressesBegan`) to
-    /// decide whether the back button should scroll to the top (focus is deep in
-    /// the grid) or bubble to the shell to open the sidebar (focus already on the
-    /// hero). nil when focus is outside the collection (e.g. the sidebar).
-    private var lastFocusedSectionIndex: Int?
-
     private var heroSectionIndex: Int? {
         sectionsSnapshot.firstIndex(where: { $0.kind == .hero })
     }
@@ -4198,37 +4191,6 @@ final class PlexHomeViewController: UIViewController {
         }
         return super.preferredFocusEnvironments
     }
-
-    // MARK: - Menu (back) button: staged back navigation
-
-    /// Staged back navigation (issues #19 / #192). The first Menu press from deep
-    /// in the grid scrolls to the top and moves focus to the hero; a second press
-    /// (focus already on the hero) is passed through so the `.sidebarAdaptable`
-    /// shell performs its native sidebar reveal. From there the sidebar itself
-    /// owns the final "go Home" step (see `TVSidebarView.onExitCommand`).
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        guard presses.contains(where: { $0.type == .menu }) else {
-            super.pressesBegan(presses, with: event)
-            return
-        }
-
-        // If focus is already on the hero (or we can't tell where it is / there
-        // is no hero), there is nowhere further back to scroll — let Menu bubble
-        // so the shell opens the sidebar.
-        let heroIndex = heroSectionIndex
-        let focusIsAtTop = heroIndex == nil || lastFocusedSectionIndex == heroIndex
-        guard !focusIsAtTop else {
-            super.pressesBegan(presses, with: event)
-            return
-        }
-
-        // Deep in the grid: consume the press, snap to the top and route focus
-        // back to the hero (matches Plex's "reset to first item, first row").
-        scrollHeroIntoView()
-        needsInitialHeroFocus = true
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
-    }
 }
 
 // MARK: - Delegate
@@ -4583,11 +4545,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                         with coordinator: UIFocusAnimationCoordinator) {
         // Resolve the section that owns the newly-focused view.
         guard let nextSectionIndex = focusedSectionIndex(in: context) else {
-            lastFocusedSectionIndex = nil
             updateLeftEdgeGuide(for: nil)
             return
         }
-        lastFocusedSectionIndex = nextSectionIndex
         let kind: HomeSectionKind? = sectionsSnapshot.indices.contains(nextSectionIndex)
             ? sectionsSnapshot[nextSectionIndex].kind
             : nil
