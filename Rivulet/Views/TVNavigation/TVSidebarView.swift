@@ -109,10 +109,11 @@ struct TVSidebarView: View {
     var body: some View {
         sidebarTabView
         .onExitCommand {
-            // Staged back button (issue #192): a Menu press from the open
-            // sidebar on a non-Home tab returns to Home. From the content grid
-            // this is a no-op — the press falls through to the system's sidebar
-            // reveal and PlexHomeViewController's scroll-to-top (issue #19).
+            // Back button (issue #192): a Menu press from the open sidebar on a
+            // non-Home tab returns to the Home tab (matching Plex, where the back
+            // button eventually walks you back to Home). From the content grid
+            // this is a no-op — the press is handled by the system's native
+            // sidebar reveal.
             if selectedTab != .home, Self.isFocusInSidebar() {
                 selectedTab = .home
             }
@@ -908,11 +909,10 @@ struct TVSidebarView: View {
     }
 
     /// True when the remote's Menu press is arriving while focus is inside the
-    /// sidebar (not the content grid). Used to stage the back button: on a
-    /// non-Home tab, a Menu press from the open sidebar selects Home (issue
-    /// #192). A Menu press from the content grid returns false here and falls
-    /// through to the system's native sidebar reveal / the grid's own scroll-to-
-    /// top handler (issue #19, owned by PlexHomeViewController).
+    /// sidebar (not the content grid). Used to stage the back button (issue
+    /// #192): on a non-Home tab, a Menu press from the open sidebar selects Home.
+    /// A Menu press from the content grid returns false here and falls through to
+    /// the system's native sidebar reveal.
     @MainActor
     private static func isFocusInSidebar() -> Bool {
         guard let scene = UIApplication.shared.connectedScenes
