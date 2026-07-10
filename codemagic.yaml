@@ -10,7 +10,6 @@ workflows:
     environment:
       groups:
         - rivulet
-        - github
       vars:
         XCODE_SCHEME: "Rivulet"
         XCODE_PROJECT: "Rivulet.xcodeproj"
