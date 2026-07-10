@@ -1,9 +1,3 @@
-# Codemagic CI/CD configuration for Rivulet (tvOS)
-# Docs: https://docs.codemagic.io/yaml-quick-start/building-a-native-ios-app/
-#
-# Archives a signed Release build of the Rivulet scheme and uploads to
-# TestFlight. Signing files are fetched automatically from App Store Connect.
-
 workflows:
   rivulet-tvos-testflight:
     name: Rivulet tvOS → TestFlight
@@ -16,12 +10,12 @@ workflows:
     environment:
       groups:
         - rivulet
-        - github   # provides GITHUB_TOKEN for publishing the IPA to Releases
+        - github
       vars:
         XCODE_SCHEME: "Rivulet"
         XCODE_PROJECT: "Rivulet.xcodeproj"
         BUNDLE_ID: "com.gstudios.rivulet"
-        APP_STORE_APPLE_ID: 6756892857   # Rivulet's App Store Connect Apple ID
+        APP_STORE_APPLE_ID: 6756892857
       xcode: latest
 
     triggering:
@@ -38,12 +32,6 @@ workflows:
 
       - name: Provide the distribution certificate private key
         script: |
-          # Persist ONE distribution certificate across builds. Regenerating the
-          # key every build made `fetch-signing-files --create` mint a NEW cert
-          # each run, which eventually hit Apple's distribution-cert cap (HTTP
-          # 409 "you already have a current Distribution certificate"). Store a
-          # stable PEM key as CERTIFICATE_PRIVATE_KEY (secure env group) so
-          # --create binds to it once and REUSES that same cert forever after.
           if [ -n "${CERTIFICATE_PRIVATE_KEY:-}" ]; then
             printf '%s' "$CERTIFICATE_PRIVATE_KEY" > "$CM_BUILD_DIR/cert_key.pem"
             echo "Using persistent CERTIFICATE_PRIVATE_KEY."
@@ -56,9 +44,6 @@ workflows:
 
       - name: Fetch or create signing files (tvOS App Store)
         script: |
-          # --create generates the distribution certificate (backed by the
-          # key above) AND any missing provisioning profiles for the app and
-          # its TopShelf extension (com.gstudios.rivulet.*).
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
             --type TVOS_APP_STORE \
@@ -78,9 +63,6 @@ workflows:
 
       - name: Generate Secrets.swift from env
         script: |
-          # Secrets.swift is gitignored (holds the Sentry DSN); recreate it on
-          # CI from the SENTRY_DSN env var (group `rivulet`). Falls back to the
-          # template's placeholder if unset so the build still compiles.
           cat > Rivulet/Config/Secrets.swift <<EOF
           import Foundation
 
@@ -92,8 +74,6 @@ workflows:
 
       - name: Set build number from Codemagic counter
         script: |
-          # Use App Store Connect's latest TestFlight build number + 1 so we
-          # never collide with an existing build. Falls back to PROJECT_BUILD_NUMBER.
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "")
           if [ -n "$LATEST" ]; then
             NEXT=$(($LATEST + 1))
@@ -128,7 +108,6 @@ workflows:
 
       - name: Publish IPA to GitHub Releases
         script: |
-          # Tag builds only; CM_TAG is set only when a tag triggered the build.
           if [ -z "${CM_TAG:-}" ]; then
             echo "Not a tag build, skipping GitHub release."
             exit 0
@@ -142,7 +121,6 @@ workflows:
             echo "No IPA found, skipping GitHub release."
             exit 0
           fi
-          # Attach the IPA to the release for this tag, creating it if needed.
           GH_TOKEN="$GITHUB_TOKEN" gh release create "$CM_TAG" \
             --repo "$CM_REPO_SLUG" \
             --title "Rivulet $CM_TAG" \
@@ -160,9 +138,5 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
-        # Auto-distribute to the external tester group. Internal testers get
-        # every build automatically once it finishes processing, so an internal
-        # group must NOT be listed here (App Store Connect rejects assigning a
-        # build to an internal group).
         beta_groups:
           - Rivulet External Plex Forum
