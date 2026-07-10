@@ -140,3 +140,11 @@ workflows:
         # build to an internal group).
         beta_groups:
           - Rivulet External Plex Forum
+
+      # Attach the signed IPA to the GitHub Release for the pushed tag.
+      # Only fires on tag builds (matches the v* trigger above). Auth comes
+      # from the GitHub App integration on this repo, so no token is needed.
+      github_releases:
+        prerelease: false
+        artifact_patterns:
+          - build/ios/ipa/*.ipa
