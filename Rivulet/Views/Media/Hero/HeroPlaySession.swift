@@ -57,11 +57,13 @@ enum HeroPlaySession {
             )
 
             if type == "season" {
-                // Already a season — children are the episodes
-                if let firstEpisode = children.first {
-                    heroPlayLog.info("[HeroPlay] Season \(ratingKey, privacy: .public) → first ep \(firstEpisode.ratingKey ?? "?", privacy: .public)")
+                // Already a season — children are the episodes. Start at the
+                // first UNPLAYED one, not blindly at E01 (a rewatched season
+                // would otherwise always replay its first episode).
+                if let target = firstUnplayed(in: children) {
+                    heroPlayLog.info("[HeroPlay] Season \(ratingKey, privacy: .public) → first unplayed ep \(target.ratingKey ?? "?", privacy: .public)")
                     return await fetchFullIfPossible(
-                        firstEpisode,
+                        target,
                         serverURL: serverURL,
                         authToken: authToken
                     )
@@ -73,10 +75,10 @@ enum HeroPlaySession {
                     authToken: authToken,
                     ratingKey: firstSeasonKey
                 )
-                if let firstEpisode = episodes.first {
-                    heroPlayLog.info("[HeroPlay] Show \(ratingKey, privacy: .public) → S1E1 \(firstEpisode.ratingKey ?? "?", privacy: .public)")
+                if let target = firstUnplayed(in: episodes) {
+                    heroPlayLog.info("[HeroPlay] Show \(ratingKey, privacy: .public) → \(target.ratingKey ?? "?", privacy: .public)")
                     return await fetchFullIfPossible(
-                        firstEpisode,
+                        target,
                         serverURL: serverURL,
                         authToken: authToken
                     )
@@ -87,6 +89,18 @@ enum HeroPlaySession {
         }
 
         return item
+    }
+
+    /// Same rule as `EpisodePicker.firstUnplayed`, in Plex's currency: resume an
+    /// episode that's underway, else the first unwatched one, else restart at
+    /// the first. Plex marks watched via `viewCount` and tracks a resume point
+    /// in `viewOffset` independently.
+    private static func firstUnplayed(in episodes: [PlexMetadata]) -> PlexMetadata? {
+        func isPlayed(_ m: PlexMetadata) -> Bool { (m.viewCount ?? 0) > 0 }
+        func isInProgress(_ m: PlexMetadata) -> Bool { (m.viewOffset ?? 0) > 0 && !isPlayed(m) }
+        return episodes.first(where: isInProgress)
+            ?? episodes.first(where: { !isPlayed($0) })
+            ?? episodes.first
     }
 
     /// Upgrade a hub-derived episode stub to a fully-loaded metadata blob so the

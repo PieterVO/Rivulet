@@ -19,6 +19,7 @@ struct ContentView: View {
 
     @StateObject private var dataStore = PlexDataStore.shared
     @StateObject private var authManager = PlexAuthManager.shared
+    @StateObject private var profileManager = PlexUserProfileManager.shared
     @StateObject private var restartCoordinator = AppRestartCoordinator.shared
     #if DEBUG
     @State private var showSplash = false
@@ -71,6 +72,18 @@ struct ContentView: View {
             splashLog.info("isHomeHeroReady changed to \(isReady), showSplash=\(self.showSplash)")
             if isReady {
                 evaluateSplashDismissal(trigger: "hero ready")
+            }
+        }
+        .onChange(of: profileManager.isPresentingLaunchPicker) { _, isPresenting in
+            // The launch picker path defers hub loading until after selection,
+            // so isHomeContentReady never fires and the splash would otherwise
+            // ride its full 15s timeout while the picker sits behind it. Drop
+            // the splash immediately so the picker is the launch surface. This
+            // only fires when the picker actually presents (picker-on-launch +
+            // multiple profiles); every other launch is untouched.
+            if isPresenting {
+                splashLog.info("Launch profile picker presenting — dismissing splash")
+                showSplash = false
             }
         }
         .task {

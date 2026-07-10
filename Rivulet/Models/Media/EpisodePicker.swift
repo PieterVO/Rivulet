@@ -1,0 +1,99 @@
+//
+//  EpisodePicker.swift
+//  Rivulet
+//
+//  Which episode does "Play" mean when the user presses it on a season or a
+//  show? Shared by the carousel hero and the home hero so both agree.
+//
+
+import Foundation
+
+enum EpisodePicker {
+
+    /// The episode Play should start, given a season's episodes in server order.
+    ///
+    /// A season has no playable media of its own, so pressing Play on one has to
+    /// resolve to an episode:
+    ///
+    /// 1. An episode already in progress (`viewOffset > 0` and unwatched) —
+    ///    the user is midway through it, so resume rather than skip past.
+    /// 2. Otherwise the first **unplayed** episode.
+    /// 3. Otherwise (the whole season is watched) the first episode, so Play
+    ///    restarts the season rather than doing nothing.
+    ///
+    /// Returns nil only when `episodes` is empty.
+    static func firstUnplayed(in episodes: [MediaItem]) -> MediaItem? {
+        let ordered = inPlaybackOrder(episodes)
+        return ordered.first(where: { $0.userState.isInProgress })
+            ?? ordered.first(where: { !$0.userState.isPlayed })
+            ?? ordered.first
+    }
+
+    /// The episode a Play press on `item` should start. `nil` if it can't be
+    /// resolved (no provider data), in which case the caller plays `item` as-is.
+    ///
+    ///  - movie / episode: plays itself (returned unchanged).
+    ///  - show: its Plex OnDeck episode; if nothing's started, the first
+    ///    season's first unplayed episode.
+    ///  - season: that season's first unplayed episode.
+    ///
+    /// Shared by the carousel's Play button and the "Next Up / Resume" label so
+    /// the label can never disagree with what Play does.
+    static func resolvePlayTarget(
+        for item: MediaItem, provider: MediaProvider
+    ) async -> MediaItem? {
+        switch item.kind {
+        case .movie, .episode:
+            return item
+        case .show:
+            if let onDeck = try? await provider.fullDetail(for: item.ref).nextEpisode {
+                return onDeck
+            }
+            guard let firstSeason = try? await provider.children(of: item.ref).first
+            else { return nil }
+            let episodes = (try? await provider.children(of: firstSeason.ref)) ?? []
+            return firstUnplayed(in: episodes)
+        case .season:
+            let episodes = (try? await provider.children(of: item.ref)) ?? []
+            return firstUnplayed(in: episodes)
+        default:
+            return nil
+        }
+    }
+
+    /// The "Next Up: S1E3 · Title" / "Resume: S1E3 · Title" line for a resolved
+    /// episode, or nil if it lacks the numbering to label. "Resume" when the
+    /// user is mid-episode, else "Next Up".
+    static func nextUpLabel(for episode: MediaItem) -> String? {
+        guard let s = episode.seasonNumber, let e = episode.episodeNumber else { return nil }
+        let prefix = episode.userState.isInProgress ? "Resume" : "Next Up"
+        var code = "S\(s)E\(e)"
+        let title = episode.title.trimmingCharacters(in: .whitespaces)
+        if !title.isEmpty { code += " · \(title)" }
+        return "\(prefix): \(code)"
+    }
+
+    /// Sort by season then episode number when those are present, so a caller
+    /// that hands us an unordered array still gets S01E01 before S01E02. Items
+    /// missing a number keep their relative position at the end (Plex normally
+    /// returns children already ordered; this is belt-and-braces).
+    static func inPlaybackOrder(_ episodes: [MediaItem]) -> [MediaItem] {
+        episodes.enumerated().sorted { lhs, rhs in
+            let l = (lhs.element.seasonNumber, lhs.element.episodeNumber)
+            let r = (rhs.element.seasonNumber, rhs.element.episodeNumber)
+            guard let ls = l.0, let le = l.1, let rs = r.0, let re = r.1 else {
+                return lhs.offset < rhs.offset   // stable: preserve server order
+            }
+            return (ls, le) < (rs, re)
+        }.map(\.element)
+    }
+}
+
+extension MediaUserState {
+    /// Started but not finished. Plex marks an episode played via `viewCount`,
+    /// and keeps a resume position in `viewOffset` independently, so an item can
+    /// legitimately be both played and have an offset (a rewatch in progress).
+    /// "In progress" means the user has somewhere to resume TO and hasn't
+    /// finished it.
+    var isInProgress: Bool { viewOffset > 0 && !isPlayed }
+}

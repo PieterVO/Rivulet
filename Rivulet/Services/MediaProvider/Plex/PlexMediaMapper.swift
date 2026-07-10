@@ -41,11 +41,28 @@ enum PlexMediaMapper {
 
     static func userState(_ meta: PlexMetadata) -> MediaUserState {
         MediaUserState(
-            isPlayed: (meta.viewCount ?? 0) > 0,
+            isPlayed: isFullyWatched(meta),
             viewOffset: TimeInterval(meta.viewOffset ?? 0) / 1000,
             isFavorite: (meta.userRating ?? 0) > 0,
             lastViewedAt: meta.lastViewedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         )
+    }
+
+    /// `isPlayed` means FULLY watched, and Plex expresses that differently for
+    /// containers than for leaves.
+    ///
+    /// On a show or season, `viewCount` is an aggregate over watched children,
+    /// not a boolean — a season with 2 of 8 episodes watched reports
+    /// `viewCount == 2`, so `viewCount > 0` marked the whole season played.
+    /// Containers are only watched when every episode is
+    /// (`viewedLeafCount >= leafCount`), the same rule `PlexMetadata.isWatched`
+    /// uses.
+    private static func isFullyWatched(_ meta: PlexMetadata) -> Bool {
+        if meta.type == "show" || meta.type == "season" {
+            guard let total = meta.leafCount, total > 0 else { return false }
+            return (meta.viewedLeafCount ?? 0) >= total
+        }
+        return (meta.viewCount ?? 0) > 0
     }
 
     // MARK: - Artwork

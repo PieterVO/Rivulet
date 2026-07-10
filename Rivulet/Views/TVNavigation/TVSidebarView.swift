@@ -108,7 +108,16 @@ struct TVSidebarView: View {
 
     var body: some View {
         sidebarTabView
-        .onExitCommand { }
+        .onExitCommand {
+            // Back button (issue #192): a Menu press from the open sidebar on a
+            // non-Home tab returns to the Home tab (matching Plex, where the back
+            // button eventually walks you back to Home). From the content grid
+            // this is a no-op — the press is handled by the system's native
+            // sidebar reveal.
+            if selectedTab != .home, Self.isFocusInSidebar() {
+                selectedTab = .home
+            }
+        }
         .task { await Self.installSidebarFocusGuard() }
         .task { await focusRecoveryWatchdog() }
         .onAppear { syncSidebarStructure() }
@@ -172,6 +181,11 @@ struct TVSidebarView: View {
                 hasCheckedProfilePicker = true
 
                 if profileManager.hasMultipleProfiles {
+                    // Stand the launch splash down so the picker is the top
+                    // surface (otherwise it renders under the splash, which
+                    // rides its 15s safety timeout because hubs — and thus
+                    // isHomeContentReady — are deferred until after selection).
+                    profileManager.isPresentingLaunchPicker = true
                     showProfilePicker = true
                     // Content will load after profile is selected
                     return
@@ -322,6 +336,7 @@ struct TVSidebarView: View {
             if !isShowing {
                 // Profile selected, unblock content
                 isAwaitingProfileSelection = false
+                profileManager.isPresentingLaunchPicker = false
 
                 // Load content if not already loaded (profile switch handles its own reload)
                 Task {
@@ -889,6 +904,35 @@ struct TVSidebarView: View {
             if let found = findSidebarCollectionView(in: subview) {
                 return found
             }
+        }
+        return nil
+    }
+
+    /// True when the remote's Menu press is arriving while focus is inside the
+    /// sidebar (not the content grid). Used to stage the back button (issue
+    /// #192): on a non-Home tab, a Menu press from the open sidebar selects Home.
+    /// A Menu press from the content grid returns false here and falls through to
+    /// the system's native sidebar reveal.
+    @MainActor
+    private static func isFocusInSidebar() -> Bool {
+        guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene }).first,
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
+              let sidebarCV = findSidebarCollectionView(in: window),
+              let focused = focusedView(in: window) else {
+            return false
+        }
+        return focused.isDescendant(of: sidebarCV)
+    }
+
+    /// Depth-first search for the currently-focused view in a tree.
+    /// (`UIScreen.focusedView` is deprecated and unreliable under multiple
+    /// windows; walking `isFocused` is the supported route.)
+    @MainActor
+    private static func focusedView(in view: UIView) -> UIView? {
+        if view.isFocused { return view }
+        for subview in view.subviews {
+            if let found = focusedView(in: subview) { return found }
         }
         return nil
     }

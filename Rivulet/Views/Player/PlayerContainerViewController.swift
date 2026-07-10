@@ -576,8 +576,26 @@ class PlayerContainerViewController: UIViewController {
         let panRecognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePanGesture(_:)))
         // Only recognize indirect touches (Siri Remote touchpad, not direct screen touches)
         panRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        // The focus engine reads the SAME indirect touch stream this recognizer
+        // does, and a recognizer that reaches .began cancels the competing
+        // interaction. An unconstrained pan therefore swallowed vertical swipes
+        // and the engine never turned them into the move commands that drive
+        // `.onMoveCommand` (swipe up/down to the transport controls). Gate the
+        // begin so only a clearly horizontal, actionable swipe is claimed.
+        panRecognizer.delegate = self
         view.addGestureRecognizer(panRecognizer)
         panGestureRecognizer = panRecognizer
+    }
+
+    /// True when a touch-surface swipe should drive the scrubber. Mirrors the
+    /// bail conditions in `handlePanGesture` so the recognizer never *begins*
+    /// in a state where it would no-op — beginning is what steals the gesture
+    /// from the focus engine.
+    private var panCanDriveScrub: Bool {
+        guard let vm = viewModel else { return false }
+        return !vm.playbackState.isFailed
+            && vm.postVideoState == .hidden
+            && !vm.controlsFocusActive
     }
 
     // MARK: - Touch-Surface Tap (timeline overlay)
@@ -706,14 +724,16 @@ class PlayerContainerViewController: UIViewController {
         guard let vm = viewModel else { return }
 
         // Bail in error / post-video / controls-focus states regardless of mode.
+        // Kept in sync with `panCanDriveScrub`, which stops the recognizer from
+        // beginning (and thus stealing the gesture) in these same states.
         if vm.playbackState.isFailed || vm.postVideoState != .hidden || vm.controlsFocusActive {
             return
         }
 
-        // Touch-surface pan only drives continuous swipe-to-scrub while
-        // paused. During active playback the pan is a no-op (previously
-        // it also opened the legacy info panel on a downward swipe).
-        guard vm.playbackState == .paused else { return }
+        // Touch-surface pan drives continuous swipe-to-scrub whether the item
+        // is playing or paused. It used to require `.paused`, so a swipe during
+        // playback did nothing at all — the recognizer still began and swallowed
+        // the gesture, but the handler returned immediately.
 
         let translation = gesture.translation(in: view)
         let velocity = gesture.velocity(in: view)
@@ -1334,3 +1354,31 @@ final class BottomScrimView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 
+
+// MARK: - UIGestureRecognizerDelegate
+
+extension PlayerContainerViewController: UIGestureRecognizerDelegate {
+
+    /// Only let the swipe-to-scrub pan claim a gesture that is clearly
+    /// HORIZONTAL and that it will actually act on. On tvOS the focus engine
+    /// consumes the same indirect-touch stream; once a recognizer begins, the
+    /// competing interaction is cancelled. Refusing here (rather than bailing
+    /// inside the action) leaves vertical swipes to the focus engine, which is
+    /// what surfaces the transport controls via `.onMoveCommand`.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+              pan === panGestureRecognizer
+        else { return true }
+
+        guard panCanDriveScrub else { return false }
+
+        // Decide on VELOCITY, not translation. This is called the instant the
+        // pan clears its slop threshold, when translation is still near zero
+        // and its direction is noise; velocity is already well-defined. Require
+        // a decisive horizontal bias (2:1) so a diagonal drift toward the
+        // controls still reads as vertical and reaches the focus engine.
+        let velocity = pan.velocity(in: view)
+        guard velocity != .zero else { return false }
+        return abs(velocity.x) > abs(velocity.y) * 2
+    }
+}

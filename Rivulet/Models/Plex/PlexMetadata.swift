@@ -66,6 +66,14 @@ nonisolated struct PlexGuid: Codable, Sendable {
     var id: String?
 }
 
+/// A show's external IDs (any may be nil), used to resolve a TMDB id when Plex
+/// didn't hand us a `tmdb://` guid directly.
+nonisolated struct ShowExternalIDs: Sendable, Equatable {
+    var tmdb: Int?
+    var tvdb: Int?
+    var imdb: String?
+}
+
 /// Canonical categories for Plex extras. Declaration order is render order.
 enum ExtraSubtype: Int, CaseIterable, Sendable, Comparable {
     case trailer
@@ -569,6 +577,43 @@ extension PlexMetadata {
     /// Extract a TMDB ID from a Plex guid string
     nonisolated static func extractTmdbId(from guid: String) -> Int? {
         extractExternalId(from: guid, prefixes: ["tmdb://", "themoviedb://"])
+    }
+
+    /// Extract a TVDB numeric ID from a Plex guid string (e.g. "tvdb://409104").
+    nonisolated static func extractTvdbId(from guid: String) -> Int? {
+        extractExternalId(from: guid, prefixes: ["tvdb://", "thetvdb://"])
+    }
+
+    /// Extract an IMDB ID (e.g. "tt31510819") from a Plex guid string. IMDB ids
+    /// are alphanumeric ("tt" + digits), so this can't reuse the numeric
+    /// `extractExternalId`.
+    nonisolated static func extractImdbId(from guid: String) -> String? {
+        let lower = guid.lowercased()
+        guard lower.contains("imdb://") else { return nil }
+        let remainder = lower.components(separatedBy: "imdb://").dropFirst().first ?? ""
+        guard let token = remainder.split(whereSeparator: { $0 == "?" || $0 == "&" || $0 == "/" }).first,
+              token.hasPrefix("tt"), token.count > 2 else { return nil }
+        return String(token)
+    }
+
+    /// For an episode, the SHOW's external IDs read only from the grandparent /
+    /// parent guid STRINGS. It deliberately does NOT read this item's `Guid`
+    /// array: on an episode that array holds the EPISODE's own ids
+    /// (e.g. tmdb://<episodeId>), and using them as a show id sends a wrong,
+    /// non-existent id to Insights. Legacy agents (thetvdb://77921/…,
+    /// themoviedb://<showId>/…) put a usable inline show id in grandparentGuid;
+    /// modern plex:// guids carry none, so the caller must fetch the show's own
+    /// metadata to get its external ids.
+    var showExternalIDs: ShowExternalIDs {
+        var tmdb: Int?
+        var tvdb: Int?
+        var imdb: String?
+        for g in [grandparentGuid, parentGuid].compactMap({ $0 }) {
+            if tmdb == nil { tmdb = PlexMetadata.extractTmdbId(from: g) }
+            if tvdb == nil { tvdb = PlexMetadata.extractTvdbId(from: g) }
+            if imdb == nil { imdb = PlexMetadata.extractImdbId(from: g) }
+        }
+        return ShowExternalIDs(tmdb: tmdb, tvdb: tvdb, imdb: imdb)
     }
 
     /// Extract a numeric ID from a guid string matching any of the given prefixes
