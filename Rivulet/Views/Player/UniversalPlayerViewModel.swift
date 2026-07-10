@@ -3780,7 +3780,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             let fullMetadata = try await networkManager.getMetadata(
                 serverURL: serverURL,
                 authToken: authToken,
-                ratingKey: ratingKey
+                ratingKey: ratingKey,
+                includeGuids: true  // populate external-id guids so Insights can resolve a TMDB id
             )
 
             // Update our metadata with the parent keys
@@ -3803,6 +3804,22 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Update Media array if missing (needed for info overlay display)
             if metadata.Media == nil || metadata.Media?.isEmpty == true {
                 metadata.Media = fullMetadata.Media
+            }
+
+            // Carry over external-id guids (fetched via includeGuids=1) so
+            // Insights can resolve a show TMDB id. The lightweight metadata the
+            // player starts with (e.g. from a hub) usually lacks these.
+            if metadata.grandparentGuid == nil {
+                metadata.grandparentGuid = fullMetadata.grandparentGuid
+            }
+            if metadata.parentGuid == nil {
+                metadata.parentGuid = fullMetadata.parentGuid
+            }
+            if metadata.guid == nil {
+                metadata.guid = fullMetadata.guid
+            }
+            if metadata.Guid == nil || metadata.Guid?.isEmpty == true {
+                metadata.Guid = fullMetadata.Guid
             }
 
         } catch {
@@ -3910,9 +3927,22 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// stays nil and the panel shows no Trivia section).
     func loadInsightsTrivia() async {
         let generation = itemGeneration
-        let tmdbId = metadata.type == "episode"
+        var tmdbId = metadata.type == "episode"
             ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
             : metadata.tmdbId
+
+        // For episodes, Plex often gives a plex:// or tvdb:// grandparent guid
+        // (not tmdb://), so the direct extraction above is nil. Resolve the
+        // show TMDB id from the show's external ids (tvdb/imdb -> tmdb via the
+        // proxy find route) so Insights can fetch/request generation instead of
+        // silently bailing. Cached per show, so this is one lookup, not per
+        // episode.
+        if tmdbId == nil, metadata.type == "episode" {
+            let externalIDs = await resolveShowExternalIDs()
+            guard generation == itemGeneration else { return }
+            tmdbId = await InsightsShowIDResolver.shared.resolve(externalIDs)
+            guard generation == itemGeneration else { return }
+        }
 
         guard let tmdbId else {
             guard generation == itemGeneration else { return }
@@ -3969,6 +3999,32 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard generation == itemGeneration else { return }
         insightsTrivia = trivia
         suppressedTriviaIDs = suppressed
+    }
+
+    /// Gather the show's external ids for an episode. Uses guids already on the
+    /// current metadata if present; otherwise fetches the show's metadata (by
+    /// grandparentRatingKey, with includeGuids) so a lightweight episode payload
+    /// (e.g. from a hub, which carries no guids) still resolves. Best-effort:
+    /// returns whatever ids it can find, possibly empty.
+    private func resolveShowExternalIDs() async -> ShowExternalIDs {
+        let inHand = metadata.showExternalIDs
+        if inHand.tmdb != nil || inHand.tvdb != nil || inHand.imdb != nil {
+            return inHand
+        }
+        guard let showKey = metadata.grandparentRatingKey else { return inHand }
+        guard let showMeta = try? await PlexNetworkManager.shared.getMetadata(
+            serverURL: serverURL, authToken: authToken, ratingKey: showKey, includeGuids: true
+        ) else { return inHand }
+        // The show payload's own guid/Guid array carries the show's external ids.
+        var tmdb = showMeta.guid.flatMap(PlexMetadata.extractTmdbId)
+        var tvdb = showMeta.guid.flatMap(PlexMetadata.extractTvdbId)
+        var imdb = showMeta.guid.flatMap(PlexMetadata.extractImdbId)
+        for g in (showMeta.Guid?.compactMap { $0.id } ?? []) {
+            if tmdb == nil { tmdb = PlexMetadata.extractTmdbId(from: g) }
+            if tvdb == nil { tvdb = PlexMetadata.extractTvdbId(from: g) }
+            if imdb == nil { imdb = PlexMetadata.extractImdbId(from: g) }
+        }
+        return ShowExternalIDs(tmdb: tmdb, tvdb: tvdb, imdb: imdb)
     }
 
     /// Fire a one-shot generation request to the pipeline for a title/episode

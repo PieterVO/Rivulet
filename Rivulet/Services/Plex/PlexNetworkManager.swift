@@ -388,9 +388,17 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     func getMetadata(
         serverURL: String,
         authToken: String,
-        ratingKey: String
+        ratingKey: String,
+        includeGuids: Bool = false
     ) async throws -> PlexMetadata {
-        guard let url = URL(string: "\(serverURL)/library/metadata/\(ratingKey)") else {
+        // Plex omits the external-id `Guid` array (tmdb://, tvdb://, imdb://)
+        // from the default metadata response. Callers that need it (e.g.
+        // Insights TMDB-id resolution) must opt in.
+        var urlString = "\(serverURL)/library/metadata/\(ratingKey)"
+        if includeGuids {
+            urlString += "?includeGuids=1"
+        }
+        guard let url = URL(string: urlString) else {
             throw PlexAPIError.invalidURL
         }
 
