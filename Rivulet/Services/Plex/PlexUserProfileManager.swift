@@ -37,6 +37,12 @@ class PlexUserProfileManager: ObservableObject {
     /// Set of user UUIDs that have remembered PINs (for UI updates)
     @Published var usersWithRememberedPins: Set<String> = []
 
+    /// True while the launch-time "Who's Watching?" picker owns the screen.
+    /// Only ever set on the profile-picker-on-launch path; lets the launch
+    /// splash stand down so the picker isn't buried under it. Stays false for
+    /// users who keep the picker off, so their launch path is unchanged.
+    @Published var isPresentingLaunchPicker = false
+
     // MARK: - UserDefaults Keys
 
     private let userDefaults = UserDefaults.standard

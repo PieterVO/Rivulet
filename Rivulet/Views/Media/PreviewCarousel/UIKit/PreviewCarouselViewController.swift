@@ -374,6 +374,24 @@ final class PreviewCarouselViewController: UIViewController {
         menuRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
         view.addGestureRecognizer(menuRecognizer)
 
+        // Swipe-to-page. Paging previously keyed ONLY off .leftArrow/.rightArrow
+        // presses, which a touch surface does not emit — a light swipe produces
+        // indirect touches plus focus-engine moves, and arrow presses come from
+        // directional CLICKS. Because the carousel is deliberately focusless
+        // (`canFocusItemAt` is false in .carouselStable), a swipe also generated
+        // no focus move, so it did nothing on any remote. These recognizers give
+        // the swipe a home. Nothing to conflict with: with no focusable cells the
+        // engine has no candidate to move to, so claiming the gesture steals
+        // nothing.
+        for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
+            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleCarouselSwipe(_:)))
+            swipe.direction = direction
+            swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+            // On tvOS a swipe recognizer otherwise waits for a .select press.
+            swipe.allowedPressTypes = []
+            view.addGestureRecognizer(swipe)
+        }
+
         // Focus anchor: invisible, always-focusable, so the focus engine has
         // a target inside the modal and Menu presses enter our responder
         // chain (see the focusAnchor doc comment). Zero-size, behind
@@ -868,13 +886,17 @@ final class PreviewCarouselViewController: UIViewController {
         top.present(popup, animated: true)
     }
 
+    /// Play on a show or a season has to resolve to an actual episode — neither
+    /// has playable media of its own, and handing Plex a season ratingKey makes
+    /// the transcode start hang until it times out.
     private func playHeroItem(_ item: MediaItem) {
-        guard item.kind == .show else { playMediaItem(item); return }
+        guard item.kind == .show || item.kind == .season else { playMediaItem(item); return }
         Task { [weak self] in
             guard let self,
-                  let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
-                  let detail = try? await provider.fullDetail(for: item.ref) else { return }
-            await MainActor.run { self.playMediaItem(detail.nextEpisode ?? item) }
+                  let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID)
+            else { return }
+            let target = await EpisodePicker.resolvePlayTarget(for: item, provider: provider)
+            await MainActor.run { self.playMediaItem(target ?? item) }
         }
     }
 
@@ -936,6 +958,17 @@ final class PreviewCarouselViewController: UIViewController {
     // overrides needed.
 
     // MARK: - Paging
+
+    /// Swiping the finger LEFT drags the strip leftward, revealing the NEXT
+    /// card — same direction convention as a right-arrow press.
+    @objc private func handleCarouselSwipe(_ gesture: UISwipeGestureRecognizer) {
+        guard state.isCarouselInputEnabled else { return }
+        switch gesture.direction {
+        case .left:  pageForward()
+        case .right: pageBackward()
+        default:     break
+        }
+    }
 
     private func pageForward() {
         guard state.isCarouselInputEnabled else { return }
@@ -1176,6 +1209,12 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.belowFoldCollection.slideToDetailsTop(animated: true) { [weak self] in
             guard let self else { return }
             self.expandedDetail.setBelowFoldInteractive(true)
+            // Flush layout BEFORE asking for focus. The preferred-focus target
+            // may be a deep episode in the orthogonal rail, and UIKit rejects a
+            // preferred index path whose cell isn't realized yet (it throws
+            // NSInternalInconsistencyException from _delegatePreferredIndexPath).
+            // The rail positions itself in layoutSubviews, so run that first.
+            self.expandedDetail.belowFoldCollection.layoutIfNeeded()
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
             // Focus is now in the below-fold; make the faded chrome buttons

@@ -889,6 +889,33 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     }
 
     func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
-        armedEpisodeFocusIndexPath ?? pendingInitialFocus ?? (pillEntryArmed ? currentSeasonFirstEpisode : nil)
+        let candidate = armedEpisodeFocusIndexPath
+            ?? pendingInitialFocus
+            ?? (pillEntryArmed ? currentSeasonFirstEpisode : nil)
+        guard let candidate else { return nil }
+        return realizedFocusTarget(candidate, in: collectionView)
+    }
+
+    /// UIKit requires that this delegate return an index path whose CELL EXISTS
+    /// right now — not merely a valid data-source index. Episodes live in an
+    /// orthogonal scrolling section, so a target deep in the rail (say episode
+    /// 22) has no cell until that part of the rail is scrolled into view, and
+    /// returning it raises:
+    ///
+    ///     NSInternalInconsistencyException: no cell for index path {0, 21} —
+    ///     the collection view's delegate must return an index path for a valid
+    ///     UICollectionViewCell
+    ///
+    /// So: drop paths that are stale or not yet realized, and return nil to let
+    /// the focus engine pick. This is a pure query — UIKit calls it mid focus
+    /// update, so it must not scroll, lay out, or mutate our tracking state.
+    /// Realizing the cell is the job of `pendingInitialScroll` in
+    /// `layoutSubviews`, which runs before focus is handed in.
+    private func realizedFocusTarget(_ indexPath: IndexPath, in collectionView: UICollectionView) -> IndexPath? {
+        // Stale across a snapshot change — the item may no longer exist at all.
+        guard dataSource.itemIdentifier(for: indexPath) != nil else { return nil }
+        // Deep episodes live in an orthogonal rail and have no cell until that
+        // stretch is scrolled in. Preferring an unrealized path is the crash.
+        return collectionView.cellForItem(at: indexPath) != nil ? indexPath : nil
     }
 }

@@ -174,4 +174,45 @@ final class PlexMediaMapperTests: XCTestCase {
         XCTAssertNotNil(item.grandparentArtwork?.thumbnail)
         XCTAssertNotNil(item.grandparentArtwork?.backdrop)
     }
+
+    // MARK: - isPlayed (container vs leaf)
+
+    func test_userState_seasonPartiallyWatched_isNotPlayed() {
+        var meta = PlexMetadata()
+        meta.type = "season"
+        meta.leafCount = 8
+        meta.viewedLeafCount = 2
+        meta.viewCount = 2   // Plex aggregates watched children here — NOT a boolean
+        XCTAssertFalse(PlexMediaMapper.userState(meta).isPlayed)
+    }
+
+    func test_userState_seasonFullyWatched_isPlayed() {
+        var meta = PlexMetadata()
+        meta.type = "season"
+        meta.leafCount = 8
+        meta.viewedLeafCount = 8
+        XCTAssertTrue(PlexMediaMapper.userState(meta).isPlayed)
+    }
+
+    func test_userState_showPartiallyWatched_isNotPlayed() {
+        var meta = PlexMetadata()
+        meta.type = "show"
+        meta.leafCount = 24
+        meta.viewedLeafCount = 10
+        XCTAssertFalse(PlexMediaMapper.userState(meta).isPlayed)
+    }
+
+    func test_userState_seasonMissingLeafCount_isNotPlayed() {
+        var meta = PlexMetadata()
+        meta.type = "season"
+        meta.viewCount = 3   // present but meaningless without leafCount
+        XCTAssertFalse(PlexMediaMapper.userState(meta).isPlayed)
+    }
+
+    func test_userState_episodeWatched_isPlayed() {
+        var meta = PlexMetadata()
+        meta.type = "episode"
+        meta.viewCount = 1
+        XCTAssertTrue(PlexMediaMapper.userState(meta).isPlayed)
+    }
 }

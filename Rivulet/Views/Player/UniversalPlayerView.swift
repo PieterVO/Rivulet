@@ -669,7 +669,9 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
 
         case .scrubRelative(let seconds):
             guard vm.postVideoState == .hidden else { return }
-            guard vm.playbackState == .paused else { return }
+            // Swipe-to-scrub works during playback as well as while paused.
+            // `updateSwipeScrubPosition` enters scrub state on its own (via
+            // `startSwipeScrubbing`) without pausing, matching the shuttle path.
             vm.updateSwipeScrubPosition(by: seconds)
             vm.showControlsTemporarily()
 

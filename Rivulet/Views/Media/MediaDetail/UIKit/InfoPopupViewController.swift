@@ -285,18 +285,34 @@ enum InfoPopupContent {
         if let genre = detail.genres.first, !genre.isEmpty {
             stack.addArrangedSubview(label(genre, size: 21, weight: .semibold, color: .white.withAlphaComponent(0.6), lines: 1))
         }
-        if let overview = detail.item.overview, !overview.isEmpty {
-            let syn = label(overview, size: 24, weight: .regular, color: .white.withAlphaComponent(0.9), lines: 0)
+        let overviewText = detail.item.overview?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let overviewText, !overviewText.isEmpty {
+            let syn = label(overviewText, size: 24, weight: .regular, color: .white.withAlphaComponent(0.9), lines: 0)
             stack.addArrangedSubview(syn)
             stack.setCustomSpacing(22, after: syn)
+        } else {
+            // Seasons (and some shows) carry no synopsis of their own on Plex,
+            // which left the popup showing only the title. Say so rather than
+            // render a blank card.
+            let placeholder = label("No information found on Plex.", size: 24, weight: .regular,
+                                     color: .white.withAlphaComponent(0.5), lines: 0)
+            stack.addArrangedSubview(placeholder)
+            stack.setCustomSpacing(22, after: placeholder)
         }
         stack.addArrangedSubview(metaRow(detail))
 
         let source = detail.mediaSources.first
+        let isContainer = detail.item.kind == .season || detail.item.kind == .show
 
         // Information
         var info: [(String, String)] = []
         if let y = detail.item.year { info.append(("Released", "\(y)")) }
+        // Containers have no runtime; surface episode count + watched progress,
+        // which is the useful "info" for a season/show.
+        if isContainer, let progress = detail.item.childProgress, progress.total > 0 {
+            info.append(("Episodes", "\(progress.total)"))
+            info.append(("Watched", "\(progress.played) of \(progress.total)"))
+        }
         if let rt = detail.item.runtime, rt > 0 { info.append(("Run Time", runtimeString(rt))) }
         if let r = detail.contentRating, !r.isEmpty { info.append(("Rated", r)) }
         if let region = detail.regionOfOrigin, !region.isEmpty { info.append(("Region of Origin", region)) }

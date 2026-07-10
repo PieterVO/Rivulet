@@ -66,11 +66,16 @@ enum PreviewCarouselGeometry {
     /// corner radius all run on this curve.
     static let expandAnimationDuration: TimeInterval = 0.35
 
+    /// The collapsed card is inset left/right/top and bleeds off the SCREEN
+    /// BOTTOM (Apple TV+ look — the episode strip overlaps the artwork rather
+    /// than sitting below it; see `Docs/atv_ref/carousel_ref.md`). Deliberately
+    /// not an aspect-ratio height: the artwork is `.scaleAspectFill` inside a
+    /// clipping window, so an off-16:9 card crops instead of letterboxing, and
+    /// expand only has to travel left, right, and top to reach fullscreen.
     static func centeredCardSize(in bounds: CGRect) -> CGSize {
         let width = max(0, bounds.width - 2 * centeredHorizontalInset)
-        let availableHeight = max(0, bounds.height - topInset)
-        let imageHeight = width * 9 / 16
-        return CGSize(width: width, height: min(availableHeight, imageHeight))
+        let height = max(0, bounds.height - topInset)
+        return CGSize(width: width, height: height)
     }
 
     static func centeredCardFrame(in bounds: CGRect) -> CGRect {

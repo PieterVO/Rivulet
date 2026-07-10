@@ -213,6 +213,21 @@ final class MediaDetailChromeView: UIView {
         return l
     }()
 
+    /// "Next Up: S1E3 · Title" (or "Resume:" when the target is in progress),
+    /// shown between the metadata block and the action row on show/season cards
+    /// so the user knows which episode Play will start. Hidden for movies and
+    /// episodes, and until the target episode resolves.
+    private let nextUpLabel: UILabel = {
+        let l = UILabel()
+        l.translatesAutoresizingMaskIntoConstraints = false
+        l.font = .systemFont(ofSize: 22, weight: .semibold)
+        l.textColor = UIColor.white.withAlphaComponent(0.85)
+        l.numberOfLines = 1
+        l.lineBreakMode = .byTruncatingTail
+        l.isHidden = true
+        return l
+    }()
+
     /// "2023 · 49 min   ⭐ 7.8   [4K] [DV] [5.1]" — caption.bold(), white.
     private let qualityRow: UIStackView = {
         let s = UIStackView()
@@ -291,6 +306,8 @@ final class MediaDetailChromeView: UIView {
         // metadataBlock spacing; quality→action is the chromeStack gap.)
         metadataBlock.setCustomSpacing(30, after: descriptionLabel)
         chromeStack.setCustomSpacing(30, after: metadataBlock)
+        chromeStack.addArrangedSubview(nextUpLabel)
+        chromeStack.setCustomSpacing(16, after: nextUpLabel)
         chromeStack.addArrangedSubview(actionAndCastRow)
 
         // actionAndCastRow is a plain UIView (not a stack). Children
@@ -459,12 +476,15 @@ final class MediaDetailChromeView: UIView {
         resolvedGenres = []
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        nextUpLabel.isHidden = true
+        nextUpLabel.text = nil
 
         guard let item = item else { return }
 
         rebuildGenreRow(item: item, detail: nil)
         rebuildQualityRow(item: item, detail: nil)
         rebuildActionButtons(item: item)
+        resolveNextUpLabel(for: item, token: token)
 
         // Clear any aspect constraint from the previous item — a stale
         // ratio would size the new image wrong while it's loading.
@@ -551,6 +571,24 @@ final class MediaDetailChromeView: UIView {
     }
 
     private var resolvedGenres: [String] = []
+
+    /// Resolve the episode Play will start on a show/season card and show it as
+    /// "Next Up: S1E3 · Title" (or "Resume:" mid-episode). Uses the same
+    /// `EpisodePicker.resolvePlayTarget` the Play button does, so the label can
+    /// never promise a different episode than the one that plays.
+    private func resolveNextUpLabel(for item: MediaItem, token: UInt64) {
+        guard item.kind == .show || item.kind == .season else { return }
+        Task { @MainActor [weak self] in
+            guard let self,
+                  let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
+                  let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider),
+                  let text = EpisodePicker.nextUpLabel(for: episode),
+                  self.loadToken == token
+            else { return }
+            self.nextUpLabel.text = text
+            self.nextUpLabel.isHidden = false
+        }
+    }
 
     private static func fetchDetail(_ ref: MediaItemRef) async -> MediaItemDetail? {
         if let provider = await MainActor.run(body: {
