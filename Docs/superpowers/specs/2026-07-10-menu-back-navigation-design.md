@@ -3,6 +3,39 @@
 Date: 2026-07-10
 Issues: #19 (Back button should scroll back up to top row), #192 (Back button on remote takes you all the way back to Home)
 
+## OUTCOME (2026-07-10) — read this first
+
+**Shipped: #192 only. #19 abandoned as platform-blocked.**
+
+The staged design below assumed the app could intercept the Menu press that moves focus
+from a content grid into the sidebar. It cannot. Empirically confirmed on the tvOS 26
+simulator across **every** interception seam:
+
+- UIKit VC `pressesBegan` never receives `.menu` (only arrow/select/analog press types).
+- A `.menu` `UITapGestureRecognizer` on the embedded content VC never fires.
+- A `.menu` handler / `pressesBegan` swizzle on the `UIWindow` never sees `.menu`.
+- `shouldUpdateFocus(in:)` on the content collection view never fires for the
+  outbound-to-sidebar move (only intra-content moves); the same on the sidebar's
+  private collection view never fires for the inbound-from-content move.
+- SwiftUI `.onExitCommand` only fires once focus is **already in the sidebar**.
+- `.toolbarVisibility(.hidden, for: .tabBar)` does **not** hide the `.sidebarAdaptable`
+  sidebar (state flips, sidebar stays), and there is no public tvOS 26 API to hide it on
+  scroll (`tabBarMinimizeBehavior.onScrollDown` is iOS/iPadOS-only; the tvOS pill
+  collapse is selection-driven and system-owned). The Apple TV app achieves its
+  scroll-hide + staged Menu with private sidebar/scroll coordination we can't reach.
+
+**What shipped (issue #192):** the shell's `.onExitCommand` (previously an empty Menu
+swallow) now checks whether focus is inside the sidebar (via `isFocusInSidebar()`); if
+so and the current tab is not Home, it selects the Home tab. So: Menu opens the sidebar
+(system), a further Menu returns to Home. One file changed: `TVSidebarView.swift`.
+
+**Known limitation:** after returning to Home this way, focus stays in the sidebar (Home
+row highlighted) and the sidebar stays expanded until the user presses Select/Down.
+`resetFocus(in: contentNamespace)` (inline and deferred) does not pull focus out of the
+system-owned sidebar — same platform wall. Accepted as a minor cosmetic imperfection.
+
+The staged design that follows is retained for historical context only.
+
 ## Goal
 
 Make the Menu ("back") button on the Siri Remote walk backward in **stages**, matching the
