@@ -4037,10 +4037,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             : "\(type == "movie" ? "movie" : "tv"):\(tmdbId)"
         guard !requestedInsightKeys.contains(key) else { return }
         requestedInsightKeys.insert(key)
+        // For an episode the generation title must be the SHOW title, not the
+        // episode name (the pipeline searches Wikipedia/Fandom by show). Use
+        // grandparentTitle for episodes; fall back to the item title otherwise.
+        let requestTitle = (metadata.type == "episode"
+            ? (metadata.grandparentTitle ?? metadata.title)
+            : metadata.title) ?? ""
         let req = InsightsGenerationRequest(
             type: type == "movie" ? "movie" : "tv", tmdbId: tmdbId,
             season: season, episode: episode,
-            title: metadata.title ?? "", year: metadata.year)
+            title: requestTitle, year: metadata.year)
         Task { await InsightsTriviaClient.shared.requestGeneration(req) }
     }
 

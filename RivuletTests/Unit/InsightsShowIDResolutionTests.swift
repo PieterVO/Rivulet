@@ -31,19 +31,33 @@ final class InsightsShowIDResolutionTests: XCTestCase {
 
     // MARK: - showExternalIDs on an episode
 
-    func testShowExternalIDsFromGuidArray() {
-        // Modern Plex agent: plex:// grandparent guid, real ids in Guid[].
+    func testShowExternalIDsIgnoresEpisodeOwnGuidArray() {
+        // Regression: on an episode, the Guid[] array holds the EPISODE's own
+        // ids (tmdb://<episodeId>). Using them as a show id sends a wrong,
+        // non-existent id to Insights (the real 2026 Little House bug: episode
+        // tmdb 7145391 sent instead of show tmdb 283304). showExternalIDs must
+        // read only the grandparent/parent guid strings, never this array.
         var m = PlexMetadata()
         m.type = "episode"
-        m.grandparentGuid = "plex://show/5d9c08fd"
+        m.grandparentGuid = "plex://show/686c3376"
         m.Guid = [
-            PlexGuid(id: "tvdb://409104"),
-            PlexGuid(id: "imdb://tt31510819"),
+            PlexGuid(id: "tmdb://7145391"),   // episode's own id — must be ignored
+            PlexGuid(id: "tvdb://11654472"),
         ]
         let ids = m.showExternalIDs
+        XCTAssertNil(ids.tmdb, "episode's own tmdb id must not be used as the show id")
+        XCTAssertNil(ids.tvdb)
+        XCTAssertNil(ids.imdb)
+    }
+
+    func testShowExternalIDsFromLegacyTvdbGrandparentGuid() {
+        // Legacy thetvdb agent: show id is inline in the grandparent guid.
+        var m = PlexMetadata()
+        m.type = "episode"
+        m.grandparentGuid = "com.plexapp.agents.thetvdb://77921/1/3?lang=en"
+        let ids = m.showExternalIDs
+        XCTAssertEqual(ids.tvdb, 77921)
         XCTAssertNil(ids.tmdb)
-        XCTAssertEqual(ids.tvdb, 409104)
-        XCTAssertEqual(ids.imdb, "tt31510819")
     }
 
     func testShowExternalIDsPrefersDirectTmdbGuid() {

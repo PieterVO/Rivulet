@@ -596,17 +596,19 @@ extension PlexMetadata {
         return String(token)
     }
 
-    /// For an episode, the show's external IDs gathered from the grandparent
-    /// guid plus the metadata `Guid` array (which, when the response was
-    /// fetched with `includeGuids=1`, carries tvdb://, imdb://, tmdb://
-    /// entries). Used by Insights to resolve a show TMDB id when the primary
-    /// grandparent guid is a plex:// or tvdb:// id, not tmdb://.
+    /// For an episode, the SHOW's external IDs read only from the grandparent /
+    /// parent guid STRINGS. It deliberately does NOT read this item's `Guid`
+    /// array: on an episode that array holds the EPISODE's own ids
+    /// (e.g. tmdb://<episodeId>), and using them as a show id sends a wrong,
+    /// non-existent id to Insights. Legacy agents (thetvdb://77921/…,
+    /// themoviedb://<showId>/…) put a usable inline show id in grandparentGuid;
+    /// modern plex:// guids carry none, so the caller must fetch the show's own
+    /// metadata to get its external ids.
     var showExternalIDs: ShowExternalIDs {
         var tmdb: Int?
         var tvdb: Int?
         var imdb: String?
-        let guids = ([grandparentGuid, parentGuid].compactMap { $0 }) + (Guid?.compactMap { $0.id } ?? [])
-        for g in guids {
+        for g in [grandparentGuid, parentGuid].compactMap({ $0 }) {
             if tmdb == nil { tmdb = PlexMetadata.extractTmdbId(from: g) }
             if tvdb == nil { tvdb = PlexMetadata.extractTvdbId(from: g) }
             if imdb == nil { imdb = PlexMetadata.extractImdbId(from: g) }
