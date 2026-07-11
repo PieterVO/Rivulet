@@ -65,8 +65,6 @@ Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEn
 - **Audio** — AAC, AC3, E-AC3 (including Atmos / JOC), TrueHD, DTS, DTS-HD MA, FLAC, ALAC, MP3, and PCM.
 - **Subtitles** — Text (SRT, ASS/SSA) and bitmap (PGS, DVB).
 
-The player chrome is custom, not `AVPlayerViewController`. Glass control bar, scrubbing with thumbnail previews, Up Next, Skip Intro and Skip Credits.
-
 ### Live TV
 
 - Dispatcharr and generic M3U/XMLTV sources
