@@ -30,4 +30,50 @@ struct AetherSubtitleCue: Identifiable {
         /// video frame; the overlay multiplies by the on-screen video rect.
         case image(cgImage: CGImage, position: CGRect)
     }
+
+    /// Stable content identity: `(startTime, endTime, body)`.
+    ///
+    /// `id` is NOT usable as an identity. It originates from AetherEngine's
+    /// `EmbeddedSubtitleDecoder.nextCueID`, a per-decoder-instance monotonic
+    /// counter starting at 0. Every seek makes the drainer reset the decoder
+    /// (`.resetAndDecode`), so ids restart at 0 and collide with unrelated
+    /// older cues still sitting in the engine's `subtitleCues` array — which
+    /// hands SwiftUI duplicate `ForEach` identities.
+    ///
+    /// Content identity also collapses the engine's re-decode duplicates
+    /// (identical start + end + body) while keeping genuine simultaneous
+    /// speakers (identical start, DIFFERENT text) distinct.
+    var contentKey: ContentKey {
+        ContentKey(startTime: startTime, endTime: endTime, body: body)
+    }
+
+    /// Hashable projection of a cue's content.
+    ///
+    /// Image bodies key off the CGImage's *reference identity* plus the
+    /// position rect — never pixel contents. Comparing pixels would be
+    /// expensive, and a decoder reset that re-emits the same packet yields
+    /// the same (or an equivalent) decoded image object. If two image cues
+    /// share start/end/position but carry different CGImage refs we keep both:
+    /// conservative, never drop a cue we cannot prove is a duplicate.
+    struct ContentKey: Hashable {
+        enum BodyKey: Hashable {
+            case text(String)
+            case image(image: ObjectIdentifier, position: CGRect)
+        }
+
+        let startTime: Double
+        let endTime: Double
+        let body: BodyKey
+
+        init(startTime: Double, endTime: Double, body: Body) {
+            self.startTime = startTime
+            self.endTime = endTime
+            switch body {
+            case .text(let string):
+                self.body = .text(string)
+            case .image(let cgImage, let position):
+                self.body = .image(image: ObjectIdentifier(cgImage), position: position)
+            }
+        }
+    }
 }

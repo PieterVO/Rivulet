@@ -72,8 +72,27 @@ final class SubtitleModel: ObservableObject {
     /// 1. Binary search for the rightmost cue with startTime <= t.
     /// 2. Walk leftward as long as startTime > t - maxCueDuration.
     /// 3. Include cues whose endTime >= t.
+    /// 4. Drop cues that duplicate an already-collected cue on full content
+    ///    identity — `(startTime, endTime, body)`.
     ///
-    /// This is O(log n + k) where k is the number of active cues (typically 1-3).
+    /// Step 4 exists because AetherEngine 5.0.1 leaks duplicate cues on every
+    /// rewind: `SubtitleOverlayDrainer.drainPlan` returns `.resetAndDecode`
+    /// on a playhead jump, which resets the decoder but never clears
+    /// `subtitleCues`; the re-decoded backscan window is then appended. The
+    /// engine's own `insertCueSorted` deliberately keeps *text* cues sharing a
+    /// start time (they may be distinct simultaneous speakers), and
+    /// `pruneOldSubtitleCues` cannot help because a rewind moves `sourceTime`
+    /// backward, leaving the stale copies' `endTime` in the future. So one
+    /// line stacks a fresh copy per rewind across it.
+    ///
+    /// Content identity is the discriminator the engine lacks:
+    /// - Two real simultaneous speakers share `startTime` but differ in text
+    ///   -> both survive.
+    /// - A re-decoded duplicate matches on start AND end AND body
+    ///   -> collapses to one.
+    ///
+    /// This is O(log n + k) where k is the number of active cues (typically
+    /// 1-3); the dedupe is a hash-set pass over that same k, not over `cues`.
     var activeCues: [AetherSubtitleCue] {
         let t = sourceTime - delaySeconds
         guard !cues.isEmpty else { return [] }
@@ -94,14 +113,24 @@ final class SubtitleModel: ObservableObject {
 
         guard pivot >= 0 else { return [] }
 
-        // Walk left within the maxCueDuration window.
+        // Walk left within the maxCueDuration window, dropping cues that
+        // duplicate an already-seen cue on full content identity.
+        //
+        // The walk runs right-to-left, so the copy that survives a duplicate
+        // group is the one nearest the END of `cues` — i.e. the most recently
+        // appended. Duplicates are identical by construction, so which object
+        // survives is immaterial; the subsequent reverse restores startTime
+        // order either way.
         let windowStart = t - maxCueDuration
         var result: [AetherSubtitleCue] = []
+        var seen: Set<AetherSubtitleCue.ContentKey> = []
         var i = pivot
         while i >= 0 && cues[i].startTime > windowStart {
             let cue = cues[i]
             if cue.startTime <= t && cue.endTime >= t {
-                result.append(cue)
+                if seen.insert(cue.contentKey).inserted {
+                    result.append(cue)
+                }
             }
             i -= 1
         }

@@ -36,15 +36,21 @@ struct AetherSubtitleOverlayView: View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
                 // Bitmap cues: render all simultaneously (PGS can emit multiples).
-                ForEach(model.activeCues.filter(\.isBitmap), id: \.id) { cue in
+                //
+                // Keyed by contentKey, NOT by cue.id: the engine's cue id is a
+                // per-decoder monotonic counter that restarts at 0 whenever a
+                // seek resets the decoder, so it collides with older cues still
+                // in the array and hands SwiftUI duplicate ForEach identities.
+                ForEach(model.activeCues.filter(\.isBitmap), id: \.contentKey) { cue in
                     if case .image(let cgImage, let pos) = cue.body {
                         bitmapCue(cgImage: cgImage, position: pos, size: geo.size)
                     }
                 }
 
-                // Text cues: stack vertically at bottom-centre.
+                // Text cues: stack vertically at bottom-centre. Also keyed by
+                // contentKey; see the note above.
                 VStack(spacing: 4) {
-                    ForEach(model.activeCues.filter(\.isText), id: \.id) { cue in
+                    ForEach(model.activeCues.filter(\.isText), id: \.contentKey) { cue in
                         if case .text(let string) = cue.body {
                             styledText(string, size: geo.size)
                         }

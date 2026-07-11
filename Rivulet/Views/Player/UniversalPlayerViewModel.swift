@@ -12,214 +12,10 @@ import Sentry
 import AVFoundation
 import AVKit
 
-// MARK: - Subtitle Preference
-
-/// Stores user's subtitle preference for auto-selection
-struct SubtitlePreference: Codable, Equatable {
-    /// Whether subtitles are enabled
-    var enabled: Bool
-    /// Preferred language code (e.g., "en", "es")
-    var languageCode: String?
-    /// Preferred codec (e.g., "srt", "ass", "pgs")
-    var codec: String?
-    /// Whether to prefer hearing impaired tracks
-    var preferHearingImpaired: Bool
-
-    static let off = SubtitlePreference(enabled: false, languageCode: nil, codec: nil, preferHearingImpaired: false)
-
-    init(enabled: Bool, languageCode: String?, codec: String?, preferHearingImpaired: Bool) {
-        self.enabled = enabled
-        self.languageCode = languageCode
-        self.codec = codec
-        self.preferHearingImpaired = preferHearingImpaired
-    }
-
-    /// Create preference from a selected track
-    init(from track: MediaTrack) {
-        self.enabled = true
-        self.languageCode = track.languageCode
-        self.codec = track.codec
-        self.preferHearingImpaired = track.isHearingImpaired
-    }
-}
-
-/// Manages subtitle preference persistence
-enum SubtitlePreferenceManager {
-    // Individual keys for each preference field (more robust than JSON)
-    private static let enabledKey = "subtitlePreferenceEnabled"
-    private static let languageKey = "subtitlePreferenceLanguage"
-    private static let codecKey = "subtitlePreferenceCodec"
-    private static let hearingImpairedKey = "subtitlePreferenceHearingImpaired"
-
-    // Migration from old JSON format
-    private static let migrationKey = "subtitlePreferenceMigrated"
-
-    static var current: SubtitlePreference {
-        get {
-            // Migrate from old JSON format if needed
-            if !UserDefaults.standard.bool(forKey: migrationKey) {
-                UserDefaults.standard.set(true, forKey: migrationKey)
-                if let data = UserDefaults.standard.data(forKey: "subtitlePreference"),
-                   let oldPref = try? JSONDecoder().decode(SubtitlePreference.self, from: data) {
-                    // Migrate old values to new format
-                    UserDefaults.standard.set(oldPref.enabled, forKey: enabledKey)
-                    UserDefaults.standard.set(oldPref.languageCode, forKey: languageKey)
-                    UserDefaults.standard.set(oldPref.codec, forKey: codecKey)
-                    UserDefaults.standard.set(oldPref.preferHearingImpaired, forKey: hearingImpairedKey)
-                    UserDefaults.standard.removeObject(forKey: "subtitlePreference")
-                }
-            }
-
-            // Read from individual keys
-            let enabled = UserDefaults.standard.bool(forKey: enabledKey)
-            let languageCode = UserDefaults.standard.string(forKey: languageKey)
-            let codec = UserDefaults.standard.string(forKey: codecKey)
-            let preferHearingImpaired = UserDefaults.standard.bool(forKey: hearingImpairedKey)
-
-            return SubtitlePreference(
-                enabled: enabled,
-                languageCode: languageCode,
-                codec: codec,
-                preferHearingImpaired: preferHearingImpaired
-            )
-        }
-        set {
-            UserDefaults.standard.set(newValue.enabled, forKey: enabledKey)
-            UserDefaults.standard.set(newValue.languageCode, forKey: languageKey)
-            UserDefaults.standard.set(newValue.codec, forKey: codecKey)
-            UserDefaults.standard.set(newValue.preferHearingImpaired, forKey: hearingImpairedKey)
-        }
-    }
-
-    /// Whether user has explicitly set subtitle preferences.
-    /// If false, playback should honor stream defaults/forced tracks.
-    static var hasStoredPreference: Bool {
-        UserDefaults.standard.object(forKey: enabledKey) != nil ||
-        UserDefaults.standard.object(forKey: languageKey) != nil ||
-        UserDefaults.standard.object(forKey: codecKey) != nil ||
-        UserDefaults.standard.object(forKey: hearingImpairedKey) != nil ||
-        UserDefaults.standard.object(forKey: "subtitlePreference") != nil
-    }
-
-    /// Find best matching subtitle track based on preference
-    static func findBestMatch(in tracks: [MediaTrack], preference: SubtitlePreference) -> MediaTrack? {
-        guard preference.enabled, let preferredLang = preference.languageCode else {
-            return nil
-        }
-
-        // Filter tracks by language
-        let langMatches = tracks.filter { $0.languageCode == preferredLang }
-        guard !langMatches.isEmpty else {
-            // No tracks match preferred language - keep subtitles off
-            return nil
-        }
-
-        // Try to find exact codec match
-        if let preferredCodec = preference.codec {
-            if let exactMatch = langMatches.first(where: {
-                $0.codec == preferredCodec && $0.isHearingImpaired == preference.preferHearingImpaired
-            }) {
-                return exactMatch
-            }
-            // Try codec match without hearing impaired preference
-            if let codecMatch = langMatches.first(where: { $0.codec == preferredCodec }) {
-                return codecMatch
-            }
-        }
-
-        // Fall back to first track of preferred language with matching HI preference
-        if let hiMatch = langMatches.first(where: { $0.isHearingImpaired == preference.preferHearingImpaired }) {
-            return hiMatch
-        }
-
-        // Fall back to first track of preferred language
-        return langMatches.first
-    }
-}
-
-// MARK: - Audio Preference
-
-/// Stores user's audio preference for auto-selection
-struct AudioPreference: Codable, Equatable {
-    /// Preferred language code (e.g., "en", "es"). Nil means default to English.
-    var languageCode: String?
-
-    static let defaultEnglish = AudioPreference(languageCode: "eng")
-
-    /// Create preference from a selected track
-    init(from track: MediaTrack) {
-        self.languageCode = track.languageCode
-    }
-
-    init(languageCode: String?) {
-        self.languageCode = languageCode
-    }
-}
-
-/// Manages audio preference persistence
-enum AudioPreferenceManager {
-    private static let languageKey = "audioPreferenceLanguage"
-
-    // Migration: try to read old JSON format once
-    private static let migrationKey = "audioPreferenceMigrated"
-
-    static var current: AudioPreference {
-        get {
-            // Migrate from old JSON format if needed
-            if !UserDefaults.standard.bool(forKey: migrationKey) {
-                UserDefaults.standard.set(true, forKey: migrationKey)
-                if let data = UserDefaults.standard.data(forKey: "audioPreference"),
-                   let oldPref = try? JSONDecoder().decode(AudioPreference.self, from: data) {
-                    // Migrate old value to new format
-                    UserDefaults.standard.set(oldPref.languageCode, forKey: languageKey)
-                    UserDefaults.standard.removeObject(forKey: "audioPreference")
-                }
-            }
-
-            // Read from simple string storage
-            let languageCode = UserDefaults.standard.string(forKey: languageKey)
-            return AudioPreference(languageCode: languageCode ?? "eng")
-        }
-        set {
-            UserDefaults.standard.set(newValue.languageCode, forKey: languageKey)
-        }
-    }
-
-    /// Find best matching audio track based on preference
-    /// Returns the highest quality track in the preferred language, falling back to English
-    static func findBestMatch(in tracks: [MediaTrack], preference: AudioPreference) -> MediaTrack? {
-        guard !tracks.isEmpty else { return nil }
-
-        // Helper to find best track by quality (most channels = better)
-        func bestTrack(in candidates: [MediaTrack]) -> MediaTrack? {
-            candidates.max { ($0.channels ?? 0) < ($1.channels ?? 0) }
-        }
-
-        // Try preferred language first
-        if let preferredLang = preference.languageCode {
-            let langMatches = tracks.filter {
-                $0.languageCode?.lowercased() == preferredLang.lowercased()
-            }
-            if let best = bestTrack(in: langMatches) {
-                return best
-            }
-        }
-
-        // Fall back to English tracks
-        let englishMatches = tracks.filter {
-            let code = $0.languageCode?.lowercased()
-            return code == "eng" || code == "en" || code == "english"
-        }
-        if let best = bestTrack(in: englishMatches) {
-            return best
-        }
-
-        // No English either - return the first track (usually default)
-        return tracks.first(where: { $0.isDefault }) ?? tracks.first
-    }
-}
-
 // MARK: - Post-Video State
+//
+// Track memory (audio + subtitle intent, resolution, migration) lives in
+// Services/Plex/Playback/TrackIntent.swift.
 
 /// State machine for post-video summary experience
 enum PostVideoState: Equatable {
@@ -572,7 +368,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// "user hasn't picked yet" from "user explicitly turned subs off"
     /// from "user picked this specific subtitle track".
     enum InitialSubtitleSelection {
-        case auto              // No preselection — fall through to SubtitlePreferenceManager.
+        case auto              // No preselection — fall through to the stored SubtitleIntent.
         case off               // User explicitly chose Off in the pre-play picker.
         case track(id: Int)    // User picked a specific subtitle track.
     }
@@ -1438,9 +1234,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             languages.append(contentsOf: languageCandidates(for: track))
         }
 
-        if let preferred = AudioPreferenceManager.current.languageCode {
-            languages.append(preferred)
-        }
+        languages.append(TrackIntentStore.effectiveAudioIntent.language)
 
         if let selected = plexAudioTracksFromMetadata().first(where: { $0.isDefault }) {
             languages.append(contentsOf: languageCandidates(for: selected))
@@ -1463,12 +1257,18 @@ final class UniversalPlayerViewModel: ObservableObject {
             break
         }
 
-        let preference = SubtitlePreferenceManager.current
-        if preference.enabled, let preferred = preference.languageCode {
-            languages.append(preferred)
-        } else if !SubtitlePreferenceManager.hasStoredPreference,
-                  let selected = plexSubtitleTracksFromMetadata().first(where: { $0.isForced || $0.isDefault }) {
-            languages.append(contentsOf: languageCandidates(for: selected))
+        switch TrackIntentStore.subtitleIntent {
+        case let .track(language, _, _, _) where !language.isEmpty:
+            languages.append(language)
+        case .off:
+            break
+        case .track, .none:
+            // No stored intent (or an intent with no usable language): fall
+            // back to the file's forced/default subtitle stream.
+            if let selected = plexSubtitleTracksFromMetadata()
+                .first(where: { $0.isForced || $0.isDefault }) {
+                languages.append(contentsOf: languageCandidates(for: selected))
+            }
         }
 
         return uniqueNonEmpty(languages)
@@ -2771,7 +2571,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         selectAudioTrackWithoutSaving(id: id)
 
         if let track = audioTracks.first(where: { $0.id == id }) {
-            AudioPreferenceManager.current = AudioPreference(from: track)
+            TrackIntentStore.audioIntent = AudioIntent(from: track)
         }
     }
 
@@ -2796,9 +2596,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         selectSubtitleTrackWithoutSaving(id: id)
 
         if let id = id, let track = subtitleTracks.first(where: { $0.id == id }) {
-            SubtitlePreferenceManager.current = SubtitlePreference(from: track)
+            TrackIntentStore.subtitleIntent = SubtitleIntent(from: track)
         } else {
-            SubtitlePreferenceManager.current = .off
+            TrackIntentStore.subtitleIntent = .off
         }
     }
 
@@ -2813,11 +2613,11 @@ final class UniversalPlayerViewModel: ObservableObject {
            let plexId = plexSubtitleId(forAetherTrackId: aetherTrackId) {
             currentSubtitleTrackId = plexId
             if let track = subtitleTracks.first(where: { $0.id == plexId }) {
-                SubtitlePreferenceManager.current = SubtitlePreference(from: track)
+                TrackIntentStore.subtitleIntent = SubtitleIntent(from: track)
             }
         } else {
             currentSubtitleTrackId = nil
-            SubtitlePreferenceManager.current = .off
+            TrackIntentStore.subtitleIntent = .off
         }
     }
 
@@ -2950,10 +2750,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     ///     user picked something deliberately, in Plex Web / mobile / our
     ///     own picker — that choice persists server-side and should win
     ///     over a global language default).
-    ///  3. App-level `AudioPreferenceManager` language preference (which
-    ///     defaults to English even when nothing has been stored — drives
-    ///     the typical "auto-pick the highest-quality English stream"
-    ///     behavior for items the user has never deliberately picked for).
+    ///  3. The global `AudioIntent` (which defaults to English even when
+    ///     nothing has been stored — drives the typical "auto-pick the
+    ///     highest-quality English stream" behavior for items the user has
+    ///     never deliberately picked for). Commentary / audio-description
+    ///     tracks are excluded from this automatic tier.
     ///  4. Plex's default-flagged stream as a final fallback.
     /// In every tier we issue `selectAudioTrackWithoutSaving` explicitly,
     /// even when `currentAudioTrackId` already matches the desired id.
@@ -2998,9 +2799,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // 3. App-level language preference.
-        let preference = AudioPreferenceManager.current
-        if let match = AudioPreferenceManager.findBestMatch(in: audioTracks, preference: preference) {
+        // 3. Global audio intent (defaults to English when nothing stored).
+        //    Excludes commentary / audio-description tracks from every
+        //    automatic tier — see TrackIntentResolver.resolveAudio.
+        if let match = TrackIntentResolver.resolveAudio(
+            intent: TrackIntentStore.effectiveAudioIntent,
+            in: audioTracks
+        ) {
             selectAudioTrackWithoutSaving(id: match.id)
             return
         }
@@ -3044,8 +2849,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // No explicit user preference yet: honor selected/default stream behavior.
-        if !SubtitlePreferenceManager.hasStoredPreference {
+        // 3. No explicit user intent yet: honor selected/default stream behavior.
+        guard let intent = TrackIntentStore.subtitleIntent else {
             if currentSubtitleTrackId == nil,
                let forcedTrack = subtitleTracks.first(where: { $0.isForced }) {
                 selectSubtitleTrackWithoutSaving(id: forcedTrack.id)
@@ -3055,19 +2860,15 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        let preference = SubtitlePreferenceManager.current
-
-        if !preference.enabled {
-            // User prefers subtitles off
-            selectSubtitleTrackWithoutSaving(id: nil)
-            return
-        }
-
-        // Find best matching track
-        if let match = SubtitlePreferenceManager.findBestMatch(in: subtitleTracks, preference: preference) {
+        // 4. Global subtitle intent. Resolution is a PURE READ: when no track
+        //    on this title matches the intent (e.g. stored "ENG forced" but
+        //    this title only ships a regular English track), subtitles come up
+        //    off for this title and the stored intent is left ALONE, so it
+        //    re-engages on the next title that does have a forced English
+        //    track. Only an explicit user pick writes intent.
+        if let match = TrackIntentResolver.resolveSubtitle(intent: intent, in: subtitleTracks) {
             selectSubtitleTrackWithoutSaving(id: match.id)
         } else {
-            // No matching language found - keep subtitles off
             selectSubtitleTrackWithoutSaving(id: nil)
         }
     }
