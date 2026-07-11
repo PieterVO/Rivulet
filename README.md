@@ -1,36 +1,74 @@
+<div align="center">
+
+<img src="Branding/logo_glow_transparent.png" alt="Rivulet" width="220">
+
 # Rivulet
 
-A native tvOS video streaming app designed for simplicity, combining **Plex** media server integration with **Live TV** support.
+**A native tvOS video app for Plex and Live TV.**
+Built for simplicity. Direct play by default.
 
-This project has fairly *opinionated* designs and logic, with a few focal points:
-- **Simplicity** - What is the best design to get me to the media I want to watch.
-- **Live TV** - Plex's live TV is, to put it nicely, sub-par. I've spent too long trying to get it to work well for me (kudos if you don't have this problem). I don't want live TV in a separate app, so this solves my problems. You might could use this just for live tv. Go for it.
-- **HomePod Integration** - The Plex app has never worked well when setting HomePod as the default audio output on my Apple TV. It hurts to have a HomePod sitting there collecting dust while my sub-par tv speakers play sound. This app helps the hurt.
-- **Custom Video Player** - Direct play by default, no server transcoding. The bar I'm chasing is Infuse. This was frustratingly built because Apple's frameworks can't handle DV profile 7 or P8.6 and can't direct play most video containers, and the third-party players that handle the trickier formats can't use Apple's HomePod controls.
-- **Apple TV+ Inspired** - The UI takes heavy inspiration from Apple's own TV app. Clean, focused, and native-feeling.
-
-## Screenshots
-
-| | |
-|---|---|
-| ![](Screenshots/01-hero.png) | ![](Screenshots/02-home-rows.png) |
-| ![](Screenshots/03-sidebar.png) | ![](Screenshots/04-detail.png) |
-| ![](Screenshots/05-episodes.png) | ![](Screenshots/06-library.png) |
-
+<a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
+  <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store">
+</a>
+&nbsp;
 <a href="https://testflight.apple.com/join/TcCsF5As">
-  <img src="https://developer.apple.com/assets/elements/icons/testflight/testflight-64x64_2x.png" alt="TestFlight" height="50">
-  <br>
-  <strong>Join the TestFlight Beta</strong>
+  <img src="https://img.shields.io/badge/Join_the-TestFlight_Beta-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Join the TestFlight Beta">
 </a>
 
-<br>
+<br><br>
 
 ![tvOS 26+](https://img.shields.io/badge/tvOS-26+-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white)
+![License](https://img.shields.io/badge/license-PolyForm_NC_1.0.0-blue)
+
+</div>
+
+---
+
+<div align="center">
+
+<img src="Screenshots/AppStore/01_home-hero.png" alt="Home" width="100%">
+
+</div>
+
+<table>
+<tr>
+<td width="50%"><img src="Screenshots/AppStore/02_home-rows.png" alt="Home rows"></td>
+<td width="50%"><img src="Screenshots/AppStore/06_sidebar.png" alt="Sidebar"></td>
+</tr>
+<tr>
+<td width="50%"><img src="Screenshots/AppStore/03_detail-sintel.png" alt="Media detail"></td>
+<td width="50%"><img src="Screenshots/AppStore/04_detail-expanded.png" alt="Expanded detail"></td>
+</tr>
+</table>
+
+---
+
+## Why this exists
+
+This project has fairly *opinionated* designs and logic, with a few focal points:
+
+- **Simplicity** — What is the best design to get me to the media I want to watch.
+- **Live TV** — Plex's live TV is, to put it nicely, sub-par. I've spent too long trying to get it to work well for me (kudos if you don't have this problem). I don't want live TV in a separate app, so this solves my problems. You might could use this just for live tv. Go for it.
+- **HomePod Integration** — The Plex app has never worked well when setting HomePod as the default audio output on my Apple TV. It hurts to have a HomePod sitting there collecting dust while my sub-par tv speakers play sound. This app helps the hurt.
+- **Direct Play** — No server transcoding. The bar I'm chasing is Infuse. This was frustratingly built because Apple's frameworks can't direct play most video containers, and the third-party players that handle the trickier formats can't use Apple's HomePod controls.
+- **Apple TV+ Inspired** — The UI takes heavy inspiration from Apple's own TV app. Clean, focused, and native-feeling.
 
 ## Features
 
+### Video Player
+
+Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEngine) — FFmpeg demuxing, remuxed to HLS-fMP4, handed to Apple's frameworks. Direct play is the primary path. A Plex server transcode is only the fallback when a file has no direct-play URL, or when startup fails.
+
+- **Video** — H.264 and HEVC through VideoToolbox. AV1, VP9, MPEG-2, VC-1, and MPEG-4 Part 2 fall back to software decode.
+- **HDR** — HDR10, HDR10+, HLG, and Dolby Vision. DV profiles 5 and 8.1 play with full Dolby Vision. Profile 7 plays as its HDR10 base layer.
+- **Audio** — AAC, AC3, E-AC3 (including Atmos / JOC), TrueHD, DTS, DTS-HD MA, FLAC, ALAC, MP3, and PCM.
+- **Subtitles** — Text (SRT, ASS/SSA) and bitmap (PGS, DVB).
+
+The player chrome is custom, not `AVPlayerViewController`. Glass control bar, scrubbing with thumbnail previews, Up Next, Skip Intro and Skip Credits.
+
 ### Live TV
+
 - Dispatcharr and generic M3U/XMLTV sources
 - Plex Live TV
 - Channel guide, favorites, and recently watched
@@ -38,14 +76,16 @@ This project has fairly *opinionated* designs and logic, with a few focal points
 
 Dispatcharr and Plex Live TV are tested regularly. Generic M3U/XMLTV is wired up but less battle-tested. Feedback welcome.
 
-### Custom Video Player
-FFmpeg for demuxing, Apple's sample-buffer frameworks for rendering (`AVSampleBufferDisplayLayer`, `AVSampleBufferAudioRenderer`, `AVSampleBufferRenderSynchronizer`). Direct play is the primary path; HLS is only a fallback.
+### Discover and Watchlist
 
-- **Video**: H.264 and HEVC via VideoToolbox. HDR10, HLG, and Dolby Vision. DV profiles 5, 7, and 8.1. Profile 7 (dual-layer Blu-ray rips) is converted to 8.1 on-the-fly via [libdovi](https://github.com/quietvoid/dovi_tool).
-- **Audio**: AAC, AC3, E-AC3, TrueHD, DTS, DTS-HD MA, FLAC, ALAC, MP3, and PCM variants.
-- **Subtitles**: Text (SRT, ASS/SSA) rendered in SwiftUI. Bitmap (PGS, DVB) decoded via FFmpeg.
+Browse trending and upcoming titles, add to your Plex watchlist, and see at a glance what you already own on your server.
+
+### Insights
+
+While something is playing, pull up Insights for cast and trivia on what's on screen. Work in progress — coverage and accuracy will keep improving.
 
 ### Music
+
 - Album, artist, and playlist browsing, modeled on Apple's Music app for tvOS.
 - Lyrics display (synced when the source provides timestamps, static otherwise).
 - Real-time audio visualizer on the Now Playing screen.
@@ -63,14 +103,12 @@ Chasing Plexamp on the features side. Long way to go.
 ## Building
 
 ```bash
-# Clone the repository
 git clone https://github.com/l984-451/Rivulet.git
 cd Rivulet
 
-# Open in Xcode
 open Rivulet.xcodeproj
 
-# Build for Apple TV
+# Or from the command line
 xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
 ```
 
@@ -92,11 +130,17 @@ Third-party components retain their original licenses. FFmpeg is included under 
 
 ## Acknowledgments
 
-- [FFmpeg](https://ffmpeg.org/): demuxing, audio decoding, subtitle decoding, and remuxing
-- [libdovi](https://github.com/quietvoid/dovi_tool): Dolby Vision RPU conversion
-- [Plex](https://plex.tv/): media server platform
-- [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr): IPTV management
+- [AetherEngine](https://github.com/superuser404notfound/AetherEngine) — the playback engine
+- [FFmpeg](https://ffmpeg.org/) — demuxing, decoding, and remuxing
+- [libdovi](https://github.com/quietvoid/dovi_tool) — Dolby Vision RPU handling
+- [Plex](https://plex.tv/) — media server platform
+- [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) — IPTV management
+- [TMDB](https://www.themoviedb.org/) — artwork and metadata for Discover
 
 ---
 
-**Note**: Rivulet is not affiliated with or endorsed by Plex, Inc.
+<div align="center">
+
+Rivulet is not affiliated with or endorsed by Plex, Inc.
+
+</div>

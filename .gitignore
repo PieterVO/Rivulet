@@ -98,3 +98,14 @@ perf-spike/traces/
 
 # Sentry CLI auth (do not commit)
 .sentryclirc
+
+# Design sources and icon exports — the shipping art lives in
+# Rivulet/Assets.xcassets and Branding/. Everything else is scratch.
+*.afdesign
+*.afphoto
+*.sketch
+*.psd
+Screenshots/*
+!Screenshots/AppStore/
+Screenshots/AppStore/*
+!Screenshots/AppStore/*.png
