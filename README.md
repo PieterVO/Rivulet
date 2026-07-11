@@ -122,6 +122,8 @@ By submitting a pull request, you agree to license your contribution under the s
 
 Rivulet is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
 
+Everything here is free to use, read, fork, and build on. The only thing you can't do is sell it. I'd rather give this away than watch someone else charge for it.
+
 In short: clone it, run it, modify it, share it, contribute back, for personal, educational, research, hobby, or other noncommercial use. You may not use Rivulet (or anything derived from it) for commercial purposes, including selling it, charging for access to it, or bundling it into a paid product or service.
 
 Third-party components retain their original licenses. FFmpeg is included under LGPL-2.1+; libdovi under MIT. See [LICENSE](LICENSE) for details.
