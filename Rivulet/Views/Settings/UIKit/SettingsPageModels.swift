@@ -131,8 +131,6 @@ enum SettingsContent {
         case .liveTVSourceDetail: return liveTVSourceDetail
         case .about:       return about
         case .displaySizePicker:      return displaySizePicker
-        case .audioLanguagePicker:    return audioLanguagePicker
-        case .subtitlesPicker:        return subtitlesPicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         default:           return []   // not yet ported (later clusters)
         }
@@ -154,34 +152,6 @@ enum SettingsContent {
                 isSelected: { SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue) == opt.rawValue },
                 select: { SettingsStore.setInt("autoplayCountdown", opt.rawValue) }))
         }
-    }
-
-    private static var audioLanguagePicker: [SettingsRowItem] {
-        LanguageOption.allCases.map { opt in
-            SettingsRowItem(id: "al_\(opt.rawValue)", title: opt.description, kind: .option(
-                isSelected: { LanguageOption(languageCode: AudioPreferenceManager.current.languageCode) == opt },
-                select: { AudioPreferenceManager.current = AudioPreference(languageCode: opt.rawValue) }))
-        }
-    }
-
-    private static var subtitlesPicker: [SettingsRowItem] {
-        SubtitleOption.allCases.map { opt in
-            SettingsRowItem(id: "sub_\(opt.description)", title: opt.description, kind: .option(
-                isSelected: { currentSubtitleOption() == opt },
-                select: { applySubtitleOption(opt) }))
-        }
-    }
-
-    private static func currentSubtitleOption() -> SubtitleOption {
-        SubtitleOption(enabled: SubtitlePreferenceManager.current.enabled,
-                       languageCode: SubtitlePreferenceManager.current.languageCode)
-    }
-
-    private static func applySubtitleOption(_ opt: SubtitleOption) {
-        var pref = SubtitlePreferenceManager.current
-        pref.enabled = opt.isEnabled
-        if let code = opt.languageCode { pref.languageCode = code }
-        SubtitlePreferenceManager.current = pref
     }
 
     // MARK: Root
@@ -227,15 +197,6 @@ enum SettingsContent {
 
     private static var playback: [SettingsRowItem] {
         [
-            SettingsRowItem(id: "audioLanguage", title: "Audio Language",
-                            kind: .navigationValue(.audioLanguagePicker, value: {
-                                LanguageOption(languageCode: AudioPreferenceManager.current.languageCode).description
-                            })),
-            SettingsRowItem(id: "subtitles", title: "Subtitles",
-                            kind: .navigationValue(.subtitlesPicker, value: {
-                                SubtitleOption(enabled: SubtitlePreferenceManager.current.enabled,
-                                               languageCode: SubtitlePreferenceManager.current.languageCode).description
-                            })),
             toggle("autoSkipIntro", "Auto-Skip Intro", key: "autoSkipIntro", default: false),
             toggle("autoSkipCredits", "Auto-Skip Credits", key: "autoSkipCredits", default: false),
             toggle("autoSkipAds", "Auto-Skip Ads", key: "autoSkipAds", default: false),

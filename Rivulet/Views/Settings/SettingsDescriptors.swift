@@ -119,16 +119,6 @@ enum SettingsDescriptorStore {
         ),
 
         // MARK: Playback
-        "audioLanguage": SettingDescriptor(
-            icon: "waveform",
-            iconColor: .cyan,
-            description: "Sets the preferred language for audio tracks. When available, this language will be selected automatically."
-        ),
-        "subtitles": SettingDescriptor(
-            icon: "captions.bubble",
-            iconColor: .yellow,
-            description: "Sets the preferred language for subtitles. Choose Off to disable automatic subtitle selection."
-        ),
         "autoSkipIntro": SettingDescriptor(
             icon: "play.circle",
             iconColor: .green,
@@ -367,8 +357,6 @@ enum SettingsDescriptorStore {
         case .cache: return ("internaldrive", .gray)
         case .userProfiles: return ("person.crop.circle", .cyan)
         case .displaySizePicker: return ("textformat.size", .orange)
-        case .audioLanguagePicker: return ("waveform", .cyan)
-        case .subtitlesPicker: return ("captions.bubble", .yellow)
         case .autoplayCountdownPicker: return ("forward.end.alt", .purple)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .blue)
         case .addLiveTVSource: return ("plus.circle.fill", .blue)
