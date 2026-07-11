@@ -222,9 +222,26 @@ final class PlayerRailView: UIView {
 
     private weak var lastFocusedButton: UIView?
 
+    /// The scrubber's focus proxy, injected by the container (it is a sibling
+    /// of the rail, not a child — see PlayerContainerViewController). Focus
+    /// lands here FIRST when the chrome comes up: the timeline is the primary
+    /// affordance and the button row sits above it (AVPlayerViewController's
+    /// model). Once the user has moved up into the buttons, the last-focused
+    /// button wins instead, so re-entering the rail returns them where they
+    /// left off rather than yanking focus back down to the scrubber.
+    weak var scrubberFocusProxy: UIView?
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let last = lastFocusedButton, !last.isHidden { return [last] }
+        if let proxy = scrubberFocusProxy, proxy.canBecomeFocused { return [proxy] }
         return [subtitlesButton]
+    }
+
+    /// Drop the remembered button so the next chrome appearance starts on the
+    /// scrubber again. Called when controls-focus mode ends — "where you left
+    /// off" is scoped to one visit to the controls, not to the whole session.
+    func resetFocusMemory() {
+        lastFocusedButton = nil
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {

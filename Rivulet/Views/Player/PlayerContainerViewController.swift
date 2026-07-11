@@ -280,6 +280,11 @@ class PlayerContainerViewController: UIViewController {
             ])
             skipPillFocusGuide = skipGuide
 
+            // The proxy is a sibling of the rail, so the rail can't reach it
+            // through the view tree — hand it over so its preferredFocus can
+            // make the scrubber the first landing.
+            railView.scrubberFocusProxy = proxy
+
             rail = railView
             progressBar = bar
             scrubberProxy = proxy
@@ -591,11 +596,27 @@ class PlayerContainerViewController: UIViewController {
     /// bail conditions in `handlePanGesture` so the recognizer never *begins*
     /// in a state where it would no-op — beginning is what steals the gesture
     /// from the focus engine.
+    ///
+    /// Controls-focus mode does NOT disqualify a swipe. The scrubber is only
+    /// on screen once the controls are up, and raising them is what sets
+    /// `controlsFocusActive` — gating on it meant the pan refused to begin in
+    /// exactly the state where the user can see the thing they want to drag.
+    /// Only focus resting on a transport BUTTON blocks the swipe, so a
+    /// horizontal flick there still moves focus along the row.
     private var panCanDriveScrub: Bool {
         guard let vm = viewModel else { return false }
         return !vm.playbackState.isFailed
             && vm.postVideoState == .hidden
-            && !vm.controlsFocusActive
+            && !focusIsOnTransportButton
+    }
+
+    /// Focus is parked on a transport button rather than the scrubber. While
+    /// `controlsFocusActive`, the scrubber proxy is the only focusable element
+    /// that wants swipes (see `updateScrubberFocusEnabled`); anything else in
+    /// the rail needs left/right to move focus, not to seek.
+    private var focusIsOnTransportButton: Bool {
+        guard viewModel?.controlsFocusActive == true else { return false }
+        return scrubberProxy?.isFocused != true
     }
 
     // MARK: - Touch-Surface Tap (timeline overlay)
@@ -721,14 +742,9 @@ class PlayerContainerViewController: UIViewController {
     }
 
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
-        guard let vm = viewModel else { return }
-
-        // Bail in error / post-video / controls-focus states regardless of mode.
         // Kept in sync with `panCanDriveScrub`, which stops the recognizer from
         // beginning (and thus stealing the gesture) in these same states.
-        if vm.playbackState.isFailed || vm.postVideoState != .hidden || vm.controlsFocusActive {
-            return
-        }
+        guard panCanDriveScrub else { return }
 
         // Touch-surface pan drives continuous swipe-to-scrub whether the item
         // is playing or paused. It used to require `.paused`, so a swipe during
@@ -834,6 +850,18 @@ class PlayerContainerViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self, weak vm] _ in
                 self?.progressBar?.resetFilmstrip()
+                if let vm { self?.applyRailMetadata(vm: vm) }
+            }
+            .store(in: &cancellables)
+
+        // The meta row's audio slot names the track that is playing, so it has
+        // to follow the selection — both the user's pick and the engine's own
+        // late-arriving track list (issue #200).
+        vm.$currentAudioTrackId
+            .combineLatest(vm.$audioTracks)
+            .removeDuplicates { $0.0 == $1.0 && $0.1 == $1.1 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak vm] _ in
                 if let vm { self?.applyRailMetadata(vm: vm) }
             }
             .store(in: &cancellables)
@@ -982,9 +1010,20 @@ class PlayerContainerViewController: UIViewController {
         vm.$controlsFocusActive
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.setNeedsFocusUpdate()
-                self?.updateFocusIfNeeded()
+            .sink { [weak self] active in
+                guard let self else { return }
+                // The scrubber proxy is the rail's FIRST landing, and its
+                // `canBecomeFocused` is gated on `controlsFocusActive` — which
+                // has only just flipped. Refresh that gate BEFORE resolving
+                // focus, or the engine polls a still-unfocusable proxy and the
+                // rail falls through to the subtitles button.
+                self.applyChromeVisibility()
+                // Leaving controls-focus ends this visit to the rail, so the
+                // next one starts on the scrubber again rather than on whatever
+                // button happened to be focused when the user backed out.
+                if !active { self.rail?.resetFocusMemory() }
+                self.setNeedsFocusUpdate()
+                self.updateFocusIfNeeded()
             }
             .store(in: &cancellables)
 
@@ -1123,14 +1162,36 @@ class PlayerContainerViewController: UIViewController {
 
     /// Eyebrow + title + meta row from the current item, ported from the
     /// 2a card's identical composition.
+    ///
+    /// The audio slot names the track that is actually PLAYING, so it must be
+    /// derived from the view model's live selection rather than the item's
+    /// stream list — reading the part's first audio stream showed the same
+    /// label no matter which track the user picked (issue #200). Re-applied on
+    /// every `$currentAudioTrackId` / `$audioTracks` emission (see bindChrome).
     private func applyRailMetadata(vm: UniversalPlayerViewModel) {
         let meta = vm.metadata
         rail?.setTitle(vm.title, eyebrow: vm.subtitle)
 
         let runtime = meta.duration.map { "\($0 / 60000) min" }
-        let audio = meta.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio })
-            .flatMap { $0.displayTitle ?? $0.extendedDisplayTitle }
-        rail?.setMeta(rating: meta.contentRating, runtime: runtime, audio: audio)
+        rail?.setMeta(rating: meta.contentRating, runtime: runtime,
+                      audio: railAudioLabel(vm: vm))
+    }
+
+    /// One-line name for the selected audio track, e.g. "English · TrueHD 7.1".
+    /// Falls back to the track's own display name when there is no codec/channel
+    /// detail to add, and to nil (slot hidden) before tracks have loaded.
+    private func railAudioLabel(vm: UniversalPlayerViewModel) -> String? {
+        // Before the engine publishes its track list the selection is unknown;
+        // the default track is the honest guess, and the sink below corrects it
+        // the moment a real selection lands.
+        let track = vm.audioTracks.first(where: { $0.id == vm.currentAudioTrackId })
+            ?? vm.audioTracks.first(where: { $0.isDefault })
+        guard let track else { return nil }
+
+        let format = track.audioFormatString
+        let language = track.language ?? track.languageDisplay.capitalized
+        guard !format.isEmpty, format != "Audio" else { return language }
+        return "\(language) · \(format)"
     }
 
     /// Single writer for all chrome alphas. Every visibility rule lives
@@ -1180,7 +1241,21 @@ class PlayerContainerViewController: UIViewController {
         let keepRailTitle = ambient && vm.metadata.type == "episode"
         let railAlpha: CGFloat = keepRailTitle ? 1 : (railVisible ? 1 : 0)
 
-        scrubberProxy?.isFocusEnabled = railVisible && !isLoading && vm.controlsFocusActive
+        // The proxy is the rail's first focus landing, so it must be focusable
+        // as soon as the chrome is up — NOT only after controls-focus mode has
+        // already moved focus onto a rail button (the old rule, which made the
+        // subtitles button the de-facto first landing).
+        //
+        // The `isFocused` term is load-bearing: a left/right press on the
+        // focused proxy calls exitControlsFocus() and begins a scrub, which
+        // clears BOTH `controlsFocusActive` and `railVisible`. Without this
+        // term the proxy would stop being focusable in the middle of the very
+        // gesture it is servicing, and the focus update that follows would yank
+        // focus off the scrubber mid-shuttle. A view that currently holds focus
+        // keeps it; the gate only governs whether focus may ARRIVE here.
+        let proxyHasFocus = scrubberProxy?.isFocused == true
+        scrubberProxy?.isFocusEnabled =
+            (railVisible && !isLoading) || (proxyHasFocus && !isLoading && !ambient)
 
         // The skip pill lives independently of the rail: it stays up whenever a
         // marker is active (chrome shown OR hidden), so the user can jump forward

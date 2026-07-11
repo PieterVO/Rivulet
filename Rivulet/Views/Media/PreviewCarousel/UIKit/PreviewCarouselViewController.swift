@@ -67,6 +67,11 @@ final class PreviewCarouselViewController: UIViewController {
     private var pagingAnimation: PagingAnimation?
     private var displayLink: CADisplayLink?
 
+    /// Up/down swipe recognizers (touch surface). Held so the gesture delegate
+    /// can tell them apart from the horizontal paging swipes, which are claimed
+    /// unconditionally.
+    private var verticalSwipeRecognizers: [UISwipeGestureRecognizer] = []
+
     // MARK: - Subviews
 
     private let backdrop = UIView()
@@ -390,6 +395,26 @@ final class PreviewCarouselViewController: UIViewController {
             // On tvOS a swipe recognizer otherwise waits for a .select press.
             swipe.allowedPressTypes = []
             view.addGestureRecognizer(swipe)
+        }
+
+        // Swipe-up/down. The vertical choreography (carousel → hero → details,
+        // pills → episodes, and every step back up) lived only in `pressesBegan`
+        // under .upArrow/.downArrow, so a touch-surface swipe reached none of it
+        // and the engine bonked with no candidate to move to.
+        //
+        // Unlike the horizontal case these CANNOT be claimed unconditionally:
+        // inside the details the below-fold rows ARE focusable, and the engine
+        // needs the swipe to walk between them. `gestureRecognizerShouldBegin`
+        // therefore lets each recognizer begin only for the hand-off transitions
+        // the engine cannot perform on its own.
+        for direction in [UISwipeGestureRecognizer.Direction.up, .down] {
+            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleVerticalSwipe(_:)))
+            swipe.direction = direction
+            swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+            swipe.allowedPressTypes = []
+            swipe.delegate = self
+            view.addGestureRecognizer(swipe)
+            verticalSwipeRecognizers.append(swipe)
         }
 
         // Focus anchor: invisible, always-focusable, so the focus engine has
@@ -758,86 +783,110 @@ final class PreviewCarouselViewController: UIViewController {
                     return
                 }
             case .downArrow:
-                // Down from the carousel expands the centered card to the hero —
-                // the mirror of Up (hero → carousel). Same action as Select, so
-                // Down walks carousel → hero → details.
-                if state.isCarouselInputEnabled {
-                    expandCurrentCard()
-                    return
-                }
-                // Down from the expanded hero hands focus into the real
-                // below-fold collection (focus-driven nav + auto-scroll, which
-                // drives the hero choreography).
-                if state.phase == .expandedHero {
-                    enterBelowFold()
-                    return
-                }
-                // Down from the season pills drops focus into the episodes — at
-                // the SELECTED season's first episode. The orthogonal rail was
-                // scrolled there on pill-focus, but the focus engine still
-                // remembers episode 0 / season 1; arm the preferred-focus target
-                // across this update so it enters the current season instead.
-                if state.phase == .detailsStable, expandedDetail.focusIsOnPills {
-                    expandedDetail.detailsFocusTarget = .episodes
-                    expandedDetail.armPillEntryFocus()
-                    setNeedsFocusUpdate(); updateFocusIfNeeded()
-                    expandedDetail.disarmPillEntryFocus()
-                    return
-                }
+                if handleDownNavigation() { return }
             case .upArrow:
-                // Up choreography ONLY at the top of the details: pills → hero,
-                // episodes → pills. From a LOWER section (Trailers/Related/Cast/
-                // About/Info) we must NOT intercept — fall through to the focus
-                // engine so it moves focus up ONE row. (The previous version
-                // forced focus to the pills on every Up, so one Up from any lower
-                // row jumped straight to the top.)
-                if state.phase == .detailsStable {
-                    if expandedDetail.focusIsOnPills {
-                        // Already on the season pills → Up collapses to the hero.
-                        returnToHeroFromBelowFold()
-                        return
-                    }
-                    if expandedDetail.focusIsOnEpisodes {
-                        // The primary row (episodes for shows, trailers/related for
-                        // movies) is the anchor: Up lands here first. If it JUST
-                        // took focus on THIS press (the engine moved focus up before
-                        // pressesBegan ran), stick on it — only a deliberate Up from
-                        // a RESTING primary row lifts to pills / collapses.
-                        //  - episodeThumbJustTookFocus: within-section description→thumb
-                        //    (no section change, so the section gate misses it).
-                        //  - episodesJustTookFocus: a lower row → primary section
-                        //    change (covers movies, where there's no episode thumb).
-                        if expandedDetail.episodeThumbJustTookFocus
-                            || expandedDetail.episodesJustTookFocus { return }
-                        if expandedDetail.hasSeasonPills {
-                            // Episodes → lift to the pills. The pills are
-                            // non-focusable while on the episodes, so the engine
-                            // can't grab one; setting target=.pills enables them
-                            // and drives focus to the SELECTED season's pill.
-                            expandedDetail.detailsFocusTarget = .pills
-                            setNeedsFocusUpdate(); updateFocusIfNeeded()
-                        } else {
-                            returnToHeroFromBelowFold()   // no pills → straight to hero
-                        }
-                        return
-                    }
-                    // Lower section: let the focus engine move up one row.
-                }
-                // Up from the expanded hero collapses to the carousel — the
-                // mirror of Down (carousel → hero → details). Same path as Menu
-                // from the hero, so Up and Back stay identical at every level.
-                // In standalone detail the hero IS the top — Up does nothing; only
-                // Back/Menu dismisses (there's no carousel to collapse to).
-                if state.phase == .expandedHero {
-                    if standaloneDetail { return }
-                    handleMenuPress()
-                    return
-                }
+                if handleUpNavigation() { return }
             default:
                 break
             }
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    // MARK: - Vertical navigation
+    //
+    // Shared by .upArrow/.downArrow PRESSES (d-pad / clickpad clicks) and by the
+    // up/down SWIPE recognizers (touch surface, e.g. the iPhone remote), which
+    // emit no arrow presses. Both call these, so the two input paths cannot
+    // drift. Each returns true when it consumed the input; false means "not
+    // ours" — the press falls through to the focus engine, and the swipe
+    // recognizer refuses to begin so the engine sees the touches instead.
+
+    /// Down: carousel → hero → below-fold details, and pills → episodes.
+    @discardableResult
+    private func handleDownNavigation() -> Bool {
+        // Down from the carousel expands the centered card to the hero —
+        // the mirror of Up (hero → carousel). Same action as Select, so
+        // Down walks carousel → hero → details.
+        if state.isCarouselInputEnabled {
+            expandCurrentCard()
+            return true
+        }
+        // Down from the expanded hero hands focus into the real
+        // below-fold collection (focus-driven nav + auto-scroll, which
+        // drives the hero choreography).
+        if state.phase == .expandedHero {
+            enterBelowFold()
+            return true
+        }
+        // Down from the season pills drops focus into the episodes — at
+        // the SELECTED season's first episode. The orthogonal rail was
+        // scrolled there on pill-focus, but the focus engine still
+        // remembers episode 0 / season 1; arm the preferred-focus target
+        // across this update so it enters the current season instead.
+        if state.phase == .detailsStable, expandedDetail.focusIsOnPills {
+            expandedDetail.detailsFocusTarget = .episodes
+            expandedDetail.armPillEntryFocus()
+            setNeedsFocusUpdate(); updateFocusIfNeeded()
+            expandedDetail.disarmPillEntryFocus()
+            return true
+        }
+        return false
+    }
+
+    /// Up: episodes → pills → hero → carousel.
+    @discardableResult
+    private func handleUpNavigation() -> Bool {
+        // Up choreography ONLY at the top of the details: pills → hero,
+        // episodes → pills. From a LOWER section (Trailers/Related/Cast/
+        // About/Info) we must NOT intercept — fall through to the focus
+        // engine so it moves focus up ONE row. (The previous version
+        // forced focus to the pills on every Up, so one Up from any lower
+        // row jumped straight to the top.)
+        if state.phase == .detailsStable {
+            if expandedDetail.focusIsOnPills {
+                // Already on the season pills → Up collapses to the hero.
+                returnToHeroFromBelowFold()
+                return true
+            }
+            if expandedDetail.focusIsOnEpisodes {
+                // The primary row (episodes for shows, trailers/related for
+                // movies) is the anchor: Up lands here first. If it JUST
+                // took focus on THIS press (the engine moved focus up before
+                // pressesBegan ran), stick on it — only a deliberate Up from
+                // a RESTING primary row lifts to pills / collapses.
+                //  - episodeThumbJustTookFocus: within-section description→thumb
+                //    (no section change, so the section gate misses it).
+                //  - episodesJustTookFocus: a lower row → primary section
+                //    change (covers movies, where there's no episode thumb).
+                if expandedDetail.episodeThumbJustTookFocus
+                    || expandedDetail.episodesJustTookFocus { return true }
+                if expandedDetail.hasSeasonPills {
+                    // Episodes → lift to the pills. The pills are
+                    // non-focusable while on the episodes, so the engine
+                    // can't grab one; setting target=.pills enables them
+                    // and drives focus to the SELECTED season's pill.
+                    expandedDetail.detailsFocusTarget = .pills
+                    setNeedsFocusUpdate(); updateFocusIfNeeded()
+                } else {
+                    returnToHeroFromBelowFold()   // no pills → straight to hero
+                }
+                return true
+            }
+            // Lower section: let the focus engine move up one row.
+            return false
+        }
+        // Up from the expanded hero collapses to the carousel — the
+        // mirror of Down (carousel → hero → details). Same path as Menu
+        // from the hero, so Up and Back stay identical at every level.
+        // In standalone detail the hero IS the top — Up does nothing; only
+        // Back/Menu dismisses (there's no carousel to collapse to).
+        if state.phase == .expandedHero {
+            if standaloneDetail { return true }
+            handleMenuPress()
+            return true
+        }
+        return false
     }
 
     // MARK: - Playback
@@ -967,6 +1016,47 @@ final class PreviewCarouselViewController: UIViewController {
         case .left:  pageForward()
         case .right: pageBackward()
         default:     break
+        }
+    }
+
+    /// Touch-surface equivalent of an .upArrow / .downArrow press. Only ever
+    /// begins for transitions `verticalSwipeWouldNavigate` vouched for, so it
+    /// can drive the same choreography the presses do.
+    @objc private func handleVerticalSwipe(_ gesture: UISwipeGestureRecognizer) {
+        switch gesture.direction {
+        case .down: handleDownNavigation()
+        case .up:   handleUpNavigation()
+        default:    break
+        }
+    }
+
+    /// Whether a vertical swipe in the CURRENT state is a hand-off the focus
+    /// engine cannot make by itself, and so should be claimed by the recognizer.
+    ///
+    /// This must stay conservative. In `.detailsStable` the below-fold rows are
+    /// focusable and the engine moves between them on its own; claiming the
+    /// gesture there would cancel that and break scrolling through the details.
+    /// So we claim only the boundary transitions:
+    ///   - down: carousel → hero, hero → below-fold, pills → episodes
+    ///   - up:   episodes → pills, pills → hero, hero → carousel
+    /// Everything else (a lower details row moving one row at a time) is left to
+    /// the engine, which mirrors what the arrow-press handlers already do by
+    /// falling through to `super.pressesBegan`.
+    private func verticalSwipeWouldNavigate(_ direction: UISwipeGestureRecognizer.Direction) -> Bool {
+        switch direction {
+        case .down:
+            if state.isCarouselInputEnabled { return true }
+            if state.phase == .expandedHero { return true }
+            if state.phase == .detailsStable, expandedDetail.focusIsOnPills { return true }
+            return false
+        case .up:
+            if state.phase == .expandedHero { return true }
+            if state.phase == .detailsStable {
+                return expandedDetail.focusIsOnPills || expandedDetail.focusIsOnEpisodes
+            }
+            return false
+        default:
+            return false
         }
     }
 
@@ -1430,6 +1520,25 @@ final class PreviewCarouselViewController: UIViewController {
         }
         let item = items[index]
         return PreviewSourceTarget(rowID: existing.rowID, itemID: item.ref.itemID)
+    }
+}
+
+// MARK: - UIGestureRecognizerDelegate
+
+extension PreviewCarouselViewController: UIGestureRecognizerDelegate {
+
+    /// Gate the vertical swipes. On tvOS the focus engine reads the same
+    /// indirect-touch stream a recognizer does, and a recognizer that reaches
+    /// .began CANCELS the competing focus interaction. So a vertical swipe may
+    /// only be claimed where the engine has nothing useful to do with it — the
+    /// hand-off transitions in `verticalSwipeWouldNavigate`. Anywhere else
+    /// (moving between the below-fold rows) we must decline and let the engine
+    /// have the touches.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let swipe = gestureRecognizer as? UISwipeGestureRecognizer,
+              verticalSwipeRecognizers.contains(where: { $0 === swipe })
+        else { return true }
+        return verticalSwipeWouldNavigate(swipe.direction)
     }
 }
 
