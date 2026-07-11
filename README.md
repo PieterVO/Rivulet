@@ -8,11 +8,11 @@
 Built for simplicity. Direct play by default.
 
 <a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
-  <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store">
+  <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white&logoSize=auto" alt="Download on the App Store" height="54">
 </a>
-&nbsp;
+
 <a href="https://testflight.apple.com/join/TcCsF5As">
-  <img src="https://img.shields.io/badge/Join_the-TestFlight_Beta-0D96F6?style=for-the-badge&logo=apple&logoColor=white" alt="Join the TestFlight Beta">
+  <img src="https://img.shields.io/badge/Join_the-TestFlight_Beta-0D96F6?style=for-the-badge&logo=apple&logoColor=white&logoSize=auto" alt="Join the TestFlight Beta" height="54">
 </a>
 
 <br><br>
