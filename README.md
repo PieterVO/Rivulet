@@ -58,7 +58,7 @@ This project has fairly *opinionated* designs and logic, with a few focal points
 
 ### Video Player
 
-Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEngine) — FFmpeg demuxing, remuxed to HLS-fMP4, handed to Apple's frameworks. Direct play is the primary path. A Plex server transcode is only the fallback when a file has no direct-play URL, or when startup fails.
+Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEngine): FFmpeg demuxing, remuxed to HLS-fMP4, handed to Apple's frameworks. Direct play is the primary path. A Plex server transcode is only the fallback when a file has no direct-play URL, or when startup fails.
 
 - **Video** — H.264 and HEVC through VideoToolbox. AV1, VP9, MPEG-2, VC-1, and MPEG-4 Part 2 fall back to software decode.
 - **HDR** — HDR10, HDR10+, HLG, and Dolby Vision. DV profiles 5 and 8.1 play with full Dolby Vision. Profile 7 plays as its HDR10 base layer.
@@ -82,7 +82,7 @@ Browse trending and upcoming titles, add to your Plex watchlist, and see at a gl
 
 ### Insights
 
-While something is playing, pull up Insights for cast and trivia on what's on screen. Work in progress — coverage and accuracy will keep improving.
+While something is playing, pull up Insights for cast and trivia on what's on screen. Work in progress, so coverage and accuracy will keep improving.
 
 ### Music
 
