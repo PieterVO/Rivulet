@@ -549,6 +549,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// One-shot direct-play -> HLS fallback guards (prevents loops).
     private var hasAttemptedRivuletHLSFallback = false
     private var isAttemptingRivuletHLSFallback = false
+    /// Causal-chain diagnostics for this playback session. Carries the ORIGINAL
+    /// (primary-route) failure through to whatever error finally surfaces, so a
+    /// fallback failure never reports itself as the root cause. See RIVULET-19.
+    private let diagnostics = PlaybackDiagnostics()
 
     // MARK: - Shuffled Queue
 
@@ -716,6 +720,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         rivuletFallbackHeaders = [:]
         // Tag the chosen route for App Hang triage (RIVULET-41).
         AppHangContext.setPlaybackRoute(plan.primary.description)
+        // Seed the media fingerprint (codec / DV profile / audio / resume offset)
+        // so EVERY playback error from here on is self-describing. Without this,
+        // "playback failed" can't be told apart from "playback fails on DV P7".
+        diagnostics.setMedia(metadata, route: plan.primary.description, startOffset: startOffset)
+        diagnostics.step("route_selected", detail: plan.description)
 
         switch plan.primary {
         case .hls:
@@ -898,6 +907,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                                 print("[Player] Underlying: \(underlying.domain) code=\(underlying.code) — \(underlying.localizedDescription)")
                             }
                         }
+                        // The AVPlayerItem error was previously only printed to
+                        // the console, so a mid-playback item failure that the
+                        // HLS fallback rescued left no trace in Sentry at all.
+                        let itemError = item.error ?? PlayerError.loadFailed(message)
+                        self.diagnostics.recordPrimaryFailure(
+                            itemError,
+                            kind: self.classifyDirectPlayFailure(PlayerError.loadFailed(message)),
+                            route: self.playbackPlan?.primary.description.lowercased() ?? "unknown"
+                        )
                         if self.shouldAttemptRivuletFallbackOnItemFailure() {
                             let failureKind = self.classifyDirectPlayFailure(PlayerError.loadFailed(message))
                             let resumeTime = self.currentTime
@@ -1135,15 +1153,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             playbackState = .failed(.loadFailed(technicalError))
 
-            SentrySDK.capture(error: error) { scope in
-                scope.setTag(value: "playback", key: "component")
-                scope.setTag(value: "avplayer", key: "player_type")
-                scope.setExtra(value: url.absoluteString, key: "stream_url")
-                scope.setExtra(value: self.metadata.title ?? "unknown", key: "media_title")
-                scope.setExtra(value: self.metadata.type ?? "unknown", key: "media_type")
-                scope.setExtra(value: self.metadata.ratingKey ?? "unknown", key: "rating_key")
-                scope.setExtra(value: self.startOffset ?? 0, key: "start_offset")
-            }
+            // Route through PlaybackDiagnostics so this carries the media
+            // fingerprint, the startup timeline, and any earlier primary-route
+            // failure. The old inline capture reported the media title but not
+            // the codec, and knew nothing about a prior Aether failure.
+            diagnostics.step("avplayer_start_failed", detail: technicalError)
+            diagnostics.capture(error, event: "avplayer_start_failed", extraTags: [
+                "player_type": "avplayer"
+            ])
         }
     }
 
@@ -1311,7 +1328,16 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             let transcodeReady = await waitForHLSTranscodeReady(url: hlsURL, headers: streamHeaders)
             if !transcodeReady {
-                throw PlayerError.loadFailed("HLS transcode session failed to start")
+                // HLS as the PRIMARY route (no direct-play URL existed), not a
+                // fallback. Tagged separately from `fallback_preflight_failed`
+                // so the two don't grind together in one Sentry issue: this one
+                // means the server is slow, that one means Aether ALSO broke.
+                let error = PlayerError.loadFailed("HLS transcode session failed to start")
+                diagnostics.step("hls_primary_preflight_failed")
+                diagnostics.capture(error, event: "primary_preflight_failed", extraTags: [
+                    "player_type": "avplayer"
+                ])
+                throw error
             }
 
             // Log the HLS master manifest for debugging track labels and I-frame playlists
@@ -1344,8 +1370,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                     externalSubtitles: aetherExternalSubtitles()
                 )
             } catch {
-                guard planHasHLSFallback(plan) else { throw error }
                 let kind = classifyDirectPlayFailure(error)
+                // Record the ORIGINAL Aether failure before doing anything else.
+                // This is the root cause of RIVULET-19: previously `error` was
+                // classified and then discarded, so if the HLS fallback ALSO
+                // failed we reported the fallback's error and destroyed the only
+                // evidence of why direct play died in the first place.
+                diagnostics.recordPrimaryFailure(error, kind: kind, route: "aether")
+                guard planHasHLSFallback(plan) else { throw error }
                 try await attemptRivuletHLSFallback(
                     resumeTime: startTime ?? 0,
                     reason: "aether_startup_load_failed",
@@ -2052,10 +2084,22 @@ final class UniversalPlayerViewModel: ObservableObject {
         streamHeaders = fallback.headers
         plexSessionId = fallback.sessionId
 
+        diagnostics.step("hls_fallback_preflight", detail: "reason=\(reason) kind=\(failureKind.rawValue)")
         let transcodeReady = await waitForHLSTranscodeReady(url: fallback.url, headers: fallback.headers)
         if !transcodeReady {
-            throw PlayerError.loadFailed("HLS transcode session failed to start")
+            // RIVULET-19. Capture with the full causal chain: the Aether failure
+            // that sent us here, plus what the server said on all 8 preflight
+            // polls. Reported as `fallback_preflight_failed` — the user got
+            // NOTHING, both routes died.
+            let error = PlayerError.loadFailed("HLS transcode session failed to start")
+            diagnostics.step("hls_fallback_preflight_failed")
+            diagnostics.capture(error, event: "fallback_preflight_failed", extraTags: [
+                "fallback_reason": reason,
+                "player_type": "avplayer"
+            ])
+            throw error
         }
+        diagnostics.step("hls_fallback_preflight_ready")
 
         try loadAVPlayer(url: fallback.url, headers: fallback.headers)
         if resumeTime > 0 {
@@ -2100,26 +2144,46 @@ final class UniversalPlayerViewModel: ObservableObject {
                             if hasHeader && hasVariants {
                                 // This is a master playlist - follow a variant to check for segments
                                 if let variantReady = await checkVariantPlaylist(masterContent: content, baseURL: url, headers: headers), variantReady {
+                                    diagnostics.recordPreflightAttempt(attempt, outcome: "ready (variant has segments)")
                                     return true
                                 } else {
+                                    // Master resolved but the variant has no #EXTINF yet:
+                                    // the transcoder started but is not producing segments.
+                                    // Distinct from a 404, and the likeliest RIVULET-19 shape.
+                                    diagnostics.recordPreflightAttempt(attempt, outcome: "200 master, variant has NO segments (transcoder starving)")
                                 }
                             } else if hasHeader && hasSegments {
                                 // This is already a media playlist with segments
+                                diagnostics.recordPreflightAttempt(attempt, outcome: "ready (media playlist has segments)")
                                 return true
                             } else if hasHeader {
                                 // Has header but no content yet
+                                diagnostics.recordPreflightAttempt(attempt, outcome: "200 manifest header only, no variants/segments")
                             } else {
                                 print("🎬 [HLSPreflight] Invalid manifest content")
+                                // A 200 that is not a manifest is usually a Plex HTML
+                                // error page. Record a prefix so we can tell.
+                                let prefix = content.prefix(120).replacingOccurrences(of: "\n", with: " ")
+                                diagnostics.recordPreflightAttempt(attempt, outcome: "200 but NOT a manifest: \(prefix)")
                             }
+                        } else {
+                            diagnostics.recordPreflightAttempt(attempt, outcome: "200 but body is not UTF-8 (\(data.count) bytes)")
                         }
                     } else if httpResponse.statusCode == 404 || httpResponse.statusCode == 503 {
                         // Transcode not started yet
+                        diagnostics.recordPreflightAttempt(attempt, outcome: "HTTP \(httpResponse.statusCode) (transcode not started)")
                     } else {
                         print("🎬 [HLSPreflight] Unexpected status \(httpResponse.statusCode)")
+                        diagnostics.recordPreflightAttempt(attempt, outcome: "HTTP \(httpResponse.statusCode) (unexpected)")
                     }
                 }
             } catch {
                 print("🎬 [HLSPreflight] Error: \(error.localizedDescription)")
+                let nsError = error as NSError
+                diagnostics.recordPreflightAttempt(
+                    attempt,
+                    outcome: "transport error \(nsError.domain) code=\(nsError.code): \(error.localizedDescription)"
+                )
             }
 
             // Wait before retrying (increasing delay: 0.5s, 1s, 1.5s, 2s, 2.5s, 3s, 3.5s, 4s)

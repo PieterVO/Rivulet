@@ -31,6 +31,27 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     // Default timeout for requests
     private let defaultTimeout: TimeInterval = 30.0
 
+    /// Collapse a request URL into a stable, low-cardinality endpoint identity
+    /// for Sentry tagging and grouping.
+    ///
+    /// A raw Plex URL is worthless as a tag: `/library/metadata/14735` and
+    /// `/library/metadata/183532` are the same endpoint but produce unbounded
+    /// distinct values, so Sentry can neither group failures nor let you ask
+    /// "how often does metadata fetch fail?". Replacing numeric ids with `{id}`
+    /// gives one tag value per endpoint. The query string is always dropped —
+    /// it carries the auth token.
+    nonisolated static func sentryEndpoint(for url: URL) -> String {
+        let normalized = url.path
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .map { component -> String in
+                // Pure-numeric path components are ids (ratingKey, sectionKey…).
+                if !component.isEmpty, component.allSatisfy(\.isNumber) { return "{id}" }
+                return String(component)
+            }
+            .joined(separator: "/")
+        return normalized.isEmpty ? "/" : "/" + normalized
+    }
+
     // URL session with custom delegate for self-signed certs
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -79,8 +100,41 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             request.addValue(value, forHTTPHeaderField: key)
         }
 
+        // Stable, low-cardinality endpoint identity for Sentry grouping. The raw
+        // URL is useless as a tag (every ratingKey makes it unique), so distinct
+        // failures of the same endpoint never group. See `sentryEndpoint`.
+        let endpoint = Self.sentryEndpoint(for: url)
+
         let netStart = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await session.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            // Transport-level failures (timeout -1001, connection lost -1005,
+            // cannot-connect -1004) previously escaped this function completely
+            // uninstrumented. Sentry auto-captured them with NO url, NO endpoint,
+            // NO method — which is why RIVULET-2A / -E / -D are unactionable
+            // walls of NSURLErrorDomain text. Attach the request identity.
+            let nsError = error as NSError
+            let elapsedMs = Int((ProcessInfo.processInfo.systemUptime - netStart) * 1000)
+            // -999 is a user-cancelled request (navigating away); it's already
+            // dropped in beforeSend, so don't pay to capture it.
+            if nsError.code != NSURLErrorCancelled {
+                SentryBridge.capture(error: error) { scope in
+                    scope.setTag(value: "plex_network", key: "component")
+                    scope.setTag(value: "transport", key: "error_type")
+                    scope.setTag(value: endpoint, key: "endpoint")
+                    scope.setTag(value: method, key: "method")
+                    scope.setTag(value: String(nsError.code), key: "urlerror_code")
+                    scope.setExtra(value: url.path, key: "path")
+                    scope.setExtra(value: url.host ?? "unknown", key: "host")
+                    scope.setExtra(value: elapsedMs, key: "elapsed_ms")
+                    scope.setExtra(value: self.defaultTimeout, key: "timeout_interval")
+                }
+            }
+            throw error
+        }
         let netMs = Int((ProcessInfo.processInfo.systemUptime - netStart) * 1000)
         // Startup-tracing: flag any slow call (the 30s timeout candidate). Path
         // only — query strings carry the auth token.
@@ -101,9 +155,13 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             if httpResponse.statusCode != 401 && httpResponse.statusCode != 403 && !(500...599).contains(httpResponse.statusCode) {
                 SentryBridge.capture(error: error) { scope in
                     scope.setTag(value: "plex_network", key: "component")
+                    scope.setTag(value: "http", key: "error_type")
+                    // Tags (not extras) so Sentry can group and facet by them.
+                    scope.setTag(value: endpoint, key: "endpoint")
+                    scope.setTag(value: method, key: "method")
+                    scope.setTag(value: String(httpResponse.statusCode), key: "status_code")
                     scope.setExtra(value: url.absoluteString, key: "url")
-                    scope.setExtra(value: method, key: "method")
-                    scope.setExtra(value: httpResponse.statusCode, key: "status_code")
+                    scope.setExtra(value: netMs, key: "elapsed_ms")
                     if let responseStr = String(data: data, encoding: .utf8) {
                         scope.setExtra(value: String(responseStr.prefix(500)), key: "response_body")
                     }

@@ -1,0 +1,179 @@
+//
+//  PlaybackDiagnostics.swift
+//  Rivulet
+//
+//  Causal-chain diagnostics for playback startup (see RIVULET-19).
+//
+//  Why this exists
+//  ---------------
+//  RIVULET-19 ("HLS transcode session failed to start") is the FALLBACK failing,
+//  not the primary. The real bug is whatever made Aether fail first — but that
+//  error was computed, classified, and then discarded, so every Sentry event
+//  reported the symptom and destroyed the cause.
+//
+//  A playback startup is a sequence, not an event: route chosen -> Aether tried
+//  -> Aether failed (why?) -> HLS fallback built -> preflight polled (what did
+//  the server actually say?) -> failed. Any one of those steps can be the real
+//  story. This type records the whole sequence and attaches it to whatever error
+//  finally surfaces, so a single Sentry event is self-describing.
+//
+//  Everything here is a no-op when the SDK isn't running (DEBUG), so callers
+//  never guard on build configuration.
+//
+
+import Foundation
+import Sentry
+
+/// Accumulates the full causal chain of a single playback startup attempt and
+/// attaches it to any error captured for that attempt.
+///
+/// One instance per player session. Not thread-safe by design: it is only ever
+/// touched from the player's main-actor-isolated view model.
+@MainActor
+final class PlaybackDiagnostics {
+
+    /// Stable Sentry context block name. Lands as a dedicated section on the event.
+    private static let contextKey = "playback"
+
+    /// The media fingerprint: what we were trying to play, and with what streams.
+    /// Set once at startup so every subsequent capture carries it.
+    private var media: [String: Any] = [:]
+
+    /// The startup story so far, in order. Each entry is one step.
+    private var timeline: [String] = []
+
+    /// The ORIGINAL failure, if the primary route already died. This is the
+    /// value RIVULET-19 was throwing away.
+    private var rootCause: [String: Any]?
+
+    /// What the HLS preflight actually observed, attempt by attempt.
+    private var preflightObservations: [String] = []
+
+    // MARK: - Media fingerprint
+
+    /// Record what we're playing and how it's encoded. Called once per session,
+    /// before the first load attempt.
+    ///
+    /// The codec/DV/audio fingerprint is the difference between "playback broke"
+    /// and "playback breaks on DV P7 + TrueHD", which is an actionable bug.
+    func setMedia(_ metadata: PlexMetadata, route: String, startOffset: TimeInterval?) {
+        let part = metadata.Media?.first?.Part?.first
+        let streams = part?.Stream ?? []
+        let video = streams.first { $0.isVideo }
+        let audio = streams.first { $0.isAudio }
+
+        media = [
+            "route": route,
+            "title": metadata.title ?? "unknown",
+            "type": metadata.type ?? "unknown",
+            "rating_key": metadata.ratingKey ?? "unknown",
+            "container": metadata.Media?.first?.container ?? "unknown",
+            "video_codec": video?.codec ?? "unknown",
+            "video_codec_id": video?.codecID ?? "unknown",
+            "video_profile": video?.profile ?? "unknown",
+            "audio_codec": audio?.codec ?? "unknown",
+            "audio_channels": audio?.channels ?? -1,
+            "has_dolby_vision": metadata.hasDolbyVision,
+            "dv_profile": video?.DOVIProfile ?? -1,
+            "dv_bl_compat_id": video?.DOVIBLCompatID ?? -1,
+            "subtitle_stream_count": streams.filter { $0.isSubtitle }.count,
+            // A resumed (seeked) start is materially harder on a Plex transcode
+            // than a start at zero. RIVULET-19's sample was 58 minutes in.
+            "start_offset": startOffset ?? 0,
+            "is_resume": (startOffset ?? 0) > 1
+        ]
+        step("session_start", detail: route)
+    }
+
+    // MARK: - Timeline
+
+    /// Append one step to the startup story. Also drops a breadcrumb so the
+    /// sequence survives even on an event this instance never sees (an App Hang,
+    /// or an OS-level crash mid-startup).
+    func step(_ name: String, detail: String? = nil) {
+        let entry = detail.map { "\(name): \($0)" } ?? name
+        timeline.append(entry)
+
+        let crumb = Breadcrumb(level: .info, category: "playback.startup")
+        crumb.message = entry
+        SentryBridge.addBreadcrumb(crumb)
+    }
+
+    // MARK: - Root cause
+
+    /// Record the failure of the PRIMARY route before falling back.
+    ///
+    /// This is the whole point of the type. Without it, an Aether failure that
+    /// is successfully papered over by the HLS fallback is invisible, and one
+    /// that ISN'T gets reported as an HLS bug.
+    func recordPrimaryFailure(_ error: Error, kind: DirectPlayFailureKind, route: String) {
+        let nsError = error as NSError
+        rootCause = [
+            "route": route,
+            "kind": kind.rawValue,
+            "message": error.localizedDescription,
+            "domain": nsError.domain,
+            "code": nsError.code,
+            "underlying": (nsError.userInfo[NSUnderlyingErrorKey] as? NSError)
+                .map { "\($0.domain) code=\($0.code): \($0.localizedDescription)" } ?? "none"
+        ]
+        step("primary_failed", detail: "\(route)/\(kind.rawValue): \(error.localizedDescription)")
+
+        // Capture the primary failure as its OWN event, right now, even if the
+        // fallback goes on to succeed. A silently-rescued Aether failure is
+        // still a bug we need to see — it's a direct-play miss for that user.
+        SentryBridge.capture(error: error) { scope in
+            scope.setLevel(.warning)
+            scope.setTag(value: "playback", key: "component")
+            scope.setTag(value: "primary_route_failed", key: "playback_event")
+            scope.setTag(value: route, key: "failed_route")
+            scope.setTag(value: kind.rawValue, key: "failure_kind")
+            self.apply(to: scope)
+        }
+    }
+
+    // MARK: - HLS preflight
+
+    /// Record one poll of the Plex transcode manifest.
+    ///
+    /// RIVULET-19 fires when 8 of these fail in a row, but the event never said
+    /// WHY: a 404 (transcode never started) and a 200-with-empty-manifest
+    /// (transcoder started but is starving) are completely different bugs with
+    /// completely different fixes.
+    func recordPreflightAttempt(_ attempt: Int, outcome: String) {
+        preflightObservations.append("#\(attempt) \(outcome)")
+    }
+
+    // MARK: - Capture
+
+    /// Capture a playback error with the entire causal chain attached.
+    func capture(_ error: Error, event: String, extraTags: [String: String] = [:]) {
+        SentryBridge.capture(error: error) { scope in
+            scope.setTag(value: "playback", key: "component")
+            scope.setTag(value: event, key: "playback_event")
+            // Surface the root cause as a TAG, not just context, so Sentry can
+            // group and filter by it. "HLS preflight failed" is not searchable;
+            // "HLS preflight failed BECAUSE Aether hit demuxInit" is.
+            if let kind = self.rootCause?["kind"] as? String {
+                scope.setTag(value: kind, key: "root_cause_kind")
+            }
+            for (key, value) in extraTags {
+                scope.setTag(value: value, key: key)
+            }
+            self.apply(to: scope)
+        }
+    }
+
+    /// Attach the accumulated chain to a scope.
+    private func apply(to scope: Scope) {
+        var context = media
+        context["timeline"] = timeline
+        if let rootCause {
+            context["root_cause"] = rootCause
+        }
+        if !preflightObservations.isEmpty {
+            context["hls_preflight"] = preflightObservations
+        }
+        scope.setContext(value: context, key: Self.contextKey)
+    }
+}

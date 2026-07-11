@@ -9,7 +9,14 @@
 
 import Sentry
 
-enum SentryBridge {
+// `nonisolated` on purpose. The project compiles with MainActor default
+// isolation, so without this the whole enum is inferred @MainActor — which made
+// every capture from a non-isolated async context (the Live TV providers, any
+// URLSession continuation) an actor hop, and a hard error under full Swift 6.
+// SentrySDK is internally thread-safe and explicitly documented as callable
+// from any thread, so binding it to the main actor buys nothing and costs a hop
+// on the error path, which is exactly where we least want to perturb timing.
+nonisolated enum SentryBridge {
     static func addBreadcrumb(_ crumb: Breadcrumb) {
         #if !DEBUG
         SentrySDK.addBreadcrumb(crumb)
