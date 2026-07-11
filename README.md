@@ -31,16 +31,14 @@ Built for simplicity. Direct play by default.
 
 </div>
 
-<table>
-<tr>
-<td width="50%"><img src="Screenshots/AppStore/02_home-rows.png" alt="Home rows"></td>
-<td width="50%"><img src="Screenshots/AppStore/06_sidebar.png" alt="Sidebar"></td>
-</tr>
-<tr>
-<td width="50%"><img src="Screenshots/AppStore/03_detail-sintel.png" alt="Media detail"></td>
-<td width="50%"><img src="Screenshots/AppStore/04_detail-expanded.png" alt="Expanded detail"></td>
-</tr>
-</table>
+<div align="center">
+
+<img src="Screenshots/AppStore/02_home-rows.png" alt="Home rows" width="49%">
+<img src="Screenshots/AppStore/06_sidebar.png" alt="Sidebar" width="49%">
+<img src="Screenshots/AppStore/03_detail-sintel.png" alt="Media detail" width="49%">
+<img src="Screenshots/AppStore/04_detail-expanded.png" alt="Expanded detail" width="49%">
+
+</div>
 
 ---
 
