@@ -6,26 +6,33 @@
 //  artwork image stretched full-bleed UNDERNEATH the home's frosted material
 //  (`backgroundBlurView` sits in front and diffuses it into an unrecognizable
 //  tint field), plus a vertical vignette so the lower half stays dark behind
-//  shelf labels.
+//  the shelf labels.
 //
-//  Behavior pinned from the references (Docs/atv_ref/below_home_hero_ref.* and
-//  the Apple TV app screenshot pass, 2026-06-10): the wash clearly derives
-//  from content (blue one screen, warm gray another), is smoky/uneven (a
-//  mega-blurred image, not a uniform gradient), and is set ONCE per screen —
-//  paging the hero does NOT recolor it. So `setAmbient` latches the first
-//  image and ignores later calls.
+//  The wash tracks the hero: paging the carousel recolors the page. Because
+//  the material in front destroys all detail, the crossfade is slow (0.6s) so
+//  the tint drifts between colors rather than snapping — a hard cut would read
+//  as a flicker of the whole background. Surfaces with no hero (or before one
+//  loads) fall back to the first featured item, set once.
 //
 
 import UIKit
 
+@MainActor
 final class AmbientBackdropView: UIView {
 
-    private let imageView = UIImageView()
+    private let currentImageView = UIImageView()
+    private let previousImageView = UIImageView()
     private let vignette = VignetteView()
     private var loadTask: Task<Void, Never>?
-    /// Latched after the first successful set — the ambient never changes
-    /// for the life of the screen (matches the Apple TV app).
-    private(set) var hasAmbient = false
+    private var clearPreviousTask: Task<Void, Never>?
+    private var currentURL: URL?
+
+    /// True once any artwork has been shown. The no-hero fallback uses this to
+    /// avoid overwriting a wash the hero already established.
+    var hasAmbient: Bool { currentURL != nil }
+
+    private let crossfadeDuration: TimeInterval = 0.6
+    private let imageAlpha: CGFloat = 0.85
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -33,19 +40,23 @@ final class AmbientBackdropView: UIView {
         clipsToBounds = true
         backgroundColor = .clear
 
-        imageView.contentMode = .scaleAspectFill
-        imageView.alpha = 0   // fades in when the artwork lands
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(imageView)
+        for iv in [previousImageView, currentImageView] {
+            iv.contentMode = .scaleAspectFill
+            iv.alpha = 0   // fades in when the artwork lands
+            iv.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(iv)
+            NSLayoutConstraint.activate([
+                iv.topAnchor.constraint(equalTo: topAnchor),
+                iv.bottomAnchor.constraint(equalTo: bottomAnchor),
+                iv.leadingAnchor.constraint(equalTo: leadingAnchor),
+                iv.trailingAnchor.constraint(equalTo: trailingAnchor)
+            ])
+        }
 
         vignette.translatesAutoresizingMaskIntoConstraints = false
         addSubview(vignette)
 
         NSLayoutConstraint.activate([
-            imageView.topAnchor.constraint(equalTo: topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
             vignette.topAnchor.constraint(equalTo: topAnchor),
             vignette.bottomAnchor.constraint(equalTo: bottomAnchor),
             vignette.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -55,20 +66,51 @@ final class AmbientBackdropView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 
-    deinit { loadTask?.cancel() }
-
-    /// Set the ambient artwork once; subsequent calls are no-ops.
-    func setAmbient(url: URL?) {
-        guard !hasAmbient, let url else { return }
-        hasAmbient = true
+    deinit {
         loadTask?.cancel()
+        clearPreviousTask?.cancel()
+    }
+
+    /// Set the ambient artwork. Crossfades from whatever is on screen. A nil URL
+    /// or a repeat of the current URL is a no-op — the existing wash stays put
+    /// rather than flashing to black between hero items that lack artwork.
+    func setAmbient(url: URL?) {
+        guard let url, url != currentURL else { return }
+        currentURL = url
+        loadTask?.cancel()
+        clearPreviousTask?.cancel()
+
+        let oldImage = currentImageView.image
         loadTask = Task { [weak self] in
             let image = await ImageCacheManager.shared.image(for: url)
-            guard let self, !Task.isCancelled, let image else { return }
-            self.imageView.image = image
-            UIView.animate(withDuration: 0.6) {
-                self.imageView.alpha = 0.85
-            }
+            guard let self, !Task.isCancelled, let image, self.currentURL == url else { return }
+            self.applyImage(image, replacing: oldImage)
+        }
+    }
+
+    private func applyImage(_ image: UIImage, replacing oldImage: UIImage?) {
+        if let oldImage {
+            previousImageView.image = oldImage
+            previousImageView.alpha = imageAlpha
+        } else {
+            previousImageView.image = nil
+            previousImageView.alpha = 0
+        }
+        currentImageView.image = image
+        currentImageView.alpha = 0
+
+        UIView.animate(withDuration: crossfadeDuration, delay: 0, options: [.curveEaseInOut]) {
+            self.currentImageView.alpha = self.imageAlpha
+            self.previousImageView.alpha = 0
+        }
+
+        guard oldImage != nil else { return }
+        // Hold the outgoing image until the fade has fully settled, then drop it.
+        let totalNs = UInt64(crossfadeDuration * 1_000_000_000) + 50_000_000
+        clearPreviousTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: totalNs)
+            guard let self, !Task.isCancelled else { return }
+            self.previousImageView.image = nil
         }
     }
 

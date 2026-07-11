@@ -1397,6 +1397,10 @@ final class PlexHomeViewController: UIViewController {
     /// image is on screen.
     private func setHeroBackdrop(url: URL?) {
         backdropView.setBackdrop(url: url)
+        // The ambient wash tracks the hero: same artwork, diffused by the
+        // frosted material in front of it. Every hero page change lands here,
+        // so this is the only place the wash needs driving.
+        ambientView.setAmbient(url: url)
         if url == nil {
             markHeroReady()
         }
@@ -2798,27 +2802,20 @@ final class PlexHomeViewController: UIViewController {
         presentTileMenu(sections: [[info, remove]])
     }
 
-    /// Latch the ambient wash to the screen's first featured item once
-    /// content lands. Hero item when the hero is on, else the first row's
-    /// first item. Never updated afterward — paging the hero does not
-    /// recolor the page (pinned Apple TV app behavior; see
-    /// AmbientBackdropView's header).
+    /// Seed the ambient wash on surfaces that have no hero to drive it (hero
+    /// switched off, or none loaded). Uses the first featured row's first item
+    /// and runs once. When a hero IS present it owns the wash — every page
+    /// change recolors it via `setHeroBackdrop(url:)` — so this backs off.
     private func updateAmbientIfNeeded() {
         guard !ambientView.hasAmbient else { return }
+        // Discover's hero is MediaItem-backed (`heroMediaItems`); everywhere
+        // else it's `heroItems`. Either one means a hero owns the wash.
+        let heroSection = sectionsSnapshot.first(where: { $0.kind == .hero })
+        let hasHero = !heroItems.isEmpty || !(heroSection?.heroMediaItems.isEmpty ?? true)
+        if showHomeHero, hasHero { return }
 
-        // Hero stays PlexMetadata-backed until Stage 4; prefer it when present.
-        if let heroItem = heroItems.first,
-           let serverURL = authManager.selectedServerURL,
-           let token = authManager.selectedServerToken {
-            let request = heroItem.heroBackdropRequest(serverURL: serverURL, authToken: token)
-            if let url = request.backdropURL ?? request.thumbnailURL {
-                ambientView.setAmbient(url: url)
-                return
-            }
-        }
-
-        // Otherwise the first featured row's first MediaItem. MediaItem artwork
-        // URLs are already fully qualified, so no server/auth args are needed.
+        // MediaItem artwork URLs are already fully qualified, so no
+        // server/auth args are needed.
         let firstItem = sectionsSnapshot.first(where: { !$0.items.isEmpty })?.items.first
             ?? dataStore.homeItems.first?.items.first
         guard let firstItem else { return }
