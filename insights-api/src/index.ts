@@ -13,20 +13,30 @@
  */
 
 import { validateRequest, workItemKey, publishedKey, queueObject } from "./request";
+import { guard, b64ToBytes, type GuardEnv } from "./guard";
+import { verifyAttestation, AttestError } from "./attest";
 
-export interface Env {
+export { DeviceRegistry, ChallengeStore } from "./registry";
+
+export interface Env extends GuardEnv {
   INSIGHTS: R2Bucket;
+  CHALLENGES: DurableObjectNamespace;
 }
+
+/** Attestation challenges are single-use and short-lived. */
+const CHALLENGE_TTL_SECONDS = 5 * 60;
 
 const LONG_TTL = 60 * 60 * 24; // 24h edge cache for immutable fact JSON
 const SHORT_TTL = 60 * 5; // 5m for the suppressed list
 
+/**
+ * The client is a native tvOS app, which does not perform CORS preflights and
+ * does not need permissive CORS. `Access-Control-Allow-Origin: *` only ever
+ * served to invite browser callers, so it is gone. Kept as a no-op passthrough
+ * so call sites read unchanged.
+ */
 function cors(resp: Response): Response {
-  const h = new Headers(resp.headers);
-  h.set("Access-Control-Allow-Origin", "*");
-  h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  h.set("Access-Control-Allow-Headers", "Content-Type");
-  return new Response(resp.body, { status: resp.status, headers: h });
+  return resp;
 }
 
 function json(body: unknown, status = 200, cacheSeconds = 0): Response {
@@ -59,13 +69,72 @@ export default {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
 
+    // --- App Attest enrollment (unauthenticated by necessity: this IS how a
+    // device proves itself for the first time). Both steps are cheap and the
+    // challenge is single-use, so this is not an abuse lever.
+
+    // GET /attest/challenge — a one-time nonce for attestKey().
+    if (request.method === "GET" && parts[0] === "attest" && parts[1] === "challenge") {
+      const store = env.CHALLENGES.get(env.CHALLENGES.idFromName("global"));
+      const challenge = await (store as any).issue(CHALLENGE_TTL_SECONDS);
+      return json({ challenge }, 200);
+    }
+
+    // POST /attest/verify — {keyId, attestationObject} -> register the device.
+    if (request.method === "POST" && parts[0] === "attest" && parts[1] === "verify") {
+      let payload: any;
+      try {
+        payload = await request.json();
+      } catch {
+        return json({ error: "bad_json" }, 400);
+      }
+      if (typeof payload?.keyId !== "string" || typeof payload?.attestationObject !== "string" ||
+          typeof payload?.challenge !== "string") {
+        return json({ error: "bad_request" }, 400);
+      }
+
+      const store = env.CHALLENGES.get(env.CHALLENGES.idFromName("global"));
+      if (!(await (store as any).consume(payload.challenge))) {
+        return json({ error: "bad_challenge" }, 400);
+      }
+
+      try {
+        const { publicKeyRaw } = await verifyAttestation({
+          attestationObject: b64ToBytes(payload.attestationObject),
+          keyId: b64ToBytes(payload.keyId),
+          challenge: payload.challenge,
+          appId: env.APP_ID ?? "",
+        });
+        const reg = env.DEVICE_REGISTRY.get(env.DEVICE_REGISTRY.idFromName(payload.keyId));
+        await (reg as any).register({ publicKeyRaw: [...publicKeyRaw] });
+        return json({ status: "attested" }, 200);
+      } catch (e) {
+        const error = e instanceof AttestError ? e.message : "attestation_failed";
+        return json({ error }, 401);
+      }
+    }
+
+    // --- Everything else is gated. Read the body ONCE: these exact bytes are
+    // what the client signed, so they must be reused, not re-read.
+    const rawBody = request.method === "POST"
+      ? new Uint8Array(await request.arrayBuffer())
+      : null;
+
+    // The write path is enforced unconditionally — it is app-only (the Unraid
+    // pipeline drains R2 directly and never calls this Worker), so no old
+    // build and no server depends on it. It is also the only endpoint that
+    // costs us money and feeds the LLM, so it does not get a grace period.
+    const writePath = request.method === "POST" && parts[0] === "insights" && parts[1] === "request";
+    const g = await guard(request, url, writePath ? { ...env, ATTEST_MODE: "enforce" } : env, rawBody);
+    if (!g.allow) return json({ error: g.error }, g.status);
+
     // POST /insights/request — on-demand generation trigger. Validates the
     // camelCase app payload, short-circuits if already published, otherwise
     // writes a snake_case queue object to R2 for the pipeline's serve stage.
-    if (request.method === "POST" && parts[0] === "insights" && parts[1] === "request") {
+    if (writePath) {
       let body: unknown;
       try {
-        body = await request.json();
+        body = JSON.parse(new TextDecoder().decode(rawBody!));
       } catch {
         return cors(json({ status: "invalid", reason: "bad_json" }, 400));
       }

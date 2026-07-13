@@ -5,3 +5,37 @@ compatibility_date = "2024-11-07"
 [[r2_buckets]]
 binding = "INSIGHTS"
 bucket_name = "rivulet-insights"
+
+[vars]
+# "observe" = validate attestation if present, serve regardless (grace period
+#   while already-shipped builds, which cannot attest, drain).
+# "enforce" = reject anything unattested.
+# The write path (POST /insights/request) is ALWAYS enforced regardless of this,
+# because it is app-only and is the endpoint that actually costs us something.
+ATTEST_MODE = "observe"
+
+# "TEAMID.bundleid" — the identity Apple binds into every attestation. A fork
+# with a different bundle id or team cannot produce a valid one.
+APP_ID = "TEAMID.com.gstudios.rivulet"
+
+# Secrets (NEVER in this file — set with `wrangler secret put`):
+#   SERVER_KEY — the Unraid insights pipeline
+#   DEV_KEY    — Simulator / dev builds (App Attest is unavailable in the sim)
+
+[durable_objects]
+bindings = [
+  { name = "DEVICE_REGISTRY", class_name = "DeviceRegistry" },
+  { name = "CHALLENGES", class_name = "ChallengeStore" },
+]
+
+# SQLite-backed DOs are the free-plan-eligible class; the key-value backend is
+# paid/legacy. Do not change this to new_classes.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DeviceRegistry", "ChallengeStore"]
+
+[observability]
+# Off deliberately: no per-request invocation logs. We must be able to say
+# truthfully that we retain nothing about who requested what. Do not enable
+# this, Logpush, or R2 access logging without revisiting that.
+enabled = false
