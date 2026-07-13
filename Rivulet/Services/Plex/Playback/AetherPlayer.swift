@@ -81,7 +81,11 @@ final class AetherPlayer: PlayerProtocol {
     @Published private(set) var sourceTime: Double = 0
 
     @Published private(set) var audioTracks: [MediaTrack] = []
-    private var _subtitleTracks: [MediaTrack] = []
+    /// Published so the host can rebuild its merged track list the moment the
+    /// engine reports (symmetric with `audioTracks`). These carry engine stream
+    /// indices as ids and NO forced bit / long title — `TrackMerge` folds Plex's
+    /// metadata onto them.
+    @Published private(set) var subtitleTracks: [MediaTrack] = []
 
     init() {
         do {
@@ -194,7 +198,7 @@ final class AetherPlayer: PlayerProtocol {
         engine.$subtitleTracks
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tracks in
-                self?._subtitleTracks = tracks.map(Self.translateTrack)
+                self?.subtitleTracks = tracks.map(Self.translateTrack)
             }
             .store(in: &cancellables)
     }
@@ -257,8 +261,18 @@ final class AetherPlayer: PlayerProtocol {
             languageCode: t.language,
             codec: t.codec,
             isDefault: t.isDefault,
+            // The engine reads the container's disposition bits and DOES report
+            // these. They were previously dropped on the floor here, which is
+            // why the app believed only Plex knew a track was forced.
+            isForced: t.isForced,
             isHearingImpaired: t.isHearingImpaired,
+            isCommentary: t.isCommentary,
             channels: t.channels > 0 ? t.channels : nil,
+            // `TrackInfo.id` IS the container stream index (Demuxer enumerates
+            // all streams and passes the loop counter through as `id`). It is
+            // the same value Plex reports as `PlexStream.index`, which is what
+            // lets TrackMerge pair the two sides on container truth.
+            streamIndex: t.isExternal ? nil : t.id,
             isExternal: t.isExternal
         )
     }
@@ -458,7 +472,6 @@ final class AetherPlayer: PlayerProtocol {
 
     // MARK: - Tracks
 
-    var subtitleTracks: [MediaTrack] { _subtitleTracks }
     var currentAudioTrackId: Int? { activeAudioTrackId }
     var currentSubtitleTrackId: Int? { activeSubtitleTrackId }
 

@@ -1188,8 +1188,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// at load as first-class tracks. External streams are the ones with a
     /// `key` (a /library/streams path served by the Plex server) — they are
     /// NOT inside the media container, so the engine can't discover them by
-    /// demuxing. Registration order == metadata stream order; the id mapping
-    /// in aetherSubtitleIndex/plexSubtitleId relies on that ordinal identity.
+    /// demuxing. Registration order == metadata stream order, which is what
+    /// lets `TrackMerge` pair each sidecar with its Plex stream by ordinal.
     private func aetherExternalSubtitles() -> [AetherPlayer.SidecarSubtitle] {
         guard let streams = metadata.Media?.first?.Part?.first?.Stream else { return [] }
         return streams.filter { $0.isSubtitle && $0.key != nil }.compactMap { stream in
@@ -1378,23 +1378,23 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Use Aether's own track list (Aether engine indices as IDs) so the
-        // picker and selectAudioTrack both speak the same index space.
+        // Engine track lists. Both funnel through updateTrackLists(), which
+        // merges them with Plex's streams into ONE list per type (engine index
+        // as the id, Plex's forced/SDH/commentary labels folded on). Either
+        // side can arrive first, so the merge re-runs on each.
         player.$audioTracks
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tracks in
                 guard let self, !tracks.isEmpty else { return }
-                let wasEmpty = self.audioTracks.isEmpty
-                self.audioTracks = tracks
-                if wasEmpty {
-                    self.currentAudioTrackId = player.currentAudioTrackId ??
-                        tracks.first(where: { $0.isDefault })?.id ??
-                        tracks.first?.id
-                    if !self.hasAppliedAudioPreference {
-                        self.hasAppliedAudioPreference = true
-                        self.applyAudioPreference()
-                    }
-                }
+                self.updateTrackLists()
+            }
+            .store(in: &cancellables)
+
+        player.$subtitleTracks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] tracks in
+                guard let self, !tracks.isEmpty else { return }
+                self.updateTrackLists()
             }
             .store(in: &cancellables)
 
@@ -1418,7 +1418,9 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // directly via selectSubtitleTrackWithoutSaving, not through this
                 // mirror sink, so dropping nil here doesn't miss real off events.
                 guard let self, let id else { return }
-                self.currentSubtitleTrackId = self.plexSubtitleId(forAetherTrackId: id)
+                // Track ids ARE engine indices on this route (see TrackMerge) —
+                // the engine's active index needs no translation.
+                self.currentSubtitleTrackId = id
             }
             .store(in: &cancellables)
 
@@ -2602,23 +2604,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Native (AVKit) subtitle picker bridge. Track ids ARE engine indices on
+    /// the aether route, so a pick from the native picker is the same value our
+    /// own picker produces — just forward it.
     func selectAetherSubtitleTrackFromNativePicker(aetherTrackId: Int?) {
-        guard let ap = aetherPlayer else { return }
-        // User picked a track manually via the native picker: their choice
-        // wins over any active replay window (no later revert).
-        clearReplayWindow()
-        ap.selectSubtitleTrack(id: aetherTrackId)
-
-        if let aetherTrackId,
-           let plexId = plexSubtitleId(forAetherTrackId: aetherTrackId) {
-            currentSubtitleTrackId = plexId
-            if let track = subtitleTracks.first(where: { $0.id == plexId }) {
-                TrackIntentStore.subtitleIntent = SubtitleIntent(from: track)
-            }
-        } else {
-            currentSubtitleTrackId = nil
-            TrackIntentStore.subtitleIntent = .off
-        }
+        guard aetherPlayer != nil else { return }
+        selectSubtitleTrack(id: aetherTrackId)
     }
 
     /// Whether we've already applied track preferences for this playback session
@@ -2633,113 +2624,79 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var initialAudioTrackId: Int?
     private var initialSubtitleSelection: InitialSubtitleSelection = .auto
 
+    /// Rebuild `audioTracks` / `subtitleTracks`.
+    ///
+    /// ON THE AETHER ROUTE there is ONE list per stream type, produced by
+    /// `TrackMerge`: engine tracks (authoritative stream index = `id`, but no
+    /// forced bit and no long title) folded together with Plex's streams (which
+    /// have both). Track ids are therefore engine indices, directly selectable,
+    /// and no Plex->engine id translation exists anywhere downstream.
+    ///
+    /// ON THE HLS ROUTE there is no engine, so the tracks are Plex's as-is and
+    /// the ids are Plex stream ids. Selection there goes through AVPlayer's own
+    /// media selection, which is keyed off the same Plex list.
+    ///
+    /// Called from `updateTrackLists()`'s original sites AND from the engine's
+    /// track publishers, since either side can arrive first.
     private func updateTrackLists() {
         let previousSubtitleCount = subtitleTracks.count
         let previousAudioCount = audioTracks.count
 
-        // Aether manages its own audio track list via bindAetherPublishers.
-        // Don't overwrite those tracks with Plex metadata here — Aether uses
-        // engine indices as IDs, Plex uses stream IDs; they're incompatible.
-        let useAetherTracks = aetherPlayer != nil
+        let plexStreams = metadata.Media?.first?.Part?.first?.Stream ?? []
+        let plexAudio = plexStreams.filter { $0.isAudio }.map { MediaTrack(from: $0) }
+        let plexSubs = plexStreams.filter { $0.isSubtitle }.map { MediaTrack(from: $0) }
 
-        let newAudioTracks: [MediaTrack]
-        let newSubtitleTracks: [MediaTrack]
-        let newCurrentAudioTrackId: Int?
-        let newCurrentSubtitleTrackId: Int?
-
-        if let streams = metadata.Media?.first?.Part?.first?.Stream {
-            let plexAudio = streams.filter { $0.isAudio }
-            newAudioTracks = useAetherTracks ? audioTracks : plexAudio.map { MediaTrack(from: $0) }
-            newSubtitleTracks = streams.filter { $0.isSubtitle }.map { MediaTrack(from: $0) }
-            let selectedAudioId = streams.first(where: { $0.isAudio && $0.selected == true })?.id
-            let selectedSubtitleId = streams.first(where: { $0.isSubtitle && $0.selected == true })?.id
-            newCurrentAudioTrackId = selectedAudioId ??
-                newAudioTracks.first(where: { $0.isDefault })?.id ??
-                newAudioTracks.first?.id
-            newCurrentSubtitleTrackId = selectedSubtitleId ??
-                newSubtitleTracks.first(where: { $0.isForced })?.id ??
-                newSubtitleTracks.first(where: { $0.isDefault })?.id
+        if let ap = aetherPlayer {
+            // Engine list drives membership; Plex supplies the labels. Until the
+            // engine reports (empty list), leave the current tracks alone rather
+            // than publishing a Plex list whose ids the engine can't accept.
+            if !ap.audioTracks.isEmpty {
+                audioTracks = TrackMerge.mergeAudio(engine: ap.audioTracks, plex: plexAudio)
+            }
+            if !ap.subtitleTracks.isEmpty {
+                subtitleTracks = TrackMerge.mergeSubtitles(engine: ap.subtitleTracks, plex: plexSubs)
+            }
+            // The engine's active indices ARE our ids now — no translation.
+            //
+            // Both are re-read on EVERY call, not latched to first population.
+            // The engine re-publishes its track lists mid-session (the native
+            // side-demuxer swap on an audio switch rebuilds them from a fresh
+            // format context), and the ids are renumbered when it does. Latching
+            // would strand `currentAudioTrackId` in the old numbering, so the
+            // picker's checkmark and the rail's label would point at the wrong
+            // row. The engine's active index is authoritative and always in the
+            // current numbering.
+            if let active = ap.activeSubtitleTrackId {
+                currentSubtitleTrackId = active
+            }
+            if let active = ap.activeAudioTrackId {
+                currentAudioTrackId = active
+            }
         } else {
-            newAudioTracks = useAetherTracks ? audioTracks : []
-            newSubtitleTracks = []
-            newCurrentAudioTrackId = nil
-            newCurrentSubtitleTrackId = nil
+            audioTracks = plexAudio
+            subtitleTracks = plexSubs
+
+            // Plex route: seed the current ids from the server's stream flags.
+            if previousAudioCount == 0 {
+                currentAudioTrackId = plexStreams.first(where: { $0.isAudio && $0.selected == true })?.id
+                    ?? plexAudio.first(where: { $0.isDefault })?.id
+                    ?? plexAudio.first?.id
+            }
+            if previousSubtitleCount == 0 {
+                currentSubtitleTrackId = plexStreams.first(where: { $0.isSubtitle && $0.selected == true })?.id
+                    ?? plexSubs.first(where: { $0.isForced })?.id
+                    ?? plexSubs.first(where: { $0.isDefault })?.id
+            }
         }
 
-        if !useAetherTracks {
-            audioTracks = newAudioTracks
-        }
-        subtitleTracks = newSubtitleTracks
-
-        if useAetherTracks, let activeAetherSubtitle = aetherPlayer?.activeSubtitleTrackId {
-            currentSubtitleTrackId = plexSubtitleId(forAetherTrackId: activeAetherSubtitle)
-        }
-
-        // Only update current track IDs on first population.
-        // After tracks are populated, the user's explicit selections take precedence.
-        if previousAudioCount == 0 && !useAetherTracks {
-            currentAudioTrackId = newCurrentAudioTrackId
-        }
-        if previousSubtitleCount == 0 && !useAetherTracks {
-            currentSubtitleTrackId = newCurrentSubtitleTrackId
-        }
-
-        // Apply saved audio preference when tracks are first available
-        if !hasAppliedAudioPreference && !audioTracks.isEmpty && previousAudioCount == 0 {
+        // Apply remembered intent once, when each list first has content.
+        if !hasAppliedAudioPreference, !audioTracks.isEmpty, previousAudioCount == 0 {
             hasAppliedAudioPreference = true
             applyAudioPreference()
         }
-
-        // Apply saved subtitle preference when tracks are first available
-        if !hasAppliedSubtitlePreference && !subtitleTracks.isEmpty && previousSubtitleCount == 0 {
+        if !hasAppliedSubtitlePreference, !subtitleTracks.isEmpty, previousSubtitleCount == 0 {
             hasAppliedSubtitlePreference = true
             applySubtitlePreference()
-        }
-    }
-
-    enum StreamType { case audio, subtitle }
-
-    /// Enrich player tracks with Plex stream metadata (display name, channels, subtitle keys, etc.)
-    private func enrichTracksWithPlexStreams(_ tracks: [MediaTrack], plexStreams: [PlexStream], type: StreamType) -> [MediaTrack] {
-        // Filter Plex streams to only match the correct type
-        let filteredStreams = plexStreams.filter { stream in
-            switch type {
-            case .audio: return stream.isAudio
-            case .subtitle: return stream.isSubtitle
-            }
-        }
-
-        return tracks.map { track in
-            // Try to find matching Plex stream by language code and codec
-            let matchingStream = filteredStreams.first { stream in
-                // Match by language code and codec type
-                let langMatch = track.languageCode?.lowercased() == stream.languageCode?.lowercased()
-                let codecMatch = track.codec?.lowercased() == stream.codec?.lowercased()
-                return langMatch && codecMatch
-            } ?? filteredStreams.first { stream in
-                // Fallback: just match by language
-                track.languageCode?.lowercased() == stream.languageCode?.lowercased()
-            }
-
-            guard let stream = matchingStream else { return track }
-
-            // Use Plex displayTitle for better formatting (e.g., "English (AAC 7.1)" instead of "Track 1")
-            let enrichedName = stream.displayTitle ?? stream.extendedDisplayTitle ?? track.name
-
-            // Create enriched track with Plex metadata - keep original ID for selection to work
-            return MediaTrack(
-                id: track.id,
-                name: enrichedName,
-                language: stream.language ?? track.language,
-                languageCode: stream.languageCode ?? track.languageCode,
-                codec: stream.codec ?? track.codec,
-                isDefault: stream.default ?? track.isDefault,
-                isForced: stream.forced ?? track.isForced,
-                isHearingImpaired: stream.hearingImpaired ?? track.isHearingImpaired,
-                extendedDisplayTitle: stream.extendedDisplayTitle ?? track.extendedDisplayTitle,
-                channels: stream.channels ?? track.channels,
-                subtitleKey: stream.key ?? track.subtitleKey
-            )
         }
     }
 
@@ -2765,37 +2722,27 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// reliable way to honor the user's actual choice. The cost is a
     /// possibly-redundant HLS session rebuild at startup; correctness wins.
     private func applyAudioPreference() {
-        // 1. Pre-play picker (this session).
+        // 1. Pre-play picker (this session). The pre-play picker lists Plex
+        //    streams (it runs before any engine exists), so its id is a Plex
+        //    stream id — the one place a translation is still needed. Resolve it
+        //    positionally against the merged list.
         if let id = initialAudioTrackId {
             initialAudioTrackId = nil
-            if aetherPlayer != nil {
-                if let aetherID = aetherAudioIndex(forPlexTrackId: id) {
-                    selectAudioTrackWithoutSaving(id: aetherID)
-                }
-                return
-            }
-            if audioTracks.contains(where: { $0.id == id }) {
-                selectAudioTrackWithoutSaving(id: id)
+            if let track = audioTrackMatchingPlexStreamId(id) {
+                selectAudioTrackWithoutSaving(id: track.id)
                 return
             }
         }
 
-        // 2. Plex per-item explicit selection.
-        if aetherPlayer != nil {
-            let plexTracks = plexAudioTracksFromMetadata()
-            if let plexSelectedId = metadata.Media?.first?.Part?.first?.Stream?
-                .first(where: { $0.isAudio && $0.selected == true })?.id,
-               let plexDefaultId = plexTracks.first(where: { $0.isDefault })?.id,
-               plexSelectedId != plexDefaultId,
-               let aetherID = aetherAudioIndex(forPlexTrackId: plexSelectedId) {
-                selectAudioTrackWithoutSaving(id: aetherID)
-                return
-            }
-        } else if let plexSelectedId = currentAudioTrackId,
-                  let plexDefaultId = audioTracks.first(where: { $0.isDefault })?.id,
-                  plexSelectedId != plexDefaultId,
-                  audioTracks.contains(where: { $0.id == plexSelectedId }) {
-            selectAudioTrackWithoutSaving(id: plexSelectedId)
+        // 2. Plex per-item explicit selection: a `selected: true` stream that
+        //    isn't also the file's default means the user deliberately picked it
+        //    (here, or in Plex Web / mobile), and that persists server-side.
+        let plexAudioStreams = (metadata.Media?.first?.Part?.first?.Stream ?? []).filter { $0.isAudio }
+        if let selectedId = plexAudioStreams.first(where: { $0.selected == true })?.id,
+           let defaultId = plexAudioStreams.first(where: { $0.default == true })?.id,
+           selectedId != defaultId,
+           let track = audioTrackMatchingPlexStreamId(selectedId) {
+            selectAudioTrackWithoutSaving(id: track.id)
             return
         }
 
@@ -2829,23 +2776,26 @@ final class UniversalPlayerViewModel: ObservableObject {
             selectSubtitleTrackWithoutSaving(id: nil)
             return
         case .track(let id):
+            // Pre-play picker id is a PLEX stream id (it runs before any engine
+            // exists) — resolve it positionally onto the merged list.
             initialSubtitleSelection = .auto
-            if subtitleTracks.contains(where: { $0.id == id }) {
-                selectSubtitleTrackWithoutSaving(id: id)
+            if let track = subtitleTrackMatchingPlexStreamId(id) {
+                selectSubtitleTrackWithoutSaving(id: track.id)
                 return
             }
         case .auto:
             break
         }
 
-        // 2. Plex's per-item explicit selection. A `selected: true`
-        //    track that's neither the default nor the forced track is
-        //    one the user picked deliberately — honor it over the
-        //    app-level language preference.
-        if let plexSelectedSubId = currentSubtitleTrackId,
-           let track = subtitleTracks.first(where: { $0.id == plexSelectedSubId }),
+        // 2. Plex's per-item explicit selection. A `selected: true` stream
+        //    that's neither the default nor the forced one is a deliberate
+        //    user pick (here, or in Plex Web / mobile) — honor it over the
+        //    global intent.
+        let plexSubStreams = (metadata.Media?.first?.Part?.first?.Stream ?? []).filter { $0.isSubtitle }
+        if let selectedId = plexSubStreams.first(where: { $0.selected == true })?.id,
+           let track = subtitleTrackMatchingPlexStreamId(selectedId),
            !track.isDefault, !track.isForced {
-            selectSubtitleTrackWithoutSaving(id: plexSelectedSubId)
+            selectSubtitleTrackWithoutSaving(id: track.id)
             return
         }
 
@@ -2873,146 +2823,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Select subtitle track without saving preference (for auto-selection)
-    private func selectSubtitleTrackWithoutSaving(id: Int?) {
-        if let ap = aetherPlayer {
-            if let id {
-                // `subtitleTracks` ids are Plex stream ids; AetherEngine selects
-                // by container AVStream index. Translate before dispatching, or
-                // fall back to the raw id if no match (best effort).
-                let aetherIndex = aetherSubtitleIndex(forPlexTrackId: id) ?? id
-                ap.selectSubtitleTrack(id: aetherIndex)
-            } else {
-                ap.selectSubtitleTrack(id: nil)
-            }
-            currentSubtitleTrackId = id
-            return
-        }
-        currentSubtitleTrackId = id
-    }
-
-    /// Map a Plex subtitle stream id (from `subtitleTracks`, the Plex-sourced
-    /// picker list) to the matching AetherEngine subtitle AVStream index.
+    /// Select a subtitle track without persisting intent (auto-selection).
     ///
-    /// The picker shows Plex tracks (richer labels), but AetherEngine selects
-    /// subtitles by container AVStream index, not Plex stream id. Match by
-    /// language + codec, then language alone, then ordinal position as a last
-    /// resort. Returns nil if Aether has not reported its tracks yet.
-    private func aetherSubtitleIndex(forPlexTrackId id: Int) -> Int? {
-        guard let ap = aetherPlayer else { return nil }
-        let aetherTracks = ap.subtitleTracks
-        guard !aetherTracks.isEmpty,
-              let plexIndex = subtitleTracks.firstIndex(where: { $0.id == id }) else { return nil }
-        let plexTrack = subtitleTracks[plexIndex]
-
-        // External (sidecar) subtitles: registered with the engine at load
-        // in metadata order (aetherExternalSubtitles), so the nth external
-        // Plex stream IS the nth isExternal engine track. Never language-
-        // match these against embedded streams - a sidecar SRT must not
-        // select an embedded track of the same language.
-        if plexTrack.subtitleKey != nil {
-            let externalAether = aetherTracks.filter(\.isExternal)
-            let externalOrdinal = subtitleTracks[...plexIndex].filter { $0.subtitleKey != nil }.count - 1
-            guard externalOrdinal >= 0, externalOrdinal < externalAether.count else { return nil }
-            return externalAether[externalOrdinal].id
-        }
-
-        // Embedded: match among the engine's embedded (container) tracks only.
-        let embeddedAether = aetherTracks.filter { !$0.isExternal }
-        let lang = plexTrack.languageCode?.lowercased()
-        let codec = plexTrack.codec?.lowercased()
-
-        if let lang {
-            if let match = embeddedAether.first(where: {
-                $0.languageCode?.lowercased() == lang && $0.codec?.lowercased() == codec
-            }) {
-                return match.id
-            }
-            if let match = embeddedAether.first(where: { $0.languageCode?.lowercased() == lang }) {
-                return match.id
-            }
-        }
-        // Ordinal fallback: same position among EMBEDDED subtitle tracks on
-        // both sides (external entries excluded from both lists).
-        let embeddedPlexIndex = subtitleTracks[..<plexIndex].filter { $0.subtitleKey == nil }.count
-        if embeddedPlexIndex < embeddedAether.count {
-            return embeddedAether[embeddedPlexIndex].id
-        }
-        return nil
-    }
-
-    private func plexSubtitleId(forAetherTrackId id: Int) -> Int? {
-        guard let ap = aetherPlayer else { return nil }
-        let aetherTracks = ap.subtitleTracks
-        guard !aetherTracks.isEmpty,
-              let aetherIndex = aetherTracks.firstIndex(where: { $0.id == id }) else { return nil }
-        let aetherTrack = aetherTracks[aetherIndex]
-
-        // External engine tracks map back by ordinal among externals
-        // (mirror of aetherSubtitleIndex).
-        if aetherTrack.isExternal {
-            let externalPlex = subtitleTracks.filter { $0.subtitleKey != nil }
-            let externalOrdinal = aetherTracks[...aetherIndex].filter(\.isExternal).count - 1
-            guard externalOrdinal >= 0, externalOrdinal < externalPlex.count else { return nil }
-            return externalPlex[externalOrdinal].id
-        }
-
-        let embeddedPlex = subtitleTracks.filter { $0.subtitleKey == nil }
-        let lang = aetherTrack.languageCode?.lowercased()
-        let codec = MediaTrack.normalizedSubtitleCodec(aetherTrack.codec)
-
-        if let lang {
-            if let match = embeddedPlex.first(where: {
-                $0.languageCode?.lowercased() == lang &&
-                MediaTrack.normalizedSubtitleCodec($0.codec) == codec
-            }) {
-                return match.id
-            }
-            if let match = embeddedPlex.first(where: { $0.languageCode?.lowercased() == lang }) {
-                return match.id
-            }
-        }
-
-        let embeddedAetherIndex = aetherTracks[..<aetherIndex].filter { !$0.isExternal }.count
-        if embeddedAetherIndex < embeddedPlex.count {
-            return embeddedPlex[embeddedAetherIndex].id
-        }
-        return nil
-    }
-
-    private func aetherAudioIndex(forPlexTrackId id: Int) -> Int? {
-        let aetherTracks = audioTracks
-        let plexTracks = plexAudioTracksFromMetadata()
-        guard !aetherTracks.isEmpty,
-              let plexIndex = plexTracks.firstIndex(where: { $0.id == id }) else { return nil }
-        let plexTrack = plexTracks[plexIndex]
-        let lang = plexTrack.languageCode?.lowercased()
-        let codec = plexTrack.codec?.lowercased()
-        let channels = plexTrack.channels
-
-        if let lang {
-            if let match = aetherTracks.first(where: {
-                $0.languageCode?.lowercased() == lang &&
-                $0.codec?.lowercased() == codec &&
-                (channels == nil || $0.channels == channels)
-            }) {
-                return match.id
-            }
-            if let match = aetherTracks.first(where: {
-                $0.languageCode?.lowercased() == lang &&
-                $0.codec?.lowercased() == codec
-            }) {
-                return match.id
-            }
-            if let match = aetherTracks.first(where: { $0.languageCode?.lowercased() == lang }) {
-                return match.id
-            }
-        }
-
-        if plexIndex < aetherTracks.count {
-            return aetherTracks[plexIndex].id
-        }
-        return nil
+    /// No id translation: on the aether route `subtitleTracks` ids ARE engine
+    /// stream indices (see `TrackMerge`), so the id dispatches straight through.
+    private func selectSubtitleTrackWithoutSaving(id: Int?) {
+        aetherPlayer?.selectSubtitleTrack(id: id)
+        currentSubtitleTrackId = id
     }
 
     private func plexAudioTracksFromMetadata() -> [MediaTrack] {
@@ -3025,6 +2842,47 @@ final class UniversalPlayerViewModel: ObservableObject {
         metadata.Media?.first?.Part?.first?.Stream?
             .filter { $0.isSubtitle }
             .map { MediaTrack(from: $0) } ?? []
+    }
+
+    // MARK: - Plex stream id -> merged track
+    //
+    // Two inputs still speak PLEX stream ids rather than our (engine-indexed)
+    // track ids: the pre-play picker, which runs before any engine exists, and
+    // Plex's server-side `selected` flag. These are the only Plex-id boundaries
+    // left; everything downstream of the merge is one id space.
+    //
+    // On the HLS route the merged list IS the Plex list, so the id matches
+    // directly. On the aether route we join on the container stream index —
+    // the same key `TrackMerge` used to build the list (sidecars excepted:
+    // they have no stream index, so they pair by registration order).
+
+    private func audioTrackMatchingPlexStreamId(_ id: Int) -> MediaTrack? {
+        // HLS route: the merged list IS the Plex list, so the id matches directly.
+        guard aetherPlayer != nil else {
+            return audioTracks.first { $0.id == id }
+        }
+        // Aether route: join on the container stream index, the key both sides
+        // carry (see TrackMerge).
+        guard let streamIndex = plexAudioTracksFromMetadata()
+            .first(where: { $0.id == id })?.streamIndex else { return nil }
+        return audioTracks.first { $0.streamIndex == streamIndex }
+    }
+
+    private func subtitleTrackMatchingPlexStreamId(_ id: Int) -> MediaTrack? {
+        guard aetherPlayer != nil else {
+            return subtitleTracks.first { $0.id == id }
+        }
+        let plex = plexSubtitleTracksFromMetadata()
+        guard let plexIndex = plex.firstIndex(where: { $0.id == id }) else { return nil }
+        let plexTrack = plex[plexIndex]
+
+        // Sidecars have no stream index — they pair by registration order.
+        if plexTrack.subtitleKey != nil {
+            let ordinal = plex[..<plexIndex].count(where: { $0.subtitleKey != nil })
+            return subtitleTracks.filter(\.isExternal)[safe: ordinal]
+        }
+        guard let streamIndex = plexTrack.streamIndex else { return nil }
+        return subtitleTracks.first { $0.streamIndex == streamIndex }
     }
 
     // MARK: - Controls Visibility

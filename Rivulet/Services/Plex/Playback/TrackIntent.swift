@@ -201,6 +201,12 @@ enum TrackCommentary {
     /// only excluded from *automatic* selection. An explicit pick is stored as
     /// intent and honored by the exact-match tier.
     static func isCommentaryOrDescription(_ track: MediaTrack) -> Bool {
+        // AetherEngine reads the container's disposition bits and reports this
+        // outright. Trust it when set; the title match below is the fallback for
+        // files that don't flag the disposition (and for the Plex/HLS route,
+        // which has no such flag at all).
+        if track.isCommentary { return true }
+
         let haystacks = [track.extendedDisplayTitle, track.name, track.language]
             .compactMap { $0?.lowercased() }
         for text in haystacks {

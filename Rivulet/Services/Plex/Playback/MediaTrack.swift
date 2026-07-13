@@ -30,10 +30,31 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
     // Subtitle-specific
     let subtitleKey: String?  // Plex URL path for external subtitles (e.g., "/library/streams/12345")
 
+    /// True for a commentary / audio-description track.
+    ///
+    /// AetherEngine reports this directly (`TrackInfo.isCommentary`, read from
+    /// the container's disposition bits). Plex exposes NO such flag, so on the
+    /// Plex side it stays false and `TrackCommentary.isCommentaryOrDescription`
+    /// falls back to matching the title text.
+    let isCommentary: Bool
+
+    /// The track's index within the container's stream list.
+    ///
+    /// THE JOIN KEY between AetherEngine and Plex. The engine's `TrackInfo.id`
+    /// is literally this value (Demuxer walks every stream and passes the loop
+    /// counter through), and Plex reports the same thing as `PlexStream.index`.
+    /// Matching on it is container truth: immune to either side listing streams
+    /// the other doesn't (e.g. Plex's `embeddedInVideo` closed-caption
+    /// pseudo-streams, which FFmpeg never surfaces as separate streams).
+    ///
+    /// `nil` for external sidecar subtitles — they aren't in the container at
+    /// all, so they have no stream index and are paired by registration order.
+    let streamIndex: Int?
+
     /// Engine-side marker: true for AetherEngine tracks registered from an
-    /// external sidecar file (TrackInfo.isExternal). The Plex-side analogue
-    /// is `subtitleKey != nil`; the two lists are matched ordinal-to-ordinal
-    /// among externals in UniversalPlayerViewModel's track mapping.
+    /// external sidecar file (TrackInfo.isExternal). The Plex-side analogue is
+    /// `subtitleKey != nil`. Sidecars are paired by registration order, not by
+    /// stream index (see `TrackMerge`).
     let isExternal: Bool
 
     init(
@@ -45,9 +66,11 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         isDefault: Bool = false,
         isForced: Bool = false,
         isHearingImpaired: Bool = false,
+        isCommentary: Bool = false,
         extendedDisplayTitle: String? = nil,
         channels: Int? = nil,
         subtitleKey: String? = nil,
+        streamIndex: Int? = nil,
         isExternal: Bool = false
     ) {
         self.id = id
@@ -58,9 +81,11 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isDefault = isDefault
         self.isForced = isForced
         self.isHearingImpaired = isHearingImpaired
+        self.isCommentary = isCommentary
         self.extendedDisplayTitle = extendedDisplayTitle
         self.channels = channels
         self.subtitleKey = subtitleKey
+        self.streamIndex = streamIndex
         self.isExternal = isExternal
     }
 
@@ -74,9 +99,11 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isDefault = stream.default ?? false
         self.isForced = stream.forced ?? false
         self.isHearingImpaired = stream.hearingImpaired ?? false
+        self.isCommentary = false  // Plex has no commentary flag; title-matched instead.
         self.extendedDisplayTitle = stream.extendedDisplayTitle
         self.channels = stream.channels
         self.subtitleKey = stream.key
+        self.streamIndex = stream.index
         self.isExternal = false
     }
 
@@ -93,9 +120,11 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isDefault = track.isDefault
         self.isForced = track.isForced
         self.isHearingImpaired = false
+        self.isCommentary = false
         self.extendedDisplayTitle = track.extendedTitle
         self.channels = track.channels
         self.subtitleKey = nil
+        self.streamIndex = track.index
         self.isExternal = false
     }
 
@@ -109,9 +138,12 @@ struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isDefault = track.isDefault
         self.isForced = track.isForced
         self.isHearingImpaired = track.isHearingImpaired
+        self.isCommentary = false
         self.extendedDisplayTitle = track.extendedTitle
         self.channels = nil
         self.subtitleKey = track.externalURL?.path
+        // Sidecars aren't in the container, so they have no stream index.
+        self.streamIndex = track.externalURL == nil ? track.index : nil
         self.isExternal = track.externalURL != nil
     }
 
