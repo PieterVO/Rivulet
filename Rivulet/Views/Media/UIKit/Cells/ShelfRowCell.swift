@@ -79,6 +79,10 @@ final class ShelfRowCell: UICollectionViewCell {
     private var hasSkeleton = false
     /// Identity of the configured content; a change forces a full reload.
     private var contentToken: Int = 0
+    /// False until the first configure after init/reuse. Distinguishes an
+    /// in-place content change (cross-dissolved) from binding a freshly
+    /// (re)used cell (instant).
+    private var hasBoundContent = false
     /// How far this cell extends PAST the visible panel on each side (the
     /// expanded detail's below-fold is translated/widened off-screen by a
     /// constant pull). The shelf margin + equation are panel-relative: the
@@ -232,6 +236,7 @@ final class ShelfRowCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         pendingFocusIndex = nil
+        hasBoundContent = false
         offsetLink?.invalidate()
         offsetLink = nil
     }
@@ -255,12 +260,29 @@ final class ShelfRowCell: UICollectionViewCell {
         }
 
         if kindChanged || contentToken != self.contentToken {
+            // In-place content change on a row the user can see (a refresh
+            // reordered Continue Watching, advanced a progress bar, …) gets a
+            // cross-dissolve instead of a hard-cut reload. First binds and
+            // post-reuse binds stay instant — fading those would flash every
+            // row scrolled into view.
+            let isVisibleRebind = hasBoundContent && !kindChanged && window != nil
             self.contentToken = contentToken
             self.realCount = realCount
             self.hasSkeleton = hasSkeleton
-            rowCollectionView.reloadData()
-            rowCollectionView.layoutIfNeeded()
-            setOffset(clampedTo: initialOffset)
+            hasBoundContent = true
+            let applyContent = {
+                self.rowCollectionView.reloadData()
+                self.rowCollectionView.layoutIfNeeded()
+                self.setOffset(clampedTo: initialOffset)
+            }
+            if isVisibleRebind {
+                UIView.transition(with: rowCollectionView,
+                                  duration: 0.35,
+                                  options: [.transitionCrossDissolve, .allowUserInteraction],
+                                  animations: applyContent)
+            } else {
+                applyContent()
+            }
         } else {
             updateCounts(realCount: realCount, hasSkeleton: hasSkeleton)
         }

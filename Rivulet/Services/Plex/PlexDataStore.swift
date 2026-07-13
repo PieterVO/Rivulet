@@ -236,6 +236,23 @@ class PlexDataStore: ObservableObject {
     /// Track if app is in foreground
     private var isInForeground = true
 
+    /// When the last full `/hubs` fetch completed and when the last
+    /// Continue Watching fetch STARTED (either path). Used to gate the
+    /// foreground-return and surface-appearance refreshes so they never
+    /// duplicate a fetch the timers or the post-playback path just did.
+    private var lastHubsFetchAt: Date?
+    private var lastContinueWatchingFetchAt: Date?
+
+    /// Staggered Continue-Watching-only re-fetches after playback ends. The
+    /// player's single 2s-delayed refresh races the server committing the
+    /// final timeline/scrobble into the hub — when the server is slower, that
+    /// one refresh fetches pre-play data, the equality gate judges it
+    /// unchanged, and the row sits stale until the 30s poll. The burst
+    /// re-checks on a short tail so a late server commit still lands within
+    /// seconds. Each fetch is the small CW payload and equality-gated, so
+    /// already-fresh data makes the burst a no-op.
+    private var postPlaybackRefreshTask: Task<Void, Never>?
+
     private init() {
         setupPollingObservers()
     }
@@ -248,8 +265,10 @@ class PlexDataStore: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.isInForeground = true
-                self?.startPollingIfNeeded()
+                guard let self else { return }
+                self.isInForeground = true
+                self.startPollingIfNeeded()
+                await self.refreshOnForegroundReturn()
             }
         }
 
@@ -273,6 +292,8 @@ class PlexDataStore: ObservableObject {
             Task { @MainActor in
                 self?.isPlaybackActive = true
                 self?.stopPolling()
+                self?.postPlaybackRefreshTask?.cancel()
+                self?.postPlaybackRefreshTask = nil
             }
         }
 
@@ -284,8 +305,50 @@ class PlexDataStore: ObservableObject {
             Task { @MainActor in
                 self?.isPlaybackActive = false
                 self?.startPollingIfNeeded()
+                self?.schedulePostPlaybackRefreshBurst()
             }
         }
+    }
+
+    /// See `postPlaybackRefreshTask`. Fires CW-only fetches ~5s / 13s / 28s
+    /// after dismissal (the player's own refresh covers ~2s), then stops.
+    /// Cancelled if playback starts again.
+    private func schedulePostPlaybackRefreshBurst() {
+        postPlaybackRefreshTask?.cancel()
+        postPlaybackRefreshTask = Task { [weak self] in
+            for delay: Double in [5, 8, 15] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard let self, !Task.isCancelled else { return }
+                guard self.isInForeground, !self.isPlaybackActive else { return }
+                await self.pollContinueWatching()
+            }
+        }
+    }
+
+    /// Immediate stale-while-revalidate when the app returns to the
+    /// foreground: the poll timers resume on `didBecomeActive` but their
+    /// FIRST tick is a full interval away (30s / 3min), so without this a
+    /// return from background shows whatever the home looked like when the
+    /// app was suspended. CW always re-checks (small payload, equality-gated);
+    /// the fat `/hubs` fetch only re-runs when older than its poll interval.
+    /// Skipped on the launch activation (`didCompleteInitialHubFetch` false)
+    /// so it never contends the launch-critical first paint.
+    private func refreshOnForegroundReturn() async {
+        guard didCompleteInitialHubFetch, isInForeground, !isPlaybackActive else { return }
+        await pollContinueWatching()
+        if let last = lastHubsFetchAt, Date().timeIntervalSince(last) < pollingInterval { return }
+        await pollHubs()
+    }
+
+    /// Nonblocking refresh for a surface (re)appearing — e.g. the home tab
+    /// being navigated back to. Fetches only the small Continue Watching hub,
+    /// and only when the last CW fetch (any path) is older than `interval`,
+    /// so appear-driven calls can't stack on top of the timers or the
+    /// post-playback burst.
+    func refreshContinueWatchingIfStale(olderThan interval: TimeInterval = 10) async {
+        guard !isPlaybackActive else { return }
+        if let last = lastContinueWatchingFetchAt, Date().timeIntervalSince(last) < interval { return }
+        await pollContinueWatching()
     }
 
     /// Start polling if conditions are met (foreground, not playing, authenticated)
@@ -604,6 +667,7 @@ class PlexDataStore: ObservableObject {
 
             if continueWatchingFetchCompleted {
                 hasFetchedContinueWatching = true
+                lastContinueWatchingFetchAt = Date()
                 if !continueWatchingHubsAreEqual(self.continueWatchingHub, fetchedContinueWatching) {
                     self.continueWatchingHub = fetchedContinueWatching
                     self.hubsVersion = UUID()
@@ -625,6 +689,7 @@ class PlexDataStore: ObservableObject {
             // The fetch returned cleanly: the server connection is up. A still
             // empty Home from here on is genuine, not the post-sign-in race.
             didCompleteInitialHubFetch = true
+            lastHubsFetchAt = Date()
         } catch {
             let nsError = error as NSError
             print("📦 PlexDataStore: ❌ Hubs fetch error: \(error)")
@@ -667,6 +732,7 @@ class PlexDataStore: ObservableObject {
     /// path (`fetchHubsFromServer`) so the two can't diverge. A thrown fetch is
     /// swallowed (keep the current hub) exactly as the full path does.
     private func fetchContinueWatchingOnly(serverURL: String, token: String) async {
+        lastContinueWatchingFetchAt = Date()
         let userId = profileManager.selectedUserId
         let fetched: PlexHub?
         do {

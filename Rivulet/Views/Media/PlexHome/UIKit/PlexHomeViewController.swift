@@ -1205,6 +1205,23 @@ final class PlexHomeViewController: UIViewController {
         }
         applyPendingPreviewRestoreIfNeeded()
         nudgeInitialHeroFocusIfNeeded()
+        refreshOnReappearIfNeeded()
+    }
+
+    /// Nonblocking stale-while-revalidate whenever the home surface comes back
+    /// on screen (tab switch back, player/preview dismissal): re-check the
+    /// small Continue Watching hub in the background. The data store throttles
+    /// this against its own timers and the post-playback burst, so repeated
+    /// appearances are free. Skipped on the FIRST appearance — the launch path
+    /// already fetches, and an extra request would contend the first paint.
+    private var hasRunFirstAppearance = false
+    private func refreshOnReappearIfNeeded() {
+        guard case .home = mode else { return }
+        guard hasRunFirstAppearance else {
+            hasRunFirstAppearance = true
+            return
+        }
+        Task { await dataStore.refreshContinueWatchingIfStale() }
     }
 
     // MARK: - Stale focus appearance (focus returning into the collection)
