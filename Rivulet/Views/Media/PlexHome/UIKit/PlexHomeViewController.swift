@@ -2972,21 +2972,20 @@ final class PlexHomeViewController: UIViewController {
     private func mergedItems(forSection id: HomeSectionID, initial: [MediaItem])
     -> (items: [MediaItem], totalSize: Int?) {
         if var state = paginationStates[id] {
-            // Server-side hubs can change items between renders (e.g.
-            // refresh adds new content at the top). When the initial
-            // list is a strict superset we replace the head to pick up
-            // the changes; otherwise keep whatever pagination accumulated.
+            // The fresh projection is ALWAYS the authoritative head; only
+            // paginated-in extras survive from the accumulated state. A hub
+            // refresh can reorder items or advance their viewOffset without
+            // changing the item SET — the old "rebuild only when initial has
+            // unseen items" subset check treated that as no-change and kept
+            // rendering the stale accumulated copy, which froze Continue
+            // Watching's order and progress no matter how fresh the data
+            // store was.
             let initialKeys = Set(initial.map { $0.ref.itemID })
-            let loadedKeys = Set(state.loadedItems.map { $0.ref.itemID })
-            if !initialKeys.isSubset(of: loadedKeys) {
-                // Initial set has new items we haven't seen — rebuild
-                // from initial, then re-append paginated-only entries.
-                let paginatedExtras = state.loadedItems.filter { item in
-                    !initialKeys.contains(item.ref.itemID)
-                }
-                state.loadedItems = initial + paginatedExtras
-                paginationStates[id] = state
+            let paginatedExtras = state.loadedItems.filter { item in
+                !initialKeys.contains(item.ref.itemID)
             }
+            state.loadedItems = initial + paginatedExtras
+            paginationStates[id] = state
             return (state.loadedItems, state.totalSize)
         } else {
             paginationStates[id] = PaginationState(
