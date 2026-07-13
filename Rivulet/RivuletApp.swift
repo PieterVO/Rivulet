@@ -103,7 +103,15 @@ struct RivuletApp: App {
                        message.contains("Code=-999") || (message.contains("NSURLErrorDomain") && message.contains("cancelled")) {
                         return nil
                     }
-                    return event
+                    // Plex passes `X-Plex-Token` as a URL query parameter, and
+                    // IPTV providers pass username/password the same way, so any
+                    // URL that reaches an event carries a live credential. Call
+                    // sites use SensitiveDataRedactor directly, but this hook is
+                    // the actual guarantee: it also covers events the SDK builds
+                    // itself (enableCaptureFailedRequests attaches the failing
+                    // request URL) and NSError descriptions with an embedded URL,
+                    // neither of which any call site can reach.
+                    return SentryEventRedaction.redact(event)
                 }
             }
 

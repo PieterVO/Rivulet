@@ -160,10 +160,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                     scope.setTag(value: endpoint, key: "endpoint")
                     scope.setTag(value: method, key: "method")
                     scope.setTag(value: String(httpResponse.statusCode), key: "status_code")
-                    scope.setExtra(value: url.absoluteString, key: "url")
+                    // The token rides in the query string, so never send the raw
+                    // URL. safeURLString keeps host/path plus the query's KEY
+                    // names, which is all we ever diagnose from.
+                    scope.setExtra(value: SensitiveDataRedactor.safeURLString(url), key: "url")
                     scope.setExtra(value: netMs, key: "elapsed_ms")
                     if let responseStr = String(data: data, encoding: .utf8) {
-                        scope.setExtra(value: String(responseStr.prefix(500)), key: "response_body")
+                        // Plex error pages echo the request URL back at us.
+                        scope.setExtra(value: SensitiveDataRedactor.redact(String(responseStr.prefix(500))), key: "response_body")
                     }
                 }
             }
@@ -183,20 +187,20 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_network", key: "component")
                 scope.setTag(value: "json_decode", key: "error_type")
-                scope.setExtra(value: url.absoluteString, key: "url")
+                scope.setExtra(value: SensitiveDataRedactor.safeURLString(url), key: "url")
                 scope.setExtra(value: String(describing: T.self), key: "expected_type")
                 scope.setExtra(value: data.count, key: "response_size")
 
                 // Try UTF-8 first, fall back to Latin1 (which never fails) to capture something
                 if let responseStr = String(data: data, encoding: .utf8) {
-                    scope.setExtra(value: String(responseStr.prefix(2000)), key: "response_body")
+                    scope.setExtra(value: SensitiveDataRedactor.redact(String(responseStr.prefix(2000))), key: "response_body")
                 } else {
                     // UTF-8 failed - capture what we can
                     scope.setTag(value: "true", key: "invalid_utf8")
 
                     // Latin1 encoding never fails - use it to get a lossy representation
                     if let latin1Str = String(data: data.prefix(2000), encoding: .isoLatin1) {
-                        scope.setExtra(value: latin1Str, key: "response_body_latin1")
+                        scope.setExtra(value: SensitiveDataRedactor.redact(latin1Str), key: "response_body_latin1")
                     }
 
                     // Try to find the error position from the underlying error

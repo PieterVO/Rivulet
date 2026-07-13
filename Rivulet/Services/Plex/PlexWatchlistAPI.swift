@@ -73,14 +73,16 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
         var request = URLRequest(url: components.url!)
         addPlexHeaders(to: &request)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        watchlistAPILog.info("fetchAll URL=\(request.url?.absoluteString ?? "?", privacy: .public)")
+        // `privacy: .public` persists in the device log archive, and the token is
+        // a query param — log the URL shape, never its values.
+        watchlistAPILog.info("fetchAll URL=\(SensitiveDataRedactor.safeURLStringOptional(request.url), privacy: .public)")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         guard (200...299).contains(http.statusCode) else {
             let snippet = String(data: data.prefix(256), encoding: .utf8)
-            watchlistAPILog.error("fetchAll HTTP \(http.statusCode) body=\(snippet ?? "(non-utf8)", privacy: .public)")
+            watchlistAPILog.error("fetchAll HTTP \(http.statusCode) body=\(SensitiveDataRedactor.redactOptional(snippet) ?? "(non-utf8)", privacy: .public)")
             throw PlexWatchlistHTTPError(statusCode: http.statusCode, bodySnippet: snippet)
         }
 
@@ -159,14 +161,14 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
         var request = URLRequest(url: components.url!)
         request.httpMethod = "PUT"
         addPlexHeaders(to: &request)
-        watchlistAPILog.info("mutate \(action, privacy: .public) URL=\(request.url?.absoluteString ?? "?", privacy: .public)")
+        watchlistAPILog.info("mutate \(action, privacy: .public) URL=\(SensitiveDataRedactor.safeURLStringOptional(request.url), privacy: .public)")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         guard (200...299).contains(http.statusCode) else {
             let snippet = String(data: data.prefix(256), encoding: .utf8)
-            watchlistAPILog.error("mutate \(action, privacy: .public) HTTP \(http.statusCode) body=\(snippet ?? "(non-utf8)", privacy: .public)")
+            watchlistAPILog.error("mutate \(action, privacy: .public) HTTP \(http.statusCode) body=\(SensitiveDataRedactor.redactOptional(snippet) ?? "(non-utf8)", privacy: .public)")
             throw PlexWatchlistHTTPError(statusCode: http.statusCode, bodySnippet: snippet)
         }
     }
@@ -204,7 +206,7 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
         var request = URLRequest(url: components.url!)
         addPlexHeaders(to: &request)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        watchlistAPILog.info("matches type=\(type) URL=\(request.url?.absoluteString ?? "?", privacy: .public)")
+        watchlistAPILog.info("matches type=\(type) URL=\(SensitiveDataRedactor.safeURLStringOptional(request.url), privacy: .public)")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
