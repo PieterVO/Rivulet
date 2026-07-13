@@ -1,3 +1,5 @@
+import { guard, type GuardEnv } from "./guard";
+
 const TMDB_BASE = "https://api.themoviedb.org/3";
 const TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 const LIST_TTL_SECONDS = 60 * 60; // 1 hour for popular/trending lists
@@ -11,7 +13,7 @@ const LIST_SECTIONS = new Set([
   "on_the_air",
 ]);
 
-export interface Env {
+export interface Env extends GuardEnv {
   TMDB_API_KEY: string;
 }
 
@@ -26,6 +28,19 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // Gate every route. Without this the Worker is a free, key-less TMDB API
+    // for anyone who knows the URL, spending OUR upstream key.
+    // All routes here are GETs, so the assertion binds path+query+timestamp
+    // rather than a body.
+    const g = await guard(request, url, env, null);
+    if (!g.allow) {
+      return new Response(JSON.stringify({ error: g.error }), {
+        status: g.status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const parts = url.pathname.split("/").filter(Boolean); // e.g. ["tmdb","keywords","123"]
     if (parts[0] !== "tmdb" || parts.length < 2) {
       return addCors(new Response("Not Found", { status: 404 }));
@@ -226,10 +241,12 @@ function cleanHeaders(headers: Headers): Headers {
   return h;
 }
 
+/**
+ * The clients are a native tvOS app and a server-side pipeline. Neither does a
+ * CORS preflight, and neither needs permissive CORS. `Allow-Origin: *` only
+ * ever served to invite browser callers into a proxy that spends our TMDB key,
+ * so it is gone. Kept as a passthrough so call sites read unchanged.
+ */
 function addCors(resp: Response): Response {
-  const h = new Headers(resp.headers);
-  h.set("Access-Control-Allow-Origin", "*");
-  h.set("Access-Control-Allow-Methods", "GET, OPTIONS");
-  h.set("Access-Control-Allow-Headers", "Content-Type");
-  return new Response(resp.body, { status: resp.status, headers: h });
+  return resp;
 }

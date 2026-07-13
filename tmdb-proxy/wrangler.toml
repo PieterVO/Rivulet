@@ -2,5 +2,32 @@ name = "tmdb-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-11-07"
 
-# Uncomment to add routes/workers.dev custom domain later
-# routes = []
+[vars]
+# "observe" = validate attestation if present, serve regardless (grace period
+#   while already-shipped builds, which cannot attest, drain).
+# "enforce" = reject anything unattested.
+# These are READ routes: an old build that gets 401 here shows no poster art,
+# no hero images, no Discover. So this stays "observe" until shipped builds
+# have drained, then flips to "enforce" — a config change, not a deploy.
+ATTEST_MODE = "observe"
+
+# "TEAMID.bundleid" — the identity Apple binds into every attestation.
+APP_ID = "TEAMID.com.gstudios.rivulet"
+
+# Secrets (NEVER in this file — set with `wrangler secret put`):
+#   TMDB_API_KEY — upstream TMDB key (this is what an open proxy leaks)
+#   SERVER_KEY   — the Unraid insights pipeline (seed stage calls this Worker;
+#                  a server has no Secure Enclave and cannot attest)
+#   DEV_KEY      — Simulator / dev builds
+
+# The device registry lives in insights-api and is shared: a device attests
+# ONCE and both Workers trust it. This is a cross-script binding to that class,
+# so there is exactly one registry and one enrollment.
+[[durable_objects.bindings]]
+name = "DEVICE_REGISTRY"
+class_name = "DeviceRegistry"
+script_name = "insights-api"
+
+[observability]
+# Off deliberately: no per-request invocation logs.
+enabled = false
