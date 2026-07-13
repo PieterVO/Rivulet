@@ -67,7 +67,7 @@ actor InsightsShowIDResolver {
 
         var req = URLRequest(url: finalURL)
         req.addValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await session.data(for: req),
+        guard let (data, response) = try? await session.attestedData(for: req),
               let http = response as? HTTPURLResponse, http.statusCode == 200,
               let decoded = try? JSONDecoder().decode(FindResponse.self, from: data) else {
             return nil

@@ -75,7 +75,7 @@ actor InsightsTriviaClient {
     /// open (showing a fact) is acceptable; failing closed is not required.
     func suppressedFactIDs() async -> Set<String> {
         let url = baseURL.appendingPathComponent("insights/suppressed")
-        guard let (data, response) = try? await session.data(from: url),
+        guard let (data, response) = try? await send(URLRequest(url: url)),
               let http = response as? HTTPURLResponse, http.statusCode == 200,
               let ids = try? JSONDecoder().decode([String].self, from: data) else {
             return []
@@ -86,12 +86,16 @@ actor InsightsTriviaClient {
     /// Fire-and-forget request asking the pipeline to generate trivia for a
     /// title/episode it doesn't have yet. All failures ignored — this is a
     /// best-effort nudge, never a blocking or error-surfacing call.
+    ///
+    /// This is the one WRITE endpoint, and the Worker enforces attestation on
+    /// it unconditionally (no grace period): it costs us R2 writes and feeds
+    /// the generation pipeline, so it is never open to anonymous callers.
     func requestGeneration(_ req: InsightsGenerationRequest) async {
         let url = baseURL.appendingPathComponent("insights/request")
         var r = URLRequest(url: url); r.httpMethod = "POST"
         r.setValue("application/json", forHTTPHeaderField: "Content-Type")
         r.httpBody = try? JSONEncoder().encode(req)
-        _ = try? await session.data(for: r)   // fire-and-forget; all failures ignored
+        _ = try? await send(r)   // fire-and-forget; all failures ignored
     }
 
     private func fetchTrivia(path: String) async -> TitleTrivia? {
@@ -101,12 +105,18 @@ actor InsightsTriviaClient {
 
     private func fetchResult(path: String) async -> TriviaFetchResult {
         let url = baseURL.appendingPathComponent(path)
-        guard let (data, response) = try? await session.data(from: url),
+        guard let (data, response) = try? await send(URLRequest(url: url)),
               let http = response as? HTTPURLResponse else { return .unavailable }
         if http.statusCode == 404 { return .notFound }
         guard http.statusCode == 200,
               let t = try? JSONDecoder().decode(TitleTrivia.self, from: data) else { return .unavailable }
         return .found(t)
+    }
+
+    /// Every call to our Worker goes through the shared attested path, which
+    /// signs the request and re-enrolls once on a 401.
+    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.attestedData(for: request)
     }
 }
 

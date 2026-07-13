@@ -65,6 +65,16 @@ class Config:
     r2_access_key_id: str
     r2_secret_access_key: str
 
+    # The tmdb-proxy Worker requires App Attest from the app. This pipeline is
+    # a server: no Secure Enclave, so it cannot attest and authenticates with a
+    # shared secret instead. That is safe HERE (and nowhere else) because the
+    # machine is ours and the secret never ships to a user.
+    #
+    # Defaults to empty (send no header), which still works while the Worker is
+    # in "observe" mode. It MUST be set before the Worker flips to "enforce",
+    # or the seed stage loses TMDB access.
+    tmdb_proxy_server_key: str = ""
+
     @property
     def r2_configured(self) -> bool:
         return bool(
@@ -107,6 +117,7 @@ class Config:
                 "INSIGHTS_TMDB_PROXY_BASE_URL",
                 "https://tmdb-proxy.baingurley.workers.dev",
             ).rstrip("/"),
+            tmdb_proxy_server_key=os.environ.get("INSIGHTS_TMDB_PROXY_SERVER_KEY", ""),
             library_only=os.environ.get("INSIGHTS_LIBRARY_ONLY", "").lower() in ("1", "true", "yes"),
             plex_base_url=os.environ.get("INSIGHTS_PLEX_BASE_URL", "").rstrip("/"),
             plex_token=os.environ.get("INSIGHTS_PLEX_TOKEN", ""),

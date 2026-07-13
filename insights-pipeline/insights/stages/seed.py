@@ -496,11 +496,28 @@ def load_seed_jsonl(path: Path) -> list[WorkItem]:
     return items
 
 
-def _fetch_tmdb_list(config: Config, section: str, media_type: MediaType) -> dict[str, Any]:
-    url = f"{config.tmdb_proxy_base_url}/tmdb/list/{section}"
-    resp = requests.get(url, params={"type": media_type}, timeout=30)
+def _proxy_get(config: Config, path: str, params: dict[str, Any]) -> dict[str, Any]:
+    """GET the tmdb-proxy Worker, authenticating as the pipeline.
+
+    The Worker requires App Attest from the app; a server cannot attest (no
+    Secure Enclave), so it presents a shared secret instead. Every proxy call
+    goes through here so a new one cannot silently ship unauthenticated.
+    """
+    headers = {"Accept": "application/json"}
+    if config.tmdb_proxy_server_key:
+        headers["X-Rivulet-Server-Key"] = config.tmdb_proxy_server_key
+    resp = requests.get(
+        f"{config.tmdb_proxy_base_url}{path}",
+        params=params,
+        headers=headers,
+        timeout=30,
+    )
     resp.raise_for_status()
     return resp.json()
+
+
+def _fetch_tmdb_list(config: Config, section: str, media_type: MediaType) -> dict[str, Any]:
+    return _proxy_get(config, f"/tmdb/list/{section}", {"type": media_type})
 
 
 def _fetch_plex_library_dump(config: Config) -> dict[str, Any]:
@@ -537,17 +554,12 @@ def _fetch_plex_library_dump(config: Config) -> dict[str, Any]:
 
 def _fetch_tmdb_show_season_count(config: Config, tmdb_id: int) -> int:
     """Number of seasons for a show, via tmdb-proxy's existing `details` route."""
-    url = f"{config.tmdb_proxy_base_url}/tmdb/details/{tmdb_id}"
-    resp = requests.get(url, params={"type": "tv"}, timeout=30)
-    resp.raise_for_status()
-    return int(resp.json().get("number_of_seasons", 0) or 0)
+    data = _proxy_get(config, f"/tmdb/details/{tmdb_id}", {"type": "tv"})
+    return int(data.get("number_of_seasons", 0) or 0)
 
 
 def _fetch_tmdb_season(config: Config, tmdb_id: int, season_number: int) -> dict[str, Any]:
-    url = f"{config.tmdb_proxy_base_url}/tmdb/season/{tmdb_id}"
-    resp = requests.get(url, params={"season": season_number}, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    return _proxy_get(config, f"/tmdb/season/{tmdb_id}", {"season": season_number})
 
 
 def _fetch_episodes_for_show(config: Config, show_item: WorkItem, today: date) -> list[WorkItem]:

@@ -6,5 +6,11 @@
 	<array>
 		<string>group.com.bain.Rivulet</string>
 	</array>
+	<!-- App Attest. Proves to our Workers that a request comes from the genuine
+	     app on genuine Apple hardware. "development" talks to Apple's dev
+	     attestation service; TestFlight and App Store builds MUST use
+	     "production" or every attestation is rejected on-device. -->
+	<key>com.apple.developer.devicecheck.appattest-environment</key>
+	<string>development</string>
 </dict>
 </plist>
