@@ -490,6 +490,13 @@ final class PlexHomeViewController: UIViewController {
     /// (items / isLoadingMore / hasReachedEnd / totalSize).
     private struct PaginationState {
         var loadedItems: [MediaItem]       // initial items + everything paginated in
+        /// itemIDs that arrived via loadMoreIfNeeded — the ONLY items allowed
+        /// to survive a head refresh as tail extras. Without this, any item
+        /// that fell out of the refreshed hub head (finished, dismissed,
+        /// rolled to the next episode) was indistinguishable from a
+        /// paginated-in extra and got re-appended at the tail forever —
+        /// the "old episodes at the far right of Continue Watching" bug.
+        var paginatedKeys: Set<String> = []
         var totalSize: Int?
         var isLoadingMore: Bool
         var hasReachedEnd: Bool
@@ -2981,8 +2988,13 @@ final class PlexHomeViewController: UIViewController {
             // Watching's order and progress no matter how fresh the data
             // store was.
             let initialKeys = Set(initial.map { $0.ref.itemID })
+            // An extra survives only if it was actually paginated in AND the
+            // head doesn't cover it now. Items the head has since absorbed
+            // are head-owned from here on — drop them from paginatedKeys so
+            // they can't resurrect at the tail after later falling out.
+            state.paginatedKeys.subtract(initialKeys)
             let paginatedExtras = state.loadedItems.filter { item in
-                !initialKeys.contains(item.ref.itemID)
+                state.paginatedKeys.contains(item.ref.itemID)
             }
             state.loadedItems = initial + paginatedExtras
             paginationStates[id] = state
@@ -4517,6 +4529,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     freshState.hasReachedEnd = true
                 } else {
                     freshState.loadedItems.append(contentsOf: newItems)
+                    // Register as genuine paginated extras — only these may
+                    // outlive a head refresh in mergedItems.
+                    freshState.paginatedKeys.formUnion(newItems.map { $0.ref.itemID })
                     if let total = freshState.totalSize,
                        freshState.loadedItems.count >= total {
                         freshState.hasReachedEnd = true
