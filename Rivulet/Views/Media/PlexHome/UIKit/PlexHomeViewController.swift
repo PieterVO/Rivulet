@@ -3554,20 +3554,6 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Tile-menu "Go to Show": fetch the show and open its expanded detail
-    /// (season pills + episode rail live there).
-    private func presentShowDetail(ratingKey: String) {
-        guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return }
-        Task { @MainActor in
-            guard let meta = try? await PlexNetworkManager.shared.getMetadata(
-                serverURL: serverURL, authToken: token, ratingKey: ratingKey) else { return }
-            let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
-            presentStandaloneExpandedDetail(
-                PlexMediaMapper.item(meta, providerID: providerID, serverURL: serverURL, authToken: token))
-        }
-    }
-
     /// Open the new UIKit detail page (`MediaItemDetailPageViewController`) for a
     /// hero item — the hero Info ("i") button. Mirrors how the carousel presents
     /// the same page. Play inside the page closes it first, then routes to the
@@ -4342,62 +4328,57 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let network = PlexNetworkManager.shared
 
         if isContinueWatching {
-            // Ordering: [Watch from Beginning, Go to Episode/Movie, Go to Show]
-            // | [Mark as Watched, Remove from Continue Watching]
-            // | [Refresh Metadata].
-            var navigation: [TileMenuAction] = [
+            // Same segmentation as the generic menu below: [Watch from
+            // Beginning] | [watched state + navigation] | [More Info,
+            // Refresh Metadata]. CW adds Remove from Continue Watching to
+            // the middle group.
+            let cwFirst = [
                 TileMenuAction(title: "Watch from Beginning",
                                systemImage: "arrow.counterclockwise") { [weak self] in
                     self?.playItem(item, fromBeginning: true)
                 },
             ]
-            // Content-aware: CW mixes episodes and movies. Episodes get both
-            // the episode detail page and the show's expanded detail (season
-            // pills + episode rail); movies get the standalone movie detail
-            // (same page Related drill-ins open).
-            if item.kind == .episode {
-                navigation.append(TileMenuAction(title: "Go to Episode",
-                                                 systemImage: "info.circle") { [weak self] in
-                    self?.selectMediaItem(item)
-                })
-                if let showKey = item.grandparentRef?.itemID, !showKey.isEmpty {
-                    navigation.append(TileMenuAction(title: "Go to Show",
-                                                     systemImage: "tv") { [weak self] in
-                        self?.presentShowDetail(ratingKey: showKey)
-                    })
-                }
-            } else {
-                navigation.append(TileMenuAction(title: item.kind == .movie ? "Go to Movie" : "More Info",
-                                                 systemImage: item.kind == .movie ? "film" : "info.circle") { [weak self] in
-                    self?.selectMediaItem(item)
+
+            var cwMiddle = [
+                TileMenuAction(title: "Mark as Watched",
+                               systemImage: "eye.fill") { [weak self] in
+                    self?.performMenuAction(optimisticWatched: true) {
+                        try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                    }
+                },
+                TileMenuAction(title: "Remove from Continue Watching",
+                               systemImage: "trash",
+                               destructive: true) { [weak self] in
+                    self?.performMenuAction {
+                        try await network.removeFromContinueWatching(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                    }
+                },
+            ]
+            if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
+                cwMiddle.append(TileMenuAction(title: "Go to Show",
+                                               systemImage: "tv") { [weak self] in
+                    // Pass the EPISODE, not the show: the expanded detail
+                    // keys everything off it — episode chrome up top, the
+                    // episode's season pill selected, rail positioned at
+                    // this episode, About describing the show.
+                    self?.presentStandaloneExpandedDetail(item)
                 })
             }
-            return [
-                navigation,
-                [
-                    TileMenuAction(title: "Mark as Watched",
-                                   systemImage: "rectangle.badge.checkmark") { [weak self] in
-                        self?.performMenuAction(optimisticWatched: true) {
-                            try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                        }
-                    },
-                    TileMenuAction(title: "Remove from Continue Watching",
-                                   systemImage: "trash",
-                                   destructive: true) { [weak self] in
-                        self?.performMenuAction {
-                            try await network.removeFromContinueWatching(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                        }
-                    },
-                ],
-                [
-                    TileMenuAction(title: "Refresh Metadata",
-                                   systemImage: "arrow.clockwise") {
-                        Task {
-                            try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                        }
-                    },
-                ],
+
+            let cwLast = [
+                TileMenuAction(title: "More Info",
+                               systemImage: "info.circle") { [weak self] in
+                    self?.selectMediaItem(item)
+                },
+                TileMenuAction(title: "Refresh Metadata",
+                               systemImage: "arrow.clockwise") {
+                    Task {
+                        try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                    }
+                },
             ]
+
+            return [cwFirst, cwMiddle, cwLast]
         }
 
         // Generic media-item menu (Recently Added, Recommendations):
@@ -4409,7 +4390,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // misleading; the CW menu's play-from-start behavior is correct.)
         let first = [
             TileMenuAction(title: "Watch from Beginning",
-                           systemImage: "play.fill") { [weak self] in
+                           systemImage: "arrow.counterclockwise") { [weak self] in
                 self?.playItem(item, fromBeginning: true)
             },
         ]
@@ -4439,10 +4420,12 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // Episode-only: jump to the show's detail (season pills + episode
         // rail live there — a separate "Go to Season" entry would open the
         // same page, so the old SwiftUI menu's two entries fold into one).
-        if item.kind == .episode, let showKey = item.grandparentRef?.itemID {
+        // Pass the EPISODE, not the show: the expanded detail keys off it
+        // (season pill selected, rail positioned at this episode).
+        if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
             middle.append(TileMenuAction(title: "Go to Show",
                                          systemImage: "tv") { [weak self] in
-                self?.presentShowDetail(ratingKey: showKey)
+                self?.presentStandaloneExpandedDetail(item)
             })
         }
 
