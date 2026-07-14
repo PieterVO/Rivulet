@@ -137,6 +137,48 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.3 (65)", [
+            "Updated AetherEngine to 5.0.5. Fixes duplicate subtitles after rewinding, subtitle timing during fast skipping, and playback resuming on its own when skipping while paused",
+            "The changelog in Settings now shows the full release history",
+            "Security improvements for Rivulet's online features",
+        ]),
+        ("1.0.3 (64)", [
+            "Continue Watching now stays up to date after you finish watching and when you return to the app",
+            "You can now pick any subtitle track, not just the first one for each language",
+        ]),
+        ("1.0.3 (63)", [
+            "Fixed duplicate subtitle lines stacking up after rewinding",
+            "Rivulet now remembers your audio and subtitle choices, including forced subtitles, and applies them to the next thing you watch",
+            "Removed the audio and subtitle language settings. The player now learns your preference from what you pick",
+            "You can now swipe through the Home carousel",
+            "The ambient glow on Home now follows the featured artwork",
+            "Better diagnostics when playback fails",
+        ]),
+        ("1.0.3 (62)", [
+            "Major playback engine update (AetherEngine 5.0)",
+            "Releases are now also published on GitHub",
+        ]),
+        ("1.0.3 (61)", [
+            "Pressing Back in the sidebar now returns you to Home",
+            "The preview carousel now shows series info",
+            "Insights now works on TV episodes",
+        ]),
+        ("1.0.2 (59)", [
+            "Insights (work in progress): while watching, open Insights to see the cast and trivia for the current movie or show. Coverage and accuracy will keep improving",
+            "Redesigned the player controls: a cleaner glass control bar with subtitles, audio, info, and Up Next, plus smoother scrubbing with thumbnail previews",
+            "Redesigned the paused screen with full quality backdrop art and the title logo",
+            "The Apple TV top shelf now shows Continue Watching as full bleed artwork with the title logo",
+            "New Home hero that highlights trending movies and shows",
+            "Playback fixes: subtitles keep their selection when you change the audio track, trick play thumbnails line up with the right moment, and fast forward and rewind speeds are steadier",
+            "Bug fixes",
+        ]),
+        ("1.0.1 (56)", [
+            "Watchlist items you own now show proper artwork and a Play button",
+            "Playback now resumes correctly after leaving and returning to the app",
+            "Fixed subtitle language names in the track picker",
+            "Fixed the Home hero sometimes loading late",
+            "Refreshed the app icon",
+        ]),
         ("1.0.0 (53)", [
             "Fixed the Aether player not playing any content (black screen, no audio) for some users",
         ]),
@@ -162,22 +204,39 @@ struct WhatsNewView: View {
             "Bug fixes.",
             "Live TV fixes coming soon!",
         ]),
+        ("1.0.0 (48)", [
+            "Added Discover and Watchlist tabs",
+            "Added Music browsing",
+            "Added pre-play audio and subtitle track pickers",
+            "Added a Resume or Restart prompt setting (off by default)",
+            "A bare touchpad tap surfaces the timeline overlay",
+            "Fixed focus on player error screens",
+            "Auto-transcodes codecs Apple TV can't decode (MPEG-2, VC-1, VP9, AV1)",
+            "Fixed a freeze when resuming after a paused scrub",
+            "Fixed audio flutter on AAC, FLAC, and PCM tracks",
+            "Fixed 401 errors on multi-server Plex accounts",
+            "Thanks to @rrgomes for PR contributions in this release",
+        ]),
         ("1.0.0 (47)", [
-            "New Discover page — browse Popular, Top Rated, Now Playing, and Upcoming content from TMDB",
-            "Plex Watchlist integration — saved items appear on Home and you can add/remove from anywhere",
+            "New Discover page: browse Popular, Top Rated, Now Playing, and Upcoming content from TMDB",
+            "Plex Watchlist integration: saved items appear on Home and you can add or remove from anywhere",
             "Hero bookmark button now toggles your Plex Watchlist. Mark Watched moved to the detail page",
         ]),
         ("1.0.0 (46)", [
             "Fixed watched episodes not automatically playing",
             "Fixed some animation jank",
-            "Updated heros to be apple-esque. Not perfect yet",
+            "Updated heroes to be more Apple TV+ style. Not perfect yet",
             "Fixed library sorting",
         ]),
         ("1.0.0 (44)", [
-            "Built a completely custom video player using ffmpeg and internal tvOS tools. The end-goal is playback as smooth as Infuse. Its working well in all my tests, but please open any issues if you experience them",
+            "Built a completely custom video player using ffmpeg and internal tvOS tools. The end goal is playback as smooth as Infuse. It's working well in all my tests, but please open any issues if you experience them",
             "Re-styled many GUI elements to match Apple TV+ style and functionality",
-            "Apples built-in player (AVPlayer) can be used if desired. Toggle in settings.",
-            "Currently re-working the music library style to match the Apple Music app, and am working on functionality to match PlexAmp. Its a WIP now but wanted to get something out.",
+            "Apple's built-in player (AVPlayer) can be used if desired. Toggle in settings",
+            "Currently re-working the music library style to match the Apple Music app, with functionality to match PlexAmp. It's a work in progress but wanted to get something out",
+        ]),
+        ("1.0.0 (43)", [
+            "Refined the GUI to be more Apple TV+ style",
+            "Removed MPVKit. Defaulting to AVPlayer while the custom player is in development",
         ]),
         ("1.0.0 (40)", [
             "Fun depth effects on posters, because why not",
@@ -203,7 +262,7 @@ struct WhatsNewView: View {
             "PIP now works in Live TV",
             "Better multiview handling in Live TV",
             "Live TV scrubbing controls",
-            "Continuuing efforts to stop audio buffer on HomePods",
+            "Continuing efforts to fix audio buffering on HomePods",
             "Only show Post Video screen on tv shows with a next up episode",
         ]),
         ("1.0.0 (36)", [
