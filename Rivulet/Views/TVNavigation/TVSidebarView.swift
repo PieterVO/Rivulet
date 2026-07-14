@@ -7,6 +7,7 @@
 
 import SwiftUI
 import os.log
+import Sentry
 
 // Temporary diagnostic logger for intermittent sidebar focus loss.
 private let libraryIndexLog = Logger(subsystem: "com.rivulet.app", category: "LibraryIndex")
@@ -246,8 +247,8 @@ struct TVSidebarView: View {
                 // matches by external GUID, so the fetch must include them
                 // (Plex omits them from the default summary response).
                 //
-                // DEFERRED 5s past launch: this fetches ~5MB per library
-                // (size: 5000 + includeGuids) — ~20MB total — so it must stay
+                // DEFERRED 5s past launch: this fetches ~5MB per page
+                // (5000 items + includeGuids, paginated) — so it must stay
                 // clear of the home's first-paint window. It no longer gates the
                 // trending hero or "in your library" badges: hydrateFromDisk()
                 // above serves last launch's snapshot in ms. This fetch refreshes
@@ -263,21 +264,69 @@ struct TVSidebarView: View {
                     let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
 
                     var allItems: [PlexMetadata] = []
+                    var failedSections = 0
+                    let pageSize = 5000
                     for library in visible {
-                        if let result = try? await PlexNetworkManager.shared.getLibraryItemsWithTotal(
-                            serverURL: serverURL,
-                            authToken: token,
-                            sectionId: library.key,
-                            start: 0,
-                            size: 5000,
-                            includeGuids: true
-                        ) {
-                            allItems.append(contentsOf: result.items)
+                        // Page through the whole section — libraries larger than one
+                        // page used to be truncated, silently dropping ownership
+                        // matches for everything past the first 5000 titles (#202).
+                        var start = 0
+                        while true {
+                            do {
+                                let result = try await PlexNetworkManager.shared.getLibraryItemsWithTotal(
+                                    serverURL: serverURL,
+                                    authToken: token,
+                                    sectionId: library.key,
+                                    start: start,
+                                    size: pageSize,
+                                    includeGuids: true
+                                )
+                                allItems.append(contentsOf: result.items)
+                                start += result.items.count
+                                if result.items.isEmpty || start >= (result.totalSize ?? 0) { break }
+                            } catch {
+                                failedSections += 1
+                                libraryIndexLog.error("[GUIDIndex] fetch failed for section \(library.key, privacy: .public) at offset \(start): \(error.localizedDescription, privacy: .public)")
+                                let crumb = Breadcrumb(level: .error, category: "guid_index")
+                                crumb.message = "Library GUID fetch failed"
+                                crumb.data = ["section": library.key, "offset": start, "error": error.localizedDescription]
+                                SentryBridge.addBreadcrumb(crumb)
+                                break
+                            }
                         }
                     }
+
                     let withGuids = allItems.filter { ($0.Guid ?? []).isEmpty == false }
                     let sample = withGuids.first.flatMap { $0.Guid?.first?.id } ?? "(none)"
-                    libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, sample=\(sample, privacy: .public)")
+                    libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, \(failedSections) failed sections, sample=\(sample, privacy: .public)")
+
+                    let crumb = Breadcrumb(level: .info, category: "guid_index")
+                    crumb.message = "Library GUID index rebuilt"
+                    crumb.data = [
+                        "libraries": visible.count,
+                        "failed_sections": failedSections,
+                        "items": allItems.count,
+                        "with_guids": withGuids.count
+                    ]
+                    SentryBridge.addBreadcrumb(crumb)
+
+                    // A fetch failure means Discover/Watchlist ownership matching is
+                    // degraded for this user — surface it instead of failing silently.
+                    if failedSections > 0 {
+                        let event = Event(level: .warning)
+                        event.message = SentryMessage(formatted: "GUID index build incomplete")
+                        event.extra = [
+                            "libraries": visible.count,
+                            "failed_sections": failedSections,
+                            "items": allItems.count,
+                            "with_guids": withGuids.count
+                        ]
+                        SentryBridge.capture(event: event)
+                    }
+
+                    // If nothing came back at all, keep the disk-hydrated snapshot
+                    // rather than clobbering a working index with an empty one.
+                    if allItems.isEmpty && failedSections > 0 { return }
                     await LibraryGUIDIndex.shared.replace(with: allItems)
                 }
             }
