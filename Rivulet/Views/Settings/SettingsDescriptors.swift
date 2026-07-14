@@ -330,7 +330,7 @@ enum SettingsDescriptorStore {
         "changelog": SettingDescriptor(
             icon: "list.bullet.rectangle",
             iconColor: .blue,
-            description: "See what's new in this version of Rivulet."
+            description: "Release notes for every version of Rivulet."
         ),
         "licensesLegal": SettingDescriptor(
             icon: "doc.text.fill",

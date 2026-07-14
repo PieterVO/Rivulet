@@ -549,14 +549,19 @@ enum SettingsContent {
         ]
     }
 
+    /// Settings → Changelog shows the FULL release history (every entry in
+    /// `WhatsNewView.changelogs`, newest first), unlike the fresh-launch
+    /// "What's New" which stays scoped to the current build.
     private static func presentChangelog(on vc: UIViewController) {
-        vc.present(makeChangelogPopup(), animated: true)
+        let popup = InfoPopupViewController(
+            content: InfoPopupContent.changelogHistory(WhatsNewView.changelogs),
+            width: 1000, height: 920, scrollable: true)
+        vc.present(popup, animated: true)
     }
 
-    /// Builds the standard changelog glass popup for the current build (or the
-    /// most recent changelog entry if this build has none, so it's never blank).
-    /// Shared by Settings → Changelog and the fresh-launch "What's New" so the
-    /// two are identical. Select/Menu dismiss; content-sized.
+    /// Builds the current-build changelog glass popup (or the most recent
+    /// changelog entry if this build has none, so it's never blank). Used by
+    /// the fresh-launch "What's New". Select/Menu dismiss; content-sized.
     static func makeChangelogPopup() -> InfoPopupViewController {
         // The changelog is keyed on the build-qualified version ("1.0.0 (50)").
         let short = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"

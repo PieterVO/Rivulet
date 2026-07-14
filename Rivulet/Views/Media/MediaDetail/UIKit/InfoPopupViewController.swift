@@ -520,6 +520,23 @@ enum InfoPopupContent {
         return stack
     }
 
+    /// Full changelog history: every released version's notes, newest first.
+    /// Present with `scrollable: true` — Up/Down pages, Select/Menu dismiss.
+    static func changelogHistory(_ entries: [(version: String, features: [String])]) -> UIView {
+        let stack = verticalStack(spacing: 8)
+        stack.addArrangedSubview(label("Changelog", size: 44, weight: .bold, color: .white, lines: 1))
+        for entry in entries {
+            if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(40, after: last) }
+            let ver = label("Version \(entry.version)", size: 27, weight: .semibold, color: .white.withAlphaComponent(0.92), lines: 1)
+            stack.addArrangedSubview(ver)
+            stack.setCustomSpacing(14, after: ver)
+            for feature in entry.features {
+                stack.addArrangedSubview(changelogBullet(feature))
+            }
+        }
+        return stack
+    }
+
     /// One changelog feature: a small dot (top-aligned to the first text line) +
     /// a wrapping label.
     private static func changelogBullet(_ text: String) -> UIView {
