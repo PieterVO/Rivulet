@@ -176,6 +176,16 @@ let episodes = try await networkManager.getChildren(
 let next = episodes.first(where: { $0.index == currentEpisodeIndex + 1 })
 ```
 
+### Release Notes / Changelog
+
+Release notes live ONLY in the `changelogs` array in
+`Rivulet/Views/Components/WhatsNewView.swift` (root `CHANGELOG.md` is a stub).
+Entries are keyed by build-qualified version (`"1.0.3 (65)"`), newest first.
+Settings → About → Changelog renders the full history; the fresh-launch
+"What's New" shows only the current build's entry. Write bullets as simple,
+user-facing sentences (what users get, not internal details); no em dashes.
+Every AetherEngine bump gets a changelog line.
+
 ### Adding Settings
 
 Use components from `SettingsComponents.swift`:
