@@ -4329,13 +4329,17 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
         if isContinueWatching {
             // Same segmentation as the generic menu below: [Watch from
-            // Beginning] | [watched state + navigation] | [More Info,
-            // Refresh Metadata]. CW adds Remove from Continue Watching to
+            // Beginning, More Info] | [watched state + navigation] |
+            // [Refresh Metadata]. CW adds Remove from Continue Watching to
             // the middle group.
             let cwFirst = [
                 TileMenuAction(title: "Watch from Beginning",
                                systemImage: "arrow.counterclockwise") { [weak self] in
                     self?.playItem(item, fromBeginning: true)
+                },
+                TileMenuAction(title: "More Info",
+                               systemImage: "info.circle") { [weak self] in
+                    self?.selectMediaItem(item)
                 },
             ]
 
@@ -4366,10 +4370,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             }
 
             let cwLast = [
-                TileMenuAction(title: "More Info",
-                               systemImage: "info.circle") { [weak self] in
-                    self?.selectMediaItem(item)
-                },
                 TileMenuAction(title: "Refresh Metadata",
                                systemImage: "arrow.clockwise") {
                     Task {
@@ -4382,8 +4382,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
 
         // Generic media-item menu (Recently Added, Recommendations):
-        // [Watch from Beginning] | [watched state + episode navigation] |
-        // [More Info, Refresh Metadata].
+        // [Watch from Beginning, More Info] | [watched state + episode
+        // navigation] | [Refresh Metadata].
 
         // Watch from Beginning: actually starts playback at 0:00. (The old
         // SwiftUI menu only fired markUnwatched here without playing —
@@ -4392,6 +4392,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             TileMenuAction(title: "Watch from Beginning",
                            systemImage: "arrow.counterclockwise") { [weak self] in
                 self?.playItem(item, fromBeginning: true)
+            },
+            TileMenuAction(title: "More Info",
+                           systemImage: "info.circle") { [weak self] in
+                self?.selectMediaItem(item)
             },
         ]
 
@@ -4430,10 +4434,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
 
         let last = [
-            TileMenuAction(title: "More Info",
-                           systemImage: "info.circle") { [weak self] in
-                self?.selectMediaItem(item)
-            },
             TileMenuAction(title: "Refresh Metadata",
                            systemImage: "arrow.clockwise") {
                 Task {
