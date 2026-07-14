@@ -287,10 +287,14 @@ final class MultiStreamViewModel: ObservableObject {
                     scope.setExtra(value: channel.name, key: "channel_name")
                     scope.setExtra(value: channel.id, key: "channel_id")
                     scope.setExtra(value: channel.channelNumber ?? 0, key: "channel_number")
-                    scope.setExtra(value: url.absoluteString, key: "stream_url")
+                    // Plex transcode URLs carry X-Plex-Token in the query, and an
+                    // IPTV stream URL can carry the provider username/password.
+                    // Keep the query's key names (that's what diagnoses a bad
+                    // client profile) and drop every value.
+                    scope.setExtra(value: SensitiveDataRedactor.safeURLString(url), key: "stream_url")
                     scope.setExtra(value: url.host ?? "unknown", key: "stream_host")
                     scope.setExtra(value: url.path, key: "stream_path")
-                    scope.setExtra(value: url.query ?? "", key: "stream_query_params")
+                    scope.setExtra(value: SensitiveDataRedactor.redact(url.query ?? ""), key: "stream_query_params")
                 }
 
                 scheduleAutoRecovery(for: slot.id, channel: channel, reason: "initial-load-failed")
@@ -533,7 +537,7 @@ final class MultiStreamViewModel: ObservableObject {
                     scope.setTag(value: String(describing: channel.sourceType), key: "source_type")
                     scope.setExtra(value: channel.name, key: "channel_name")
                     scope.setExtra(value: channel.id, key: "channel_id")
-                    scope.setExtra(value: url.absoluteString, key: "stream_url")
+                    scope.setExtra(value: SensitiveDataRedactor.safeURLString(url), key: "stream_url")
                 }
 
                 scheduleAutoRecovery(for: newSlot.id, channel: channel, reason: "replace-load-failed")
