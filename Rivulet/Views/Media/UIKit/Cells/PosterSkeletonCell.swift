@@ -2,10 +2,9 @@
 //  PosterSkeletonCell.swift
 //  Rivulet
 //
-//  Loading-placeholder cell for the end of a paginating hub row. Mirrors
-//  SwiftUI `InfiniteContentRow.skeletonPosterCard` (`PlexHomeView.swift:1403-1430`)
-//  for both poster (260x390 portrait + title placeholder rows) and
-//  Continue Watching (392x280 landscape) variants.
+//  Loading-placeholder cell for the end of a paginating hub row, in both
+//  poster (260x390 portrait + title placeholder rows) and Continue
+//  Watching (392x280 landscape) variants.
 //
 //  Two sizing modes are supported via `configure(isContinueWatching:)`:
 //   - false: portrait poster + two title placeholder rows

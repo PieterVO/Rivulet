@@ -71,7 +71,8 @@ class PlexDataStore: ObservableObject {
     /// one-row-per-library-hub set), keyed by library section key.
     @Published private(set) var libraryItemsByKey: [String: CachedHomeRail] = [:]
 
-    /// Set by PlexHomeView when processed hubs are ready to display
+    /// Set by the UIKit home (PlexHomeViewController) once the home reaches
+    /// any settled state; ContentView's launch splash dismisses on it.
     @Published var isHomeContentReady = false
 
     /// Set by the UIKit home VC when the hero backdrop image is on screen (or

@@ -304,9 +304,8 @@ struct HomeSectionData {
         HomeSectionData(
             id: .recommendations,
             kind: .recommendationsLoading,
-            // SwiftUI's loading view doesn't render the row title at all
-            // (PlexHomeView.swift:867-881) -- it's an inline status row
-            // that replaces the row entirely. nil here suppresses the
+            // The loading state is an inline status row that replaces the
+            // row entirely — no row title. nil here suppresses the
             // section-header.
             title: nil,
             headerStyle: .swiftUIInfiniteRow,
@@ -1664,8 +1663,8 @@ final class PlexHomeViewController: UIViewController {
     }
 
     /// Evaluate auth + data-store state and show the right overlay (or
-    /// the home content). Mirror of SwiftUI `PlexHomeView.body`'s
-    /// branching precedence (`PlexHomeView.swift:122-150`).
+    /// the home content). Precedence: credentials → data → loading →
+    /// error → content.
     private func updateHomeState() {
         let hasCredentials = authManager.hasCredentials
         // Data presence/loading/error per mode: the home reads the global hub
@@ -2908,8 +2907,7 @@ final class PlexHomeViewController: UIViewController {
             sections.append(.watchlist(items: watchlistItems))
         }
 
-        // Personalized recommendations. Three-way branch matching
-        // SwiftUI recommendationsSection (`PlexHomeView.swift:867-922`):
+        // Personalized recommendations. Three-way branch:
         //   isLoadingRecommendations && empty   -> loading state cell
         //   recommendationsError != nil         -> error state cell
         //   !recommendations.isEmpty            -> populated row
@@ -4296,9 +4294,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         return false
     }
 
-    /// Mirrors SwiftUI InfiniteContentRow's `.onAppear` pagination trigger
-    /// (`PlexHomeView.swift:1328-1335`): when a card within 5 items of
-    /// the end displays, fire `loadMoreIfNeeded()` for its section.
+    /// Pagination trigger: when a card within 5 items of the end
+    /// displays, fire `loadMoreIfNeeded()` for its section.
     func collectionView(_ collectionView: UICollectionView,
                         willDisplay cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
@@ -4321,7 +4318,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     }
 
     /// Select long-press on a library-grid tile → the tile action menu.
-    /// Mirrors `MediaItemContextMenu` (`MediaItemContextMenu.swift:30`).
     /// Shelf-row tiles have their own recognizer (ShelfRowCell); this one
     /// only serves `.grid` sections, whose tiles are outer-collection cells.
     @objc private func handleGridLongPress(_ recognizer: UILongPressGestureRecognizer) {
@@ -4342,10 +4338,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     // MARK: - Tile menu builder
 
     /// Build the tile menu action groups for a cell — one sub-array per
-    /// divider-separated group, mirroring SwiftUI MediaItemContextMenu's
-    /// action set and `Divider()` placement, including the conditional
-    /// Mark-as-Watched / Unwatched branching and the CW-specific
-    /// Remove + Go-to-Episode override.
+    /// divider-separated group. This is the CANONICAL long-press menu for
+    /// home rows + library grid (the SwiftUI MediaItemContextMenu survives
+    /// only on MediaDetailView's episode cards). CW rows swap the watched
+    /// group for Remove-from-CW + Go-to-Show.
     private func tileMenuSections(for item: MediaItem, isContinueWatching: Bool) -> [[TileMenuAction]] {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
@@ -4472,8 +4468,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     }
 
     /// Performs a context-menu action with optional optimistic-watched
-    /// update + a hubs refresh after completion. Mirrors SwiftUI's
-    /// `performAction(optimisticWatched:_:)` (`MediaItemContextMenu.swift:164`).
+    /// update + a hubs refresh after completion.
     private func performMenuAction(optimisticWatched: Bool? = nil,
                                    _ action: @escaping () async throws -> Void) {
         Task { @MainActor in
@@ -4516,9 +4511,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
     // MARK: - Pagination
 
-    /// Load the next page of items for a paginating hub section. Mirror
-    /// of SwiftUI `InfiniteContentRow.loadMoreIfNeeded()`
-    /// (`PlexHomeView.swift:1436-1496`).
+    /// Load the next page of items for a paginating hub section.
     @MainActor
     private func loadMoreIfNeeded(sectionID: HomeSectionID, hubKey: String?, hubIdentifier: String?) async {
         guard var state = paginationStates[sectionID],

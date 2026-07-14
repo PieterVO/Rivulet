@@ -3,8 +3,7 @@
 //  Rivulet
 //
 //  Full-width loading / error state for the Personalized Recommendations
-//  row. Mirror of SwiftUI PlexHomeView.recommendationsSection's first
-//  two branches (`PlexHomeView.swift:867-901`).
+//  row.
 //
 //   - Loading:  spinner + "Building Personalized Recommendations" +
 //               "This may take a moment"

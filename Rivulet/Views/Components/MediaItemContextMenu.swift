@@ -2,19 +2,14 @@
 //  MediaItemContextMenu.swift
 //  Rivulet
 //
-//  Context menu for media items with common actions
+//  SwiftUI long-press context menu for the episode cards/rows inside
+//  MediaDetailView — its ONLY remaining surface. Every other long-press
+//  menu (home rows, library grid) is the UIKit tile menu built in
+//  PlexHomeViewController.tileMenuSections + TileMenuPopupViewController,
+//  which is the canonical menu; keep the two in step from that side.
 //
 
 import SwiftUI
-
-// MARK: - Context Menu Source
-
-/// Identifies where the context menu was triggered from
-enum MediaItemContextSource {
-    case continueWatching
-    case library
-    case other
-}
 
 // MARK: - Context Menu Actions
 
@@ -31,12 +26,8 @@ struct MediaItemContextMenu: ViewModifier {
     let item: PlexMetadata
     let serverURL: String
     let authToken: String
-    let source: MediaItemContextSource
     var onRefreshNeeded: MediaItemRefreshCallback?
     var onShowInfo: MediaItemNavigationCallback?
-    var onGoToSeason: MediaItemNavigationCallback?
-    var onGoToShow: MediaItemNavigationCallback?
-    var onShufflePlay: MediaItemNavigationCallback?
 
     @State private var isPerformingAction = false
 
@@ -87,51 +78,6 @@ struct MediaItemContextMenu: ViewModifier {
                     }
                 } label: {
                     Label("Mark as Unwatched", systemImage: "eye.slash.fill")
-                }
-            }
-
-            // Remove from Continue Watching (only in continue watching section)
-            if source == .continueWatching {
-                Button(role: .destructive) {
-                    performAction {
-                        try await networkManager.removeFromContinueWatching(
-                            serverURL: serverURL,
-                            authToken: authToken,
-                            ratingKey: item.ratingKey ?? ""
-                        )
-                    }
-                } label: {
-                    Label("Remove from Continue Watching", systemImage: "xmark.circle.fill")
-                }
-            }
-
-            // Go to Season/Show (only for episodes)
-            if item.type == "episode" {
-                if let onGoToSeason = onGoToSeason, item.parentRatingKey != nil {
-                    Button {
-                        onGoToSeason()
-                    } label: {
-                        Label("Go to Season", systemImage: "list.number")
-                    }
-                }
-
-                if let onGoToShow = onGoToShow, item.grandparentRatingKey != nil {
-                    Button {
-                        onGoToShow()
-                    } label: {
-                        Label("Go to Show", systemImage: "tv")
-                    }
-                }
-            }
-
-            // Shuffle Play (for shows and seasons)
-            if item.type == "show" || item.type == "season" {
-                if let onShufflePlay {
-                    Button {
-                        onShufflePlay()
-                    } label: {
-                        Label("Shuffle Play", systemImage: "shuffle")
-                    }
                 }
             }
 
@@ -187,48 +133,18 @@ struct MediaItemContextMenu: ViewModifier {
 // MARK: - View Extension
 
 extension View {
-    /// Adds a context menu with common Plex media actions
-    func mediaItemContextMenu(
-        item: PlexMetadata,
-        serverURL: String,
-        authToken: String,
-        source: MediaItemContextSource = .other,
-        onRefreshNeeded: MediaItemRefreshCallback? = nil,
-        onShowInfo: MediaItemNavigationCallback? = nil,
-        onGoToSeason: MediaItemNavigationCallback? = nil,
-        onGoToShow: MediaItemNavigationCallback? = nil,
-        onShufflePlay: MediaItemNavigationCallback? = nil
-    ) -> some View {
-        modifier(MediaItemContextMenu(
-            item: item,
-            serverURL: serverURL,
-            authToken: authToken,
-            source: source,
-            onRefreshNeeded: onRefreshNeeded,
-            onShowInfo: onShowInfo,
-            onGoToSeason: onGoToSeason,
-            onGoToShow: onGoToShow,
-            onShufflePlay: onShufflePlay
-        ))
-    }
-
-    /// MediaItem-based overload. Adapts the agnostic MediaItem to the Plex-typed
-    /// context menu by resolving the ratingKey from the item's ref and deriving
-    /// watch state from MediaUserState.
+    /// Adds a context menu with common Plex media actions. Adapts the agnostic
+    /// MediaItem to the Plex-typed modifier by resolving the ratingKey from the
+    /// item's ref and deriving watch state from MediaUserState.
     func mediaItemContextMenu(
         mediaItem: MediaItem,
         serverURL: String,
         authToken: String,
-        source: MediaItemContextSource = .other,
         onRefreshNeeded: MediaItemRefreshCallback? = nil,
-        onShowInfo: MediaItemNavigationCallback? = nil,
-        onGoToSeason: MediaItemNavigationCallback? = nil,
-        onGoToShow: MediaItemNavigationCallback? = nil,
-        onShufflePlay: MediaItemNavigationCallback? = nil
+        onShowInfo: MediaItemNavigationCallback? = nil
     ) -> some View {
-        // Build a minimal PlexMetadata shell so the existing PlexMetadata-typed
-        // context menu modifier can reuse its Plex network calls.
-        // Post-wave-1: replace with a MediaItem-native context menu modifier.
+        // Build a minimal PlexMetadata shell so the modifier can reuse its
+        // Plex network calls.
         var shell = PlexMetadata()
         shell.ratingKey = mediaItem.ref.itemID
         shell.type = mediaItem.kind == .episode ? "episode"
@@ -243,12 +159,8 @@ extension View {
             item: shell,
             serverURL: serverURL,
             authToken: authToken,
-            source: source,
             onRefreshNeeded: onRefreshNeeded,
-            onShowInfo: onShowInfo,
-            onGoToSeason: onGoToSeason,
-            onGoToShow: onGoToShow,
-            onShufflePlay: onShufflePlay
+            onShowInfo: onShowInfo
         ))
     }
 }

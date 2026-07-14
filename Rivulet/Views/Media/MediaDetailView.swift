@@ -36,8 +36,8 @@ struct MediaDetailView: View {
     /// view is hosted inside `PreviewOverlayHost`: the preview is presented
     /// via UIKit `UIViewController.present(_:)`, so the SwiftUI view tree
     /// inside has no `NavigationStack` ancestor and `.navigationDestination`
-    /// is a no-op. The host (typically `PlexHomeView`) dismisses the preview
-    /// and pushes the destination onto its own `NavigationStack`.
+    /// is a no-op. The host dismisses the preview and routes the
+    /// destination through its own navigation.
     var onSubItemNavigation: ((MediaItem) -> Void)? = nil
     var enableDetailDataLoading: Bool = true
     /// When hosted inside `PreviewOverlayHost`, reflects whether the entry /
@@ -360,8 +360,7 @@ struct MediaDetailView: View {
                 // tree has no `NavigationStack` ancestor and these
                 // destinations would be no-ops. Sub-item navigation in
                 // that context routes through `onSubItemNavigation`
-                // instead — see the host (PlexLibraryView /
-                // PlexHomeView).
+                // instead — see the presenting host.
                 isEnabled: onPreviewExitRequested == nil
             ))
     }
@@ -3372,7 +3371,6 @@ struct EpisodeCard: View {
             mediaItem: episode,
             serverURL: serverURL,
             authToken: authToken,
-            source: .other,
             onRefreshNeeded: onRefreshNeeded,
             onShowInfo: onShowInfo
         )
@@ -3480,7 +3478,6 @@ struct EpisodeRow: View {
             mediaItem: episode,
             serverURL: serverURL,
             authToken: authToken,
-            source: .other,
             onRefreshNeeded: onRefreshNeeded,
             onShowInfo: onShowInfo
         )

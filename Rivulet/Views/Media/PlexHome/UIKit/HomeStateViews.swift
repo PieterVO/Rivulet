@@ -6,13 +6,8 @@
 //  content to render (no Plex connection, loading, error, empty), plus
 //  the transient watchlist toast and the connection-error banner.
 //
-//  Mirror of the SwiftUI helpers in `PlexHomeView`:
-//   - notConnectedView   (PlexHomeView.swift:983)
-//   - loadingView        (PlexHomeView.swift:851)
-//   - errorView          (PlexHomeView.swift:927)
-//   - emptyView          (PlexHomeView.swift:956)
-//   - connectionErrorBanner (PlexHomeView.swift:806)
-//   - WatchlistToastModifier (WatchlistToast.swift)
+//  States: not-connected, loading, error, empty, the connection-error
+//  banner, and the watchlist toast.
 //
 
 import UIKit
@@ -242,8 +237,7 @@ final class WatchlistToastView: UIView {
 // MARK: - Connection error banner
 
 /// Yellow warning banner shown at the top of the home when we're rendering
-/// cached content but the Plex connection check failed. Mirror of
-/// SwiftUI `connectionErrorBanner` (`PlexHomeView.swift:806-847`).
+/// cached content but the Plex connection check failed.
 @MainActor
 final class ConnectionErrorBannerView: UIView {
 

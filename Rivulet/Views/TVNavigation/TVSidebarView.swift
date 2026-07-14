@@ -511,8 +511,8 @@ struct TVSidebarView: View {
                 Color.clear
             case .search:
                 // UIKit Search: the home VC in .search mode under the system
-                // `.searchable` keyboard. The SwiftUI PlexSearchView is the
-                // retired implementation, kept in-tree like PlexHomeView.
+                // `.searchable` keyboard. (The retired SwiftUI PlexSearchView
+                // was removed — see git history.)
                 UIKitSearchContainer()
             case .home:
                 // PlexHomeRoot is ALWAYS rendered (never an if/else branch) so
@@ -538,8 +538,8 @@ struct TVSidebarView: View {
                     }
             case .discover:
                 // UIKit Discover: same hero + shelf surface as the home,
-                // TMDB-fed (HomeMode.discover). The SwiftUI DiscoverView is
-                // the retired implementation, kept in-tree like PlexHomeView.
+                // TMDB-fed (HomeMode.discover). (The retired SwiftUI
+                // DiscoverView was removed — see git history.)
                 UIKitHomeContainer(mode: .discover)
             case .library(let key):
                 if let lib = dataStore.libraries.first(where: { $0.key == key }) {
