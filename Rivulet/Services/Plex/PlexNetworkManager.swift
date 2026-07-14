@@ -1133,18 +1133,40 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Remove item from continue watching by marking as unwatched
+    /// Remove item from the Continue Watching hub without touching its
+    /// watch state (progress/viewCount stay intact — the item is only
+    /// hidden from the hub, matching official Plex clients).
     func removeFromContinueWatching(
         serverURL: String,
         authToken: String,
         ratingKey: String
     ) async throws {
-        // Mark as unwatched clears all progress and removes from "Continue Watching"
-        try await markUnwatched(
-            serverURL: serverURL,
-            authToken: authToken,
-            ratingKey: ratingKey
-        )
+        guard var components = URLComponents(string: "\(serverURL)/actions/removeFromContinueWatching") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "ratingKey", value: ratingKey)
+        ]
+
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            if let httpResponse = response as? HTTPURLResponse {
+                throw PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: nil)
+            }
+            throw PlexAPIError.invalidResponse
+        }
     }
 
     // MARK: - Playlists

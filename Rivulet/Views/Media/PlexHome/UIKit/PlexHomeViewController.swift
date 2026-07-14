@@ -4342,21 +4342,38 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let network = PlexNetworkManager.shared
 
         if isContinueWatching {
-            // SwiftUI ContinueWatchingContextMenuModifier (PlexHomeView.swift:1037)
-            // ordering: [Watch from Beginning, More Info] | [Mark as Watched,
-            // Remove from Continue Watching] | [Refresh Metadata].
+            // Ordering: [Watch from Beginning, Go to Episode/Movie, Go to Show]
+            // | [Mark as Watched, Remove from Continue Watching]
+            // | [Refresh Metadata].
+            var navigation: [TileMenuAction] = [
+                TileMenuAction(title: "Watch from Beginning",
+                               systemImage: "arrow.counterclockwise") { [weak self] in
+                    self?.playItem(item, fromBeginning: true)
+                },
+            ]
+            // Content-aware: CW mixes episodes and movies. Episodes get both
+            // the episode detail page and the show's expanded detail (season
+            // pills + episode rail); movies get the standalone movie detail
+            // (same page Related drill-ins open).
+            if item.kind == .episode {
+                navigation.append(TileMenuAction(title: "Go to Episode",
+                                                 systemImage: "info.circle") { [weak self] in
+                    self?.selectMediaItem(item)
+                })
+                if let showKey = item.grandparentRef?.itemID, !showKey.isEmpty {
+                    navigation.append(TileMenuAction(title: "Go to Show",
+                                                     systemImage: "tv") { [weak self] in
+                        self?.presentShowDetail(ratingKey: showKey)
+                    })
+                }
+            } else {
+                navigation.append(TileMenuAction(title: item.kind == .movie ? "Go to Movie" : "More Info",
+                                                 systemImage: item.kind == .movie ? "film" : "info.circle") { [weak self] in
+                    self?.selectMediaItem(item)
+                })
+            }
             return [
-                [
-                    TileMenuAction(title: "Watch from Beginning",
-                                   systemImage: "arrow.counterclockwise") { [weak self] in
-                        self?.playItem(item, fromBeginning: true)
-                    },
-                    // Content-aware: CW mixes episodes and movies.
-                    TileMenuAction(title: item.kind == .episode ? "Go to Episode" : "More Info",
-                                   systemImage: "info.circle") { [weak self] in
-                        self?.selectMediaItem(item)
-                    },
-                ],
+                navigation,
                 [
                     TileMenuAction(title: "Mark as Watched",
                                    systemImage: "rectangle.badge.checkmark") { [weak self] in
@@ -4387,14 +4404,13 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // [Watch from Beginning] | [watched state + episode navigation] |
         // [More Info, Refresh Metadata].
 
-        // Watch from Beginning. SwiftUI fires markUnwatched here to clear
-        // viewOffset — odd action name vs. behavior, but we match exactly.
+        // Watch from Beginning: actually starts playback at 0:00. (The old
+        // SwiftUI menu only fired markUnwatched here without playing —
+        // misleading; the CW menu's play-from-start behavior is correct.)
         let first = [
             TileMenuAction(title: "Watch from Beginning",
                            systemImage: "play.fill") { [weak self] in
-                self?.performMenuAction(optimisticWatched: false) {
-                    try await network.markUnwatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                }
+                self?.playItem(item, fromBeginning: true)
             },
         ]
 
