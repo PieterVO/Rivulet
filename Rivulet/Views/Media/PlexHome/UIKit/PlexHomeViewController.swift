@@ -502,6 +502,14 @@ final class PlexHomeViewController: UIViewController {
         var hasReachedEnd: Bool
     }
     private var paginationStates: [HomeSectionID: PaginationState] = [:]
+
+    /// Continue Watching removals applied optimistically: these itemIDs are
+    /// hidden from CW rows the moment the user picks Remove, while the
+    /// server PUT + CW refetch run behind. Each ID is cleared on reconcile —
+    /// after a confirmed refetch (data no longer contains it) or on failure
+    /// (tile reappears; server truth wins) — so a later rewatch can re-enter
+    /// the row. Render-only: never persisted, never fed back into the store.
+    private var pendingCWRemovals: Set<String> = []
     private let paginationPageSize = 24
 
     // MARK: Library-mode grid state
@@ -2879,10 +2887,14 @@ final class PlexHomeViewController: UIViewController {
         for hub in dataStore.homeItems {
             let id = HomeSectionID(raw: hub.id)
             let merged = mergedItems(forSection: id, initial: hub.items)
+            var items = merged.items
+            if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
+                items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
+            }
             sections.append(.hub(
                 id: id,
                 title: hub.title,
-                items: merged.items,
+                items: items,
                 isContinueWatching: hub.isContinueWatching,
                 hubKey: hub.hubKey,
                 hubIdentifier: hub.hubIdentifier,
@@ -2940,10 +2952,14 @@ final class PlexHomeViewController: UIViewController {
         for hub in dataStore.libraryItemsByKey[key] ?? [] {
             let id = HomeSectionID(raw: hub.id)
             let merged = mergedItems(forSection: id, initial: hub.items)
+            var items = merged.items
+            if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
+                items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
+            }
             sections.append(.hub(
                 id: id,
                 title: hub.title,
-                items: merged.items,
+                items: items,
                 isContinueWatching: hub.isContinueWatching,
                 hubKey: hub.hubKey,
                 hubIdentifier: hub.hubIdentifier,
@@ -4365,9 +4381,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 TileMenuAction(title: "Remove from Continue Watching",
                                systemImage: "trash",
                                destructive: true) { [weak self] in
-                    self?.performMenuAction {
-                        try await network.removeFromContinueWatching(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                    }
+                    self?.removeFromContinueWatchingOptimistically(item)
                 },
             ]
             if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
@@ -4468,6 +4482,35 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             } catch {}
             await dataStore.refreshHubs()
             await dataStore.refreshLibraryHubs()
+        }
+    }
+
+    /// Optimistic Continue Watching removal: the tile disappears the moment
+    /// the menu closes; the server PUT + refetch run behind it. Suppression
+    /// (`pendingCWRemovals`) holds until the refreshed data itself no longer
+    /// contains the item, so racing hub refreshes can't flash it back. On
+    /// failure the suppression lifts and the tile returns — server truth wins.
+    private func removeFromContinueWatchingOptimistically(_ item: MediaItem) {
+        let ratingKey = item.ref.itemID
+        guard !ratingKey.isEmpty,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+
+        pendingCWRemovals.insert(ratingKey)
+        applySnapshot(animated: true)
+
+        Task { @MainActor in
+            do {
+                try await PlexNetworkManager.shared.removeFromContinueWatching(
+                    serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                // Refetch CW (and library hubs, which carry their own CW rows)
+                // BEFORE lifting the suppression, so the data is already clean
+                // and the reconcile snapshot is a visual no-op.
+                await dataStore.refreshContinueWatchingIfStale(olderThan: 0)
+                await dataStore.refreshLibraryHubs()
+            } catch {}
+            pendingCWRemovals.remove(ratingKey)
+            applySnapshot(animated: true)
         }
     }
 
