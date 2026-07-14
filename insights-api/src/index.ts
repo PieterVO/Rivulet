@@ -104,6 +104,13 @@ export default {
           keyId: b64ToBytes(payload.keyId),
           challenge: payload.challenge,
           appId: env.APP_ID ?? "",
+          // Trust anchor. UNSET IN PRODUCTION — wrangler.toml never defines
+          // ATTEST_TEST_ROOT_PEM, so this is undefined and verifyAttestation
+          // falls back to Apple's pinned root. It exists only so the local
+          // end-to-end harness can mint a chain without a physical Apple TV.
+          // Setting it on a deployed Worker would require account access, at
+          // which point the attacker already owns everything.
+          rootPem: env.ATTEST_TEST_ROOT_PEM,
         });
         const reg = env.DEVICE_REGISTRY.get(env.DEVICE_REGISTRY.idFromName(payload.keyId));
         await (reg as any).register({ publicKeyRaw: [...publicKeyRaw] });

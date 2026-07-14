@@ -87,16 +87,28 @@ export interface ChainOpts {
   tamperAuthData?: boolean;
   /** Put a wrong nonce in the leaf extension (must be rejected). */
   wrongNonce?: boolean;
+  /**
+   * Reuse a previously-minted CA (root + intermediate), instead of generating a
+   * fresh random one.
+   *
+   * The e2e harness needs this: the Worker must be booted trusting a root, but
+   * the attestation nonce binds a challenge only the RUNNING Worker can issue.
+   * So the CA is minted first (it doesn't depend on the challenge), the Worker
+   * boots trusting it, and the leaf — which carries the nonce — is minted after.
+   */
+  ca?: SavedCA;
 }
 
-/**
- * Build a full attestation. `rootPem` is returned so a test can pin a
- * DIFFERENT root than Apple's and prove the chain check actually rejects it.
- */
-export async function makeAttestation(opts: ChainOpts = {}): Promise<Chain> {
-  const challenge = opts.challenge ?? "challenge-0001";
-  const appId = opts.appId ?? TEST_APP_ID;
+/** A minted CA, serializable so it can outlive the process that made it. */
+export interface SavedCA {
+  rootPem: string;
+  rootPrivateJwk: JsonWebKey;
+  caPem: string;
+  caPrivateJwk: JsonWebKey;
+}
 
+/** Mint just the CA (root + intermediate). Independent of any challenge. */
+export async function makeCA(): Promise<SavedCA> {
   const rootKeys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-384" }, true, ["sign", "verify"]);
   const rootCert = await x509.X509CertificateGenerator.createSelfSigned({
     serialNumber: "01",
@@ -120,6 +132,32 @@ export async function makeAttestation(opts: ChainOpts = {}): Promise<Chain> {
     signingKey: rootKeys.privateKey as any,
     extensions: [new x509.BasicConstraintsExtension(true, 1, true)],
   });
+
+  return {
+    rootPem: rootCert.toString("pem"),
+    rootPrivateJwk: await crypto.subtle.exportKey("jwk", rootKeys.privateKey),
+    caPem: caCert.toString("pem"),
+    caPrivateJwk: await crypto.subtle.exportKey("jwk", caKeys.privateKey),
+  };
+}
+
+/**
+ * Build a full attestation. `rootPem` is returned so a test can pin a
+ * DIFFERENT root than Apple's and prove the chain check actually rejects it.
+ */
+export async function makeAttestation(opts: ChainOpts = {}): Promise<Chain> {
+  const challenge = opts.challenge ?? "challenge-0001";
+  const appId = opts.appId ?? TEST_APP_ID;
+
+  // Reuse a pre-minted CA when given one (the e2e harness needs the root to
+  // exist before the Worker boots); otherwise mint a throwaway CA.
+  const savedCA = opts.ca ?? (await makeCA());
+  const rootCert = new x509.X509Certificate(savedCA.rootPem);
+  const caCert = new x509.X509Certificate(savedCA.caPem);
+  const caPrivateKey = await crypto.subtle.importKey(
+    "jwk", savedCA.caPrivateJwk,
+    { name: "ECDSA", namedCurve: "P-384" }, false, ["sign"],
+  );
 
   // Leaf = the Secure Enclave key.
   const leafKeys = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
@@ -159,7 +197,7 @@ export async function makeAttestation(opts: ChainOpts = {}): Promise<Chain> {
     // SHA-256 leaf under a P-384 issuer — mirrors Apple, and is the trap.
     signingAlgorithm: { name: "ECDSA", hash: "SHA-256" },
     publicKey: leafKeys.publicKey as any,
-    signingKey: caKeys.privateKey as any,
+    signingKey: caPrivateKey as any,
     extensions: [new x509.Extension("1.2.840.113635.100.8.2", false, extDer.slice().buffer)],
   });
 
@@ -185,7 +223,7 @@ export async function makeAttestation(opts: ChainOpts = {}): Promise<Chain> {
   ]);
 
   return {
-    rootPem: rootCert.toString("pem"),
+    rootPem: savedCA.rootPem,
     attestationObject, keyId, challenge, appId,
     leafPrivateKey: leafKeys.privateKey,
     publicKeyRaw, authData,

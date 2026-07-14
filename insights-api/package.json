@@ -4,7 +4,9 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run test"
+    "e2e": "./test/e2e/e2e.sh",
+    "check": "npm run typecheck && npm run test",
+    "check:all": "npm run check && npm run e2e"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260713.1",

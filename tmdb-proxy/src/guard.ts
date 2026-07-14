@@ -23,6 +23,12 @@ export interface GuardEnv {
   APP_ID?: string;
   SERVER_KEY?: string;  // Unraid pipeline
   DEV_KEY?: string;     // Simulator / dev builds
+  /**
+   * Test-only trust anchor. NEVER set in production (wrangler.toml does not
+   * define it), so attestation falls back to Apple's pinned root. Exists so the
+   * e2e harness can mint a chain without physical Apple hardware.
+   */
+  ATTEST_TEST_ROOT_PEM?: string;
 }
 
 export const HDR_KEY_ID = "X-Rivulet-Key-Id";
