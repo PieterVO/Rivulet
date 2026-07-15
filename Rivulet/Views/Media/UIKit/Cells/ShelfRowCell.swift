@@ -331,6 +331,15 @@ final class ShelfRowCell: UICollectionViewCell {
         setNeedsFocusUpdate()
     }
 
+    /// Arm the next focus landing to a specific item WITHOUT touching layout
+    /// or requesting an update — set just before a content rebind so the
+    /// reload's own focus re-resolution already steers to the target instead
+    /// of relanding on a neighbor first (see the Continue Watching removal
+    /// restore in PlexHomeViewController).
+    func armFocusRestore(on itemIndex: Int) {
+        pendingFocusIndex = itemIndex
+    }
+
     /// Jump the row's horizontal window so `itemIndex` is realized/visible
     /// without changing the pending focus target yet. Used while a modal is
     /// still covering Home, so the eventual focus update has no visible
@@ -362,9 +371,13 @@ final class ShelfRowCell: UICollectionViewCell {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        // Sticky until a focus update actually LANDS in the row
+        // (didUpdateFocusIn clears it). The engine may consult this getter
+        // more than once per pass, and a reload's own relanding pass can
+        // consult it before the caller's forced update — consuming on first
+        // read let focus settle one tile off after a CW removal.
         if let index = pendingFocusIndex,
            let cell = rowCollectionView.cellForItem(at: IndexPath(item: index, section: 0)) {
-            pendingFocusIndex = nil
             return [cell]
         }
         return [rowCollectionView]
@@ -530,6 +543,9 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
         guard let next = context.nextFocusedIndexPath else { return }
+        // Any landing in the row retires a pending restore target — the
+        // steering is one-shot; keeping it armed would hijack later entries.
+        pendingFocusIndex = nil
         let target = snappedOffset(toShow: next.item)
         guard abs(target - collectionView.contentOffset.x) > 0.5 else { return }
         animateOffset(to: target)
