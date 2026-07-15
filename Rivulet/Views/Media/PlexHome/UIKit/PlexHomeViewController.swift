@@ -2713,7 +2713,8 @@ final class PlexHomeViewController: UIViewController {
             guard itemIndex < section.items.count else { return }
             let item = section.items[itemIndex]
             presentTileMenu(sections: tileMenuSections(for: item,
-                                                       isContinueWatching: section.kind == .continueWatching))
+                                                       isContinueWatching: section.kind == .continueWatching,
+                                                       shelfLocation: (sectionID: sectionID, itemIndex: itemIndex)))
         case .discoverList:
             presentDiscoverTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .searchGrid:
@@ -4342,7 +4343,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     /// home rows + library grid (the SwiftUI MediaItemContextMenu survives
     /// only on MediaDetailView's episode cards). CW rows swap the watched
     /// group for Remove-from-CW + Go-to-Show.
-    private func tileMenuSections(for item: MediaItem, isContinueWatching: Bool) -> [[TileMenuAction]] {
+    private func tileMenuSections(for item: MediaItem,
+                                  isContinueWatching: Bool,
+                                  shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) -> [[TileMenuAction]] {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
               !item.ref.itemID.isEmpty
@@ -4387,7 +4390,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 TileMenuAction(title: "Remove from Continue Watching",
                                systemImage: "trash",
                                destructive: true) { [weak self] in
-                    self?.removeFromContinueWatchingOptimistically(item)
+                    self?.removeFromContinueWatchingOptimistically(item, shelfLocation: shelfLocation)
                 },
             ]
 
@@ -4485,7 +4488,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     /// (`pendingCWRemovals`) holds until the refreshed data itself no longer
     /// contains the item, so racing hub refreshes can't flash it back. On
     /// failure the suppression lifts and the tile returns — server truth wins.
-    private func removeFromContinueWatchingOptimistically(_ item: MediaItem) {
+    private func removeFromContinueWatchingOptimistically(
+        _ item: MediaItem,
+        shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil
+    ) {
         let ratingKey = item.ref.itemID
         guard !ratingKey.isEmpty,
               let serverURL = authManager.selectedServerURL,
@@ -4493,6 +4499,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
         pendingCWRemovals.insert(ratingKey)
         applySnapshot(animated: true)
+        if let shelfLocation {
+            restoreShelfFocusAfterRemoval(sectionID: shelfLocation.sectionID,
+                                          removedIndex: shelfLocation.itemIndex)
+        }
 
         Task { @MainActor in
             do {
@@ -4506,6 +4516,31 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             } catch {}
             pendingCWRemovals.remove(ratingKey)
             applySnapshot(animated: true)
+        }
+    }
+
+    /// Keep focus at the same slot after an optimistic CW removal: the item
+    /// that slid into the removed tile's place takes focus (clamped to the
+    /// new end when the last tile was removed). The tile menu dismisses
+    /// BEFORE the removal handler runs, so the engine has already restored
+    /// focus onto the doomed tile; the shelf's crossfade reload then strands
+    /// it on whatever cell instance gets rebound. Deferred one runloop so
+    /// the reload has re-bound cells first, then routed through the row's
+    /// prepareFocusRestore (same mechanism as preview-dismiss restoration).
+    private func restoreShelfFocusAfterRemoval(sectionID: HomeSectionID, removedIndex: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  let sectionIdx = self.sectionsSnapshot.firstIndex(where: { $0.id == sectionID }),
+                  case let count = self.sectionsSnapshot[sectionIdx].items.count,
+                  count > 0,
+                  let row = self.collectionView.cellForItem(
+                      at: IndexPath(item: 0, section: sectionIdx)) as? ShelfRowCell
+            else { return }
+            let target = min(removedIndex, count - 1)
+            row.resetVisibleFocusAppearance(except: target)
+            row.prepareFocusRestore(on: target)
+            self.setNeedsFocusUpdate()
+            self.updateFocusIfNeeded()
         }
     }
 
