@@ -4353,10 +4353,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
         if isContinueWatching {
             // Same segmentation as the generic menu below: [Watch from
-            // Beginning, More Info] | [watched state + navigation] |
+            // Beginning, More Info, Go to Show] | [watched state] |
             // [Refresh Metadata]. CW adds Remove from Continue Watching to
             // the middle group.
-            let cwFirst = [
+            var cwFirst = [
                 TileMenuAction(title: "Watch from Beginning",
                                systemImage: "arrow.counterclockwise") { [weak self] in
                     self?.playItem(item, fromBeginning: true)
@@ -4366,8 +4366,18 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     self?.selectMediaItem(item)
                 },
             ]
+            if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
+                cwFirst.append(TileMenuAction(title: "Go to Show",
+                                              systemImage: "tv") { [weak self] in
+                    // Pass the EPISODE, not the show: the expanded detail
+                    // keys everything off it — episode chrome up top, the
+                    // episode's season pill selected, rail positioned at
+                    // this episode, About describing the show.
+                    self?.presentStandaloneExpandedDetail(item)
+                })
+            }
 
-            var cwMiddle = [
+            let cwMiddle = [
                 TileMenuAction(title: "Mark as Watched",
                                systemImage: "eye.fill") { [weak self] in
                     self?.performMenuAction(optimisticWatched: true) {
@@ -4380,16 +4390,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     self?.removeFromContinueWatchingOptimistically(item)
                 },
             ]
-            if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
-                cwMiddle.append(TileMenuAction(title: "Go to Show",
-                                               systemImage: "tv") { [weak self] in
-                    // Pass the EPISODE, not the show: the expanded detail
-                    // keys everything off it — episode chrome up top, the
-                    // episode's season pill selected, rail positioned at
-                    // this episode, About describing the show.
-                    self?.presentStandaloneExpandedDetail(item)
-                })
-            }
 
             let cwLast = [
                 TileMenuAction(title: "Refresh Metadata",
@@ -4404,13 +4404,13 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
 
         // Generic media-item menu (Recently Added, Recommendations):
-        // [Watch from Beginning, More Info] | [watched state + episode
-        // navigation] | [Refresh Metadata].
+        // [Watch from Beginning, More Info, Go to Show] | [watched state] |
+        // [Refresh Metadata].
 
         // Watch from Beginning: actually starts playback at 0:00. (The old
         // SwiftUI menu only fired markUnwatched here without playing —
         // misleading; the CW menu's play-from-start behavior is correct.)
-        let first = [
+        var first = [
             TileMenuAction(title: "Watch from Beginning",
                            systemImage: "arrow.counterclockwise") { [weak self] in
                 self?.playItem(item, fromBeginning: true)
@@ -4420,6 +4420,18 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 self?.selectMediaItem(item)
             },
         ]
+
+        // Episode-only: jump to the show's detail (season pills + episode
+        // rail live there — a separate "Go to Season" entry would open the
+        // same page, so the old SwiftUI menu's two entries fold into one).
+        // Pass the EPISODE, not the show: the expanded detail keys off it
+        // (season pill selected, rail positioned at this episode).
+        if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
+            first.append(TileMenuAction(title: "Go to Show",
+                                        systemImage: "tv") { [weak self] in
+                self?.presentStandaloneExpandedDetail(item)
+            })
+        }
 
         // Mark as Watched / Unwatched — conditional on view state.
         // isWatched mirrors the old `viewCount > 0`; watchProgress != nil
@@ -4440,18 +4452,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 self?.performMenuAction(optimisticWatched: false) {
                     try await network.markUnwatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                 }
-            })
-        }
-
-        // Episode-only: jump to the show's detail (season pills + episode
-        // rail live there — a separate "Go to Season" entry would open the
-        // same page, so the old SwiftUI menu's two entries fold into one).
-        // Pass the EPISODE, not the show: the expanded detail keys off it
-        // (season pill selected, rail positioned at this episode).
-        if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
-            middle.append(TileMenuAction(title: "Go to Show",
-                                         systemImage: "tv") { [weak self] in
-                self?.presentStandaloneExpandedDetail(item)
             })
         }
 
