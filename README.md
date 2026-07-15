@@ -5,7 +5,7 @@
 # Rivulet
 
 **A native tvOS video app for Plex and Live TV.**
-Built for simplicity. Direct play by default.
+Built for simplicity.
 
 <a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
   <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store">
