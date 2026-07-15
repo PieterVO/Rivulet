@@ -1133,18 +1133,40 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Remove item from continue watching by marking as unwatched
+    /// Remove item from the Continue Watching hub without touching its
+    /// watch state (progress/viewCount stay intact — the item is only
+    /// hidden from the hub, matching official Plex clients).
     func removeFromContinueWatching(
         serverURL: String,
         authToken: String,
         ratingKey: String
     ) async throws {
-        // Mark as unwatched clears all progress and removes from "Continue Watching"
-        try await markUnwatched(
-            serverURL: serverURL,
-            authToken: authToken,
-            ratingKey: ratingKey
-        )
+        guard var components = URLComponents(string: "\(serverURL)/actions/removeFromContinueWatching") else {
+            throw PlexAPIError.invalidURL
+        }
+
+        components.queryItems = [
+            URLQueryItem(name: "ratingKey", value: ratingKey)
+        ]
+
+        guard let url = components.url else {
+            throw PlexAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            if let httpResponse = response as? HTTPURLResponse {
+                throw PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: nil)
+            }
+            throw PlexAPIError.invalidResponse
+        }
     }
 
     // MARK: - Playlists
@@ -2021,7 +2043,6 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         // ALL Plex Live TV plays through the Plex server (tune → session).
         // No direct tuner (HDHomeRun) handoff: raw tuner URLs are LAN-only
         // and bypass the server's session/tuner management entirely.
-        print("🌐 PlexNetwork: DVR \(dvrKey) make=\(dvr.make ?? "?") model=\(dvr.model ?? "?") — all channels play through Plex")
 
         // Extract provider path using DVR key (e.g., tv.plex.providers.epg.xmltv:28)
         let providerPath = extractProviderPath(from: lineup, dvrKey: dvrKey)
@@ -2119,7 +2140,6 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             }
         }
 
-        print("🌐 PlexNetwork: Live TV channels: \(channels.count) total, all via Plex tune")
         let summaryBreadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
         summaryBreadcrumb.message = "Live TV channel fetch completed"
         summaryBreadcrumb.data = [
@@ -2167,10 +2187,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         // uuid — that's the livetv session id in every observed variant.
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let mediaContainer = root["MediaContainer"] as? [String: Any] else {
-            print("🌐 PlexNetwork: tune response was not JSON (dvr=\(dvrKey), channel=\(channelId))")
-            if let head = String(data: data.prefix(400), encoding: .utf8) {
-                print("🌐 PlexNetwork: tune response head: \(head)")
-            }
+            let breadcrumb = Breadcrumb(level: .warning, category: "plex_livetv")
+            breadcrumb.message = "Tune response was not JSON"
+            breadcrumb.data = [
+                "dvr": dvrKey,
+                "channel": channelId,
+                "response_head": String(data: data.prefix(400), encoding: .utf8) ?? "n/a"
+            ]
+            SentryBridge.addBreadcrumb(breadcrumb)
             throw PlexAPIError.parsingError
         }
 
@@ -2221,15 +2245,19 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         guard let uuid = firstMediaUUID(in: mediaContainer) else {
-            print("🌐 PlexNetwork: tune succeeded but no Media uuid found (dvr=\(dvrKey), channel=\(channelId)); MediaContainer keys=\(mediaContainer.keys.sorted().joined(separator: ","))")
-            if let head = String(data: data.prefix(800), encoding: .utf8) {
-                print("🌐 PlexNetwork: tune response head: \(head)")
-            }
+            let breadcrumb = Breadcrumb(level: .warning, category: "plex_livetv")
+            breadcrumb.message = "Tune succeeded but no Media uuid found"
+            breadcrumb.data = [
+                "dvr": dvrKey,
+                "channel": channelId,
+                "media_container_keys": mediaContainer.keys.sorted().joined(separator: ","),
+                "response_head": String(data: data.prefix(800), encoding: .utf8) ?? "n/a"
+            ]
+            SentryBridge.addBreadcrumb(breadcrumb)
             throw PlexAPIError.invalidResponse
         }
 
         let partKey = firstPartKey(in: mediaContainer)
-        print("🌐 PlexNetwork: tuned dvr=\(dvrKey) channel=\(channelId) → livetv session \(uuid) partKey=\(partKey ?? "none")")
         return PlexLiveTVTuneResult(sessionUUID: uuid, partKey: partKey)
     }
 

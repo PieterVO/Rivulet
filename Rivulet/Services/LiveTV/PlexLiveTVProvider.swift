@@ -441,7 +441,6 @@ actor PlexLiveTVProvider: LiveTVProvider {
                 with: "start.ts"
             )
             if let tsURL = components.url {
-                print("📺 PlexLiveTVProvider: playing tuned session as continuous HTTP TS, directPlay allowed (\(String(tune.sessionUUID.prefix(8)))…)")
                 return tsURL
             }
             return base

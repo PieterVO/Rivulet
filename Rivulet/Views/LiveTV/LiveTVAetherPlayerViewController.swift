@@ -70,6 +70,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private var keepAliveTask: Task<Void, Never>?
     private var stopPingURL: URL?
 
+    /// The in-flight stream resolve/load (and its fallback retries). Held so it
+    /// can be cancelled on dismissal — otherwise a slow Plex tune could finish
+    /// after teardown and spin a new player/keep-alive on an off-screen VC.
+    private var streamLoadTask: Task<Void, Never>?
+
     // MARK: Chrome state
 
     /// Same glass rail as Aether VOD; Up Next and Insights are hidden (they
@@ -151,19 +156,23 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             .sink { [weak self] _ in self?.updateRailContent() }
             .store(in: &cancellables)
 
-        Task { @MainActor in
+        streamLoadTask = Task { @MainActor in
             // Resolve performs the Plex tune step for cloud-EPG/DVB channels;
             // other sources pass straight through.
             guard let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else {
+                if Task.isCancelled { return }
                 onDismiss?()
                 dismiss(animated: true)
                 return
             }
+            if Task.isCancelled { return }
             startLiveSessionKeepAlive(for: url)
             do {
                 try await aether.loadLive(url: url, headers: nil)
+                if Task.isCancelled { return }
                 aether.play()
             } catch {
+                if Task.isCancelled { return }
                 self.advanceFallback()
             }
         }
@@ -172,6 +181,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         guard isBeingDismissed || isMovingFromParent else { return }
+        streamLoadTask?.cancel()
+        streamLoadTask = nil
         stopLiveSessionKeepAlive()
         autoHideTimer?.invalidate()
         autoHideTimer = nil
@@ -450,9 +461,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         isFallbackInFlight = true
         loadingSpinner.startAnimating()
-        Task { @MainActor in
+        streamLoadTask = Task { @MainActor in
             defer { isFallbackInFlight = false }
             guard let freshURL = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else { return }
+            if Task.isCancelled { return }
             startLiveSessionKeepAlive(for: freshURL)
 
             if stage == 1 {
@@ -464,12 +476,15 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 do {
                     aetherPlayer?.stop()
                     try await aetherPlayer?.loadLive(url: retryURL, headers: nil, forceEngineDemux: true)
+                    if Task.isCancelled { return }
                     aetherPlayer?.play()
                 } catch {
+                    if Task.isCancelled { return }
                     advanceFallback()
                 }
             } else {
                 // Last resort: bare AVPlayer on its own layer (engine is done).
+                if Task.isCancelled { return }
                 aetherPlayer?.stop()
                 aetherPlayer?.unbind(view: engineSurfaceView)
                 aetherPlayer = nil
