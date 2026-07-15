@@ -137,6 +137,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.3 (66)", [
+            "Removing an item from Continue Watching is now instant and no longer clears your watch progress",
+            "New Go to Show option in the Continue Watching menu opens the show page right at your current episode",
+            "Watch from Beginning now actually starts playback from the beginning",
+            "Reorganized the long press menus on Home rows",
+            "Fixed old items reappearing at the far end of the Continue Watching row",
+        ]),
         ("1.0.3 (65)", [
             "Updated AetherEngine to 5.0.5. Fixes duplicate subtitles after rewinding, subtitle timing during fast skipping, and playback resuming on its own when skipping while paused",
             "The changelog in Settings now shows the full release history",
