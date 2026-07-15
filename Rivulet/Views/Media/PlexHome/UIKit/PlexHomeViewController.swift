@@ -4498,21 +4498,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
               let token = authManager.selectedServerToken else { return }
 
         pendingCWRemovals.insert(ratingKey)
-        // Arm the row's focus target BEFORE the snapshot: the shelf rebind
-        // triggers the engine's own focus re-resolution, and with the target
-        // pre-armed that pass lands directly on the tile that takes the
-        // removed one's slot (instead of a neighbor, corrected a beat later).
-        if let shelfLocation,
-           let sectionIdx = sectionsSnapshot.firstIndex(where: { $0.id == shelfLocation.sectionID }),
-           let row = collectionView.cellForItem(
-               at: IndexPath(item: 0, section: sectionIdx)) as? ShelfRowCell {
-            // sectionsSnapshot is still pre-removal here: the new count is
-            // one less, so clamp against count - 2.
-            let lastAfterRemoval = sectionsSnapshot[sectionIdx].items.count - 2
-            if lastAfterRemoval >= 0 {
-                row.armFocusRestore(on: min(shelfLocation.itemIndex, lastAfterRemoval))
-            }
-        }
         applySnapshot(animated: true)
         if let shelfLocation {
             restoreShelfFocusAfterRemoval(sectionID: shelfLocation.sectionID,
