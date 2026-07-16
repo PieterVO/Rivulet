@@ -137,6 +137,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.3 (67)", [
+            "Redesigned Live TV guide with a full channel grid, program details, and instant playback",
+            "Updated AetherEngine to 5.3.1. Adds teletext subtitles and much smoother audio and video on broadcast Live TV channels, faster startup on slower sources, and fewer stalls when resuming after a pause",
+        ]),
         ("1.0.3 (66)", [
             "Removing an item from Continue Watching is now instant and no longer clears your watch progress",
             "New Go to Show option in the Continue Watching menu opens the show page right at your current episode",
