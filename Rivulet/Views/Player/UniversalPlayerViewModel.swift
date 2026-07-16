@@ -614,6 +614,23 @@ final class UniversalPlayerViewModel: ObservableObject {
         return allow
     }
 
+    /// Per-category delivery mode for the INFO sheet. On the aether route the
+    /// engine plays the raw file (any software decode happens on-device, the
+    /// server does no work) so every category is Direct Play. On the HLS route
+    /// the labels mirror the inputs the transcode URL was built with. Subtitles
+    /// are always rendered client-side (engine cues on aether, /library/streams
+    /// sidecars on hls) — never burned in.
+    var streamingModeInfo: StreamingModeInfo {
+        if aetherPlayer != nil {
+            return StreamingModeInfo(video: .directPlay, audio: .directPlay, subtitles: .directPlay)
+        }
+        return StreamingModeInfo(
+            video: ContentRouter.requiresVideoTranscode(metadata: metadata) ? .transcode : .directStream,
+            audio: Self.isAudioDirectStreamCapable(metadata) ? .directStream : .transcode,
+            subtitles: .directPlay
+        )
+    }
+
     /// Check if the current audio output is AirPlay.
     private static func isAirPlayOutput() -> Bool {
         guard PlaybackAudioSessionConfigurator.isAirPlayRouteActive() else {

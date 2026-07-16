@@ -1,5 +1,21 @@
 import UIKit
 
+// MARK: - StreamingModeInfo
+
+/// Per-category delivery mode (Direct Play / Direct Stream / Transcode)
+/// shown at the top of each section, so users can confirm playback status
+/// without opening the Plex server dashboard.
+struct StreamingModeInfo {
+    enum Mode: String {
+        case directPlay = "Direct Play"
+        case directStream = "Direct Stream"
+        case transcode = "Transcode"
+    }
+    let video: Mode
+    let audio: Mode
+    let subtitles: Mode
+}
+
 // MARK: - CardInfoView (Task 6 — ported from PlayerInfoPopupView)
 
 /// In-card info/tech sheet panel. Ported from PlayerInfoPopupView: same
@@ -10,6 +26,7 @@ import UIKit
 final class CardInfoView: UIView {
 
     private let metadata: PlexMetadata
+    private let modes: StreamingModeInfo
     /// Supplies a fresh engine snapshot on demand. nil on the `hls` route
     /// (no AetherPlayer) — in that case the PLAYBACK section is omitted
     /// entirely rather than showing stale or synthesized numbers.
@@ -29,8 +46,9 @@ final class CardInfoView: UIView {
     private var audioBridgeRow: UILabel?
     private var liveTickTimer: Timer?
 
-    init(metadata: PlexMetadata, liveStatsProvider: (() -> AetherLiveStats?)? = nil) {
+    init(metadata: PlexMetadata, modes: StreamingModeInfo, liveStatsProvider: (() -> AetherLiveStats?)? = nil) {
         self.metadata = metadata
+        self.modes = modes
         self.liveStatsProvider = liveStatsProvider
         super.init(frame: .zero)
         setupViews()
@@ -144,6 +162,7 @@ final class CardInfoView: UIView {
         }
 
         stack.addArrangedSubview(sectionLabel("VIDEO"))
+        stack.addArrangedSubview(infoRow("Mode", modes.video.rawValue))
         if let videoStream = primaryVideoStream {
             if let displayTitle = videoStream.displayTitle ?? videoStream.extendedDisplayTitle {
                 stack.addArrangedSubview(infoRow("Format", displayTitle))
@@ -185,6 +204,7 @@ final class CardInfoView: UIView {
 
         if !audioStreams.isEmpty {
             stack.addArrangedSubview(sectionLabel("AUDIO"))
+            stack.addArrangedSubview(infoRow("Mode", modes.audio.rawValue))
             for (index, stream) in audioStreams.enumerated() {
                 let title = stream.displayTitle ?? stream.extendedDisplayTitle ?? "Track \(index + 1)"
                 var detail = title
@@ -202,6 +222,7 @@ final class CardInfoView: UIView {
 
         if !subtitleStreams.isEmpty {
             stack.addArrangedSubview(sectionLabel("SUBTITLES"))
+            stack.addArrangedSubview(infoRow("Mode", modes.subtitles.rawValue))
             for stream in subtitleStreams {
                 var title = stream.extendedDisplayTitle ?? stream.displayTitle ?? "Unknown"
                 var badges: [String] = []

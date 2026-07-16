@@ -1056,7 +1056,7 @@ class PlayerContainerViewController: UIViewController {
         rail.onInfo = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             self.presentRailPanel(
-                content: CardInfoView(metadata: vm.metadata, liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() }),
+                content: CardInfoView(metadata: vm.metadata, modes: vm.streamingModeInfo, liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() }),
                 width: 560, from: rail.infoButton)
         }
         rail.onUpNext = { [weak self] in
