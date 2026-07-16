@@ -2040,34 +2040,9 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             return []
         }
 
-        // Get HDHomeRun device URI for stream URLs
-        var hdhrStreamURLs: [String: String] = [:]
-        let hasHDHomeRunDevice = dvr.Device?.first?.uri != nil
-        if let device = dvr.Device?.first, let deviceURI = device.uri {
-            // Log HDHomeRun device discovery (GitHub #64 - DVB diagnostics)
-            let hdhrBreadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
-            hdhrBreadcrumb.message = "Fetching HDHomeRun stream URLs"
-            hdhrBreadcrumb.data = [
-                "device_uri_host": URL(string: deviceURI)?.host ?? "unknown",
-                "dvr_make": dvr.make ?? "unknown",
-                "dvr_model": dvr.model ?? "unknown"
-            ]
-            SentryBridge.addBreadcrumb(hdhrBreadcrumb)
-
-            hdhrStreamURLs = await fetchHDHomeRunLineup(deviceURI: deviceURI)
-        } else {
-            // No HDHomeRun device - likely a DVB tuner (GitHub #64)
-            let dvbBreadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
-            dvbBreadcrumb.message = "No HDHomeRun device found - will use Plex transcode URLs"
-            dvbBreadcrumb.data = [
-                "dvr_make": dvr.make ?? "unknown",
-                "dvr_model": dvr.model ?? "unknown",
-                "dvr_friendly_name": dvr.friendlyName ?? "unknown",
-                "has_device_array": dvr.Device != nil,
-                "device_count": dvr.Device?.count ?? 0
-            ]
-            SentryBridge.addBreadcrumb(dvbBreadcrumb)
-        }
+        // ALL Plex Live TV plays through the Plex server (tune → session).
+        // No direct tuner (HDHomeRun) handoff: raw tuner URLs are LAN-only
+        // and bypass the server's session/tuner management entirely.
 
         // Extract provider path using DVR key (e.g., tv.plex.providers.epg.xmltv:28)
         let providerPath = extractProviderPath(from: lineup, dvrKey: dvrKey)
@@ -2134,12 +2109,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 let channelTitle = media.channelTitle ?? "Channel \(channelId)"
                 let channelNumber = media.channelVcn ?? channelId
 
-                // Get stream URL from HDHomeRun lineup (keyed by channel number)
-                let streamURL = hdhrStreamURLs[channelNumber] ?? hdhrStreamURLs[channelId]
-
                 let channel = PlexLiveTVChannel(
                     ratingKey: channelId,
-                    key: "/tv.plex.providers.epg.xmltv:\(dvrKey)/metadata/\(channelId)",
+                    // Use the DVR's ACTUAL EPG provider (extracted from its
+                    // lineup, e.g. tv.plex.providers.epg.cloud:157). The
+                    // provider was previously hardcoded as epg.xmltv, which
+                    // 400s the transcode start on DVRs using Plex's cloud EPG
+                    // — the tune path pointed at a provider that doesn't exist
+                    // on the server.
+                    key: "/\(providerPath)/metadata/\(channelId)",
                     guid: nil,
                     type: "channel",
                     title: channelTitle,
@@ -2153,23 +2131,19 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                     channelThumb: media.channelThumb,
                     channelTitle: channelTitle,
                     channelNumber: channelNumber,
-                    streamURL: streamURL
+                    // No direct tuner handoff — all Plex Live TV plays through
+                    // the server (tune → /livetv/sessions).
+                    streamURL: nil
                 )
 
                 channels.append(channel)
             }
         }
 
-        // Log channel breakdown for DVB debugging (GitHub #64)
-        let channelsWithStreamURL = channels.filter { $0.streamURL != nil }.count
-        let channelsNeedingTranscode = channels.count - channelsWithStreamURL
         let summaryBreadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
         summaryBreadcrumb.message = "Live TV channel fetch completed"
         summaryBreadcrumb.data = [
             "total_channels": channels.count,
-            "channels_with_hdhr_url": channelsWithStreamURL,
-            "channels_needing_transcode": channelsNeedingTranscode,
-            "has_hdhr_device": hasHDHomeRunDevice,
             "server_host": URL(string: serverURL)?.host ?? "unknown"
         ]
         SentryBridge.addBreadcrumb(summaryBreadcrumb)
@@ -2177,70 +2151,114 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return channels
     }
 
-    /// Fetch stream URLs from HDHomeRun device lineup
-    /// Returns a dictionary mapping channel number to stream URL
-    private func fetchHDHomeRunLineup(deviceURI: String) async -> [String: String] {
-        guard let lineupURL = URL(string: "\(deviceURI)/lineup.json") else {
-            print("🌐 PlexNetwork: Invalid HDHomeRun lineup URL")
-            return [:]
+    /// Tune a Plex Live TV channel and return the live session UUID.
+    ///
+    /// Cloud-EPG / DVB DVRs require this tune step before the universal
+    /// transcoder can open the stream: pointing `path` at the EPG channel
+    /// metadata returns HTTP 400. The correct flow (matching Plex's own
+    /// clients) is:
+    ///   POST /livetv/dvrs/{dvrKey}/channels/{channelId}/tune
+    ///   → MediaSubscription → MediaGrabOperation → Video → Media[0].uuid
+    ///   → play with path=/livetv/sessions/{uuid}
+    func tuneLiveTVChannel(
+        serverURL: String,
+        authToken: String,
+        dvrKey: String,
+        channelIdentifier: String
+    ) async throws -> PlexLiveTVTuneResult {
+        // Strip any scheme-style prefix (e.g. "id://") from the identifier.
+        let channelId = channelIdentifier.contains("://")
+            ? String(channelIdentifier.split(separator: "/").last ?? "")
+            : channelIdentifier
+
+        guard !channelId.isEmpty,
+              let url = URL(string: "\(serverURL)/livetv/dvrs/\(dvrKey)/channels/\(channelId)/tune") else {
+            throw PlexAPIError.invalidURL
         }
 
-        nonisolated struct HDHomeRunChannel: Codable {
-            let GuideNumber: String?
-            let GuideName: String?
-            let URL: String?
+        var headers = plexHeaders(authToken: authToken)
+        headers["Accept"] = "application/json"
+        let data = try await requestData(url, method: "POST", headers: headers)
+
+        // The response shape varies between PMS versions and EPG providers:
+        // XML <Video> can surface in JSON as "Video" OR "Metadata", and the
+        // nesting under MediaGrabOperation isn't stable. Rather than pinning a
+        // Codable shape, walk the tree for the first Media entry carrying a
+        // uuid — that's the livetv session id in every observed variant.
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let mediaContainer = root["MediaContainer"] as? [String: Any] else {
+            let breadcrumb = Breadcrumb(level: .warning, category: "plex_livetv")
+            breadcrumb.message = "Tune response was not JSON"
+            breadcrumb.data = [
+                "dvr": dvrKey,
+                "channel": channelId,
+                "response_head": String(data: data.prefix(400), encoding: .utf8) ?? "n/a"
+            ]
+            SentryBridge.addBreadcrumb(breadcrumb)
+            throw PlexAPIError.parsingError
         }
 
-        do {
-            let (data, response) = try await session.data(from: lineupURL)
-
-            // Validate HTTP response before attempting JSON decode
-            if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-                print("🌐 PlexNetwork: HDHomeRun lineup returned HTTP \(httpResponse.statusCode)")
-                return [:]
-            }
-
-            let channels = try JSONDecoder().decode([HDHomeRunChannel].self, from: data)
-
-            var urlMap: [String: String] = [:]
-            for channel in channels {
-                if let number = channel.GuideNumber, let url = channel.URL {
-                    urlMap[number] = url
+        func firstMediaUUID(in node: Any) -> String? {
+            if let dict = node as? [String: Any] {
+                if let mediaArray = dict["Media"] as? [[String: Any]] {
+                    for media in mediaArray {
+                        if let uuid = media["uuid"] as? String, !uuid.isEmpty { return uuid }
+                    }
+                } else if let media = dict["Media"] as? [String: Any],
+                          let uuid = media["uuid"] as? String, !uuid.isEmpty {
+                    return uuid
+                }
+                for value in dict.values {
+                    if let uuid = firstMediaUUID(in: value) { return uuid }
+                }
+            } else if let array = node as? [Any] {
+                for value in array {
+                    if let uuid = firstMediaUUID(in: value) { return uuid }
                 }
             }
-
-            // Log HDHomeRun lineup success (GitHub #64 - DVB diagnostics)
-            let breadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
-            breadcrumb.message = "HDHomeRun lineup fetched successfully"
-            breadcrumb.data = [
-                "device_host": lineupURL.host ?? "unknown",
-                "total_channels": channels.count,
-                "channels_with_urls": urlMap.count
-            ]
-            SentryBridge.addBreadcrumb(breadcrumb)
-
-            return urlMap
-        } catch {
-            print("🌐 PlexNetwork: Failed to fetch HDHomeRun lineup: \(error)")
-
-            // Log HDHomeRun lineup failure (GitHub #64 - DVB diagnostics)
-            let breadcrumb = Breadcrumb(level: .error, category: "plex_livetv")
-            breadcrumb.message = "HDHomeRun lineup fetch failed"
-            breadcrumb.data = [
-                "device_host": lineupURL.host ?? "unknown",
-                "error": error.localizedDescription
-            ]
-            SentryBridge.addBreadcrumb(breadcrumb)
-
-            // Capture error event for HDHomeRun failures
-            SentryBridge.capture(error: error) { scope in
-                scope.setTag(value: "plex_livetv", key: "component")
-                scope.setTag(value: "hdhr_lineup_fetch", key: "operation")
-                scope.setExtra(value: lineupURL.host ?? "unknown", key: "device_host")
-            }
-
-            return [:]
+            return nil
         }
+
+        // The Part key inside the grab is the DIRECT-PLAY stream: the DVR's
+        // own HLS of the raw broadcast (/livetv/sessions/<uuid>/<tuner>/index.m3u8),
+        // served without the universal transcoder.
+        func firstPartKey(in node: Any) -> String? {
+            if let dict = node as? [String: Any] {
+                let parts: [[String: Any]]
+                if let arr = dict["Part"] as? [[String: Any]] { parts = arr }
+                else if let one = dict["Part"] as? [String: Any] { parts = [one] }
+                else { parts = [] }
+                for part in parts {
+                    if let key = part["key"] as? String, key.contains("/livetv/sessions/") {
+                        return key
+                    }
+                }
+                for value in dict.values {
+                    if let key = firstPartKey(in: value) { return key }
+                }
+            } else if let array = node as? [Any] {
+                for value in array {
+                    if let key = firstPartKey(in: value) { return key }
+                }
+            }
+            return nil
+        }
+
+        guard let uuid = firstMediaUUID(in: mediaContainer) else {
+            let breadcrumb = Breadcrumb(level: .warning, category: "plex_livetv")
+            breadcrumb.message = "Tune succeeded but no Media uuid found"
+            breadcrumb.data = [
+                "dvr": dvrKey,
+                "channel": channelId,
+                "media_container_keys": mediaContainer.keys.sorted().joined(separator: ","),
+                "response_head": String(data: data.prefix(800), encoding: .utf8) ?? "n/a"
+            ]
+            SentryBridge.addBreadcrumb(breadcrumb)
+            throw PlexAPIError.invalidResponse
+        }
+
+        let partKey = firstPartKey(in: mediaContainer)
+        return PlexLiveTVTuneResult(sessionUUID: uuid, partKey: partKey)
     }
 
     /// Extract provider path from DVR key and lineup URL for EPG access
@@ -2337,6 +2355,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             let summary: String?
             let thumb: String?
             let art: String?
+            let grandparentThumb: String?
+            let grandparentArt: String?
             let year: Int?
             let originallyAvailableAt: String?
             let Media: [GridEPGMedia]?
@@ -2385,6 +2405,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                     summary: program.summary,
                     thumb: program.thumb,
                     art: program.art,
+                    grandparentThumb: program.grandparentThumb,
+                    grandparentArt: program.grandparentArt,
                     year: program.year,
                     originallyAvailableAt: program.originallyAvailableAt,
                     beginsAt: media.beginsAt,
@@ -2743,6 +2765,19 @@ extension PlexNetworkManager: URLSessionDelegate {
             completionHandler(.performDefaultHandling, nil)
         }
     }
+}
+
+// MARK: - Live TV Tune Result
+
+/// Result of tuning a Plex Live TV channel.
+nonisolated struct PlexLiveTVTuneResult: Sendable {
+    /// The livetv session uuid (usable as path=/livetv/sessions/<uuid> on the
+    /// universal transcoder).
+    let sessionUUID: String
+    /// The grab's Part key — the DVR's own HLS of the RAW broadcast
+    /// (/livetv/sessions/<uuid>/<tuner>/index.m3u8). Fetching this directly is
+    /// true direct play: no universal transcoder involved.
+    let partKey: String?
 }
 
 // MARK: - API Errors
