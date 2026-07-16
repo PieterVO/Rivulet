@@ -501,14 +501,6 @@ final class PlexHomeViewController: UIViewController {
         var hasReachedEnd: Bool
     }
     private var paginationStates: [HomeSectionID: PaginationState] = [:]
-
-    /// Continue Watching removals applied optimistically: these itemIDs are
-    /// hidden from CW rows the moment the user picks Remove, while the
-    /// server PUT + CW refetch run behind. Each ID is cleared on reconcile —
-    /// after a confirmed refetch (data no longer contains it) or on failure
-    /// (tile reappears; server truth wins) — so a later rewatch can re-enter
-    /// the row. Render-only: never persisted, never fed back into the store.
-    private var pendingCWRemovals: Set<String> = []
     private let paginationPageSize = 24
 
     // MARK: Library-mode grid state
@@ -2713,8 +2705,7 @@ final class PlexHomeViewController: UIViewController {
             guard itemIndex < section.items.count else { return }
             let item = section.items[itemIndex]
             presentTileMenu(sections: tileMenuSections(for: item,
-                                                       isContinueWatching: section.kind == .continueWatching,
-                                                       shelfLocation: (sectionID: sectionID, itemIndex: itemIndex)))
+                                                       isContinueWatching: section.kind == .continueWatching))
         case .discoverList:
             presentDiscoverTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .searchGrid:
@@ -2887,14 +2878,10 @@ final class PlexHomeViewController: UIViewController {
         for hub in dataStore.homeItems {
             let id = HomeSectionID(raw: hub.id)
             let merged = mergedItems(forSection: id, initial: hub.items)
-            var items = merged.items
-            if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
-                items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
-            }
             sections.append(.hub(
                 id: id,
                 title: hub.title,
-                items: items,
+                items: merged.items,
                 isContinueWatching: hub.isContinueWatching,
                 hubKey: hub.hubKey,
                 hubIdentifier: hub.hubIdentifier,
@@ -2951,14 +2938,10 @@ final class PlexHomeViewController: UIViewController {
         for hub in dataStore.libraryItemsByKey[key] ?? [] {
             let id = HomeSectionID(raw: hub.id)
             let merged = mergedItems(forSection: id, initial: hub.items)
-            var items = merged.items
-            if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
-                items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
-            }
             sections.append(.hub(
                 id: id,
                 title: hub.title,
-                items: items,
+                items: merged.items,
                 isContinueWatching: hub.isContinueWatching,
                 hubKey: hub.hubKey,
                 hubIdentifier: hub.hubIdentifier,
@@ -4343,9 +4326,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     /// home rows + library grid (the SwiftUI MediaItemContextMenu survives
     /// only on MediaDetailView's episode cards). CW rows swap the watched
     /// group for Remove-from-CW + Go-to-Show.
-    private func tileMenuSections(for item: MediaItem,
-                                  isContinueWatching: Bool,
-                                  shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) -> [[TileMenuAction]] {
+    private func tileMenuSections(for item: MediaItem, isContinueWatching: Bool) -> [[TileMenuAction]] {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken,
               !item.ref.itemID.isEmpty
@@ -4390,7 +4371,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 TileMenuAction(title: "Remove from Continue Watching",
                                systemImage: "trash",
                                destructive: true) { [weak self] in
-                    self?.removeFromContinueWatchingOptimistically(item, shelfLocation: shelfLocation)
+                    self?.performMenuAction {
+                        try await network.removeFromContinueWatching(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                    }
                 },
             ]
 
@@ -4480,67 +4463,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             } catch {}
             await dataStore.refreshHubs()
             await dataStore.refreshLibraryHubs()
-        }
-    }
-
-    /// Optimistic Continue Watching removal: the tile disappears the moment
-    /// the menu closes; the server PUT + refetch run behind it. Suppression
-    /// (`pendingCWRemovals`) holds until the refreshed data itself no longer
-    /// contains the item, so racing hub refreshes can't flash it back. On
-    /// failure the suppression lifts and the tile returns — server truth wins.
-    private func removeFromContinueWatchingOptimistically(
-        _ item: MediaItem,
-        shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil
-    ) {
-        let ratingKey = item.ref.itemID
-        guard !ratingKey.isEmpty,
-              let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return }
-
-        pendingCWRemovals.insert(ratingKey)
-        applySnapshot(animated: true)
-        if let shelfLocation {
-            restoreShelfFocusAfterRemoval(sectionID: shelfLocation.sectionID,
-                                          removedIndex: shelfLocation.itemIndex)
-        }
-
-        Task { @MainActor in
-            do {
-                try await PlexNetworkManager.shared.removeFromContinueWatching(
-                    serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-                // Refetch CW (and library hubs, which carry their own CW rows)
-                // BEFORE lifting the suppression, so the data is already clean
-                // and the reconcile snapshot is a visual no-op.
-                await dataStore.refreshContinueWatchingIfStale(olderThan: 0)
-                await dataStore.refreshLibraryHubs()
-            } catch {}
-            pendingCWRemovals.remove(ratingKey)
-            applySnapshot(animated: true)
-        }
-    }
-
-    /// Keep focus at the same slot after an optimistic CW removal: the item
-    /// that slid into the removed tile's place takes focus (clamped to the
-    /// new end when the last tile was removed). The tile menu dismisses
-    /// BEFORE the removal handler runs, so the engine has already restored
-    /// focus onto the doomed tile; the shelf's crossfade reload then strands
-    /// it on whatever cell instance gets rebound. Deferred one runloop so
-    /// the reload has re-bound cells first, then routed through the row's
-    /// prepareFocusRestore (same mechanism as preview-dismiss restoration).
-    private func restoreShelfFocusAfterRemoval(sectionID: HomeSectionID, removedIndex: Int) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self,
-                  let sectionIdx = self.sectionsSnapshot.firstIndex(where: { $0.id == sectionID }),
-                  case let count = self.sectionsSnapshot[sectionIdx].items.count,
-                  count > 0,
-                  let row = self.collectionView.cellForItem(
-                      at: IndexPath(item: 0, section: sectionIdx)) as? ShelfRowCell
-            else { return }
-            let target = min(removedIndex, count - 1)
-            row.resetVisibleFocusAppearance(except: target)
-            row.prepareFocusRestore(on: target)
-            self.setNeedsFocusUpdate()
-            self.updateFocusIfNeeded()
         }
     }
 
