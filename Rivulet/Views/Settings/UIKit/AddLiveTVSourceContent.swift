@@ -112,7 +112,7 @@ extension SettingsContent {
         rows.append(SettingsRowItem(
             id: "addOwnServer", title: "My Own Server",
             kind: .navigationAction(.addOwnServer,
-                                    value: { "Dispatcharr, Threadfin, xTeVe…" },
+                                    value: { "Dispatcharr, Threadfin" },
                                     prepare: { beginDraft(displayName: "Live TV") })))
         rows.append(SettingsRowItem(
             id: "addPlaylistURL", title: "Playlist URL",
