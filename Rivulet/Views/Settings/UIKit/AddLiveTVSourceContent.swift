@@ -47,6 +47,11 @@ final class AddSourceDraft {
 func sanitizeURL(_ input: String) -> String {
     var url = input.trimmingCharacters(in: .whitespacesAndNewlines)
 
+    // Empty in, empty out. Without this, prepending the scheme and then
+    // dropping the trailing slash turns "" into the garbage string "http:/",
+    // which reads as a filled-in field and defeats every isEmpty check.
+    guard !url.isEmpty else { return "" }
+
     let typoPatterns = [
         "http://http://", "https://https://",
         "http://https://", "https://http://",
@@ -191,7 +196,7 @@ extension SettingsContent {
                                              hint: "Base URL. Rivulet reads /output/m3u and /output/epg.",
                                              suggestions: serverSuggestions,
                                              keyboardType: .URL,
-                                             set: { draft.serverURL = sanitizeURL($0); draft.status = .idle })),
+                                             set: { draft.serverURL = $0; draft.status = .idle })),
             SettingsRowItem(id: "displayNameField", title: "Display Name",
                             kind: .textEntry(value: { draft.displayName }, placeholder: "Live TV",
                                              hint: nil, suggestions: [], keyboardType: .default,
@@ -244,9 +249,13 @@ extension SettingsContent {
     private static func saveOwnServer(_ draft: AddSourceDraft, on vc: UIViewController) {
         guard draft.status != .checking else { return }
         let page = vc as? SettingsPageViewController
+        guard !draft.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            draft.status = .failed("Enter your server's address first.")
+            page?.reloadRows()
+            return
+        }
         let cleaned = sanitizeURL(draft.serverURL)
-        guard !draft.serverURL.isEmpty,
-              let url = URL(string: cleaned),
+        guard let url = URL(string: cleaned),
               let service = DispatcharrService.create(from: cleaned,
                                                       apiToken: draft.apiToken.isEmpty ? nil : draft.apiToken) else {
             draft.status = .failed("Couldn't reach that server. Check the address and port.")
@@ -290,14 +299,13 @@ extension SettingsContent {
                                              placeholder: "http://example.com/playlist.m3u",
                                              hint: "The M3U or M3U8 playlist URL from your provider.",
                                              suggestions: [], keyboardType: .URL,
-                                             set: { draft.m3uURL = sanitizeURL($0); draft.status = .idle })),
+                                             set: { draft.m3uURL = $0; draft.status = .idle })),
             SettingsRowItem(id: "epgURLField", title: "EPG URL (Optional)",
                             kind: .textEntry(value: { draft.epgURL },
                                              placeholder: "http://example.com/epg.xml",
                                              hint: "XMLTV format, for the program guide.",
                                              suggestions: [], keyboardType: .URL,
-                                             set: { draft.epgURL = $0.isEmpty ? "" : sanitizeURL($0)
-                                                    draft.status = .idle })),
+                                             set: { draft.epgURL = $0; draft.status = .idle })),
             SettingsRowItem(id: "displayNameField", title: "Display Name",
                             kind: .textEntry(value: { draft.displayName }, placeholder: "IPTV",
                                              hint: nil, suggestions: [], keyboardType: .default,
@@ -314,8 +322,13 @@ extension SettingsContent {
     private static func savePlaylist(_ draft: AddSourceDraft, on vc: UIViewController) {
         guard draft.status != .checking else { return }
         let page = vc as? SettingsPageViewController
-        guard !draft.m3uURL.isEmpty, let m3u = URL(string: sanitizeURL(draft.m3uURL)) else {
-            draft.status = .failed("Couldn't reach that server. Check the address and port.")
+        guard !draft.m3uURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            draft.status = .failed("Enter your playlist URL first.")
+            page?.reloadRows()
+            return
+        }
+        guard let m3u = URL(string: sanitizeURL(draft.m3uURL)) else {
+            draft.status = .failed("That playlist URL doesn't look right. Check it and try again.")
             page?.reloadRows()
             return
         }
