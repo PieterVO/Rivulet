@@ -32,13 +32,12 @@ struct MediaItemContextMenu: ViewModifier {
     @State private var isPerformingAction = false
 
     private let networkManager = PlexNetworkManager.shared
-    private let dataStore = PlexDataStore.shared
 
     func body(content: Content) -> some View {
         content.contextMenu {
             // Watch from Beginning
             Button {
-                performAction(optimisticWatched: false) {
+                performAction {
                     try await networkManager.markUnwatched(
                         serverURL: serverURL,
                         authToken: authToken,
@@ -54,7 +53,7 @@ struct MediaItemContextMenu: ViewModifier {
             // Mark as Watched
             if item.viewCount == nil || item.viewCount == 0 || item.watchProgress != nil {
                 Button {
-                    performAction(optimisticWatched: true) {
+                    performAction {
                         try await networkManager.markWatched(
                             serverURL: serverURL,
                             authToken: authToken,
@@ -69,7 +68,7 @@ struct MediaItemContextMenu: ViewModifier {
             // Mark as Unwatched (only show if already watched)
             if let viewCount = item.viewCount, viewCount > 0 {
                 Button {
-                    performAction(optimisticWatched: false) {
+                    performAction {
                         try await networkManager.markUnwatched(
                             serverURL: serverURL,
                             authToken: authToken,
@@ -107,20 +106,14 @@ struct MediaItemContextMenu: ViewModifier {
         }
     }
 
-    private func performAction(optimisticWatched: Bool? = nil, _ action: @escaping () async throws -> Void) {
+    private func performAction(_ action: @escaping () async throws -> Void) {
         guard !isPerformingAction else { return }
         isPerformingAction = true
 
         Task {
             do {
                 try await action()
-                // Apply optimistic update immediately for instant UI feedback
-                if let watched = optimisticWatched, let ratingKey = item.ratingKey {
-                    await MainActor.run {
-                        dataStore.updateItemWatchStatus(ratingKey: ratingKey, watched: watched)
-                    }
-                }
-                // Also refresh from server for consistency
+                // Refresh from the server; its data is the source of truth.
                 await onRefreshNeeded?()
             } catch {
                 print("Context menu action failed: \(error)")

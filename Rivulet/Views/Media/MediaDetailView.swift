@@ -2564,9 +2564,8 @@ struct MediaDetailView: View {
                     )
                 }
                 isWatched = false
-                // Mirror MediaItemContextMenu's behaviour: update the
-                // PlexDataStore cache so when this view re-mounts (back
-                // out and back in) `item.userState.isPlayed` reads the
+                // Update the PlexDataStore cache so when this view re-mounts
+                // (back out and back in) `item.userState.isPlayed` reads the
                 // post-toggle state rather than reverting to stale cache.
                 PlexDataStore.shared.updateItemWatchStatus(ratingKey: ratingKey, watched: false)
             } else {

@@ -4364,7 +4364,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let cwMiddle = [
                 TileMenuAction(title: "Mark as Watched",
                                systemImage: "eye.fill") { [weak self] in
-                    self?.performMenuAction(optimisticWatched: true) {
+                    self?.performMenuAction {
                         try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                     }
                 },
@@ -4427,7 +4427,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         if !isWatched || item.watchProgress != nil {
             middle.append(TileMenuAction(title: "Mark as Watched",
                                          systemImage: "eye.fill") { [weak self] in
-                self?.performMenuAction(optimisticWatched: true) {
+                self?.performMenuAction {
                     try await network.markWatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                 }
             })
@@ -4435,7 +4435,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         if isWatched {
             middle.append(TileMenuAction(title: "Mark as Unwatched",
                                          systemImage: "eye.slash.fill") { [weak self] in
-                self?.performMenuAction(optimisticWatched: false) {
+                self?.performMenuAction {
                     try await network.markUnwatched(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                 }
             })
@@ -4453,10 +4453,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         return [first, middle, last]
     }
 
-    /// Performs a context-menu action with optional optimistic-watched
-    /// update + a hubs refresh after completion.
-    private func performMenuAction(optimisticWatched: Bool? = nil,
-                                   _ action: @escaping () async throws -> Void) {
+    /// Performs a context-menu action, then refreshes hubs from the server.
+    private func performMenuAction(_ action: @escaping () async throws -> Void) {
         Task { @MainActor in
             do {
                 try await action()
