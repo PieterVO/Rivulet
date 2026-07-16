@@ -61,7 +61,6 @@ struct TVSidebarView: View {
     @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
     @State private var showWhatsNew = false
     @State private var whatsNewVersion = ""
-    @State private var deepLinkDetailItem: MediaItem?
     @State private var didApplyDebugLaunch = false
     @State private var musicLibraryEntryToken = UUID()
     // Fresh sign-in: a returning user already has credentials at launch (the
@@ -342,16 +341,9 @@ struct TVSidebarView: View {
         }
         // Handle detail deep links from Siri search results
         .onChange(of: deepLinkHandler.pendingDetail) { _, metadata in
-            guard let metadata,
-                  let serverURL = authManager.selectedServerURL,
-                  let token = authManager.selectedServerToken else { return }
-            let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
-            deepLinkDetailItem = PlexMediaMapper.item(metadata, providerID: providerID, serverURL: serverURL, authToken: token)
+            guard let metadata else { return }
             deepLinkHandler.pendingDetail = nil
-        }
-        .fullScreenCover(item: $deepLinkDetailItem) { metadata in
-            MediaDetailView(item: metadata)
-                .presentationBackground(.black)
+            presentDetailForDeepLink(metadata)
         }
         // What's New: present the SAME UIKit glass changelog popup as
         // Settings → Changelog (not a separate SwiftUI dialog) for consistency.
@@ -798,6 +790,58 @@ struct TVSidebarView: View {
         )
     }
 
+
+    // MARK: - Deep Link Detail
+
+    /// Present detail for a `rivulet://detail` deep link (Top Shelf / Siri).
+    /// Routes exactly like the home tile menu's `selectMediaItem`: episodes
+    /// get the episode detail page, everything else the standalone expanded
+    /// detail. Both are the UIKit surfaces normal in-app navigation uses.
+    private func presentDetailForDeepLink(_ metadata: PlexMetadata) {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken,
+              let top = Self.topPresentedViewController() else { return }
+        let providerID = MediaProviderRegistry.shared.primaryProvider?.id ?? "plex:\(serverURL)"
+        let item = PlexMediaMapper.item(metadata, providerID: providerID, serverURL: serverURL, authToken: token)
+
+        if item.kind == .episode {
+            let page = MediaItemDetailPageViewController(
+                item: item,
+                seriesTitle: nil,
+                onPlay: { episode in
+                    // Close the page first so the player isn't presented
+                    // underneath it, then resolve full metadata to play.
+                    top.dismiss(animated: true) {
+                        playDeepLinkItem(episode)
+                    }
+                })
+            top.present(page, animated: true)
+        } else {
+            let detail = PreviewCarouselViewController(
+                items: [item],
+                selectedIndex: 0,
+                sourceFrame: .zero,
+                sourceTarget: nil,
+                standaloneDetail: true,
+                onDismiss: { _ in })
+            top.present(detail, animated: true)
+        }
+    }
+
+    /// Play a MediaItem surfaced by the detail page: resolve full metadata by
+    /// ratingKey (MediaItem carries no PlexMetadata), then hand to the player.
+    private func playDeepLinkItem(_ item: MediaItem) {
+        let ratingKey = item.ref.itemID
+        guard !ratingKey.isEmpty,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+        Task { @MainActor in
+            guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
+                serverURL: serverURL, authToken: token, ratingKey: ratingKey
+            ) else { return }
+            presentPlayerForDeepLink(meta)
+        }
+    }
 
     // MARK: - Deep Link Player
 
