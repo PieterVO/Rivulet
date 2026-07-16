@@ -4323,8 +4323,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
     /// Build the tile menu action groups for a cell — one sub-array per
     /// divider-separated group. This is the CANONICAL long-press menu for
-    /// home rows + library grid (the SwiftUI MediaItemContextMenu survives
-    /// only on MediaDetailView's episode cards). CW rows swap the watched
+    /// home rows + library grid — the only long-press menu in the app now
+    /// that the SwiftUI detail is gone. CW rows swap the watched
     /// group for Remove-from-CW + Go-to-Show.
     private func tileMenuSections(for item: MediaItem, isContinueWatching: Bool) -> [[TileMenuAction]] {
         guard let serverURL = authManager.selectedServerURL,

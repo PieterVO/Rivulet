@@ -139,6 +139,8 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.3 (67)", [
             "Redesigned Live TV guide with a full channel grid, program details, and instant playback",
+            "Show and movie pages opened from Top Shelf or Siri now match the pages you get inside the app",
+            "Removing an item from Continue Watching no longer leaves focus in the wrong place",
             "The INFO panel in the player now shows the streaming mode for video, audio, and subtitles, so you can confirm Direct Play without checking the server dashboard",
             "Updated AetherEngine to 5.3.1. Adds teletext subtitles and much smoother audio and video on broadcast Live TV channels, faster startup on slower sources, and fewer stalls when resuming after a pause",
         ]),

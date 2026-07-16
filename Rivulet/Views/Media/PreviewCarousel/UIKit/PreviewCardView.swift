@@ -87,7 +87,6 @@ final class PreviewCardView: UICollectionViewCell {
 
     /// Left-side darkening gradient. Subtle — peaks at 0.7 black at
     /// the leading edge, drops to 0.12 at 42% across, clears at 55%.
-    /// Matches MediaDetailView.swift:1657-1666 stops exactly.
     // GRADIENT-BACKED UIVIEW (not a CAGradientLayer sublayer) so its bounds
     // animate natively with the morph's UIViewPropertyAnimator. Gradients use
     // unit coordinates, so the backing layer fills the view at any size — no
@@ -111,7 +110,6 @@ final class PreviewCardView: UICollectionViewCell {
 
     /// Bottom-fading gradient. Five-stop ramp from clear (top) to
     /// 0.95 black (bottom). Covers 55% of the card height.
-    /// Matches MediaDetailView.swift:1673-1683 stops exactly.
     private let bottomGradientView: GradientView = {
         let v = GradientView()
         v.translatesAutoresizingMaskIntoConstraints = false

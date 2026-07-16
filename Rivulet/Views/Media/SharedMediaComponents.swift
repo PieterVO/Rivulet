@@ -3,7 +3,7 @@
 //  Rivulet
 //
 //  Small shared SwiftUI helpers used across the surviving SwiftUI surfaces
-//  (MediaDetailView, Music, post-video overlays). Extracted from the retired
+//  (Music, post-video overlays). Extracted from the retired
 //  MediaPosterCard.swift when the SwiftUI poster/row/grid views were removed
 //  in favor of their UIKit equivalents.
 //

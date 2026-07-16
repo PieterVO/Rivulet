@@ -891,8 +891,7 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Playback
 
-    /// Launch playback for a MediaItem (episode thumb Select). Mirrors the
-    /// escape hatch in `MediaDetailView.presentPlayer()`: resolve the
+    /// Launch playback for a MediaItem (episode thumb Select): resolve the
     /// provider-agnostic MediaItem → a concrete `PlexMetadata` (with full Stream
     /// data for DV/HDR), build the player, and present it over the carousel.
     /// Returns to the detail when the player dismisses. No edit to the off-limits

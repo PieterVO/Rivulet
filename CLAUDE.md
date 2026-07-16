@@ -2,7 +2,9 @@
 
 Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player chrome) are **UIKit**; SwiftUI remains for thin navigation shells, Music, Live TV slots, and Settings.
 
-**UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it. `MediaDetailView` is the trap here: it is a large SwiftUI file that is NOT normal in-app navigation. In-app taps go to UIKit (`MediaItemDetailPageViewController` for episodes, `PreviewCarouselViewController(standaloneDetail:)` for movies/shows). `MediaDetailView` is constructed in exactly ONE place — the `rivulet://detail` deep link from Top Shelf / Siri, via the `fullScreenCover` in `TVSidebarView` — and retiring it by re-pointing that deep link at UIKit detail is an open follow-up.
+**UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it.
+
+**Detail is UIKit, with no SwiftUI fallback.** Every route lands on the same two surfaces: `MediaItemDetailPageViewController` for episodes, `PreviewCarouselViewController(standaloneDetail:)` for everything else. That holds for in-app taps, tile-menu "More Info" / "Go to …", hero Info, and `rivulet://detail` deep links from Top Shelf / Siri (`TVSidebarView.presentDetailForDeepLink`). The old SwiftUI `MediaDetailView` + `MediaItemContextMenu` + `SummarySheet` are **deleted** (`c0b0bf7`); if you find a comment referencing them, it is stale.
 
 The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg demux + HLS-fMP4 remux + AVPlayer, with HDR10+ / HLG / EAC3+JOC Atmos, plus a software sample-buffer backend for AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). It is the only player: VOD **and** Live TV. Video MUST render through the engine surface (`AetherVideoSurfaceView` → `engine.bind(view:)`), never an AVPlayerLayer on `currentAVPlayer`. The only other path is `hls`: AVPlayer on a Plex server transcode, used when no direct-play URL exists or as the fallback after an Aether startup failure. `ContentRouter.plan(...)` picks aether vs hls per item. (RPlayer and the localRemux/avPlayerDirect routes have been removed — see git history.)
 
@@ -41,9 +43,8 @@ Rivulet/
 │   │   ├── UIKit/      # PlayerRailView, PlayerRailPanelView, PlayerProgressBarView,
 │   │   │               #   PlayerUpNextPanelView, UpNextRowState, pills (canonical player chrome)
 │   │   └── PostVideo/  # Post-playback summary overlays
-│   ├── Media/          # MediaDetailView (SwiftUI; deep-link-only, see above — NOT in-app nav),
-│   │                   #   PreviewContext, HeroBackdropSupport, SharedMediaComponents,
-│   │                   #   CastMemberCard (CastCrewRow), SummarySheet, FocusScrollMotion
+│   ├── Media/          # PreviewContext, HeroBackdropSupport, SharedMediaComponents,
+│   │                   #   CastMemberCard (CastCrewRow), FocusScrollMotion
 │   │   ├── UIKit/, PlexHome/UIKit/, MediaDetail/UIKit/, Person/UIKit/, Library/UIKit/, PreviewCarousel/UIKit/
 │   │   │              #   — the canonical UIKit home/detail/library/person/carousel surfaces
 │   │   └── Hero/       # HeroPlaySession + hero support (SwiftUI HeroBackdropLayer/OverlayContent removed)
@@ -56,7 +57,7 @@ Rivulet/
 │   │                   #   LiveTVAetherPlayerViewController (UIKit live rail), LiveTVContainerView,
 │   │                   #   ChannelListView, MultiStreamViewModel, StreamSlotView, AetherSlotPlayerView
 │   ├── Settings/       # SettingsView, SettingsComponents, SettingsDescriptors, sub-pages
-│   ├── Components/     # CachedAsyncImage, GlassRowStyle, MediaItemContextMenu, WhatsNewView
+│   ├── Components/     # CachedAsyncImage, GlassRowStyle, WhatsNewView
 │   └── TVNavigation/   # TVSidebarView, NavigationEnvironment
 └── Docs/
     ├── RIVULET_PLAYER.md   # Canonical player reference (routing, AetherPlayer + AVPlayer)
@@ -93,7 +94,7 @@ The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Music
 
 The canonical menu is therefore hand-built: a plain `UILongPressGestureRecognizer` (needs a simultaneous-permissive delegate, or the collection view's own press recognizers force it to fail) feeding `TileMenuPopupViewController`, with actions built as `[[TileMenuAction]]` (inner arrays = divider-separated groups). `UIAction` is useless here — its handler can't be invoked programmatically. Builders live in `PlexHomeViewController.tileMenuSections`.
 
-SwiftUI's `.contextMenu` *does* still work (verified in Music). Its one remaining use is `MediaItemContextMenu` on `MediaDetailView`'s episode cards — the deep-link-only surface. Keep it in step with the UIKit tile menu from the UIKit side; that one is canonical.
+SwiftUI's `.contextMenu` *does* still work (verified in Music) — the tvOS 26 breakage is UIKit-only. But do not reach for it on a UIKit surface: hosting each tile to get it re-introduces the per-cell `UIHostingController` the UIKit migration removed for its measured hitch cost. Music is now its only user.
 
 ### Video Player Architecture
 
