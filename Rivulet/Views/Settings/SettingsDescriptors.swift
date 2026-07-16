@@ -253,12 +253,7 @@ enum SettingsDescriptorStore {
         "addLiveTVSource": SettingDescriptor(
             icon: "plus.circle.fill",
             iconColor: .blue,
-            description: "Connect a Live TV source you already have access to — your Plex server's Live TV, your own M3U server (Dispatcharr, Threadfin, etc.), or a playlist URL from an IPTV provider you subscribe to."
-        ),
-        "plexLiveTVHint": SettingDescriptor(
-            icon: "tv.and.mediabox",
-            iconColor: .orange,
-            description: "Your Plex server has Live TV available. Tap to automatically add it as a source."
+            description: "Connect a Live TV source you already have access to: your Plex server's tuners, a server you run yourself, or a playlist URL from an IPTV provider."
         ),
         "refreshChannels": SettingDescriptor(
             icon: "arrow.clockwise",
@@ -273,57 +268,57 @@ enum SettingsDescriptorStore {
         "addPlexLiveTV": SettingDescriptor(
             icon: "play.rectangle.fill",
             iconColor: .orange,
-            description: "Add Live TV channels from your Plex server's DVR tuners."
+            description: "Add the tuners already set up on your Plex server. One press adds them and loads the channel list."
         ),
-        "addDispatcharrSource": SettingDescriptor(
+        "addPlexLiveTVError": SettingDescriptor(
+            icon: "exclamationmark.triangle.fill",
+            iconColor: .orange,
+            description: "Plex Live TV could not be added. Set up a DVR and tuners in your Plex server settings, then try again."
+        ),
+        "addOwnServer": SettingDescriptor(
             icon: "server.rack",
             iconColor: .blue,
-            description: "Connect to your own M3U server that provides playlists and EPG data, such as a self-hosted Dispatcharr or Threadfin instance. You supply the server address."
+            description: "A server you run yourself that serves a playlist and a guide, such as Dispatcharr, Threadfin, xTeVe, ErsatzTV, or Cabernet. You give Rivulet the address and it finds the rest."
         ),
-        "addM3USource": SettingDescriptor(
+        "addPlaylistURL": SettingDescriptor(
             icon: "list.bullet.rectangle",
             iconColor: .green,
-            description: "Enter the M3U or M3U8 playlist URL provided by an IPTV service you subscribe to. Rivulet supplies no channels of its own."
-        ),
-        "addPlexConfirm": SettingDescriptor(
-            icon: "play.rectangle.fill",
-            iconColor: .orange,
-            description: "Tap to add Live TV channels from your Plex server."
+            description: "A playlist link from an IPTV provider you subscribe to. Rivulet supplies no channels of its own."
         ),
         "serverURL": SettingDescriptor(
             icon: "globe",
             iconColor: .blue,
-            description: "The base URL of your own M3U server, for example a self-hosted Dispatcharr instance on your network."
+            description: "The address of your server on your network, including the port. Pick your app from the suggestions to fill in the usual one."
         ),
         "displayNameField": SettingDescriptor(
             icon: "textformat",
             iconColor: .purple,
-            description: "A display name for this source in the sidebar."
+            description: "What this source is called in the sidebar and the guide."
         ),
         "apiTokenField": SettingDescriptor(
             icon: "key",
             iconColor: .orange,
-            description: "Optional API token for authenticated servers."
+            description: "Only needed if your server asks for one. Leave it empty otherwise."
         ),
         "m3uURLField": SettingDescriptor(
             icon: "list.bullet.rectangle",
             iconColor: .green,
-            description: "The M3U or M3U8 playlist URL from the IPTV provider you subscribe to."
+            description: "The playlist link your IPTV provider gave you. It usually ends in .m3u or .m3u8."
         ),
         "epgURLField": SettingDescriptor(
             icon: "calendar",
             iconColor: .orange,
-            description: "Optional XMLTV EPG URL for program guide data."
-        ),
-        "validateServer": SettingDescriptor(
-            icon: "checkmark.circle",
-            iconColor: .blue,
-            description: "Test the connection to your server before adding."
+            description: "Optional. An XMLTV guide link from the same provider, so channels show what is on."
         ),
         "addSourceConfirm": SettingDescriptor(
             icon: "plus.circle.fill",
             iconColor: .green,
-            description: "Add this source and start loading channels."
+            description: "Checks the connection and adds the source if it works. If it does not, the reason appears below."
+        ),
+        "addSourceError": SettingDescriptor(
+            icon: "exclamationmark.triangle.fill",
+            iconColor: .orange,
+            description: "The source was not added. Fix the field above and press Add Source again."
         ),
 
         // MARK: About
@@ -360,9 +355,8 @@ enum SettingsDescriptorStore {
         case .autoplayCountdownPicker: return ("forward.end.alt", .purple)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .blue)
         case .addLiveTVSource: return ("plus.circle.fill", .blue)
-        case .addPlexLiveTV: return ("play.rectangle.fill", .orange)
-        case .addDispatcharrSource: return ("server.rack", .blue)
-        case .addM3USource: return ("list.bullet.rectangle", .green)
+        case .addOwnServer: return ("server.rack", .blue)
+        case .addPlaylistURL: return ("list.bullet.rectangle", .green)
         }
     }
 }

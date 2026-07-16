@@ -46,7 +46,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case appearance, playback, music, liveTV, servers, about
     case plex, iptv, libraries, cache, userProfiles
     case liveTVSourceDetail
-    case addLiveTVSource, addPlexLiveTV, addDispatcharrSource, addM3USource
+    case addLiveTVSource, addOwnServer, addPlaylistURL
     case displaySizePicker, autoplayCountdownPicker
 
     var title: String {
@@ -61,10 +61,9 @@ enum SettingsPage: Hashable, CaseIterable {
         case .plex: return "Plex Server"
         case .iptv: return "Live TV Sources"
         case .liveTVSourceDetail: return "Source Details"
-        case .addLiveTVSource: return "Add Live TV Source"
-        case .addPlexLiveTV: return "Add Plex Live TV"
-        case .addDispatcharrSource: return "Add M3U Server"
-        case .addM3USource: return "Add M3U Playlist"
+        case .addLiveTVSource: return "Add a Source"
+        case .addOwnServer: return "My Own Server"
+        case .addPlaylistURL: return "Playlist URL"
         case .libraries: return "Sidebar Libraries"
         case .cache: return "Cache & Storage"
         case .userProfiles: return "User Profiles"

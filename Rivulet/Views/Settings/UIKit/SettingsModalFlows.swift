@@ -3,13 +3,14 @@
 //  Rivulet
 //
 //  Thin SwiftUI wrappers presented as focus-contained modals FROM the UIKit
-//  Settings pages (same proven pattern as the Plex sign-in modal). They reuse
-//  the existing, working SwiftUI leaf views — the numeric PIN pad and the
-//  text-entry add-source forms — which are tightly coupled to SwiftUI's
-//  List/keyboard environment and not worth re-deriving in UIKit. Each takes an
+//  Settings pages (same proven pattern as the Plex sign-in modal). What's left
+//  here reuses the existing, working SwiftUI numeric PIN pad. Each takes an
 //  explicit `onClose` so dismissal is deterministic (the host VC dismisses the
 //  presentation and reloads its row list). Presented modals live outside the
 //  sidebar shell, so the focus wedge does not apply here.
+//
+//  The add-source forms used to live here too; they are now real UIKit pages in
+//  the settings stack (`AddLiveTVSourceContent.swift`).
 //
 
 import SwiftUI
@@ -51,48 +52,6 @@ struct ProfilePinFlow: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black.opacity(0.6))
-    }
-}
-
-// MARK: - Add Live TV source flow
-
-/// Hosts the existing add-source picker + forms in a self-contained
-/// `NavigationStack`. Sub-pages push within the modal; Menu pops a sub-page or
-/// closes the modal at the picker root. The forms call `onComplete` (→ close)
-/// after a source is added.
-struct AddLiveTVSourceFlow: View {
-    let onClose: () -> Void
-
-    @State private var path: [SettingsPage] = []
-
-    var body: some View {
-        NavigationStack(path: $path) {
-            List {
-                AddLiveTVSourcePickerView(focusedSettingId: .constant(nil),
-                                          onNavigate: { path.append($0) })
-            }
-            .navigationTitle("Add Live TV Source")
-            .navigationDestination(for: SettingsPage.self) { page in
-                List {
-                    switch page {
-                    case .addPlexLiveTV:
-                        AddPlexLiveTVSettingsView(focusedSettingId: .constant(nil), onComplete: onClose)
-                    case .addDispatcharrSource:
-                        AddDispatcharrSettingsView(focusedSettingId: .constant(nil), onComplete: onClose)
-                    case .addM3USource:
-                        AddM3USettingsView(focusedSettingId: .constant(nil), onComplete: onClose)
-                    default:
-                        EmptyView()
-                    }
-                }
-                .navigationTitle(page.title)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.black.opacity(0.85))
-        .onExitCommand {
-            if path.isEmpty { onClose() } else { path.removeLast() }
-        }
     }
 }
 

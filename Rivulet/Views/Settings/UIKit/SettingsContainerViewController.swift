@@ -166,7 +166,12 @@ final class SettingsContainerViewController: UIViewController {
             // strands focus: the request finds no laid-out cell → focusedItem
             // becomes nil → the shell's focus watchdog yanks focus into the
             // content and the sidebar flickers open/closed at the root.
-            newVC.collectionView?.reloadData()
+            //
+            // REBUILD, don't just reloadData: a kept page's row ARRAY is also
+            // stale when the pushed page changed the underlying model (Live TV
+            // Sources gains a row when the add-source flow pops back). Reloading
+            // cells alone would redraw the old row list.
+            newVC.reloadRows()
             newVC.collectionView?.layoutIfNeeded()
             rightPane.layoutIfNeeded()
         }

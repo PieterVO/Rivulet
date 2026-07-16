@@ -59,6 +59,14 @@ struct SettingsRowItem {
         /// checkmark when selected + an optional trailing value. The list is
         /// reloaded after the tap so the checkmark moves. For profile rows.
         case selectable(isSelected: () -> Bool, value: () -> String?, handler: (UIViewController) -> Void)
+        /// A text field row: shows the current value (or the placeholder when
+        /// empty) and presents `TextEntryViewController` on select. `set` is
+        /// called with the final text on commit only — a Menu cancel leaves the
+        /// value untouched. Reads/writes draft or persisted state through the
+        /// closures, mirroring how `.toggle` rows read/write `SettingsStore`.
+        case textEntry(value: () -> String, placeholder: String, hint: String?,
+                       suggestions: [(label: String, value: String)],
+                       keyboardType: UIKeyboardType, set: (String) -> Void)
     }
 
     let id: String
@@ -104,6 +112,11 @@ struct SettingsRowItem {
         case .cycle(let value, _): return value()
         case .info(let value): return value()
         case .selectable(_, let value, _): return value()
+        // Show the current value; fall back to the placeholder (or "Not set")
+        // when empty, matching SettingsTextEntryRow.
+        case .textEntry(let value, let placeholder, _, _, _, _):
+            let current = value()
+            return current.isEmpty ? (placeholder.isEmpty ? "Not set" : placeholder) : current
         case .navigation, .action, .option: return nil
         }
     }
@@ -129,6 +142,9 @@ enum SettingsContent {
         case .userProfiles: return userProfiles
         case .iptv:        return iptv
         case .liveTVSourceDetail: return liveTVSourceDetail
+        case .addLiveTVSource:  return addLiveTVSource
+        case .addOwnServer:     return addOwnServer
+        case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
         case .displaySizePicker:      return displaySizePicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
@@ -463,23 +479,8 @@ enum SettingsContent {
                                                     prepare: { pendingSourceDetail = source }))
         }
         rows.append(SettingsRowItem(id: "addLiveTVSource", title: "Add Live TV Source",
-                                    kind: .action(destructive: false, handler: { vc in
-            presentAddSource(on: vc)
-        })))
+                                    kind: .navigation(.addLiveTVSource)))
         return rows
-    }
-
-    private static func presentAddSource(on vc: UIViewController) {
-        var host: UIHostingController<AddLiveTVSourceFlow>?
-        let flow = AddLiveTVSourceFlow(onClose: { [weak vc] in
-            host?.dismiss(animated: true)
-            (vc as? SettingsPageViewController)?.reloadRows()
-        })
-        let hc = UIHostingController(rootView: flow)
-        hc.modalPresentationStyle = .overFullScreen
-        hc.view.backgroundColor = .clear
-        host = hc
-        vc.present(hc, animated: true)
     }
 
     private static var liveTVSourceDetail: [SettingsRowItem] {
@@ -526,6 +527,12 @@ enum SettingsContent {
             if mgr.homeUsers.isEmpty && !mgr.isLoadingUsers {
                 Task { await mgr.fetchHomeUsers(); reload() }
             }
+        case .addLiveTVSource:
+            // The picker VC is created fresh on every entry, so this is the
+            // flow's entry point: start blank. Draft state and any previous
+            // failure text must not survive leaving the flow.
+            resetAddSourceFlow()
+            reload()
         default:
             break
         }
