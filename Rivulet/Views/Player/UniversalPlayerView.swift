@@ -1275,30 +1275,39 @@ struct UniversalPlayerView: View {
             // handler — this handler only owns up/down.
             break
         case .down:
-            // Scrubbing: cancel. Controls visible: hand focus to the
-            // transport bar's buttons (AVPlayerViewController model).
-            // Otherwise: surface the controls.
+            // Scrubbing: cancel. Otherwise surface the controls and land focus
+            // on the scrubber in the same press — enterControlsFocus targets the
+            // rail, whose preferredFocus puts the scrubber first. (Up from the
+            // scrubber then reaches the transport buttons.)
             if viewModel.isScrubbing {
                 inputCoordinator.handle(action: .scrubCancel, source: .swiftUICommand)
-            } else if viewModel.showControls {
-                viewModel.enterControlsFocus()
             } else {
-                inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
+                surfaceControlsAndFocusScrubber()
             }
         case .up:
             // Scrubbing: snap to the next/previous chapter boundary in the
-            // direction of travel. Controls visible: hand focus to the
-            // transport bar's buttons. Otherwise: surface the controls.
+            // direction of travel. Otherwise, same as Down: surface the controls
+            // with focus already on the scrubber.
             if viewModel.isScrubbing {
                 viewModel.chapterSnap()
-            } else if viewModel.showControls {
-                viewModel.enterControlsFocus()
             } else {
-                inputCoordinator.handle(action: .showInfo, source: .swiftUICommand)
+                surfaceControlsAndFocusScrubber()
             }
         @unknown default:
             break
         }
+    }
+
+    /// Bring the chrome up (if hidden) and move focus straight onto the
+    /// scrubber. `enterControlsFocus` targets the rail, whose `preferredFocus`
+    /// lands on the scrubber proxy first; the container's controlsFocusActive
+    /// sink refreshes the proxy's focus gate before resolving, so this reliably
+    /// lands on the scrubber in a single press.
+    private func surfaceControlsAndFocusScrubber() {
+        if !viewModel.showControls {
+            viewModel.showControlsTemporarily()
+        }
+        viewModel.enterControlsFocus()
     }
 
     private func handleSelectCommand() {
