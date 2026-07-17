@@ -257,6 +257,35 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// (The AVPlayer routes render through subtitleManager instead.)
     let aetherSubtitleModel = SubtitleModel()
 
+    // MARK: - Subtitle delay (OSD stepper, sticky per item)
+
+    /// Persistence key for this item's subtitle delay.
+    private var subtitleDelayKey: String { "plex:\(metadata.ratingKey ?? "unknown")" }
+
+    /// Current subtitle delay in seconds; positive = subtitles appear later.
+    var subtitleDelaySeconds: Double { aetherSubtitleModel.delaySeconds }
+
+    /// Steps the delay and persists it for this ratingKey, so the item reopens
+    /// where the user left it. Applied to BOTH routes (the model drives the
+    /// aether overlay, the manager the HLS overlay) so the stepper works
+    /// wherever the item routed — and keeps working across a mid-playback
+    /// route change.
+    func adjustSubtitleDelay(bySteps steps: Int) {
+        let raw = aetherSubtitleModel.delaySeconds + Double(steps) * SubtitleAdjustments.delayStep
+        let value = SubtitleAdjustments.roundedDelay(raw)
+        aetherSubtitleModel.delaySeconds = value
+        subtitleManager.delaySeconds = value
+        SubtitleAdjustments.setDelay(value, forKey: subtitleDelayKey)
+    }
+
+    /// Loads this item's stored delay into both pipelines. Called on every
+    /// playback setup, including next-episode swaps on this same instance.
+    private func loadStoredSubtitleDelay() {
+        let value = SubtitleAdjustments.delay(forKey: subtitleDelayKey)
+        aetherSubtitleModel.delaySeconds = value
+        subtitleManager.delaySeconds = value
+    }
+
     // MARK: - Metadata
 
     private(set) var metadata: PlexMetadata
@@ -497,6 +526,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         let networkManager = PlexNetworkManager.shared
 
         guard metadata.ratingKey != nil else { return }
+
+        // Sticky per-item subtitle delay (OSD stepper).
+        loadStoredSubtitleDelay()
 
         // Fetch full metadata if Media array is missing (needed for info overlay display)
         // This happens when starting playback from Continue Watching or other hubs with minimal metadata

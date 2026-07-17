@@ -75,6 +75,16 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// after teardown and spin a new player/keep-alive on an off-screen VC.
     private var streamLoadTask: Task<Void, Never>?
 
+    // MARK: Subtitle delay (OSD stepper, sticky per channel)
+
+    /// User subtitle delay for THIS channel. Engine-cue paths apply it through
+    /// SubtitleModel.delaySeconds. The native-legible (remote WebVTT) path is
+    /// event-driven with timeless cues, so a POSITIVE delay there is applied
+    /// by scheduling the model update instead; a NEGATIVE delay can't pre-show
+    /// cues that haven't arrived yet, so it's treated as 0 on that path.
+    private var subtitleDelaySeconds: Double = 0
+    private var subtitleDelayKey: String { "live:\(channel.id)" }
+
     // MARK: Native HLS legible subtitles (remote WebVTT renditions)
     //
     // On the nativeRemoteHLS path the engine never demuxes, so its subtitle
@@ -167,6 +177,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         mountSubtitleOverlay()
         observeCaptionAppearance()
         setupChrome()
+
+        // Sticky per-channel subtitle delay (OSD stepper).
+        subtitleDelaySeconds = SubtitleAdjustments.delay(forKey: subtitleDelayKey)
+        subtitleModel.delaySeconds = subtitleDelaySeconds
 
         let aether = AetherPlayer()
         aetherPlayer = aether
@@ -414,7 +428,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 header: "Subtitles",
                 tracks: aether.subtitleTracks,
                 selectedTrackId: aether.currentSubtitleTrackId,
-                showsOffRow: true
+                showsOffRow: true,
+                steppers: subtitleAdjustmentSteppers()
             ) { [weak self] trackId in
                 self?.aetherPlayer?.selectSubtitleTrack(id: trackId)
                 self?.activePanel?.dismissPanel()
@@ -447,7 +462,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 header: "Subtitles",
                 tracks: tracks,
                 selectedTrackId: selectedIndex,
-                showsOffRow: true
+                showsOffRow: true,
+                steppers: self.subtitleAdjustmentSteppers()
             ) { [weak self] trackId in
                 self?.selectNativeLegible(trackId)
                 self?.activePanel?.dismissPanel()
@@ -590,7 +606,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 guard let self else { return }
                 self.nativeLegibleClearWorkItem = nil
                 self.lastNativeLegibleLines = []
-                self.subtitleModel.update(cues: [])
+                self.applyNativeLegible(cues: [])
             }
             nativeLegibleClearWorkItem = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
@@ -612,7 +628,48 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 body: .styledText(line.runs)
             )
         }
-        subtitleModel.update(cues: cues)
+        applyNativeLegible(cues: cues)
+    }
+
+    /// Pushes a native-legible model update, honouring a POSITIVE per-channel
+    /// delay by deferring it. These cues are timeless, so the model's clock
+    /// can't shift them — a constant deadline preserves event order, and a
+    /// negative delay is treated as 0 (can't pre-show cues not yet delivered).
+    private func applyNativeLegible(cues: [AetherSubtitleCue]) {
+        let delay = max(0, subtitleDelaySeconds)
+        if delay == 0 {
+            subtitleModel.update(cues: cues)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.nativeLegibleActive else { return }
+                self.subtitleModel.update(cues: cues)
+            }
+        }
+    }
+
+    // MARK: - Subtitle adjustment steppers
+
+    /// The Delay + Height steppers shared by both subtitle-panel branches
+    /// (engine tracks and native legible renditions).
+    private func subtitleAdjustmentSteppers() -> [CardStepperConfig] {
+        [
+            CardStepperConfig(
+                title: "Delay",
+                value: { [weak self] in SubtitleAdjustments.formattedDelay(self?.subtitleDelaySeconds ?? 0) },
+                onStep: { [weak self] step in self?.adjustSubtitleDelay(bySteps: step) }),
+            CardStepperConfig(
+                title: "Height",
+                value: { SubtitleAdjustments.formattedHeight(SubtitleAdjustments.heightUnits) },
+                onStep: { step in SubtitleAdjustments.setHeightUnits(SubtitleAdjustments.heightUnits + step) }),
+        ]
+    }
+
+    /// Steps this channel's subtitle delay, applies it live, and persists it.
+    private func adjustSubtitleDelay(bySteps steps: Int) {
+        let raw = subtitleDelaySeconds + Double(steps) * SubtitleAdjustments.delayStep
+        subtitleDelaySeconds = SubtitleAdjustments.roundedDelay(raw)
+        subtitleModel.delaySeconds = subtitleDelaySeconds
+        SubtitleAdjustments.setDelay(subtitleDelaySeconds, forKey: subtitleDelayKey)
     }
 
     /// One legible-output attributed string, split into content-coloured runs.

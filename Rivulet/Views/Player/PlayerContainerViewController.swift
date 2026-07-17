@@ -1035,6 +1035,18 @@ class PlayerContainerViewController: UIViewController {
                 content: CardTrackListView(
                     header: "Subtitles", tracks: vm.subtitleTracks,
                     selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+                    steppers: [
+                        // Delay: sticky per movie/episode (ratingKey).
+                        CardStepperConfig(
+                            title: "Delay",
+                            value: { [weak vm] in SubtitleAdjustments.formattedDelay(vm?.subtitleDelaySeconds ?? 0) },
+                            onStep: { [weak vm] step in vm?.adjustSubtitleDelay(bySteps: step) }),
+                        // Height: global across all media.
+                        CardStepperConfig(
+                            title: "Height",
+                            value: { SubtitleAdjustments.formattedHeight(SubtitleAdjustments.heightUnits) },
+                            onStep: { step in SubtitleAdjustments.setHeightUnits(SubtitleAdjustments.heightUnits + step) }),
+                    ],
                     onSelect: { [weak vm, weak self] id in
                         vm?.selectSubtitleTrack(id: id)
                         self?.activeRailPanel?.dismissPanel()

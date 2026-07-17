@@ -36,6 +36,15 @@ struct AetherSubtitleOverlayView: View {
     private static let controlsVisiblePadding: CGFloat = 368
     private static let defaultPadding: CGFloat = 100
 
+    /// User height adjustment from the OSD stepper (global; positive = higher).
+    /// Read as @AppStorage so stepping it re-renders the overlay live.
+    @AppStorage(SubtitleAdjustments.heightKey) private var heightUnits: Int = 0
+
+    private var bottomPadding: CGFloat {
+        let base = controlsVisible ? Self.controlsVisiblePadding : Self.defaultPadding
+        return max(0, base + SubtitleAdjustments.heightOffset(forUnits: heightUnits))
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
@@ -66,9 +75,7 @@ struct AetherSubtitleOverlayView: View {
                         styledText(cue.body, size: geo.size)
                     }
                 }
-                .padding(.bottom, controlsVisible
-                    ? Self.controlsVisiblePadding
-                    : Self.defaultPadding)
+                .padding(.bottom, bottomPadding)
                 .frame(width: geo.size.width, height: geo.size.height, alignment: .bottom)
             }
         }
