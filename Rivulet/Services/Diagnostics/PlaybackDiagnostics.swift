@@ -49,6 +49,14 @@ final class PlaybackDiagnostics {
     /// What the HLS preflight actually observed, attempt by attempt.
     private var preflightObservations: [String] = []
 
+    /// Whether the source server is reachable only through Plex's relay (a
+    /// bandwidth-capped tunnel). Relay sessions fail at Aether open with
+    /// AVERROR_INVALIDDATA because the relay 500s raw part fetches; #211 now
+    /// routes them to a capped HLS transcode instead. Surfaced as a low-
+    /// cardinality TAG (not just context, which isn't searchable) so the relay
+    /// share of RIVULET-19 is filterable and that fix's impact is measurable.
+    private var isRelay = false
+
     // MARK: - Media fingerprint
 
     /// Record what we're playing and how it's encoded. Called once per session,
@@ -56,7 +64,9 @@ final class PlaybackDiagnostics {
     ///
     /// The codec/DV/audio fingerprint is the difference between "playback broke"
     /// and "playback breaks on DV P7 + TrueHD", which is an actionable bug.
-    func setMedia(_ metadata: PlexMetadata, route: String, startOffset: TimeInterval?) {
+    func setMedia(_ metadata: PlexMetadata, route: String, startOffset: TimeInterval?, isRelay: Bool = false) {
+        self.isRelay = isRelay
+
         let part = metadata.Media?.first?.Part?.first
         let streams = part?.Stream ?? []
         let video = streams.first { $0.isVideo }
@@ -64,6 +74,7 @@ final class PlaybackDiagnostics {
 
         media = [
             "route": route,
+            "is_relay": isRelay,
             "title": metadata.title ?? "unknown",
             "type": metadata.type ?? "unknown",
             "rating_key": metadata.ratingKey ?? "unknown",
@@ -179,6 +190,11 @@ final class PlaybackDiagnostics {
 
     /// Attach the accumulated chain to a scope.
     private func apply(to scope: Scope) {
+        // Low-cardinality tag (unlike the context dict) so relay failures are
+        // filterable in Sentry — the relay slice of RIVULET-19 and this cap's
+        // impact both hang off `is_relay:true`.
+        scope.setTag(value: isRelay ? "true" : "false", key: "is_relay")
+
         var context = media
         context["timeline"] = timeline
         if let rootCause {

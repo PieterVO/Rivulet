@@ -566,7 +566,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Seed the media fingerprint (codec / DV profile / audio / resume offset)
         // so EVERY playback error from here on is self-describing. Without this,
         // "playback failed" can't be told apart from "playback fails on DV P7".
-        diagnostics.setMedia(metadata, route: plan.primary.description, startOffset: startOffset)
+        diagnostics.setMedia(
+            metadata,
+            route: plan.primary.description,
+            startOffset: startOffset,
+            isRelay: PlexRelay.isRelayURL(serverURL)
+        )
         diagnostics.step("route_selected", detail: plan.description)
 
         switch plan.primary {
