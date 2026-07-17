@@ -157,13 +157,23 @@ final class PlayerInfoTabsView: UIView {
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let focusEscapeTarget { return [focusEscapeTarget] }
-        // Land on the tab bar so focus starts on the pills — the content is a
-        // single scroll surface that traps swipes (a swipe is never an arrow
-        // UIPress), so a swipe-user who started IN the content could never get
-        // up to the tabs. Directional Down still moves into the content, and a
-        // click-Up at the content's top escapes back here.
+        // Prefer wherever focus already lives, so a re-resolution keeps it
+        // there instead of bouncing between the tab bar and the content. Only
+        // the INITIAL landing (focus not yet inside us) falls through to the
+        // tab bar — the content is a single scroll surface that traps swipes
+        // (a swipe is never an arrow UIPress), so a swipe-user who started in
+        // the content could never get up to the tabs. Directional Down moves
+        // into the content; a click-Up at the content's top escapes back here.
+        if contentContainsFocus { return [currentContentView] }
         if let tabBar { return [tabBar] }
         return [currentContentView]
+    }
+
+    /// Whether focus currently sits inside the visible content sheet (as
+    /// opposed to the tab bar, or nowhere yet on first appearance).
+    private var contentContainsFocus: Bool {
+        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return false }
+        return focused === currentContentView || focused.isDescendant(of: currentContentView)
     }
 
     private func moveFocus(to target: UIView) {
