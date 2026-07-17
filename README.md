@@ -20,6 +20,7 @@ Built for simplicity.
 ![tvOS 26+](https://img.shields.io/badge/tvOS-26+-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white)
 ![License](https://img.shields.io/badge/license-PolyForm_NC_1.0.0-blue)
+![Not for sale](https://img.shields.io/badge/⚠_not_for_sale-Noncommercial_only-red)
 
 </div>
 
@@ -89,6 +90,17 @@ While something is playing, pull up Insights for cast and trivia on what's on sc
 
 Chasing Plexamp on the features side. Long way to go.
 
+---
+
+> [!IMPORTANT]
+> ## Rivulet is free, but not for sale.
+>
+> Licensed under [PolyForm Noncommercial 1.0.0](LICENSE). You may **clone it, run it, modify it, share it, and contribute back** for personal, educational, research, hobby, or any other noncommercial use.
+>
+> You may **not** sell Rivulet, charge for access to it, or bundle it (or any derivative of it) into a paid app, product, or service. **Anything derived from this code inherits the same restriction.** I'd rather give this away than watch someone else charge for it.
+
+---
+
 ## Requirements
 
 - Apple TV running tvOS 26 or later
@@ -123,6 +135,8 @@ Rivulet is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE).
 Everything here is free to use, read, fork, and build on. The only thing you can't do is sell it. I'd rather give this away than watch someone else charge for it.
 
 In short: clone it, run it, modify it, share it, contribute back, for personal, educational, research, hobby, or other noncommercial use. You may not use Rivulet (or anything derived from it) for commercial purposes, including selling it, charging for access to it, or bundling it into a paid product or service.
+
+This restriction is not decorative. If you ship Rivulet's code (in whole or in part, modified or not) inside something you sell, you are infringing the copyright in this project. If you spot a commercial app built on this code, please [open an issue](../../issues) so it can be reported to the relevant platform (App Store, GitHub, etc.).
 
 Third-party components retain their original licenses. FFmpeg is included under LGPL-2.1+; libdovi under MIT. See [LICENSE](LICENSE) for details.
 
