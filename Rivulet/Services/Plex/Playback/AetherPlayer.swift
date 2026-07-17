@@ -624,6 +624,38 @@ final class AetherPlayer: PlayerProtocol {
             audioBridge: engine.activeAudioDecoder
         )
     }
+
+    /// Full "stats for nerds" snapshot for the Info popup's Advanced tab.
+    /// Folds the two decoder labels (always readable) with a 1:1 copy of the
+    /// engine's 1 Hz `LiveTelemetry` (sampled automatically on native load).
+    /// Every telemetry field is nil while idle / before the first sample and
+    /// on the `hls`/AVPlayer-bypass path (no loopback pipeline); the Advanced
+    /// view prunes absent rows. This is a pure read — no sampler is started
+    /// here.
+    func advancedStats() -> AetherAdvancedStats {
+        let t = engine.diagnostics.liveTelemetry
+        return AetherAdvancedStats(
+            backend: engine.activeVideoDecoder,
+            audioBridge: engine.activeAudioDecoder,
+            instantBitrateMbps: t?.instantBitrateMbps,
+            averageBitrateMbps: t?.averageBitrateMbps,
+            audioBridgeBitrateMbps: t?.audioBridgeBitrateMbps,
+            observedFps: t?.observedFps,
+            droppedFrameCount: t?.droppedFrameCount,
+            forwardBufferSeconds: t?.forwardBufferSeconds,
+            cachedBytes: t?.cachedBytes,
+            networkThroughputMbps: t?.networkThroughputMbps,
+            networkTransferredBytes: t?.networkTransferredBytes,
+            avSyncGapMs: t?.avSyncGapMs,
+            producerRestartCount: t?.producerRestartCount,
+            muxedBytesLifetime: t?.muxedBytesLifetime,
+            serverBytesSentLifetime: t?.serverBytesSentLifetime,
+            serverRequestCount: t?.serverRequestCount,
+            demuxerBytesFetched: t?.demuxerBytesFetched,
+            audioBridgeLiveBytes: t?.audioBridgeLiveBytes,
+            rssMb: t?.rssMb
+        )
+    }
 }
 
 /// Live engine snapshot for the Info popup's PLAYBACK section. Every field
@@ -643,5 +675,97 @@ struct AetherLiveStats {
     /// entirely in that case rather than rendering an empty header.
     var isEmpty: Bool {
         bufferedSeconds == nil && backend == nil && audioBridge == nil
+    }
+}
+
+/// Full "stats for nerds" snapshot for the Info popup's Advanced tab. An
+/// app-side wrapper (like `AetherLiveStats`) so the view layer never depends
+/// on the engine's own `LiveTelemetry` type. Every field is optional and
+/// path-asymmetric: e.g. `observedFps` is nil on the native/AVPlayer path,
+/// `droppedFrameCount` / `avSyncGapMs` / `forwardBufferSeconds` are nil on the
+/// software path. The Advanced view renders only the non-nil rows.
+///
+/// The init defaults every field to nil so both the engine mapping and tests
+/// can name just the fields they care about.
+struct AetherAdvancedStats {
+    // Decoder identity (from engine.activeVideoDecoder / activeAudioDecoder).
+    let backend: String?
+    let audioBridge: String?
+    // Enthusiast telemetry.
+    let instantBitrateMbps: Double?
+    let averageBitrateMbps: Double?
+    let audioBridgeBitrateMbps: Double?
+    let observedFps: Double?
+    let droppedFrameCount: Int?
+    let forwardBufferSeconds: Double?
+    let cachedBytes: Int64?
+    let networkThroughputMbps: Double?
+    let networkTransferredBytes: Int64?
+    let avSyncGapMs: Double?
+    // Engine internals.
+    let producerRestartCount: Int?
+    let muxedBytesLifetime: Int64?
+    let serverBytesSentLifetime: Int64?
+    let serverRequestCount: Int?
+    let demuxerBytesFetched: Int64?
+    let audioBridgeLiveBytes: Int?
+    let rssMb: Int?
+
+    init(
+        backend: String? = nil,
+        audioBridge: String? = nil,
+        instantBitrateMbps: Double? = nil,
+        averageBitrateMbps: Double? = nil,
+        audioBridgeBitrateMbps: Double? = nil,
+        observedFps: Double? = nil,
+        droppedFrameCount: Int? = nil,
+        forwardBufferSeconds: Double? = nil,
+        cachedBytes: Int64? = nil,
+        networkThroughputMbps: Double? = nil,
+        networkTransferredBytes: Int64? = nil,
+        avSyncGapMs: Double? = nil,
+        producerRestartCount: Int? = nil,
+        muxedBytesLifetime: Int64? = nil,
+        serverBytesSentLifetime: Int64? = nil,
+        serverRequestCount: Int? = nil,
+        demuxerBytesFetched: Int64? = nil,
+        audioBridgeLiveBytes: Int? = nil,
+        rssMb: Int? = nil
+    ) {
+        self.backend = backend
+        self.audioBridge = audioBridge
+        self.instantBitrateMbps = instantBitrateMbps
+        self.averageBitrateMbps = averageBitrateMbps
+        self.audioBridgeBitrateMbps = audioBridgeBitrateMbps
+        self.observedFps = observedFps
+        self.droppedFrameCount = droppedFrameCount
+        self.forwardBufferSeconds = forwardBufferSeconds
+        self.cachedBytes = cachedBytes
+        self.networkThroughputMbps = networkThroughputMbps
+        self.networkTransferredBytes = networkTransferredBytes
+        self.avSyncGapMs = avSyncGapMs
+        self.producerRestartCount = producerRestartCount
+        self.muxedBytesLifetime = muxedBytesLifetime
+        self.serverBytesSentLifetime = serverBytesSentLifetime
+        self.serverRequestCount = serverRequestCount
+        self.demuxerBytesFetched = demuxerBytesFetched
+        self.audioBridgeLiveBytes = audioBridgeLiveBytes
+        self.rssMb = rssMb
+    }
+
+    /// True when every display field is nil (no decoder labels yet AND no
+    /// telemetry). The Advanced view shows a single "Gathering stats…" line
+    /// in that case rather than a blank tab.
+    var isEmpty: Bool {
+        backend == nil && audioBridge == nil
+            && instantBitrateMbps == nil && averageBitrateMbps == nil
+            && audioBridgeBitrateMbps == nil && observedFps == nil
+            && droppedFrameCount == nil && forwardBufferSeconds == nil
+            && cachedBytes == nil && networkThroughputMbps == nil
+            && networkTransferredBytes == nil && avSyncGapMs == nil
+            && producerRestartCount == nil && muxedBytesLifetime == nil
+            && serverBytesSentLifetime == nil && serverRequestCount == nil
+            && demuxerBytesFetched == nil && audioBridgeLiveBytes == nil
+            && rssMb == nil
     }
 }
