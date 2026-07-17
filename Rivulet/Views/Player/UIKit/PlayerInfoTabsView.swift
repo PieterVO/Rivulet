@@ -157,6 +157,12 @@ final class PlayerInfoTabsView: UIView {
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let focusEscapeTarget { return [focusEscapeTarget] }
+        // Land on the tab bar so focus starts on the pills — the content is a
+        // single scroll surface that traps swipes (a swipe is never an arrow
+        // UIPress), so a swipe-user who started IN the content could never get
+        // up to the tabs. Directional Down still moves into the content, and a
+        // click-Up at the content's top escapes back here.
+        if let tabBar { return [tabBar] }
         return [currentContentView]
     }
 

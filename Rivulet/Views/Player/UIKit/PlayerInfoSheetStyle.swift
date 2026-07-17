@@ -22,15 +22,6 @@ enum PlayerInfoSheetStyle {
     // MARK: - Row builders
 
     @MainActor
-    static func headerLabel(_ text: String) -> UILabel {
-        let label = UILabel()
-        label.text = text
-        label.font = .systemFont(ofSize: 26, weight: .bold)
-        label.textColor = .white
-        return label
-    }
-
-    @MainActor
     static func sectionLabel(_ text: String) -> UILabel {
         let label = UILabel()
         label.text = text

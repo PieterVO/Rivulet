@@ -22,10 +22,10 @@ struct StreamingModeInfo {
 // MARK: - CardInfoView (Info tab)
 
 /// Static media/tech sheet — the Info tab of the player's Now Playing popup.
-/// Pure metadata (Media Info, VIDEO, AUDIO, SUBTITLES, FILE); no live rows and
-/// no timer. Live playback telemetry now lives on the sibling Advanced tab
-/// (`CardStatsView`). Rows are built through `PlayerInfoSheetStyle` so the two
-/// sheets stay visually identical.
+/// Pure metadata (title, then VIDEO, AUDIO, SUBTITLES, FILE sections, each laid
+/// out in two columns); no live rows and no timer. Live playback telemetry now
+/// lives on the sibling Advanced tab (`CardStatsView`). Rows are built through
+/// `PlayerInfoSheetStyle` so the two sheets stay visually identical.
 final class CardInfoView: UIView {
 
     private let metadata: PlexMetadata
@@ -60,7 +60,9 @@ final class CardInfoView: UIView {
     private func setupViews() {
         stack.axis = .vertical
         stack.spacing = 16
-        stack.alignment = .leading
+        // .fill (not .leading) so the two-column section grids stretch to the
+        // full sheet width and their columns split it evenly.
+        stack.alignment = .fill
         scrollView.addSubview(stack)
         addSubview(scrollView)
 
@@ -102,55 +104,55 @@ final class CardInfoView: UIView {
     }
 
     private func populate() {
-        stack.addArrangedSubview(PlayerInfoSheetStyle.headerLabel("Media Info"))
+        // No "Media Info" header — the popup's tab bar already names the sheet.
+        // The title leads, then each section's rows lay out in two columns.
         if let title = metadata.title {
             stack.addArrangedSubview(PlayerInfoSheetStyle.bodyLabel(title, secondary: true))
         }
 
-        stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel("VIDEO"))
-        stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Mode", modes.video.rawValue))
+        var video: [UIView] = [PlayerInfoSheetStyle.infoRow("Mode", modes.video.rawValue)]
         if let videoStream = primaryVideoStream {
             if let displayTitle = videoStream.displayTitle ?? videoStream.extendedDisplayTitle {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Format", displayTitle))
+                video.append(PlayerInfoSheetStyle.infoRow("Format", displayTitle))
             }
             if videoStream.isDolbyVision {
                 var dvInfo = "Profile \(videoStream.DOVIProfile ?? 0)"
                 if let compatID = videoStream.DOVIBLCompatID {
                     dvInfo += " (CompatID \(compatID))"
                 }
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Dolby Vision", dvInfo))
+                video.append(PlayerInfoSheetStyle.infoRow("Dolby Vision", dvInfo))
             } else if videoStream.isHDR {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("HDR", "HDR10"))
+                video.append(PlayerInfoSheetStyle.infoRow("HDR", "HDR10"))
             }
             if let bitDepth = videoStream.bitDepth {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Bit Depth", "\(bitDepth)-bit"))
+                video.append(PlayerInfoSheetStyle.infoRow("Bit Depth", "\(bitDepth)-bit"))
             }
             if let colorSpace = videoStream.colorSpace {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Color Space", colorSpace))
+                video.append(PlayerInfoSheetStyle.infoRow("Color Space", colorSpace))
             }
         } else if let media = metadata.Media?.first {
             if let codec = media.videoCodec {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Codec", codec.uppercased()))
+                video.append(PlayerInfoSheetStyle.infoRow("Codec", codec.uppercased()))
             }
             if let res = media.videoResolution {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Resolution", res))
+                video.append(PlayerInfoSheetStyle.infoRow("Resolution", res))
             }
         }
         if let media = metadata.Media?.first {
             if let width = media.width, let height = media.height {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Dimensions", "\(width) × \(height)"))
+                video.append(PlayerInfoSheetStyle.infoRow("Dimensions", "\(width) × \(height)"))
             }
             if let frameRate = media.videoFrameRate {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Frame Rate", frameRate))
+                video.append(PlayerInfoSheetStyle.infoRow("Frame Rate", frameRate))
             }
             if let bitrate = media.bitrate {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Bitrate", PlayerInfoSheetStyle.bitrate(bitrate)))
+                video.append(PlayerInfoSheetStyle.infoRow("Bitrate", PlayerInfoSheetStyle.bitrate(bitrate)))
             }
         }
+        addSection("VIDEO", rows: video)
 
         if !audioStreams.isEmpty {
-            stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel("AUDIO"))
-            stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Mode", modes.audio.rawValue))
+            var audio: [UIView] = [PlayerInfoSheetStyle.infoRow("Mode", modes.audio.rawValue)]
             for (index, stream) in audioStreams.enumerated() {
                 let title = stream.displayTitle ?? stream.extendedDisplayTitle ?? "Track \(index + 1)"
                 var detail = title
@@ -160,13 +162,13 @@ final class CardInfoView: UIView {
                 if let sampleRate = stream.samplingRate {
                     detail += " · \(sampleRate / 1000) kHz"
                 }
-                stack.addArrangedSubview(PlayerInfoSheetStyle.bodyLabel(detail, secondary: false))
+                audio.append(PlayerInfoSheetStyle.bodyLabel(detail, secondary: false))
             }
+            addSection("AUDIO", rows: audio)
         }
 
         if !subtitleStreams.isEmpty {
-            stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel("SUBTITLES"))
-            stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Mode", modes.subtitles.rawValue))
+            var subs: [UIView] = [PlayerInfoSheetStyle.infoRow("Mode", modes.subtitles.rawValue)]
             for stream in subtitleStreams {
                 var title = stream.extendedDisplayTitle ?? stream.displayTitle ?? "Unknown"
                 var badges: [String] = []
@@ -176,25 +178,57 @@ final class CardInfoView: UIView {
                 if !badges.isEmpty {
                     title += " (\(badges.joined(separator: ", ")))"
                 }
-                stack.addArrangedSubview(PlayerInfoSheetStyle.bodyLabel(title, secondary: false))
+                subs.append(PlayerInfoSheetStyle.bodyLabel(title, secondary: false))
             }
+            addSection("SUBTITLES", rows: subs)
         }
 
         if let part = metadata.Media?.first?.Part?.first {
-            stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel("FILE"))
-            if let file = part.file {
-                let filename = (file as NSString).lastPathComponent
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Name", filename))
+            var file: [UIView] = []
+            if let path = part.file {
+                let filename = (path as NSString).lastPathComponent
+                file.append(PlayerInfoSheetStyle.infoRow("Name", filename))
             }
             if let container = part.container ?? metadata.Media?.first?.container {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Container", container.uppercased()))
+                file.append(PlayerInfoSheetStyle.infoRow("Container", container.uppercased()))
             }
             if let size = part.size {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Size", PlayerInfoSheetStyle.fileSize(Int64(size))))
+                file.append(PlayerInfoSheetStyle.infoRow("Size", PlayerInfoSheetStyle.fileSize(Int64(size))))
             }
             if let duration = metadata.duration ?? part.duration {
-                stack.addArrangedSubview(PlayerInfoSheetStyle.infoRow("Duration", PlayerInfoSheetStyle.duration(duration)))
+                file.append(PlayerInfoSheetStyle.infoRow("Duration", PlayerInfoSheetStyle.duration(duration)))
             }
+            addSection("FILE", rows: file)
         }
+    }
+
+    /// Adds a section label followed by its rows laid out in two equal columns.
+    private func addSection(_ title: String, rows: [UIView]) {
+        guard !rows.isEmpty else { return }
+        stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(title))
+        stack.addArrangedSubview(Self.twoColumnGrid(rows))
+    }
+
+    /// Lays a flat row list into a two-column grid: a vertical stack of
+    /// horizontal pairs, each column taking half the width. An odd final row
+    /// pairs with an empty spacer so it stays a half-width left column.
+    private static func twoColumnGrid(_ rows: [UIView]) -> UIView {
+        let grid = UIStackView()
+        grid.axis = .vertical
+        grid.spacing = 12
+        grid.alignment = .fill
+        var index = 0
+        while index < rows.count {
+            let pair = UIStackView()
+            pair.axis = .horizontal
+            pair.spacing = 24
+            pair.distribution = .fillEqually
+            pair.alignment = .top
+            pair.addArrangedSubview(rows[index])
+            pair.addArrangedSubview(index + 1 < rows.count ? rows[index + 1] : UIView())
+            grid.addArrangedSubview(pair)
+            index += 2
+        }
+        return grid
     }
 }
