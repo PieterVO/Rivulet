@@ -28,6 +28,17 @@ final class SkipPillButton: UIButton {
 
     private let effectView: UIVisualEffectView
 
+    /// Auto-skip progress fill: sweeps left → right across the pill over the
+    /// countdown duration (replaces the old "· N" title suffix). Lives inside
+    /// the effect view's content so the capsule's corner clip shapes it.
+    private let fillView = UIView()
+    private var fillWidthConstraint: NSLayoutConstraint?
+    private(set) var isFillRunning = false
+    /// Bumped on every begin/cancel so a stale animation completion (which
+    /// fires AFTER a new sweep has started) can't clear `isFillRunning` out
+    /// from under the running one.
+    private var fillGeneration = 0
+
     init() {
         if #available(tvOS 26.0, *) {
             effectView = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
@@ -48,9 +59,60 @@ final class SkipPillButton: UIButton {
             effectView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
+        fillView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+        fillView.isUserInteractionEnabled = false
+        effectView.contentView.addSubview(fillView)
+        fillView.translatesAutoresizingMaskIntoConstraints = false
+        let width = fillView.widthAnchor.constraint(equalToConstant: 0)
+        fillWidthConstraint = width
+        NSLayoutConstraint.activate([
+            fillView.leadingAnchor.constraint(equalTo: effectView.contentView.leadingAnchor),
+            fillView.topAnchor.constraint(equalTo: effectView.contentView.topAnchor),
+            fillView.bottomAnchor.constraint(equalTo: effectView.contentView.bottomAnchor),
+            width,
+        ])
+
         setTitleColor(.white, for: .normal)
         titleLabel?.font = .systemFont(ofSize: 26, weight: .semibold)
         contentEdgeInsets = UIEdgeInsets(top: 16, left: 34, bottom: 16, right: 34)
+    }
+
+    /// Starts the left-to-right sweep, reaching the full pill width after
+    /// `duration` seconds (the auto-skip countdown). Restarting mid-sweep (the
+    /// pill re-shown while a countdown is running) begins from empty with the
+    /// remaining duration, so the fill still lands with the skip.
+    func beginFill(duration: TimeInterval) {
+        guard duration > 0 else { return }
+        cancelFill()
+        // Lay out first so the pill has its real width — refreshSkipPill sets
+        // the title and visibility in the same pass, and a not-yet-laid-out
+        // pill would otherwise measure zero and sweep invisibly.
+        layoutIfNeeded()
+        let target = max(bounds.width, 1)
+
+        isFillRunning = true
+        fillGeneration += 1
+        let generation = fillGeneration
+
+        fillWidthConstraint?.constant = 0
+        effectView.contentView.layoutIfNeeded()
+        fillWidthConstraint?.constant = target
+        UIView.animate(withDuration: duration, delay: 0, options: [.curveLinear]) {
+            self.effectView.contentView.layoutIfNeeded()
+        } completion: { [weak self] finished in
+            guard let self, finished, generation == self.fillGeneration else { return }
+            self.isFillRunning = false
+        }
+    }
+
+    /// Stops and clears the sweep (countdown cancelled or fired).
+    func cancelFill() {
+        guard isFillRunning else { return }
+        isFillRunning = false
+        fillGeneration += 1
+        fillView.layer.removeAllAnimations()
+        fillWidthConstraint?.constant = 0
+        effectView.contentView.layoutIfNeeded()
     }
 
     required init?(coder: NSCoder) {
@@ -111,6 +173,11 @@ final class SkipPillButton: UIButton {
             self.transform = isFocused ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity
             self.effectView.backgroundColor = isFocused ? .white : UIColor.white.withAlphaComponent(0.1)
             self.setTitleColor(isFocused ? .black : .white, for: .normal)
+            // Keep the sweep visible on either background: a light overlay on
+            // the resting glass, a dark one on the white focused fill.
+            self.fillView.backgroundColor = isFocused
+                ? UIColor.black.withAlphaComponent(0.12)
+                : UIColor.white.withAlphaComponent(0.35)
         }, completion: nil)
     }
 }

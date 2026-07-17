@@ -1331,9 +1331,24 @@ class PlayerContainerViewController: UIViewController {
 
     /// Sync the pill's title (including any live countdown suffix) and
     /// re-evaluate its visibility + focus ownership.
+    /// Sync the pill's title, drive the auto-skip fill sweep, and re-evaluate
+    /// visibility + focus ownership. The fill starts when the countdown begins
+    /// (seconds jump 0 → N, which IS the total duration) and clears when it
+    /// cancels or fires; a mid-countdown re-show restarts with the remaining
+    /// seconds so the sweep still lands with the skip.
     private func refreshSkipPill() {
         skipPill?.setTitle(viewModel?.skipButtonDisplayLabel, for: .normal)
+        // Apply visibility BEFORE measuring for the fill: beginFill reads the
+        // pill's laid-out width, which is only correct once it's on screen.
         applyChromeVisibility()
+        let seconds = viewModel?.skipCountdownSeconds ?? 0
+        if seconds > 0 {
+            if skipPill?.isFillRunning == false {
+                skipPill?.beginFill(duration: TimeInterval(seconds))
+            }
+        } else {
+            skipPill?.cancelFill()
+        }
     }
 
     /// The Up→pill focus bridge is live only while the rail AND pill are on

@@ -3381,10 +3381,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         return "Skip"
     }
 
-    /// Pill title including the live auto-skip countdown when one is running
-    /// (e.g. "Skip Intro · 5"). Without a countdown it is just the base label.
+    /// Pill title. The auto-skip countdown is shown as a left-to-right fill
+    /// sweep on the pill (SkipPillButton.beginFill, driven by
+    /// PlayerContainerViewController from `skipCountdownSeconds`), not as a
+    /// "· N" text suffix — so this is always just the base label.
     var skipButtonDisplayLabel: String {
-        skipCountdownSeconds > 0 ? "\(skipButtonLabel) · \(skipCountdownSeconds)" : skipButtonLabel
+        skipButtonLabel
     }
 
     /// True when the skip pill is the lone on-screen affordance — chrome
