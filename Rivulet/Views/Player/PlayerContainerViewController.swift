@@ -1070,8 +1070,21 @@ class PlayerContainerViewController: UIViewController {
         }
         rail.onInfo = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
+            // The Advanced tab exists only on the aether route (an AetherPlayer
+            // is present). Its provider reads the engine telemetry snapshot;
+            // its gate opens/closes the sampler as the tab is viewed/left.
+            let advancedProvider: (() -> AetherAdvancedStats?)?
+            let advancedGate: ((Bool) -> Void)?
+            if vm.aetherPlayer != nil {
+                advancedProvider = { [weak vm] in vm?.aetherPlayer?.advancedStats() }
+                advancedGate = { [weak vm] observing in vm?.aetherPlayer?.setAdvancedStatsObserving(observing) }
+            } else {
+                advancedProvider = nil
+                advancedGate = nil
+            }
             self.presentRailPanel(
-                content: CardInfoView(metadata: vm.metadata, modes: vm.streamingModeInfo),
+                content: PlayerInfoTabsView(metadata: vm.metadata, modes: vm.streamingModeInfo,
+                                            advancedProvider: advancedProvider, advancedGate: advancedGate),
                 width: 560, from: rail.infoButton)
         }
         rail.onUpNext = { [weak self] in
