@@ -275,6 +275,46 @@ final class PlexNetworkManagerURLTests: XCTestCase {
         XCTAssertTrue(urlString.contains("videoCodec="))
     }
 
+    // MARK: - Relay Transcode Cap Tests
+
+    let relayServerURL = "https://178-79-141-27.6278e200ff8e4a93bfd8914adbc90a4b.plex.direct:8443"
+
+    func testBuildHLSDirectPlayURLRelayServerAppliesCap() {
+        let result = networkManager.buildHLSDirectPlayURL(
+            serverURL: relayServerURL,
+            authToken: testAuthToken,
+            ratingKey: testRatingKey
+        )
+
+        XCTAssertNotNil(result)
+        let urlString = result!.url.absoluteString
+        // 1.5 Mbps 480p rung: real transcode, not remux, with capped audio.
+        XCTAssertTrue(urlString.contains("maxVideoBitrate=1500"))
+        XCTAssertTrue(urlString.contains("videoResolution=720x480"))
+        XCTAssertTrue(urlString.contains("directPlay=0"))
+        XCTAssertTrue(urlString.contains("directStream=0"))
+        XCTAssertTrue(urlString.contains("audioBitrate=320"))
+        XCTAssertTrue(urlString.contains("directStreamAudio=0"))
+    }
+
+    func testBuildHLSDirectPlayURLDirectServerHasNoCap() {
+        // Regression guard: a directly reachable server must be untouched by
+        // the relay cap (byte-for-byte behavior preserved for non-relay).
+        let result = networkManager.buildHLSDirectPlayURL(
+            serverURL: testServerURL,
+            authToken: testAuthToken,
+            ratingKey: testRatingKey
+        )
+
+        XCTAssertNotNil(result)
+        let urlString = result!.url.absoluteString
+        XCTAssertFalse(urlString.contains("maxVideoBitrate="))
+        XCTAssertFalse(urlString.contains("videoResolution=720x480"))
+        XCTAssertTrue(urlString.contains("videoResolution=4096x2160"))
+        XCTAssertTrue(urlString.contains("directPlay=1"))
+        XCTAssertTrue(urlString.contains("audioBitrate=1024"))
+    }
+
     // MARK: - Direct Play URL Tests
 
     func testBuildPlaybackDirectPlayURLIncludesPartKey() {

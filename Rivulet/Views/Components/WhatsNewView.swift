@@ -151,6 +151,7 @@ struct WhatsNewView: View {
             "The skip button now fills up as the auto skip counts down",
             "In Live TV, the Menu button now closes an open menu or the controls one step at a time before leaving the channel",
             "New optional Community Marker Database in Playback settings fills in missing intro, recap, and credits markers when your server has none, with a new Auto-Skip Recap option",
+            "Playing from a server that reaches you only through Plex Relay now works instead of failing, at a lower 480p quality the relay's limited bandwidth can sustain",
         ]),
         ("1.0.3 (66)", [
             "Removing an item from Continue Watching is now instant and no longer clears your watch progress",
