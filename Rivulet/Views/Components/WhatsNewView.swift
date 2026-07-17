@@ -142,6 +142,7 @@ struct WhatsNewView: View {
             "Show and movie pages opened from Top Shelf or Siri now match the pages you get inside the app",
             "Removing an item from Continue Watching no longer leaves focus in the wrong place",
             "The INFO panel in the player now shows the streaming mode for video, audio, and subtitles, so you can confirm Direct Play without checking the server dashboard",
+            "The player's INFO panel now has an Advanced tab with live playback stats like bitrate, frame rate, buffer, and network throughput",
             "Updated AetherEngine to 5.6.1. Adds teletext subtitles and much smoother audio and video on broadcast Live TV channels, closed captions on more US broadcast and cable channels, faster startup on slower sources, fewer stalls when resuming after a pause, and a fix for rare freezes during 4K HDR playback",
             "HDR Live TV channels no longer fail to start",
             "The TV no longer drops to SDR and back when one Dolby Vision title starts after another",
