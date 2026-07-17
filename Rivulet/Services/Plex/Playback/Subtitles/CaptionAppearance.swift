@@ -12,6 +12,13 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
     /// Text/foreground color.
     var foreground: Color
 
+    /// True when the system lets the CONTENT's own colour win — the "Video
+    /// Override" state in tvOS caption settings, reported as
+    /// `MACaptionAppearanceBehavior.useContentIfAvailable` on the foreground
+    /// colour read. False means the user forced their colour and any
+    /// content-specified colour must be ignored.
+    var allowsContentColor: Bool
+
     /// Opacity of the text itself (0...1). Some system presets (and user
     /// overrides) express "translucent text"; ignoring it renders captions
     /// more opaque than the user asked for.
@@ -52,6 +59,7 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
 
     static let `default` = CaptionStyle(
         foreground: .white,
+        allowsContentColor: true,
         foregroundOpacity: 1.0,
         backgroundColor: .black,
         backgroundOpacity: 0.75,
@@ -62,6 +70,7 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
 
     static func == (lhs: CaptionStyle, rhs: CaptionStyle) -> Bool {
         lhs.foreground == rhs.foreground
+            && lhs.allowsContentColor == rhs.allowsContentColor
             && lhs.foregroundOpacity == rhs.foregroundOpacity
             && lhs.backgroundColor == rhs.backgroundColor
             && lhs.backgroundOpacity == rhs.backgroundOpacity
@@ -100,9 +109,15 @@ enum CaptionAppearance {
     static func current() -> CaptionStyle {
         var behavior = MACaptionAppearanceBehavior.useValue
 
-        // Foreground color + opacity
+        // Foreground color + opacity. `behavior` is an OUT param: each call
+        // overwrites it to report whether the returned value is forced by the
+        // user (.useValue) or may yield to the content (.useContentIfAvailable).
+        // Read it straight after the COLOUR call — that read is the "Video
+        // Override" state for text colour, and the opacity call below
+        // immediately clobbers it.
         let fgUnmanaged = MACaptionAppearanceCopyForegroundColor(.user, &behavior)
         let foreground = Color(fgUnmanaged.takeRetainedValue() as CGColor)
+        let allowsContentColor = (behavior == .useContentIfAvailable)
         let rawFgOpacity = Double(MACaptionAppearanceGetForegroundOpacity(.user, &behavior))
         let foregroundOpacity = rawFgOpacity > 0 ? min(rawFgOpacity, 1.0) : 1.0
 
@@ -141,6 +156,7 @@ enum CaptionAppearance {
 
         return CaptionStyle(
             foreground: foreground,
+            allowsContentColor: allowsContentColor,
             foregroundOpacity: foregroundOpacity,
             backgroundColor: backgroundColor,
             backgroundOpacity: backgroundOpacity,

@@ -15,6 +15,7 @@
 //
 
 import CoreGraphics
+import SwiftUI
 
 /// A subtitle cue ready for the Aether host overlay to paint.
 struct AetherSubtitleCue: Identifiable {
@@ -26,9 +27,23 @@ struct AetherSubtitleCue: Identifiable {
     /// Text dialogue, or a positioned bitmap (PGS / DVB / DVD).
     enum Body {
         case text(String)
+        /// Text carrying the CONTENT's own per-run colour (WebVTT `<c>`
+        /// classes, teletext colour codes). Whether a run's colour is painted
+        /// or replaced by the user's caption colour is the RENDERER's call —
+        /// see `CaptionStyle.allowsContentColor`, which mirrors the system's
+        /// "Video Override" setting. The cue always carries what the content
+        /// said; the renderer decides whether the user overrode it.
+        case styledText([StyledRun])
         /// `position` is the bitmap's origin+size in [0, 1] of the source
         /// video frame; the overlay multiplies by the on-screen video rect.
         case image(cgImage: CGImage, position: CGRect)
+    }
+
+    /// One run of a styled text cue. `color` is nil when the content did not
+    /// specify one, in which case the renderer uses the system caption colour.
+    struct StyledRun: Hashable {
+        var text: String
+        var color: Color?
     }
 
     /// Stable content identity: `(startTime, endTime, body)`.
@@ -58,6 +73,7 @@ struct AetherSubtitleCue: Identifiable {
     struct ContentKey: Hashable {
         enum BodyKey: Hashable {
             case text(String)
+            case styledText([StyledRun])
             case image(image: ObjectIdentifier, position: CGRect)
         }
 
@@ -71,6 +87,8 @@ struct AetherSubtitleCue: Identifiable {
             switch body {
             case .text(let string):
                 self.body = .text(string)
+            case .styledText(let runs):
+                self.body = .styledText(runs)
             case .image(let cgImage, let position):
                 self.body = .image(image: ObjectIdentifier(cgImage), position: position)
             }

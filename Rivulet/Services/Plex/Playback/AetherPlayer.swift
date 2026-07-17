@@ -113,11 +113,26 @@ final class AetherPlayer: PlayerProtocol {
         // AetherEngine 3.x moved the high-frequency clock off the engine's
         // own objectWillChange into a separate PlaybackClock (the engine
         // does NOT fire on clock ticks). Observe clock.$currentTime.
-        // Also drive sourceTime here so subtitle lookups share the same tick.
         engine.clock.$currentTime
             .receive(on: DispatchQueue.main)
             .sink { [weak self] t in
                 self?.timeSubject.send(t)
+            }
+            .store(in: &cancellables)
+
+        // Subtitle lookups ride the clock's SOURCE axis, which upstream
+        // documents as the value to use for the subtitle overlay. It is NOT
+        // interchangeable with currentTime:
+        //  - On zero-based sources (VOD) the two match in steady play, but
+        //    sourceTime holds the ON-SCREEN frame while a seek is in flight,
+        //    so cues don't flash the scrub target's text (engine #49).
+        //  - On live / mid-stream-joined sources (a tuner TS) sourceTime is
+        //    offset by the session zero (engine #107): cue PTS arrive on the
+        //    source axis (~8996s) while currentTime is elapsed (~0s), so
+        //    matching against currentTime shows no subtitles at all.
+        engine.clock.$sourceTime
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] t in
                 self?.sourceTime = t
             }
             .store(in: &cancellables)
