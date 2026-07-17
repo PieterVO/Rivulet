@@ -549,6 +549,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         rivuletFallbackHeaders = [:]
         // Tag the chosen route for App Hang triage (RIVULET-41).
         AppHangContext.setPlaybackRoute(plan.primary.description)
+        // Tag content shape on the global scope too, so an App Hang captured by
+        // the watchdog is sliceable by resolution / HDR / codec — the dimensions
+        // most correlated with mid-playback stalls. Coarse, low-cardinality.
+        let hdrLabel: String
+        switch metadata.hdrFormatDisplay {
+        case "Dolby Vision": hdrLabel = "dolby_vision"
+        case .some(let value) where !value.isEmpty: hdrLabel = "hdr"
+        default: hdrLabel = "sdr"
+        }
+        AppHangContext.setContent(
+            resolution: (metadata.Media?.first?.videoResolution ?? "unknown").lowercased(),
+            hdr: hdrLabel,
+            videoCodec: (metadata.primaryVideoStream?.codec ?? "unknown").lowercased()
+        )
         // Seed the media fingerprint (codec / DV profile / audio / resume offset)
         // so EVERY playback error from here on is self-describing. Without this,
         // "playback failed" can't be told apart from "playback fails on DV P7".
@@ -839,7 +853,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     /// Update playback state with side effects (controls, screensaver, post-video).
+    /// When the current session last entered `.buffering`, for measuring how
+    /// long a mid-playback stall lasted. nil while not buffering.
+    private var bufferingStartedAt: Date?
+
     private func updatePlaybackState(_ state: UniversalPlaybackState) {
+        recordStallTransition(from: playbackState, to: state)
         playbackState = state
         isBuffering = state == .buffering
 
@@ -862,6 +881,36 @@ final class UniversalPlayerViewModel: ObservableObject {
         if state == .ended {
             Task { await handlePlaybackEnded() }
         }
+    }
+
+    /// Measure mid-playback rebuffering. A stall that the user waits through
+    /// leaves no Sentry signal today unless it escalates to a watchdog hang;
+    /// this drops a breadcrumb on buffering-exit carrying how long we stalled
+    /// and at what position, so the trail before a later hang/crash shows
+    /// whether playback was starving. Startup buffering (position ~0) is already
+    /// covered by PlaybackDiagnostics' timeline, so it's skipped here.
+    private func recordStallTransition(from previous: UniversalPlaybackState, to next: UniversalPlaybackState) {
+        if next == .buffering, previous != .buffering {
+            bufferingStartedAt = Date()
+            return
+        }
+        guard previous == .buffering, next != .buffering, let startedAt = bufferingStartedAt else { return }
+        bufferingStartedAt = nil
+
+        let stallSeconds = Date().timeIntervalSince(startedAt)
+        // Only report mid-playback stalls worth looking at; ignore startup and
+        // sub-second rebuffers that are just normal pipeline breathing.
+        guard currentTime > 1, stallSeconds >= 2 else { return }
+
+        let crumb = Breadcrumb(level: stallSeconds >= 10 ? .warning : .info, category: "playback_stall")
+        crumb.message = String(format: "Rebuffered %.1fs at %.0fs", stallSeconds, currentTime)
+        crumb.data = [
+            "stall_seconds": stallSeconds,
+            "position_seconds": currentTime,
+            "resolved_to": next.appHangLabel,
+            "route": playbackPlan?.primary.description.lowercased() ?? "unknown"
+        ]
+        SentryBridge.addBreadcrumb(crumb)
     }
 
     // MARK: - Computed Properties
@@ -2123,8 +2172,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         subtitleClockSync.stop()
         clearReplayWindow()
 
-        // Clear the active playback route from the App Hang scope (RIVULET-41).
+        // Clear the active playback route and content from the App Hang scope
+        // (RIVULET-41) so a later hang off the player isn't tagged with a stale
+        // route or content shape.
         AppHangContext.setPlaybackRoute(nil)
+        AppHangContext.clearContent()
+        bufferingStartedAt = nil
 
         // Stop AetherPlayer if active
         aetherPlayer?.stop()

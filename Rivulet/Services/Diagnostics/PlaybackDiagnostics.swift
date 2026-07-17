@@ -71,6 +71,19 @@ final class PlaybackDiagnostics {
             "video_codec": video?.codec ?? "unknown",
             "video_codec_id": video?.codecID ?? "unknown",
             "video_profile": video?.profile ?? "unknown",
+            // Resolution + HDR + bitrate are the fields most correlated with
+            // mid-playback stalls and hangs (a 4K HDR high-bitrate stream is a
+            // different animal from a 1080p SDR one). Kept here so a startup
+            // failure carries them; the coarse versions also go on the global
+            // scope via AppHangContext.setContent so an App Hang is sliceable too.
+            "video_resolution": metadata.Media?.first?.videoResolution ?? "unknown",
+            "video_width": video?.width ?? -1,
+            "video_height": video?.height ?? -1,
+            "video_bitrate_kbps": video?.bitrate ?? -1,
+            "video_framerate": video?.frameRate ?? -1,
+            "video_color_trc": video?.colorTrc ?? "none",
+            "is_hdr": video?.isHDR ?? false,
+            "hdr_format": metadata.hdrFormatDisplay ?? "SDR",
             "audio_codec": audio?.codec ?? "unknown",
             "audio_channels": audio?.channels ?? -1,
             "has_dolby_vision": metadata.hasDolbyVision,

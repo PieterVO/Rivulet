@@ -44,6 +44,9 @@ enum AppHangContext {
         static let playbackRoute = "playback_route"
         static let playbackState = "playback_state"
         static let mainThreadSection = "main_thread_section"
+        static let contentResolution = "content_resolution"
+        static let contentHDR = "content_hdr"
+        static let contentVideoCodec = "content_video_codec"
     }
 
     // MARK: - Last-known values (so breadcrumbs can carry full context)
@@ -88,6 +91,33 @@ enum AppHangContext {
             message: state,
             data: ["route": currentRoute, "screen": currentScreen]
         )
+    }
+
+    // MARK: - Content descriptors
+
+    /// Record what the active session is *playing* — resolution, HDR format, and
+    /// video codec — as scope tags, so an App Hang captured by the watchdog is
+    /// sliceable by content type. A hang during playback that turns out to be
+    /// "only on 4K HDR HEVC" is an actionable bug; the same hang with no content
+    /// tags is a shrug. Pass coarse, low-cardinality strings (e.g. "4k"/"1080",
+    /// "dolby_vision"/"hdr"/"sdr", "hevc"/"h264"). Call `clearContent()` on
+    /// teardown so a later hang off the player isn't tagged with stale content.
+    static func setContent(resolution: String, hdr: String, videoCodec: String) {
+        setTag(TagKey.contentResolution, resolution)
+        setTag(TagKey.contentHDR, hdr)
+        setTag(TagKey.contentVideoCodec, videoCodec)
+        breadcrumb(
+            category: "playback_content",
+            message: "\(resolution)/\(hdr)/\(videoCodec)",
+            data: ["resolution": resolution, "hdr": hdr, "video_codec": videoCodec]
+        )
+    }
+
+    /// Reset the content tags to "none" when playback tears down.
+    static func clearContent() {
+        setTag(TagKey.contentResolution, "none")
+        setTag(TagKey.contentHDR, "none")
+        setTag(TagKey.contentVideoCodec, "none")
     }
 
     // MARK: - Main-thread blocking sections
