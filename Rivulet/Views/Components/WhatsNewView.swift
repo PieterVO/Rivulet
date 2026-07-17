@@ -146,6 +146,11 @@ struct WhatsNewView: View {
             "HDR Live TV channels no longer fail to start",
             "The TV no longer drops to SDR and back when one Dolby Vision title starts after another",
             "Skipping on a slow or stalling source no longer leaves the player hanging",
+            "Live TV subtitles now show broadcaster colours following your system caption settings, and rolling captions no longer flicker",
+            "New Delay and Height adjustments in the player's subtitle menu. Delay is remembered per movie, episode, and channel; height applies everywhere",
+            "The skip button now fills up as the auto skip counts down",
+            "In Live TV, the Menu button now closes an open menu or the controls one step at a time before leaving the channel",
+            "New optional Community Marker Database in Playback settings fills in missing intro, recap, and credits markers when your server has none, with a new Auto-Skip Recap option",
         ]),
         ("1.0.3 (66)", [
             "Removing an item from Continue Watching is now instant and no longer clears your watch progress",
