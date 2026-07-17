@@ -134,6 +134,16 @@ enum SettingsDescriptorStore {
             iconColor: .red,
             description: "Automatically skips advertisement segments when markers are available."
         ),
+        "autoSkipRecap": SettingDescriptor(
+            icon: "backward.end.circle",
+            iconColor: .teal,
+            description: "Automatically skips 'previously on' recaps. Recap markers come from the community database below; turn that on for this to have anything to skip."
+        ),
+        "useIntroDB": SettingDescriptor(
+            icon: "magnifyingglass",
+            iconColor: .indigo,
+            description: "Off by default. When on, Rivulet fills in missing intro, recap, and credits markers from the community database introdb.app, sending only the show's ID and episode number. Your own server's markers are always used first."
+        ),
         "promptResumeOrRestart": SettingDescriptor(
             icon: "questionmark.circle",
             iconColor: .blue,

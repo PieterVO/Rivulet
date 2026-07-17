@@ -259,6 +259,12 @@ nonisolated struct PlexMarker: Codable, Identifiable, Sendable {
     var isCommercial: Bool {
         type == "commercial"
     }
+
+    /// Whether this is a recap ("previously on…") marker. Plex never emits
+    /// these; they come only from the IntroDB backup (introdb.app).
+    var isRecap: Bool {
+        type == "recap"
+    }
 }
 
 // MARK: - Main Metadata Model
@@ -947,6 +953,11 @@ extension PlexMetadata {
     /// Commercial markers if available
     var commercialMarkers: [PlexMarker] {
         Marker?.filter { $0.isCommercial } ?? []
+    }
+
+    /// Recap markers if available (IntroDB backup — Plex never emits these)
+    var recapMarkers: [PlexMarker] {
+        Marker?.filter { $0.isRecap } ?? []
     }
 
     /// All markers
