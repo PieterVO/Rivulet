@@ -124,6 +124,17 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         }
     }
 
+    /// tvOS processes a Menu press on a present()-ed modal through a system
+    /// gesture that calls `dismiss(animated:)` on this VC, IN PARALLEL to the
+    /// responder-chain press. After we consume a Menu press to peel one chrome
+    /// layer (close panel / hide rail), this swallows that system echo so it
+    /// can't peel a second layer on the same physical press. Same mechanism
+    /// the VOD player (PlayerContainerViewController) uses.
+    private var blockNextDismiss = false
+    /// Cancellable reset for `blockNextDismiss`, so two arms inside the window
+    /// can't leave an early-firing timer that clears the flag mid-press.
+    private var blockDismissResetWorkItem: DispatchWorkItem?
+
     // MARK: Chrome state
 
     /// Same glass rail as Aether VOD; Up Next and Insights are hidden (they
@@ -241,6 +252,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         autoHideTimer = nil
         programInfoTimer?.invalidate()
         programInfoTimer = nil
+        blockDismissResetWorkItem?.cancel()
+        blockDismissResetWorkItem = nil
         activePanel?.dismissPanel()
         activePanel = nil
         if let hosting = subtitleHostingController {
@@ -413,6 +426,13 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
             self.restartAutoHide()
+        }
+        // While focus is inside the panel it owns Menu itself (its own
+        // pressesBegan closes it), so the VC's dismiss() funnel is bypassed —
+        // arm the echo block here instead so the parallel system dismiss
+        // can't peel the rail (or the player) on the same press.
+        panel.onMenuHandled = { [weak self] in
+            self?.armDismissEchoBlock()
         }
         activePanel = panel
         setNeedsFocusUpdate()
@@ -734,16 +754,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         for press in presses {
             switch press.type {
             case .menu:
-                // An open panel fences focus and consumes Menu itself; this
-                // branch is only the focus-outside-panel edge case.
-                if let activePanel {
-                    activePanel.dismissPanel()
-                    return
-                }
-                if railVisible {
-                    hideRail()
-                    return
-                }
+                // Route through dismiss(animated:): its override peels one
+                // layer at a time (panel → rail → player) and is the SAME
+                // funnel the parallel system Menu gesture hits, so both
+                // delivery routes make one consistent decision.
                 dismiss(animated: true)
                 return
             case .select:
@@ -766,6 +780,42 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         // to the system and peels an extra layer.
         for press in presses where press.type == .menu { return }
         super.pressesEnded(presses, with: event)
+    }
+
+    /// Menu peels ONE layer at a time: panel → rail → player. Both delivery
+    /// routes — the responder-chain press (pressesBegan) and tvOS's parallel
+    /// system Menu gesture — reach dismiss(), so the layering decision lives
+    /// HERE and stays consistent whichever fires first.
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        if blockNextDismiss {
+            blockNextDismiss = false
+            completion?()
+            return
+        }
+        if let activePanel {
+            activePanel.dismissPanel()
+            armDismissEchoBlock()
+            completion?()
+            return
+        }
+        if railVisible {
+            hideRail()
+            armDismissEchoBlock()
+            completion?()
+            return
+        }
+        super.dismiss(animated: flag, completion: completion)
+    }
+
+    /// After consuming a Menu press to peel a layer, swallow the parallel
+    /// system-gesture echo that would otherwise peel a second. Time-limited
+    /// (and cancellable) so a stuck flag can't eat the user's next real press.
+    private func armDismissEchoBlock() {
+        blockNextDismiss = true
+        blockDismissResetWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.blockNextDismiss = false }
+        blockDismissResetWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     private func togglePlayPause() {
