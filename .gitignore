@@ -12,11 +12,10 @@ Packages/
 Package.resolved
 *.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
 
-# Worker deps
-tmdb-proxy/node_modules
-tmdb-proxy/.wrangler
-insights-api/node_modules
-insights-api/.wrangler
+# Backend services are maintained in separate private repos, not here.
+tmdb-proxy/
+insights-api/
+insights-pipeline/
 
 # CocoaPods
 Pods/
