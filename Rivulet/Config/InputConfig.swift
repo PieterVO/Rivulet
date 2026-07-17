@@ -28,7 +28,10 @@ enum InputConfig {
     static let scrubNudgeDedupeWindow: TimeInterval = 0.25
     static let blockDismissTimeout: TimeInterval = 0.3
 
-    static let tapSeekSeconds: TimeInterval = 10
+    /// Single-press Left/Right skip. Applied uniformly across every remote and
+    /// focus state (content-focused, IR d-pad, keyboard, and the focused
+    /// scrubber). May become a user-facing Playback setting later.
+    static let tapSeekSeconds: TimeInterval = 30
     static let jumpSeekSeconds: TimeInterval = 30
 
     static let dpadThreshold: Float = 0.3

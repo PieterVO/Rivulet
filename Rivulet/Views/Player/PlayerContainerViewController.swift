@@ -820,34 +820,36 @@ class PlayerContainerViewController: UIViewController {
         scrubberProxy?.onFocusChange = { [weak bar] focused in
             bar?.setFocusEmphasis(focused)
         }
-        scrubberProxy?.onActivate = { [weak self, weak vm] pressType in
+        // Scrubber input model, unified with the content-focused path (see
+        // RemoteInputHandler): a quick Left/Right tap skips by `tapSeekSeconds`,
+        // a hold (>= holdThreshold) starts the FF/RW shuttle, and any press
+        // while already shuttling bumps its speed. The proxy owns tap-vs-hold
+        // detection; the closures below just carry the resolved intent.
+        //
+        // Controls-focus mode is deliberately NOT exited here. Leaving it
+        // active keeps the GameController seek path swallowed (see
+        // RemoteInputHandler.emit), so while the scrubber holds focus the proxy
+        // is the SOLE seek handler — no press is acted on twice (a double
+        // `stepSeek` would otherwise coalesce into a 2x skip).
+        scrubberProxy?.isScrubbingProvider = { [weak vm] in vm?.isScrubbing ?? false }
+        scrubberProxy?.onSkip = { [weak self, weak vm] forward in
             guard let vm else { return }
-            // While the proxy is focused it owns these presses OUTRIGHT:
-            // the container's DPad gesture handlers all defer to a focused
-            // proxy (not just to controls-focus mode). That deferral is
-            // load-bearing — the first press below exits controls-focus
-            // mode but the proxy KEEPS focus through the shuttle, so
-            // without it every follow-up click would fire both here (in
-            // pressesBegan) and in the tap gesture handler, bumping the
-            // shuttle two levels per press (2x straight to 6x).
-            vm.exitControlsFocus()
-            switch pressType {
-            case .leftArrow:
-                vm.scrubInDirection(forward: false)
-                vm.showControlsTemporarily()
-            case .rightArrow:
-                vm.scrubInDirection(forward: true)
-                vm.showControlsTemporarily()
-            default:
-                // .select commits an active scrub — the proxy consumes
-                // select, so the container's select-commit branch in
-                // pressesBegan never sees this press. Otherwise: seek
-                // entry at the current position, same as touchpad pan.
-                if vm.isScrubbing {
-                    self?.inputCoordinator.handle(action: .scrubCommit, source: .irPress)
-                } else {
-                    self?.inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
-                }
+            self?.inputCoordinator.handle(action: .stepSeek(forward: forward), source: .irPress)
+            vm.showControlsTemporarily()
+        }
+        scrubberProxy?.onShuttle = { [weak vm] forward in
+            guard let vm else { return }
+            vm.scrubInDirection(forward: forward)
+            vm.showControlsTemporarily()
+        }
+        scrubberProxy?.onSelect = { [weak self, weak vm] in
+            guard let vm else { return }
+            // Center commits an active scrub; otherwise it toggles play/pause,
+            // matching Apple's system player and the touch-remote flow.
+            if vm.isScrubbing {
+                self?.inputCoordinator.handle(action: .scrubCommit, source: .irPress)
+            } else {
+                self?.inputCoordinator.handle(action: .playPause, source: .irPress)
             }
         }
 
@@ -1399,12 +1401,28 @@ private final class ScrubberFocusProxyView: UIView {
     /// Fired when this view gains or loses focus.
     var onFocusChange: ((Bool) -> Void)?
 
-    /// Fired on `.select`/`.leftArrow`/`.rightArrow` while focused; those
-    /// press types are consumed here. Everything else (notably `.menu`) is
-    /// passed to `super` so it bubbles to the container's own handling.
-    var onActivate: ((UIPress.PressType) -> Void)?
+    /// Quick Left/Right tap (released before `holdThreshold`) → skip. Arg: forward.
+    var onSkip: ((Bool) -> Void)?
+    /// Left/Right hold, or any Left/Right press while already scrubbing → shuttle.
+    /// Arg: forward.
+    var onShuttle: ((Bool) -> Void)?
+    /// Center/`.select` press.
+    var onSelect: (() -> Void)?
+    /// Whether a shuttle is currently running — a press during one bumps speed
+    /// immediately instead of waiting to distinguish tap from hold.
+    var isScrubbingProvider: (() -> Bool)?
+
+    /// `.select`/`.leftArrow`/`.rightArrow` are consumed here; everything else
+    /// (notably `.menu`) is passed to `super` so it bubbles to the container.
 
     override var canBecomeFocused: Bool { isFocusEnabled }
+
+    // Tap-vs-hold detection for the directional press, mirroring
+    // RemoteInputHandler.beginDirectionalInput so both focus regimes behave
+    // identically.
+    private var holdTimer: Timer?
+    private var holdForward: Bool?
+    private var holdFired = false
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
@@ -1418,12 +1436,76 @@ private final class ScrubberFocusProxyView: UIView {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
             switch press.type {
-            case .select, .leftArrow, .rightArrow:
-                onActivate?(press.type)
+            case .select:
+                onSelect?()
+            case .leftArrow:
+                beginArrow(forward: false)
+            case .rightArrow:
+                beginArrow(forward: true)
             default:
                 super.pressesBegan(presses, with: event)
             }
         }
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            switch press.type {
+            case .leftArrow, .rightArrow:
+                endArrow()
+            case .select:
+                break  // consumed at began
+            default:
+                super.pressesEnded(presses, with: event)
+            }
+        }
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            switch press.type {
+            case .leftArrow, .rightArrow:
+                cancelArrow()
+            case .select:
+                break
+            default:
+                super.pressesCancelled(presses, with: event)
+            }
+        }
+    }
+
+    private func beginArrow(forward: Bool) {
+        // Already shuttling: bump/redirect immediately, no tap-vs-hold wait
+        // (matches RemoteInputHandler.beginDirectionalInput).
+        if isScrubbingProvider?() == true {
+            onShuttle?(forward)
+            return
+        }
+        holdForward = forward
+        holdFired = false
+        holdTimer?.invalidate()
+        holdTimer = Timer.scheduledTimer(withTimeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
+            guard let self, let forward = self.holdForward else { return }
+            self.holdFired = true
+            self.onShuttle?(forward)
+        }
+    }
+
+    private func endArrow() {
+        holdTimer?.invalidate()
+        holdTimer = nil
+        defer { holdForward = nil; holdFired = false }
+        // Released before the hold fired the shuttle → it was a tap → skip.
+        if !holdFired, let forward = holdForward {
+            onSkip?(forward)
+        }
+    }
+
+    private func cancelArrow() {
+        holdTimer?.invalidate()
+        holdTimer = nil
+        holdForward = nil
+        holdFired = false
     }
 }
 

@@ -54,10 +54,17 @@ enum SeekIndicator: Equatable {
     case backward(Int)  // seconds skipped backward
 
     var systemImage: String {
+        let base: String
         switch self {
-        case .forward: return "goforward.10"
-        case .backward: return "gobackward.10"
+        case .forward: base = "goforward"
+        case .backward: base = "gobackward"
         }
+        // SF Symbols only ships numbered variants for these magnitudes; fall
+        // back to the plain glyph for anything else so we never render a
+        // missing-symbol box.
+        let numbered: Set<Int> = [5, 10, 15, 30, 45, 60, 75, 90]
+        let magnitude = abs(seconds)
+        return numbered.contains(magnitude) ? "\(base).\(magnitude)" : base
     }
 
     var seconds: Int {

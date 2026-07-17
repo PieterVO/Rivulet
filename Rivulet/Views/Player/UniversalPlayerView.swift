@@ -715,8 +715,12 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
 
         case .back:
             if vm.postVideoState != .hidden {
+                // Back from the post-video / Up Next overlay returns to the
+                // still-playing fullscreen video — it does NOT exit the player.
+                // Matches Apple TV convention and the overlays' own
+                // .onExitCommand intent (which the UIKit press interception
+                // pre-empts, so it has to be honored here too).
                 vm.dismissPostVideo()
-                vm.shouldDismiss = true
             } else if vm.isScrubbing {
                 let speedBefore = vm.scrubSpeed
                 PlaybackInputTelemetry.shared.recordScrubTransition(
