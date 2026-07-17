@@ -41,9 +41,9 @@ final class TMDBMetadataSource: MetadataSource {
     }
 
     func recommendations(for ref: MediaItemRef) async throws -> [MediaItem] {
-        // Phase 3's MediaDetailView "Recommended for You" row reimplements this
-        // via TMDBDiscoverService.discover (genre-seeded) once detail is in hand.
-        // Wave 1 stub: empty.
+        // The detail surface's "Recommended for You" row reimplements this via
+        // TMDBDiscoverService.discover (genre-seeded) once detail is in hand.
+        // Stub: empty.
         return []
     }
 }

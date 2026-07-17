@@ -7,7 +7,7 @@
 //  AetherEngine's SubtitleCue cannot be named inside the Rivulet module:
 //  AetherEngine is both the module and a class, so `AetherEngine.SubtitleCue`
 //  parses as a nested-type lookup on the class and fails, while the
-//  unqualified `SubtitleCue` resolves to Rivulet's own text-only RPlayer cue
+//  unqualified `SubtitleCue` resolves to Rivulet's own text-only cue
 //  type. So AetherPlayer converts Aether's cues into this type at the engine
 //  boundary (inside a closure where the element type is inferred). Unlike
 //  Rivulet's `SubtitleCue`, this carries BOTH text and bitmap (PGS/DVB)

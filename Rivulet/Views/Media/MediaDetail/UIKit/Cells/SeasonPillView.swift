@@ -2,10 +2,8 @@
 //  SeasonPillView.swift
 //  Rivulet
 //
-//  UIKit port of the SwiftUI `SeasonPillButton` (MediaDetailView.swift). A
-//  capsule season selector pill. The SwiftUI `SeasonPillBar` is a horizontal
-//  scroller of these; in UIKit that hosting becomes a horizontal stack /
-//  collection driven by the below-fold's data + focus (later phase).
+//  A capsule season selector pill. The below-fold hosts a horizontal row of
+//  these, driven by its data + focus.
 //
 //  Faithful to source: label 24pt (semibold when selected, regular otherwise),
 //  black-on-white when focused, capsule fill white(focused) /

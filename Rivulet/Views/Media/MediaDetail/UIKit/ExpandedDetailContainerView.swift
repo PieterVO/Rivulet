@@ -817,8 +817,8 @@ final class ExpandedDetailContainerView: UIView {
     }
 
     /// Select the pill for a focused episode's parent season (episode-scroll
-    /// tracking). Matches by the episode's parentRef (season) itemID — the same
-    /// mechanism as SwiftUI MediaDetailView (seasonNumber is unreliable).
+    /// tracking). Matches by the episode's parentRef (season) itemID because
+    /// seasonNumber is unreliable.
     private func selectSeasonPill(forEpisode episode: MediaItem) {
         guard let parentID = episode.parentRef?.itemID,
               let idx = seasonRefIDs.firstIndex(of: parentID) else { return }

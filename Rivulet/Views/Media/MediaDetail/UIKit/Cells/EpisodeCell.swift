@@ -2,8 +2,7 @@
 //  EpisodeCell.swift
 //  Rivulet
 //
-//  UIKit port of the SwiftUI `EpisodeCard` (MediaDetailView.swift). A
-//  fixed-width episode card: thumbnail (with duration badge, watch-progress
+//  A fixed-width episode card: thumbnail (with duration badge, watch-progress
 //  bar, watched tag) over a description block (episode label / title /
 //  summary). Reusable standalone UIView with `configure(...)`; can be hosted
 //  in the below-fold episode row now and wrapped in a UICollectionViewCell

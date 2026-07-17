@@ -29,7 +29,7 @@ struct NextEpisodeCard: View {
         episode.grandparentTitle ?? ""
     }
 
-    /// Same idiom MediaDetailView's episode rows use: blur when the global
+    /// Same idiom the detail surface's episode rows use: blur when the global
     /// spoiler-hide setting is on AND the next episode isn't fully watched.
     /// In-progress next episodes stay blurred so a partial-watch state
     /// doesn't leak a spoiler before the user has committed to finishing.

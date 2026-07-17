@@ -156,7 +156,7 @@ final class DisplayCriteriaManager {
 
     /// Wait briefly for tvOS to settle the HDMI/display-mode switch after
     /// preferredDisplayCriteria is written. AVPlayerViewController gets this
-    /// internally; RPlayer must avoid presenting first samples during the
+    /// internally; Rivulet's own player must avoid presenting first samples during the
     /// dynamic-range handshake.
     func waitForDisplaySwitchIfNeeded() async {
         guard hasSetCriteria, let window = getKeyWindow() else { return }

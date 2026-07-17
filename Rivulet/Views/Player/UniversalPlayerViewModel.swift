@@ -3312,9 +3312,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Credits markers typically end AT the file end (endTimeSeconds ==
         // duration); seeking to literal EOF stalls Aether's AVPlayer host. Land
         // just inside the media instead: natural end-of-stream then fires within
-        // ~epsilon and drives the normal Up Next handoff. AVPlayer/RPlayer
-        // tolerate seek-to-duration, but just-before is correct for them too, so
-        // the clamp is unconditional (this is the single funnel for both the
+        // ~epsilon and drives the normal Up Next handoff. AVPlayer tolerates
+        // seek-to-duration, but just-before is correct for it too, so the
+        // clamp is unconditional (this is the single funnel for both the
         // skip button and auto-skip).
         let skipEpsilon: TimeInterval = 0.5
         let target = duration > 0
@@ -4255,7 +4255,7 @@ extension Notification.Name {
 
     /// Posted when a specific item's watched state changes via the detail-page
     /// Mark Watched / Unwatched button. Carries `ratingKey` (String) and
-    /// `watched` (Bool) in userInfo. Parent MediaDetailViews (e.g. a show
+    /// `watched` (Bool) in userInfo. Parent detail surfaces (e.g. a show
     /// detail page hosting an episode carousel) listen for this so their
     /// in-memory episode arrays reflect the change without a full reload.
     static let episodeWatchedStatusChanged = Notification.Name("episodeWatchedStatusChanged")

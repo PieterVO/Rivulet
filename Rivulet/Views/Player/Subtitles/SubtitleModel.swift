@@ -10,7 +10,7 @@ import Combine
 /// optional display delay that lets users nudge subtitle timing.
 ///
 /// Operates on `AetherSubtitleCue` (Rivulet's bridge type, carrying text AND
-/// bitmap bodies), not Rivulet's text-only RPlayer `SubtitleCue`, so the
+/// bitmap bodies), not Rivulet's text-only `SubtitleCue`, so the
 /// overlay can render PGS/DVB bitmap subtitles too.
 @MainActor
 final class SubtitleModel: ObservableObject {

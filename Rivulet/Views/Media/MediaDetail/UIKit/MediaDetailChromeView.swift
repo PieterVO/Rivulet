@@ -3,10 +3,11 @@
 //  Rivulet
 //
 //  The shared chrome surface — logo / genre row / description / quality
-//  row / action+cast row — used by both the carousel cell
-//  (`PreviewCardView`) and the fullscreen detail (`MediaDetailViewController`).
+//  row / action+cast row — used by the carousel cell (`PreviewCardView`,
+//  which also backs the standalone detail) and the home hero button row
+//  (`HeroButtonRowView`).
 //
-//  Layout structure (mirrors SwiftUI `MediaDetailView.heroMetadataOverlay`):
+//  Layout structure:
 //
 //      ┌─────────────────────────────────────────┐  ← self
 //      │ ┌──────────────────┐                    │

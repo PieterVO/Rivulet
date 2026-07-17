@@ -2,7 +2,7 @@
 //  MediaItemDetail.swift
 //  Rivulet
 //
-//  Superset returned from provider.fullDetail(for:). MediaDetailView gates
+//  Superset returned from provider.fullDetail(for:). The detail surface gates
 //  its below-fold on detail arrival. Embeds the list-level MediaItem so
 //  detail consumers don't need both types passed in.
 //

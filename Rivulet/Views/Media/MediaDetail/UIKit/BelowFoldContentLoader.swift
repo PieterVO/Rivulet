@@ -3,11 +3,8 @@
 //  Rivulet
 //
 //  Loads the below-fold detail content (seasons, episodes, cast/crew, related)
-//  for the UIKit expanded detail. A faithful port of the SwiftUI
-//  MediaDetailView loaders (loadSeasons / loadSeasonsForEpisode /
-//  loadSeasonsForCurrentSeason / loadAllEpisodes / loadEpisodesForSeason +
-//  cast from detail + provider.relatedItems), but decoupled from any view —
-//  it just fetches through the agnostic `MediaProvider` and returns a value.
+//  for the UIKit expanded detail. Decoupled from any view — it just fetches
+//  through the agnostic `MediaProvider` and returns a value.
 //
 //  The host (container / VC) calls `load(for:detail:)` when its item is set,
 //  then feeds the result into EpisodeCell / SeasonPillView / CastCell /
