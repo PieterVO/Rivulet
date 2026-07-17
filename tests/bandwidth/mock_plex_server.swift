@@ -1,4 +1,7 @@
 #!/usr/bin/env swift
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 // Mock HTTP server that models Plex's observed quirks so we can reproduce
 // the URLSessionAVIOSource bottleneck locally. Serves a deterministic byte

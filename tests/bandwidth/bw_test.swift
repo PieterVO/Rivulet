@@ -1,4 +1,7 @@
 #!/usr/bin/env swift
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 // URLSession throughput test harness.
 //

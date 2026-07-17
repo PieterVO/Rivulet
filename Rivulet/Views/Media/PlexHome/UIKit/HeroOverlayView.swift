@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  HeroOverlayView.swift
 //  Rivulet
@@ -69,6 +72,8 @@ final class HeroOverlayView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        // Stable identifier for focus diagnostics / UI automation.
+        accessibilityIdentifier = "home.hero.overlay.9f27c1"
         setUpSubviews()
         wireButtonHandlers()
         observeWatchlist()
@@ -482,6 +487,8 @@ final class MediaItemHeroOverlayView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
+        // Stable identifier for focus diagnostics / UI automation.
+        accessibilityIdentifier = "detail.hero.overlay.9f27c1"
         setUpSubviews()
         wireButtons()
     }

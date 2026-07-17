@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  PosterCell.swift
 //  Rivulet
@@ -111,6 +114,9 @@ final class PosterCell: UICollectionViewCell {
     private func setUp() {
         contentView.clipsToBounds = false
         clipsToBounds = false
+
+        // Stable identifier for focus diagnostics / UI automation.
+        accessibilityIdentifier = "hub.poster.cell.9f27c1"
 
         // No resting drop shadow: the ATV+ reference (Docs/atv_ref/
         // below_home_hero_ref.md) floats cards directly over the page

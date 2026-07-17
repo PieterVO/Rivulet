@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 import Foundation
 
 /// One title in a person's filmography, plus whether it exists on the user's server.

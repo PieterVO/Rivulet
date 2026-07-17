@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  PreviewCardView.swift
 //  Rivulet
@@ -175,6 +178,8 @@ final class PreviewCardView: UICollectionViewCell {
 
     private func commonInit() {
         backgroundColor = .clear
+        // Stable identifier for focus diagnostics / UI automation.
+        accessibilityIdentifier = "carousel.card.9f27c1"
         // Transparent: the VC-owned BackdropPlaneView renders artwork
         // behind the collection view, masked to the card windows. The
         // cell holds only vignette + chrome. No corner clip here — the
