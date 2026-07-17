@@ -50,6 +50,15 @@ enum PlayerInfoSheetStyle {
     static func infoRow(_ label: String, _ value: String) -> UILabel {
         let row = UILabel()
         row.numberOfLines = 0
+        row.attributedText = infoRowText(label, value)
+        return row
+    }
+
+    /// The "Label: value" attributed string used by every info row. Exposed so
+    /// live sheets (Advanced tab) can refresh a row's value in place each tick
+    /// with identical styling instead of rebuilding the label.
+    @MainActor
+    static func infoRowText(_ label: String, _ value: String) -> NSAttributedString {
         let text = NSMutableAttributedString(
             string: "\(label): ",
             attributes: [.font: UIFont.systemFont(ofSize: 16, weight: .medium), .foregroundColor: UIColor.white.withAlphaComponent(0.6)]
@@ -58,8 +67,7 @@ enum PlayerInfoSheetStyle {
             string: value,
             attributes: [.font: UIFont.systemFont(ofSize: 18, weight: .regular), .foregroundColor: UIColor.white]
         ))
-        row.attributedText = text
-        return row
+        return text
     }
 
     // MARK: - Formatting
