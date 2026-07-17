@@ -168,7 +168,7 @@ final class PlayerRailPanelView: UIView {
         // The info sheet is one big scrollable focus target with nothing
         // inside it to highlight, so the panel ring itself carries the
         // focus treatment — brightened while the sheet holds focus.
-        (content as? CardInfoView)?.onFocusChange = { [weak panel] focused in
+        (content as? PlayerInfoTabsView)?.onFocusChange = { [weak panel] focused in
             panel?.setFocusHighlight(focused)
         }
 

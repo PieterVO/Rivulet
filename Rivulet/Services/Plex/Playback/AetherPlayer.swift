@@ -627,6 +627,29 @@ final class AetherPlayer: PlayerProtocol {
             rssMb: t?.rssMb
         )
     }
+
+    /// Gate for the live-telemetry sampler that feeds `advancedStats()`. The
+    /// Info popup's Advanced tab opens it while the tab is on screen and closes
+    /// it on leave, so the 1 Hz sampler only runs while someone is actually
+    /// looking at the numbers.
+    ///
+    /// - Parameter observing: `true` while the Advanced tab is visible (open
+    ///   the gate — let telemetry flow), `false` when it leaves (close it).
+    ///
+    /// NOTE: the pinned AetherEngine (5.6.1) does not yet expose a public
+    /// enable/disable for `LiveTelemetrySampler` — it auto-starts on native
+    /// load and runs for the whole session. This method is the single host
+    /// seam where that engine gate call belongs the moment the API lands (or
+    /// a host-side workaround is chosen); wiring the view lifecycle to it now
+    /// means only this one line changes later. Idempotent, safe on any route.
+    func setAdvancedStatsObserving(_ observing: Bool) {
+        // TODO(aether-gate): call the engine's telemetry gate here once 5.6.x
+        // exposes it, e.g. `engine.diagnostics.setLiveTelemetryEnabled(observing)`.
+        // Until then this is a no-op: the sampler already runs, so reads stay
+        // correct; only the "don't sample when unobserved" cost saving waits on
+        // the engine API.
+        _ = observing
+    }
 }
 
 /// Full "stats for nerds" snapshot for the Info popup's Advanced tab. An

@@ -44,6 +44,12 @@ final class CardStatsView: UIView {
         didSet { scrollView.onEscapeUp = onEscapeUp }
     }
 
+    /// Fires `true` when the sheet starts ticking (Advanced is the visible tab
+    /// AND attached to a window) and `false` when it stops — the exact window
+    /// during which the engine's telemetry gate should be open. The host wires
+    /// this to `AetherPlayer.setAdvancedStatsObserving(_:)`.
+    var onActiveChange: ((Bool) -> Void)?
+
     init(provider: @escaping () -> AetherAdvancedStats?) {
         self.provider = provider
         super.init(frame: .zero)
@@ -165,11 +171,17 @@ final class CardStatsView: UIView {
                 self?.refresh()
             }
         }
+        // Transitioned into ticking → open the telemetry gate.
+        onActiveChange?(true)
     }
 
     private func stopLiveTick() {
+        // Only a real timer→no-timer transition closes the gate, so repeated
+        // stops (deactivate + window-detach) don't fire spurious closes.
+        guard liveTickTimer != nil else { return }
         liveTickTimer?.invalidate()
         liveTickTimer = nil
+        onActiveChange?(false)
     }
 
     // MARK: - Rendering
