@@ -540,8 +540,11 @@ class PlayerContainerViewController: UIViewController {
 
         if inputCoordinator.target == nil {
             if vm.postVideoState != .hidden {
+                // Return to the still-playing fullscreen video rather than
+                // exiting the player (see handleInputAction(.back)). This is
+                // the target-less fallback; the primary path routes .back
+                // through the coordinator to the same behavior.
                 vm.dismissPostVideo()
-                dismissPlayer()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
             } else if let panel = activeRailPanel {
@@ -1068,7 +1071,7 @@ class PlayerContainerViewController: UIViewController {
         rail.onInfo = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             self.presentRailPanel(
-                content: CardInfoView(metadata: vm.metadata, modes: vm.streamingModeInfo, liveStatsProvider: { [weak vm] in vm?.aetherPlayer?.liveStats() }),
+                content: CardInfoView(metadata: vm.metadata, modes: vm.streamingModeInfo),
                 width: 560, from: rail.infoButton)
         }
         rail.onUpNext = { [weak self] in
