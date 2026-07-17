@@ -421,6 +421,7 @@
 		A72E03E92EDA297E003A73DA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APPATTEST_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Rivulet/Rivulet.entitlements;
@@ -479,6 +480,7 @@
 		A72E03EA2EDA297E003A73DA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APPATTEST_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Rivulet/Rivulet.entitlements;

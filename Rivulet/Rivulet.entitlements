@@ -11,6 +11,6 @@
 	     attestation service; TestFlight and App Store builds MUST use
 	     "production" or every attestation is rejected on-device. -->
 	<key>com.apple.developer.devicecheck.appattest-environment</key>
-	<string>development</string>
+	<string>$(APPATTEST_ENVIRONMENT)</string>
 </dict>
 </plist>
