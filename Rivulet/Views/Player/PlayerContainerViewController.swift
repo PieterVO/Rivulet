@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  PlayerContainerViewController.swift
 //  Rivulet
@@ -1071,20 +1074,12 @@ class PlayerContainerViewController: UIViewController {
         rail.onInfo = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             // The Advanced tab exists only on the aether route (an AetherPlayer
-            // is present). Its provider reads the engine telemetry snapshot;
-            // its gate opens/closes the sampler as the tab is viewed/left.
-            let advancedProvider: (() -> AetherAdvancedStats?)?
-            let advancedGate: ((Bool) -> Void)?
-            if vm.aetherPlayer != nil {
-                advancedProvider = { [weak vm] in vm?.aetherPlayer?.advancedStats() }
-                advancedGate = { [weak vm] observing in vm?.aetherPlayer?.setAdvancedStatsObserving(observing) }
-            } else {
-                advancedProvider = nil
-                advancedGate = nil
-            }
+            // is present). Its provider reads the engine telemetry snapshot.
+            let advancedProvider: (() -> AetherAdvancedStats?)? =
+                vm.aetherPlayer != nil ? { [weak vm] in vm?.aetherPlayer?.advancedStats() } : nil
             self.presentRailPanel(
                 content: PlayerInfoTabsView(metadata: vm.metadata, modes: vm.streamingModeInfo,
-                                            advancedProvider: advancedProvider, advancedGate: advancedGate),
+                                            advancedProvider: advancedProvider),
                 width: 560, from: rail.infoButton)
         }
         rail.onUpNext = { [weak self] in

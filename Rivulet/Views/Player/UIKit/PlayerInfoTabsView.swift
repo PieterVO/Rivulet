@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  PlayerInfoTabsView.swift
 //  Rivulet
@@ -10,9 +13,7 @@
 //  The Advanced tab exists only on the aether route (a non-nil advanced
 //  provider closure); on the hls route this renders just the Info sheet with
 //  no tab bar, exactly as the popup did before. The Advanced sheet is built
-//  lazily on the first tab-over and ticks only while it is the visible tab,
-//  and it drives the engine telemetry gate open/closed through
-//  `advancedGate` so the sampler only runs while someone is looking.
+//  lazily on the first tab-over and ticks only while it is the visible tab.
 //
 //  Menu: intentionally does NOT conform to `RailPanelMenuHandling`, so
 //  `PlayerRailPanelView` dismisses the whole panel from either tab.
@@ -29,7 +30,6 @@ final class PlayerInfoTabsView: UIView {
     private let infoView: CardInfoView
     private var statsView: CardStatsView?
     private let advancedProvider: (() -> AetherAdvancedStats?)?
-    private let advancedGate: ((Bool) -> Void)?
     private let tabBar: InfoTabBarView?
     private var currentTab: InfoTabBarView.Tab = .info
 
@@ -64,12 +64,10 @@ final class PlayerInfoTabsView: UIView {
     init(
         metadata: PlexMetadata,
         modes: StreamingModeInfo,
-        advancedProvider: (() -> AetherAdvancedStats?)?,
-        advancedGate: ((Bool) -> Void)?
+        advancedProvider: (() -> AetherAdvancedStats?)?
     ) {
         self.infoView = CardInfoView(metadata: metadata, modes: modes)
         self.advancedProvider = advancedProvider
-        self.advancedGate = advancedGate
         self.tabBar = Self.showsTabBar(advancedProvider: advancedProvider) ? InfoTabBarView(selected: .info) : nil
         super.init(frame: .zero)
         setup()
@@ -142,9 +140,6 @@ final class PlayerInfoTabsView: UIView {
         stats.isHidden = true
         stats.onFocusChange = onFocusChange
         stats.onEscapeUp = { [weak self] in self?.escapeToTabBar() }
-        // Drives the engine telemetry gate: opens while Advanced ticks, closes
-        // when it stops (tab switch away, or panel detaches).
-        stats.onActiveChange = advancedGate
         addSubview(stats)
         constrainToContentArea(stats)
         statsView = stats
