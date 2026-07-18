@@ -36,7 +36,13 @@ final class InfoScrollView: UIScrollView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        panGestureRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        // Scrolling is self-driven from `step(up:)` on discrete up/down clicks.
+        // The pan MUST NOT consume trackpad swipes: a swipe is never an arrow
+        // UIPress, it is a focus move, so a pan-scrolling sheet swallows every
+        // upward swipe and focus can never escape back to the tab bar. With
+        // scrolling disabled the focus engine sees those swipes and moves
+        // focus out normally.
+        isScrollEnabled = false
     }
 
     required init?(coder: NSCoder) {

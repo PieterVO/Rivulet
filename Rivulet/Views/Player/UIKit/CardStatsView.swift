@@ -107,7 +107,9 @@ final class CardStatsView: UIView {
     private func setupViews() {
         stack.axis = .vertical
         stack.spacing = 16
-        stack.alignment = .leading
+        // .fill so the two-column section grids stretch to the full sheet
+        // width and their columns split it evenly (matches CardInfoView).
+        stack.alignment = .fill
         scrollView.addSubview(stack)
         addSubview(scrollView)
 
@@ -237,11 +239,13 @@ final class CardStatsView: UIView {
             }
             guard !visibleRows.isEmpty else { continue }
             stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(section.name))
+            var rowViews: [UIView] = []
             for (title, value) in visibleRows {
                 let row = PlayerInfoSheetStyle.infoRow(title, value)
-                stack.addArrangedSubview(row)
+                rowViews.append(row)
                 valueLabels[title] = row
             }
+            stack.addArrangedSubview(PlayerInfoSheetStyle.twoColumnGrid(rowViews))
         }
 
         renderedGathering = false

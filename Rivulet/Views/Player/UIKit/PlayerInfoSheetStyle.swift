@@ -64,6 +64,33 @@ enum PlayerInfoSheetStyle {
         return text
     }
 
+    // MARK: - Layout
+
+    /// Lays a flat row list into a two-column grid: a vertical stack of
+    /// horizontal pairs, each column taking half the width. An odd final row
+    /// pairs with an empty spacer so it stays a half-width left column.
+    /// Shared by both sheets so Info and Advanced read identically.
+    @MainActor
+    static func twoColumnGrid(_ rows: [UIView]) -> UIView {
+        let grid = UIStackView()
+        grid.axis = .vertical
+        grid.spacing = 12
+        grid.alignment = .fill
+        var index = 0
+        while index < rows.count {
+            let pair = UIStackView()
+            pair.axis = .horizontal
+            pair.spacing = 24
+            pair.distribution = .fillEqually
+            pair.alignment = .top
+            pair.addArrangedSubview(rows[index])
+            pair.addArrangedSubview(index + 1 < rows.count ? rows[index + 1] : UIView())
+            grid.addArrangedSubview(pair)
+            index += 2
+        }
+        return grid
+    }
+
     // MARK: - Formatting
 
     /// Whole seconds, clamped to never print negative.
