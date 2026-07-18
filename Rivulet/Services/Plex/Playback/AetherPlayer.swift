@@ -24,6 +24,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import SwiftUI
 import UIKit
 import AetherEngine
 
@@ -151,6 +152,18 @@ final class AetherPlayer: PlayerProtocol {
                     switch cue.body {
                     case .text(let string):
                         body = .text(string)
+                    case .richText(let runs):
+                        // Coloured teletext / ASS colour runs (engine 5.7.0+).
+                        // Whether the colour is painted is the renderer's call
+                        // (CaptionStyle.allowsContentColor).
+                        body = .styledText(runs.map { run in
+                            AetherSubtitleCue.StyledRun(
+                                text: run.text,
+                                color: run.color.map {
+                                    Color(red: Double($0.r) / 255, green: Double($0.g) / 255, blue: Double($0.b) / 255)
+                                }
+                            )
+                        })
                     case .image(let image):
                         body = .image(cgImage: image.cgImage, position: image.position)
                     }
