@@ -141,6 +141,7 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.3 (67)", [
+            "Choosing forced subtitles now sticks: the next title no longer switches you to full captions",
             "Redesigned Live TV guide with a full channel grid, program details, and instant playback",
             "Show and movie pages opened from Top Shelf or Siri now match the pages you get inside the app",
             "Removing an item from Continue Watching no longer leaves focus in the wrong place",

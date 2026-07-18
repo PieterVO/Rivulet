@@ -228,6 +228,55 @@ final class TrackPreferenceTests: XCTestCase {
         )
     }
 
+    // MARK: - Plex per-item selected stream vs stored intent
+
+    /// The build-66 regression: an item whose Plex metadata carries a
+    /// `selected: true` regular English stream must NOT override a stored
+    /// ENG-forced intent. Forced and regular subs are different products;
+    /// the forced boundary holds against the per-item tier too.
+    func testPlexSelectedRegularStreamCannotOverrideForcedIntent() {
+        let selected = sub(1, lang: "eng", forced: false)
+        let intent = SubtitleIntent.track(
+            language: "eng", forced: true, hearingImpaired: false, codec: "srt"
+        )
+
+        XCTAssertFalse(
+            TrackIntentResolver.plexSelectedSubtitleMayOverride(selected, intent: intent)
+        )
+    }
+
+    /// A regular selected stream may override a regular stored intent —
+    /// the per-item pick is more specific than the global memory.
+    func testPlexSelectedRegularStreamMayOverrideRegularIntent() {
+        let selected = sub(1, lang: "spa", forced: false)
+        let intent = SubtitleIntent.track(
+            language: "eng", forced: false, hearingImpaired: false, codec: "srt"
+        )
+
+        XCTAssertTrue(
+            TrackIntentResolver.plexSelectedSubtitleMayOverride(selected, intent: intent)
+        )
+    }
+
+    /// Explicit global Off still yields to a deliberate per-item pick
+    /// (the pre-play picker's server-side persistence contract).
+    func testPlexSelectedStreamMayOverrideExplicitOff() {
+        let selected = sub(1, lang: "eng", forced: false)
+
+        XCTAssertTrue(
+            TrackIntentResolver.plexSelectedSubtitleMayOverride(selected, intent: .off)
+        )
+    }
+
+    /// No stored intent at all: the per-item selection stands.
+    func testPlexSelectedStreamMayOverrideNilIntent() {
+        let selected = sub(1, lang: "eng", forced: false)
+
+        XCTAssertTrue(
+            TrackIntentResolver.plexSelectedSubtitleMayOverride(selected, intent: nil)
+        )
+    }
+
     // MARK: - Audio resolution
 
     func testAudioReturnsNilForEmptyTracks() {

@@ -2921,7 +2921,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         let plexSubStreams = (metadata.Media?.first?.Part?.first?.Stream ?? []).filter { $0.isSubtitle }
         if let selectedId = plexSubStreams.first(where: { $0.selected == true })?.id,
            let track = subtitleTrackMatchingPlexStreamId(selectedId),
-           !track.isDefault, !track.isForced {
+           !track.isDefault, !track.isForced,
+           TrackIntentResolver.plexSelectedSubtitleMayOverride(
+               track, intent: TrackIntentStore.subtitleIntent
+           ) {
             selectSubtitleTrackWithoutSaving(id: track.id)
             return
         }

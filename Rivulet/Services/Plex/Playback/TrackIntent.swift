@@ -272,6 +272,25 @@ enum TrackIntentResolver {
         }
     }
 
+    /// Whether Plex's per-item `selected: true` subtitle stream may override
+    /// the stored global intent.
+    ///
+    /// The per-item tier exists for deliberate picks persisted server-side
+    /// (the pre-play picker, Plex Web / mobile), so it normally beats the
+    /// global memory — including an explicit global Off. But the forced
+    /// boundary holds here exactly as it does in `resolveSubtitle`: forced
+    /// and regular subs are different products, so a regular selected
+    /// stream never overrides a stored forced intent. Plex marks streams
+    /// `selected` from its own auto-select too, and letting those cross
+    /// the boundary silently turns full captions on for forced-only users.
+    static func plexSelectedSubtitleMayOverride(
+        _ track: MediaTrack,
+        intent: SubtitleIntent?
+    ) -> Bool {
+        guard case .track(_, let forced, _, _)? = intent else { return true }
+        return track.isForced == forced
+    }
+
     // MARK: Audio
 
     /// Resolve the stored audio intent against the tracks of the current title.
