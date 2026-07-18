@@ -157,6 +157,8 @@ struct WhatsNewView: View {
             "New Delay and Height adjustments in the player's subtitle menu. Delay is remembered per movie, episode, and channel; height applies everywhere",
             "The skip button now fills up as the auto skip counts down",
             "In Live TV, the Menu button now closes an open menu or the controls one step at a time before leaving the channel",
+            "Redesigned the Add Source flow in Live TV to match the rest of the app, with choices named for what you have instead of technical terms",
+            "Fixed sources and servers on plain http addresses failing to connect",
             "New optional Community Marker Database in Playback settings fills in missing intro, recap, and credits markers when your server has none, with a new Auto-Skip Recap option",
             "Playing from a server that reaches you only through Plex Relay now works instead of failing, at a lower 480p quality the relay's limited bandwidth can sustain",
             "Pressing Back while the Up Next screen is showing now returns you to the video instead of closing the player",
