@@ -143,6 +143,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// Same glass rail as Aether VOD; Up Next and Insights are hidden (they
     /// have no meaning for a live broadcast).
     private let railView = PlayerRailView()
+    /// The SAME scrubber component VOD uses (same assets + spot in the rail),
+    /// but driven non-seekably: it shows the current programme's air window
+    /// (start/end wall-clock at the edges, current time on the playhead) with
+    /// no scrub interaction. Fades with the rail.
+    private let progressBar = PlayerProgressBarView()
     private var railVisible = false
     private var activePanel: PlayerRailPanelView?
     private var autoHideTimer: Timer?
@@ -312,6 +317,19 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             railView.heightAnchor.constraint(equalToConstant: PlayerRailView.railHeight),
         ])
 
+        // Programme progress bar — placed exactly where VOD puts its scrubber
+        // (132pt side insets, 34pt up from the rail bottom) so it looks
+        // identical; fades with the rail.
+        progressBar.alpha = 0
+        progressBar.transform = CGAffineTransform(translationX: 0, y: 24)
+        view.addSubview(progressBar)
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 132),
+            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -132),
+            progressBar.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -34),
+        ])
+
         railView.onSubtitles = { [weak self] in self?.presentSubtitlePanel() }
         railView.onAudio = { [weak self] in self?.presentAudioPanel() }
         railView.onInfo = { [weak self] in self?.presentInfoPanel() }
@@ -343,6 +361,19 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             runtime = "\(formatter.string(from: current.startTime)) – \(formatter.string(from: current.endTime))"
         }
 
+        // Programme progress bar (non-seekable): map the show's air window onto
+        // the VOD scrubber. Hidden when there's no guide data to anchor to.
+        if let current, current.endTime > current.startTime {
+            progressBar.isHidden = false
+            progressBar.updateLiveTimeline(
+                startTime: current.startTime,
+                currentTime: Date(),
+                endTime: current.endTime
+            )
+        } else {
+            progressBar.isHidden = true
+        }
+
         var audioDescription: String?
         if let aether = aetherPlayer,
            let activeId = aether.currentAudioTrackId,
@@ -362,6 +393,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         UIView.animate(withDuration: 0.25) {
             self.railView.alpha = 1
             self.railView.transform = .identity
+            self.progressBar.alpha = 1
+            self.progressBar.transform = .identity
         }
         rebuildSubtitleOverlay()
         setNeedsFocusUpdate()
@@ -378,6 +411,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         UIView.animate(withDuration: 0.2) {
             self.railView.alpha = 0
             self.railView.transform = CGAffineTransform(translationX: 0, y: 24)
+            self.progressBar.alpha = 0
+            self.progressBar.transform = CGAffineTransform(translationX: 0, y: 24)
         }
         rebuildSubtitleOverlay()
         setNeedsFocusUpdate()

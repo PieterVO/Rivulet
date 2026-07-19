@@ -126,6 +126,8 @@ final class PlayerProgressBarView: UIView {
     private var lastMarkers: [PlexMarker] = []
 
     private var trackHeightConstraint: NSLayoutConstraint!
+    private var endsAtTrailingConstraint: NSLayoutConstraint!
+    private var endsAtPlayheadConstraint: NSLayoutConstraint!
 
     /// Loading placeholder mode; see `setSkeleton(_:)`.
     private var isSkeleton = false
@@ -271,6 +273,12 @@ final class PlayerProgressBarView: UIView {
 
         trackHeightConstraint = trackBackground.heightAnchor.constraint(equalToConstant: Metrics.trackHeight)
 
+        endsAtTrailingConstraint = endsAtLabel.trailingAnchor.constraint(
+            equalTo: remainingTimeLabel.leadingAnchor,
+            constant: -Metrics.endsAtGap
+        )
+        endsAtPlayheadConstraint = endsAtLabel.centerXAnchor.constraint(equalTo: leadingAnchor)
+
         NSLayoutConstraint.activate([
             trackBackground.topAnchor.constraint(equalTo: topAnchor),
             trackBackground.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -290,7 +298,7 @@ final class PlayerProgressBarView: UIView {
             remainingTimeLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
 
             endsAtLabel.centerYAnchor.constraint(equalTo: remainingTimeLabel.centerYAnchor),
-            endsAtLabel.trailingAnchor.constraint(equalTo: remainingTimeLabel.leadingAnchor, constant: -Metrics.endsAtGap),
+            endsAtTrailingConstraint,
 
             bottomAnchor.constraint(equalTo: currentTimeLabel.bottomAnchor),
         ])
@@ -451,6 +459,51 @@ final class PlayerProgressBarView: UIView {
         let showWheelIndicator = isScrubbing && isWheelScrubbing
         wheelRing.isHidden = !showWheelIndicator
         wheelDot.isHidden = !showWheelIndicator
+    }
+
+    /// Live TV keeps the progress bar's existing geometry and fill treatment,
+    /// but labels the programme window with wall-clock times: air start at the
+    /// left edge, air end at the right, and the current clock time following
+    /// the playhead. Non-seekable — callers never pass scrub state.
+    func updateLiveTimeline(startTime: Date, currentTime: Date, endTime: Date) {
+        let duration = endTime.timeIntervalSince(startTime)
+        guard duration > 0 else { return }
+
+        let elapsed = min(max(0, currentTime.timeIntervalSince(startTime)), duration)
+        update(
+            currentTime: elapsed,
+            duration: duration,
+            isScrubbing: false,
+            scrubTime: 0,
+            scrubStepLabelText: nil,
+            scrubThumbnail: nil,
+            markers: [],
+            chapters: []
+        )
+
+        currentTimeLabel.text = Self.endsAtFormatter.string(from: startTime)
+        remainingTimeLabel.text = Self.endsAtFormatter.string(from: endTime)
+        endsAtLabel.text = Self.endsAtFormatter.string(from: currentTime)
+        endsAtLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
+        endsAtLabel.textColor = UIColor.white.withAlphaComponent(0.82)
+        endsAtLabel.textAlignment = .center
+        endsAtLabel.isHidden = false
+
+        // Follow the playhead, but keep the clock label fully on the track and
+        // fade out whichever edge label it would otherwise collide with.
+        let width = trackBackground.bounds.width
+        guard width > 0 else { return }
+        let half = endsAtLabel.intrinsicContentSize.width / 2
+        let x = min(max(width * CGFloat(elapsed / duration), half), width - half)
+        endsAtTrailingConstraint.isActive = false
+        endsAtPlayheadConstraint.constant = x
+        endsAtPlayheadConstraint.isActive = true
+
+        let clearance: CGFloat = 12
+        let startLabelWidth = currentTimeLabel.intrinsicContentSize.width
+        let endLabelWidth = remainingTimeLabel.intrinsicContentSize.width
+        currentTimeLabel.alpha = (x - half) < (startLabelWidth + clearance) ? 0 : 1
+        remainingTimeLabel.alpha = (x + half) > (width - endLabelWidth - clearance) ? 0 : 1
     }
 
     /// Loading placeholder: keeps the locked geometry and vertical rhythm
