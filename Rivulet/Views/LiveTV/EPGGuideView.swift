@@ -58,7 +58,20 @@ enum EPGTheme {
     /// Vertical gap between rows / horizontal gap between cells.
     static let cellSpacing: CGFloat = 4
     /// How far the guide timeline spans, starting at the current half hour.
-    static let timelineSpanHours: Int = 24
+    /// Now the CEILING / placeholder span rather than the fixed load window —
+    /// the live guide loads `initialGuideHours` up front and lazily extends.
+    /// Keep in sync with `LiveTVDataStore.epgMaxHoursAhead` (the fetch ceiling).
+    static let timelineSpanHours: Int = 72
+    /// EPG hours fetched up front when the guide first opens. Small so the grid
+    /// paints fast; `extendEPG` fills more in as the user scrolls right.
+    static let initialGuideHours: Int = 6
+    /// Hours pulled per lazy extension when scroll nears the loaded edge.
+    static let lazyLoadChunkHours: Int = 6
+    /// Fire the lazy-load request once the LEFT visible edge comes within this
+    /// many minutes of the loaded end. Covers the visible width (~4 h) plus a
+    /// preload buffer, while staying under the initial window so the first
+    /// paint isn't immediately followed by a second fetch.
+    static let lazyLoadLookaheadMinutes: Double = 300
 }
 
 // MARK: - Program helpers
@@ -81,6 +94,10 @@ struct EPGGuide: UIViewRepresentable {
     var menuActive: Bool = false
     var onFocus: (UnifiedChannel?, UnifiedProgram?) -> Void
     var onSelect: (UnifiedChannel, UnifiedProgram?) -> Void
+    /// Fired when horizontal scroll (or focus) nears the loaded right edge, so
+    /// the host can fetch another chunk of EPG. Throttled to one call per
+    /// loaded-window size by the coordinator. nil = no lazy loading.
+    var onNeedMore: (() -> Void)? = nil
     /// Transparent overlay mode: see-through cells over an ambient backdrop.
     var transparent: Bool = true
     /// Space reserved above the time ruler (the info bar lives there).
@@ -169,6 +186,10 @@ struct EPGGuide: UIViewRepresentable {
         /// than the screen can't drag the guide away from the current time.
         private var lockedX: CGFloat = 0
         private var lockedXInitialized = false
+        /// Loaded-window size (parent.totalMinutes) that the last `onNeedMore`
+        /// request was fired for. Throttles lazy loading to one request per
+        /// window: once the window grows, the guard opens for the next edge.
+        private var requestedMoreForMinutes: Int = -1
         /// While `Date() < freeScrollUntil` the timeline may scroll horizontally.
         private var freeScrollUntil: Date = .distantPast
         private(set) var currentFocusedIsLive = false
@@ -342,6 +363,21 @@ struct EPGGuide: UIViewRepresentable {
                                                  at: IndexPath(item: 0, section: 0)) as? CornerView {
                 corner.configure(date: leftDate, transparent: parent.transparent)
             }
+            maybeRequestMore(leftMinutes: Double(minutesIn))
+        }
+
+        /// Lazy horizontal loading: when the left visible edge comes within the
+        /// look-ahead window of the loaded end, ask the host for more EPG. The
+        /// `requestedMoreForMinutes` guard fires at most once per loaded-window
+        /// size, so a scroll that lingers near the edge does not spam requests;
+        /// the guard reopens when the window grows and totalMinutes changes.
+        private func maybeRequestMore(leftMinutes: Double) {
+            guard parent.onNeedMore != nil,
+                  requestedMoreForMinutes != parent.totalMinutes,
+                  Double(parent.totalMinutes) - leftMinutes < EPGTheme.lazyLoadLookaheadMinutes
+            else { return }
+            requestedMoreForMinutes = parent.totalMinutes
+            parent.onNeedMore?()
         }
 
         func collectionView(_ cv: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -533,11 +569,15 @@ final class EPGLayout: UICollectionViewLayout {
         let a = EPGCellAttributes(forSupplementaryViewOfKind: elementKind, with: indexPath)
         switch elementKind {
         case Self.kindChannel:
-            let slotTop = CGFloat(indexPath.section) * rowH
-            a.frame = CGRect(x: off.x, y: slotTop, width: colW, height: rowH)
+            // Use the exact same vertical frame as the programme cells. Keeping
+            // the row inset in layout attributes (rather than applying it later
+            // inside the supplementary view) avoids a subtle top-row rounding /
+            // clipping mismatch at the pinned ruler edge.
+            let frameY = CGFloat(indexPath.section) * rowH + gap
+            a.frame = CGRect(x: off.x, y: frameY, width: colW, height: rowH - gap * 2)
             a.zIndex = 10
             let visibleTop = off.y + rulerTop + headerH + gap
-            a.topClip = min(max(0, visibleTop - slotTop), rowH)
+            a.topClip = min(max(0, visibleTop - frameY), a.frame.height)
         case Self.kindTime:
             a.frame = CGRect(x: 0, y: off.y + rulerTop, width: contentWidth, height: headerH)
             a.zIndex = 12
@@ -711,6 +751,8 @@ final class ChannelColumnView: UICollectionReusableView {
     private let occluder = UIView()   // opaque; rounded only on the right
     private let box = UIView()        // coloured logo box; rounded all corners
     private let logo = UIImageView()
+    private var logoLoadTask: Task<Void, Never>?
+    private var currentLogoURL: URL?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -737,12 +779,12 @@ final class ChannelColumnView: UICollectionReusableView {
         let gap = EPGTheme.cellSpacing
         NSLayoutConstraint.activate([
             occluder.topAnchor.constraint(equalTo: topAnchor),
-            occluder.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -gap),
+            occluder.bottomAnchor.constraint(equalTo: bottomAnchor),
             occluder.leadingAnchor.constraint(equalTo: leadingAnchor),
             occluder.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            box.topAnchor.constraint(equalTo: topAnchor, constant: gap),
-            box.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -gap),
+            box.topAnchor.constraint(equalTo: topAnchor),
+            box.bottomAnchor.constraint(equalTo: bottomAnchor),
             box.leadingAnchor.constraint(equalTo: leadingAnchor, constant: gap),
             box.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -gap),
 
@@ -757,14 +799,39 @@ final class ChannelColumnView: UICollectionReusableView {
     func configure(_ channel: UnifiedChannel, transparent: Bool = false) {
         occluder.backgroundColor = transparent ? .clear : UIColor(EPGTheme.background)
         box.backgroundColor = transparent ? UIColor(white: 0, alpha: 0.28) : UIColor(EPGTheme.columnFill)
+
+        // Reused cells get reconfigured rapidly during fast guide scrolling.
+        // Track the URL each in-flight load belongs to and cancel on change,
+        // so a slow response can never land its logo on the wrong channel.
+        let nextLogoURL = channel.logoURL
+        if let nextLogoURL,
+           currentLogoURL == nextLogoURL,
+           logo.image != nil || logoLoadTask != nil {
+            return
+        }
+
+        logoLoadTask?.cancel()
+        logoLoadTask = nil
         logo.image = nil
-        if let url = channel.logoURL {
-            EPGLogoCache.shared.load(url) { [weak self] image in self?.logo.image = image }
+        currentLogoURL = nextLogoURL
+        guard let url = currentLogoURL else { return }
+
+        logoLoadTask = Task { [weak self] in
+            let image = await ImageCacheManager.shared.image(for: url, quality: .thumb)
+            guard let self,
+                  !Task.isCancelled,
+                  self.currentLogoURL == url
+            else { return }
+            self.logo.image = image
+            self.logoLoadTask = nil
         }
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        logoLoadTask?.cancel()
+        logoLoadTask = nil
+        currentLogoURL = nil
         logo.image = nil
     }
 
@@ -781,10 +848,10 @@ final class ChannelColumnView: UICollectionReusableView {
     }
     private func applyClip() {
         let gap = EPGTheme.cellSpacing
-        guard topClip > gap, bounds.height > 0 else { layer.mask = nil; return }
+        guard topClip > 0.5, bounds.height > 0 else { layer.mask = nil; return }
         let rect = CGRect(x: gap, y: topClip,
                           width: max(bounds.width - gap * 2, 0),
-                          height: max(bounds.height - gap - topClip, 0))
+                          height: max(bounds.height - topClip, 0))
         let r = EPGTheme.columnCorner
         clipMask.path = UIBezierPath(roundedRect: rect, byRoundingCorners: [.topLeft, .topRight],
                                      cornerRadii: CGSize(width: r, height: r)).cgPath
@@ -869,6 +936,7 @@ final class CornerView: UICollectionReusableView {
         addSubview(box)
         label.font = .systemFont(ofSize: 20, weight: .bold)
         label.textColor = .white
+        label.textAlignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(label)
 
@@ -879,7 +947,7 @@ final class CornerView: UICollectionReusableView {
             box.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -gap),
             box.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -gap),
             box.heightAnchor.constraint(equalToConstant: boxH),
-            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 14),
+            label.centerXAnchor.constraint(equalTo: box.centerXAnchor),
             label.centerYAnchor.constraint(equalTo: box.centerYAnchor),
         ])
     }
@@ -896,22 +964,6 @@ final class CornerView: UICollectionReusableView {
     }
 }
 
-// MARK: - Logo cache
-
-final class EPGLogoCache {
-    static let shared = EPGLogoCache()
-    private let cache = NSCache<NSURL, UIImage>()
-
-    func load(_ url: URL, completion: @escaping (UIImage?) -> Void) {
-        if let cached = cache.object(forKey: url as NSURL) { completion(cached); return }
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let data, let image = UIImage(data: data) else { return }
-            self?.cache.setObject(image, forKey: url as NSURL)
-            DispatchQueue.main.async { completion(image) }
-        }.resume()
-    }
-}
-
 // MARK: - Info bar
 
 /// Plex-style guide header: a poster + details on the left, scrolling beneath
@@ -924,7 +976,7 @@ struct GuideInfoBar: View {
     /// falling back to any programme icon. The channel logo is handled
     /// separately so it can be letterboxed into a 2:3 frame.
     private var programImageURL: URL? {
-        program?.posterURL ?? program?.iconURL ?? program?.landscapeURL
+        program?.posterURL ?? program?.iconURL
     }
 
     var body: some View {

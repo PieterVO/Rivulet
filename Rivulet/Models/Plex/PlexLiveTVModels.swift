@@ -124,6 +124,8 @@ nonisolated struct PlexLiveTVProgram: Codable, Identifiable, Sendable {
     let summary: String?
     let thumb: String?
     let art: String?
+    let parentThumb: String?
+    let parentArt: String?
     let grandparentThumb: String?
     let grandparentArt: String?
     let year: Int?
@@ -482,11 +484,20 @@ extension PlexLiveTVProgram {
 
         let programId = "\(unifiedChannelId):\(beginsAt ?? 0)"
 
-        // Prefer the programme's own artwork, falling back to the show's
-        // (grandparent) poster/art, which Plex often populates when the
-        // per-episode image is missing.
-        let poster = Self.plexImageURL(thumb ?? grandparentThumb, serverURL: serverURL, authToken: authToken)
-        let background = Self.plexImageURL(art ?? grandparentArt, serverURL: serverURL, authToken: authToken)
+        // Plex episode metadata uses `thumb` for the 16:9 episode still and
+        // parent/grandparent thumbs for portrait season/show posters. Movies
+        // use their own thumb as the poster. Keep those roles separate so a
+        // landscape episode still is never promoted into the 2:3 poster slot.
+        let isEpisode = type?.lowercased() == "episode" || grandparentTitle != nil
+        let posterPath = isEpisode
+            ? (grandparentThumb ?? parentThumb)
+            : (thumb ?? grandparentThumb ?? parentThumb)
+        let backgroundPath = isEpisode
+            ? (thumb ?? art ?? grandparentArt ?? parentArt)
+            : (art ?? grandparentArt ?? parentArt)
+
+        let poster = Self.plexImageURL(posterPath, serverURL: serverURL, authToken: authToken)
+        let background = Self.plexImageURL(backgroundPath, serverURL: serverURL, authToken: authToken)
 
         return UnifiedProgram(
             id: programId,

@@ -2385,6 +2385,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             let summary: String?
             let thumb: String?
             let art: String?
+            let parentThumb: String?
+            let parentArt: String?
             let grandparentThumb: String?
             let grandparentArt: String?
             let year: Int?
@@ -2435,6 +2437,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                     summary: program.summary,
                     thumb: program.thumb,
                     art: program.art,
+                    parentThumb: program.parentThumb,
+                    parentArt: program.parentArt,
                     grandparentThumb: program.grandparentThumb,
                     grandparentArt: program.grandparentArt,
                     year: program.year,
