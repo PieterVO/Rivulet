@@ -106,6 +106,12 @@ final class AetherPlayer: PlayerProtocol {
 
     private var foregroundReloadTask: Task<Void, Never>?
 
+    /// Non-nil when the app returned from background with the user PAUSED:
+    /// the torn-down session stays parked (clock intact, so the paused UI
+    /// shows the true position) and play() performs the reload. Holds the
+    /// background timestamp so the teardown-drain wait still applies.
+    private var pendingReloadSince: Date?
+
     init() {
         do {
             self.engine = try AetherEngine()
@@ -367,6 +373,10 @@ final class AetherPlayer: PlayerProtocol {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.backgroundedAt = Date()
+                // A reload landing while backgrounded would rebuild the decode
+                // session right before suspension — the wedge the engine's
+                // teardown exists to prevent. Foreground return re-arms it.
+                self?.foregroundReloadTask?.cancel()
             }
             .store(in: &cancellables)
 
@@ -381,7 +391,23 @@ final class AetherPlayer: PlayerProtocol {
     private func reloadAfterBackgroundReturn() {
         guard let backgroundedAt else { return }
         self.backgroundedAt = nil
-        let resumePlayback = userIntendsToPlay
+        if userIntendsToPlay {
+            startForegroundReload(since: backgroundedAt)
+        } else {
+            // Paused user: leave the session parked and reload on play()
+            // instead. The engine preserves the playback clock through its
+            // teardown, so the paused UI keeps the true position; an eager
+            // rebuild-then-pause showed 0 (load's stopInternal zeroes the
+            // clock and nothing re-anchors it until playback starts) and paid
+            // for a pipeline the user might never resume. Scrubs while parked
+            // still work: the engine defers pre-ready seeks and updates the
+            // clock optimistically (#127), so the reload resumes at the
+            // scrubbed position.
+            pendingReloadSince = backgroundedAt
+        }
+    }
+
+    private func startForegroundReload(since: Date) {
         foregroundReloadTask?.cancel()
         foregroundReloadTask = Task { [weak self] in
             // The engine's teardown holds a background task through a 3.5s
@@ -389,16 +415,15 @@ final class AetherPlayer: PlayerProtocol {
             // exposes no handle to await, so on a quick app switch wait out
             // the remainder before rebuilding; a real background stay has
             // long finished and pays nothing.
-            let drain = max(0, 4.0 - Date().timeIntervalSince(backgroundedAt))
+            let drain = max(0, 4.0 - Date().timeIntervalSince(since))
             if drain > 0 { try? await Task.sleep(for: .seconds(drain)) }
             guard let self, !Task.isCancelled else { return }
-            print("[AetherPlayer] foreground reload: resume=\(resumePlayback) pos=\(self.engine.currentTime)")
+            print("[AetherPlayer] foreground reload: pos=\(self.engine.currentTime)")
             // No-ops if nothing is loaded or the session was stopped while we
-            // waited (public stop() clears the engine's loadedURL).
+            // waited (public stop() clears the engine's loadedURL). The load
+            // auto-plays, which is correct: this path only runs when the user
+            // intends playback.
             try? await self.engine.reloadAtCurrentPosition()
-            guard !Task.isCancelled else { return }
-            // Every load auto-plays; restore the user's pre-background choice.
-            if !resumePlayback { self.engine.pause() }
         }
     }
 
@@ -495,6 +520,7 @@ final class AetherPlayer: PlayerProtocol {
             teletextPage: Self.regionTeletextPage()
         )
         userIntendsToPlay = true
+        pendingReloadSince = nil
         do {
             // Broadcast H.264 routinely mis-signals interlaced content as
             // progressive (codecpar fieldOrder=0; MBAFF is only flagged
@@ -611,6 +637,7 @@ final class AetherPlayer: PlayerProtocol {
             teletextPage: Self.regionTeletextPage()
         )
         userIntendsToPlay = true
+        pendingReloadSince = nil
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
         } catch {
@@ -634,6 +661,14 @@ final class AetherPlayer: PlayerProtocol {
 
     func play() {
         userIntendsToPlay = true
+        if let since = pendingReloadSince {
+            // Parked since a paused background return: rebuild the torn-down
+            // session (auto-plays at the preserved clock position) instead of
+            // playing into a session with no player item.
+            pendingReloadSince = nil
+            startForegroundReload(since: since)
+            return
+        }
         engine.play()
     }
     func pause() {
@@ -642,6 +677,7 @@ final class AetherPlayer: PlayerProtocol {
     }
     func stop() {
         foregroundReloadTask?.cancel()
+        pendingReloadSince = nil
         userIntendsToPlay = false
         engine.stop()
     }
