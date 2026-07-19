@@ -487,7 +487,12 @@ final class AetherPlayer: PlayerProtocol {
             // Honor the user's saved audio/subtitle language preferences, same
             // as VOD, so the right tracks are picked on the first frame.
             preferredAudioLanguages: Self.livePreferredAudioLanguages(),
-            preferredSubtitleLanguages: Self.livePreferredSubtitleLanguages()
+            preferredSubtitleLanguages: Self.livePreferredSubtitleLanguages(),
+            // DVB teletext caption page. libzvbi auto-detect (nil) only finds a
+            // page the broadcast FLAGS as a subtitle page; AU FTA channels carry
+            // captions on 801 without that flag, so auto-detect returns nothing.
+            // Region-default to 801 for AU, otherwise auto-detect.
+            teletextPage: Self.regionTeletextPage()
         )
         userIntendsToPlay = true
         do {
@@ -515,6 +520,19 @@ final class AetherPlayer: PlayerProtocol {
         if url.pathExtension.lowercased() == "m3u8" { return true }
         let text = url.absoluteString.lowercased()
         return text.contains(".m3u8") || text.contains("format=hls")
+    }
+
+    /// DVB teletext caption page, applied to BOTH live and VOD loads. A
+    /// `liveTeletextPage` UserDefaults key overrides everything (0 = force
+    /// libzvbi auto-detect); otherwise Australian regions default to 801
+    /// (AU FTA carries captions there without flagging it as a subtitle page,
+    /// so auto-detect misses it) and every other region uses libzvbi's
+    /// flagged-page auto-detect (nil) — identical to prior behavior.
+    private static func regionTeletextPage() -> Int? {
+        if let stored = UserDefaults.standard.object(forKey: "liveTeletextPage") as? Int {
+            return stored == 0 ? nil : stored
+        }
+        return Locale.current.region?.identifier == "AU" ? 801 : nil
     }
 
     /// The user's saved audio-language intent (ISO code), if any.
@@ -587,7 +605,10 @@ final class AetherPlayer: PlayerProtocol {
                     httpHeaders: nil,
                     formatHint: sub.formatHint
                 )
-            }
+            },
+            // Same teletext rule as Live TV: a teletext stream decodes the same
+            // way whichever surface plays it (VOD recordings/rips included).
+            teletextPage: Self.regionTeletextPage()
         )
         userIntendsToPlay = true
         do {
