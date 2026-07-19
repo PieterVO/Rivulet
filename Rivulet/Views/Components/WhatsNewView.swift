@@ -140,6 +140,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.3 (68)", [  // confirm build number at release
+            "The backdrop that appears while paused now waits ten seconds instead of five, so you have more time to look at the paused frame",
+            "Pressing Back while the paused backdrop is showing now brings back the paused frame instead of closing the player",
+        ]),
         ("1.0.3 (67)", [
             "Choosing forced subtitles now sticks: the next title no longer switches you to full captions",
             "Redesigned Live TV guide with a full channel grid, program details, and instant playback",
