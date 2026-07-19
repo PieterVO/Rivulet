@@ -146,6 +146,12 @@ struct WhatsNewView: View {
             "The backdrop that appears while paused now waits ten seconds instead of five, so you have more time to look at the paused frame",
             "Pressing Back while the paused backdrop is showing now brings back the paused frame instead of closing the player",
             "Fixed playback getting stuck after leaving the app and coming back, the video now picks up right where you left off",
+            "The player's INFO panel now responds to swipes on the remote, so you can move through and scroll its sections without clicking",
+            "Fixed Live TV channels on DVB tuners with cloud based guide data failing to start",
+            "Live TV streams no longer cut out after a few minutes because the server thought nobody was watching",
+            "The Live TV player now shows how far into the current program you are",
+            "The Live TV guide now loads program data as you scroll, so large channel lineups open faster",
+            "Teletext subtitles now start on the page used in your region",
         ]),
         ("1.0.3 (67)", [
             "Choosing forced subtitles now sticks: the next title no longer switches you to full captions",
