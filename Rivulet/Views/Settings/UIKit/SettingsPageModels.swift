@@ -151,6 +151,8 @@ enum SettingsContent {
         case .about:       return about
         case .displaySizePicker:      return displaySizePicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
+        case .contentFilter:          return contentFilter
+        case .contentFilterStrength:  return contentFilterStrength
         default:           return []   // not yet ported (later clusters)
         }
     }
@@ -226,8 +228,80 @@ enum SettingsContent {
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
                                 AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
                             })),
-            toggle("showPostVideoUpNext", "Show Up Next Panel", key: "showPostVideoUpNext", default: true)
+            toggle("showPostVideoUpNext", "Show Up Next Panel", key: "showPostVideoUpNext", default: true),
+            SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
+                            kind: .navigationValue(.contentFilter, value: {
+                                SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
+                            }))
         ]
+    }
+
+    // MARK: Content Filtering
+
+    /// VidAngel/ClearPlay-style local filter. Language categories are detected
+    /// live from the subtitle track; scene categories need an imported filter
+    /// list (see the source URL row).
+    private static var contentFilter: [SettingsRowItem] {
+        var rows: [SettingsRowItem] = [
+            toggle("cf_master", "Content Filter",
+                   key: ContentFilterManager.Keys.enabled, default: false)
+        ]
+
+        // Language categories (auto-detected from subtitles)
+        rows.append(categoryToggle(.profanity, id: "cf_profanity"))
+        rows.append(SettingsRowItem(id: "cf_strength", title: "Profanity Strength",
+                                    kind: .navigationValue(.contentFilterStrength, value: {
+                                        strengthLabel(currentProfanityStrength())
+                                    })))
+        rows.append(categoryToggle(.blasphemy, id: "cf_blasphemy"))
+        rows.append(categoryToggle(.slur, id: "cf_slur"))
+        rows.append(categoryToggle(.sexualLanguage, id: "cf_sexualLanguage"))
+
+        // Scene categories (require an imported filter list)
+        rows.append(categoryToggle(.violence, id: "cf_violence"))
+        rows.append(categoryToggle(.sexNudity, id: "cf_sexNudity"))
+        rows.append(categoryToggle(.frightening, id: "cf_frightening"))
+        rows.append(categoryToggle(.substances, id: "cf_substances"))
+
+        // Imported list source
+        rows.append(SettingsRowItem(id: "cf_sourceURL", title: "Filter List URL",
+                                    kind: .textEntry(
+                                        value: { SettingsStore.string(ContentFilterManager.Keys.listSourceURL, default: "") },
+                                        placeholder: "Optional",
+                                        hint: "A URL where per-title MCF or EDL filter files are hosted. Use {id} for the Plex rating key, or a folder that contains <ratingKey>.mcf files.",
+                                        suggestions: [],
+                                        keyboardType: .URL,
+                                        set: { SettingsStore.setString(ContentFilterManager.Keys.listSourceURL, $0) })))
+        return rows
+    }
+
+    private static var contentFilterStrength: [SettingsRowItem] {
+        FilterSeverity.allCases.map { severity in
+            SettingsRowItem(id: "cfs_\(severity.rawValue)", title: strengthLabel(severity),
+                            kind: .option(
+                                isSelected: { currentProfanityStrength() == severity },
+                                select: { SettingsStore.setInt(ContentFilterManager.Keys.profanityStrength, severity.rawValue) }))
+        }
+    }
+
+    private static func currentProfanityStrength() -> FilterSeverity {
+        FilterSeverity(rawValue: SettingsStore.int(ContentFilterManager.Keys.profanityStrength,
+                                                    default: FilterSeverity.moderate.rawValue)) ?? .moderate
+    }
+
+    /// The stored value is the *minimum* severity that gets muted.
+    private static func strengthLabel(_ severity: FilterSeverity) -> String {
+        switch severity {
+        case .mild: return "Mild and up"
+        case .moderate: return "Moderate and up"
+        case .strong: return "Strong only"
+        }
+    }
+
+    private static func categoryToggle(_ category: FilterCategory, id: String) -> SettingsRowItem {
+        SettingsRowItem(id: id, title: category.displayName, kind: .toggle(
+            get: { SettingsStore.bool(category.enabledDefaultsKey, default: category.defaultEnabled) },
+            set: { SettingsStore.setBool(category.enabledDefaultsKey, $0) }))
     }
 
     // MARK: Live TV

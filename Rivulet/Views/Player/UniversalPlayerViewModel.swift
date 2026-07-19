@@ -268,6 +268,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// (The AVPlayer routes render through subtitleManager instead.)
     let aetherSubtitleModel = SubtitleModel()
 
+    /// Local content filter (VidAngel/ClearPlay-style). Mutes language from the
+    /// subtitle track and skips scenes from imported MCF/EDL lists. VOD only.
+    /// Fed time + active cue text from the observers below; its `isFilterMuting`
+    /// output is mirrored onto the active player.
+    let contentFilter = ContentFilterManager()
+
     // MARK: - Subtitle delay (OSD stepper, sticky per item)
 
     /// Persistence key for this item's subtitle delay.
@@ -455,6 +461,59 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func setupPlayer() {
         bindPlayerState()
         observeAppLifecycle()
+        observeContentFilter()
+    }
+
+    /// Mirror the content filter's mute decision onto the active player. The
+    /// filter is fed active subtitle text from `applyContentFilter(at:)` on the
+    /// time tick (using the on-screen cue set for whichever route is active).
+    private func observeContentFilter() {
+        contentFilter.$isFilterMuting
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] muting in
+                self?.applyContentFilterMute(muting)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Silence (or restore) the active player's audio for the filter. Aether's
+    /// `setMuted` persists across the engine's internal player swaps; the HLS
+    /// route mutes the AVPlayer directly.
+    private func applyContentFilterMute(_ muting: Bool) {
+        aetherPlayer?.setMuted(muting)
+        player?.isMuted = muting
+    }
+
+    /// Apply the content filter at the given playhead: seek past a scene-skip
+    /// window when one is entered. Muting is handled reactively via the
+    /// published `isFilterMuting`. Called from both time observers.
+    private func applyContentFilter(at time: TimeInterval) {
+        // Feed the currently on-screen dialogue so language cues mute in sync.
+        // Aether decodes into aetherSubtitleModel (which resolves the active set
+        // on the sourceTime axis, honoring subtitle delay); the HLS route uses
+        // subtitleManager's already-active cues.
+        contentFilter.activeSubtitlesDidChange(texts: activeSubtitleTextForFilter())
+
+        guard let skipTarget = contentFilter.timeDidUpdate(time, allowSkip: !isScrubbing) else { return }
+        Task { [weak self] in
+            await self?.seek(to: skipTarget, revealsControls: false)
+        }
+    }
+
+    /// The subtitle lines currently on screen, as plain text, for the content
+    /// filter's language matching.
+    private func activeSubtitleTextForFilter() -> [String] {
+        if aetherPlayer != nil {
+            return aetherSubtitleModel.activeCues.compactMap { cue in
+                switch cue.body {
+                case .text(let string): return string
+                case .styledText(let runs): return runs.map(\.text).joined()
+                case .image: return nil
+                }
+            }
+        }
+        return subtitleManager.currentCues.map(\.text)
     }
 
     /// Clear any prepared stream state so the next startup recomputes route + URLs.
@@ -847,6 +906,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 self.currentTime = time.seconds
                 self.checkMarkers(at: time.seconds)
                 self.tickReplayWindow(at: time.seconds)
+                self.applyContentFilter(at: time.seconds)
             }
         }
         timeObserver = observer
@@ -977,6 +1037,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func startPlayback() async {
+        // Arm the local content filter for this item: reload settings, restore
+        // any cached filter list, and (if a source URL is set) refresh it.
+        contentFilter.beginItem(ratingKey: metadata.ratingKey)
+
         // Fetch detailed metadata if markers or chapters are missing
         let hasMarkers = !(metadata.Marker ?? []).isEmpty
         let hasChapters = !(metadata.Chapter ?? []).isEmpty
@@ -1455,6 +1519,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // assumption, so no throttle change is needed.
                 self?.checkMarkers(at: time)
                 self?.tickReplayWindow(at: time)
+                self?.applyContentFilter(at: time)
             }
             .store(in: &cancellables)
 
@@ -2187,6 +2252,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         titleLogoResolveTask = nil
         subtitleClockSync.stop()
         clearReplayWindow()
+        contentFilter.reset()
 
         // Clear the active playback route and content from the App Hang scope
         // (RIVULET-41) so a later hang off the player isn't tagged with a stale

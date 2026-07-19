@@ -345,6 +345,68 @@ enum SettingsDescriptorStore {
             iconColor: .gray,
             description: "Rivulet's license and the open-source software it uses, including FFmpeg (LGPL), libdovi, and Sentry."
         ),
+
+        // MARK: Content Filtering
+        "cat_contentFilter": SettingDescriptor(
+            icon: "hand.raised.fill",
+            iconColor: .orange,
+            description: "Mute strong language and skip scenes during playback, without ever changing the file. Language is detected live from the subtitle track; scene skips come from an imported filter list."
+        ),
+        "cf_master": SettingDescriptor(
+            icon: "hand.raised.fill",
+            iconColor: .orange,
+            description: "Turn the local content filter on. When on, Rivulet mutes and skips in real time based on the categories below. Off by default."
+        ),
+        "cf_profanity": SettingDescriptor(
+            icon: "exclamationmark.bubble.fill",
+            iconColor: .orange,
+            description: "Mutes profane words as they appear in the subtitle line. Requires a subtitle track to be active. Use Profanity Strength to choose how much is filtered."
+        ),
+        "cf_strength": SettingDescriptor(
+            icon: "dial.medium.fill",
+            iconColor: .orange,
+            description: "How much profanity to mute: mild and up, moderate and up, or strong words only."
+        ),
+        "cf_blasphemy": SettingDescriptor(
+            icon: "hands.clap.fill",
+            iconColor: .yellow,
+            description: "Mutes irreverent uses of religious names and phrases detected in the subtitle line. Ordinary dialogue is left alone."
+        ),
+        "cf_slur": SettingDescriptor(
+            icon: "person.fill.xmark",
+            iconColor: .red,
+            description: "Mutes racial and other slurs detected in the subtitle line."
+        ),
+        "cf_sexualLanguage": SettingDescriptor(
+            icon: "heart.slash.fill",
+            iconColor: .pink,
+            description: "Mutes crude and sexual language detected in the subtitle line."
+        ),
+        "cf_violence": SettingDescriptor(
+            icon: "burst.fill",
+            iconColor: .red,
+            description: "Skips violent and gory scenes. Requires an imported filter list — set the Filter List URL below. Dialogue text alone can't detect these scenes."
+        ),
+        "cf_sexNudity": SettingDescriptor(
+            icon: "eye.slash.fill",
+            iconColor: .purple,
+            description: "Skips scenes with sex or nudity. Requires an imported filter list — set the Filter List URL below."
+        ),
+        "cf_frightening": SettingDescriptor(
+            icon: "theatermasks.fill",
+            iconColor: .indigo,
+            description: "Skips frightening or intense scenes. Requires an imported filter list — set the Filter List URL below."
+        ),
+        "cf_substances": SettingDescriptor(
+            icon: "pills.fill",
+            iconColor: .teal,
+            description: "Skips scenes featuring drug, alcohol, or tobacco use. Requires an imported filter list — set the Filter List URL below."
+        ),
+        "cf_sourceURL": SettingDescriptor(
+            icon: "link",
+            iconColor: .blue,
+            description: "Optional. A location where per-title filter files live, in the open MCF (movie content filter) or EDL format. Use {id} for the Plex rating key, or point at a folder that holds <ratingKey>.mcf files. Rivulet loads the matching file when a title starts. It ships no filter data of its own."
+        ),
     ]
 
     // MARK: - Page Descriptors
@@ -366,6 +428,8 @@ enum SettingsDescriptorStore {
         case .userProfiles: return ("person.crop.circle", .cyan)
         case .displaySizePicker: return ("textformat.size", .orange)
         case .autoplayCountdownPicker: return ("forward.end.alt", .purple)
+        case .contentFilter: return ("hand.raised.fill", .orange)
+        case .contentFilterStrength: return ("dial.medium.fill", .orange)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .blue)
         case .addLiveTVSource: return ("plus.circle.fill", .blue)
         case .addOwnServer: return ("server.rack", .blue)

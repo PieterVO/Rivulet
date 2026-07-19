@@ -146,6 +146,7 @@ struct WhatsNewView: View {
             "Fixed playback getting stuck after leaving the app and coming back, the video now picks up right where you left off",
         ]),
         ("1.0.3 (67)", [
+            "New Content Filtering in Playback settings can mute strong language from the subtitle track and skip scenes using an imported filter list. It runs on device, works per category, and never changes your files. A quick toggle is also in the player controls",
             "Choosing forced subtitles now sticks: the next title no longer switches you to full captions",
             "Redesigned Live TV guide with a full channel grid, program details, and instant playback",
             "Show and movie pages opened from Top Shelf or Siri now match the pages you get inside the app",

@@ -81,6 +81,13 @@ final class TransportControlButton: UIControl {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// Swap the glyph (e.g. the content-filter toggle reflecting on/off).
+    /// Keeps the current tint so focus styling is preserved.
+    func setIcon(_ image: UIImage?) {
+        let config = UIImage.SymbolConfiguration(pointSize: 25, weight: .semibold)
+        iconView.image = image?.applyingSymbolConfiguration(config)
+    }
+
     override var canBecomeFocused: Bool { true }
 
     // Select does not fire .primaryActionTriggered on a plain UIControl

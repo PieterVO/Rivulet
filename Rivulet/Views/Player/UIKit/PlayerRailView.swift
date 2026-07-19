@@ -43,12 +43,16 @@ final class PlayerRailView: UIView {
     let upNextButton = TransportControlButton(
         icon: UIImage(systemName: "list.and.film"), accessibilityLabel: "Up Next",
         diameter: Metrics.buttonDiameter)
+    let filterButton = TransportControlButton(
+        icon: UIImage(systemName: "hand.raised"), accessibilityLabel: "Content Filter",
+        diameter: Metrics.buttonDiameter)
 
     var onSubtitles: (() -> Void)?
     var onAudio: (() -> Void)?
     var onInfo: (() -> Void)?
     var onInsights: (() -> Void)?
     var onUpNext: (() -> Void)?
+    var onFilter: (() -> Void)?
     var onReplayLongPress: (() -> Void)?
 
     private let backgroundEffectView: UIVisualEffectView
@@ -118,7 +122,7 @@ final class PlayerRailView: UIView {
         cluster.axis = .horizontal
         cluster.spacing = Metrics.buttonGap
         cluster.alignment = .center
-        [subtitlesButton, audioButton, infoButton, insightsButton, upNextButton].forEach {
+        [subtitlesButton, audioButton, infoButton, insightsButton, upNextButton, filterButton].forEach {
             cluster.addArrangedSubview($0)
         }
 
@@ -160,7 +164,14 @@ final class PlayerRailView: UIView {
         infoButton.onPress = { [weak self] in self?.onInfo?() }
         insightsButton.onPress = { [weak self] in self?.onInsights?() }
         upNextButton.onPress = { [weak self] in self?.onUpNext?() }
+        filterButton.onPress = { [weak self] in self?.onFilter?() }
         insightsButton.isHidden = true
+    }
+
+    /// Reflect the content filter's on/off state in the toggle glyph
+    /// (outline = off, filled = on).
+    func setFilterEnabled(_ enabled: Bool) {
+        filterButton.setIcon(UIImage(systemName: enabled ? "hand.raised.fill" : "hand.raised"))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

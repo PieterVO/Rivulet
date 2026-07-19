@@ -1122,6 +1122,16 @@ class PlayerContainerViewController: UIViewController {
                     hideSpoilers: SettingsStore.bool("hideTriviaSpoilers", default: true)),
                 width: 640, from: rail.insightsButton)
         }
+
+        // Content filter: a quick on/off toggle. The glyph reflects state
+        // (outline = off, filled = on); per-category controls live in Settings.
+        rail.onFilter = { [weak self, weak rail] in
+            guard let vm = self?.viewModel else { return }
+            let newState = !vm.contentFilter.isEnabled
+            vm.contentFilter.setEnabled(newState)
+            rail?.setFilterEnabled(newState)
+        }
+        rail.setFilterEnabled(vm.contentFilter.isEnabled)
     }
 
     /// Whether the Insights panel has anything to show: a non-empty cast
