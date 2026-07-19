@@ -254,70 +254,22 @@ extension PlexLiveTVChannel {
 
         var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8")
 
-        // Build the client profile extras - these define codec support and limitations
-        // This matches what official Plex clients send for Apple TV
-        let profileExtras = buildClientProfileExtras()
-
-        components?.queryItems = [
-            // Core transcode parameters
-            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
-            URLQueryItem(name: "path", value: key),
-            URLQueryItem(name: "mediaIndex", value: "0"),
-            URLQueryItem(name: "partIndex", value: "0"),
-            URLQueryItem(name: "offset", value: "0"),
-            URLQueryItem(name: "protocol", value: "hls"),
-
-            // Container format
-            URLQueryItem(name: "container", value: "mpegts"),
-            URLQueryItem(name: "segmentFormat", value: "mpegts"),
-            URLQueryItem(name: "segmentContainer", value: "mpegts"),
-
-            // Playback mode - DIRECT STREAM: the server remuxes the tuner feed
-            // (no re-encode; the codec lists below declare the raw broadcast
-            // codecs as acceptable) and AetherEngine demuxes it client-side.
-            // directPlay stays off — the universal endpoint refuses to build a
-            // session when it decides direct play.
-            URLQueryItem(name: "directPlay", value: "0"),
-            URLQueryItem(name: "directStream", value: "1"),
-            URLQueryItem(name: "directStreamAudio", value: "1"),
-
-            // Video settings - include mpeg2video so DVB broadcasts direct-play
-            // instead of forcing a video transcode (Aether software-decodes it)
-            URLQueryItem(name: "videoCodec", value: "h264,hevc,mpeg2video"),
-            URLQueryItem(name: "videoResolution", value: "1920x1080"),
-            URLQueryItem(name: "maxVideoBitrate", value: "20000"),
-            URLQueryItem(name: "videoQuality", value: "100"),
-
-            // HLS segment settings
-            URLQueryItem(name: "segmentDuration", value: "6"),
-
-            // Audio settings - include mp2/mp3 (common on DVB) for direct play
-            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3,mp2,mp3"),
-            URLQueryItem(name: "audioBitrate", value: "384"),
-            URLQueryItem(name: "audioChannels", value: "6"),
-
-            // Subtitles
-            URLQueryItem(name: "subtitles", value: "auto"),
-            URLQueryItem(name: "subtitleSize", value: "100"),
-
-            // Context and location
-            URLQueryItem(name: "context", value: "streaming"),
-            URLQueryItem(name: "location", value: "lan"),
-
-            // Session management
-            URLQueryItem(name: "session", value: sessionId),
-            URLQueryItem(name: "autoAdjustQuality", value: "0"),
-            URLQueryItem(name: "hasMDE", value: "1"),
-
-            // Fast seeking support
-            URLQueryItem(name: "fastSeek", value: "1"),
-
-            // Client profile extras - critical for Plex to understand client capabilities
-            URLQueryItem(name: "X-Plex-Client-Profile-Extra", value: profileExtras),
-
-            // Authentication
-            URLQueryItem(name: "X-Plex-Token", value: authToken),
-        ]
+        // Untuned base: `path` points at the EPG channel metadata. Cloud-EPG /
+        // DVB servers reject this (the tuned session path from resolveStreamURL
+        // replaces it); some HDHomeRun setups accept it, so it stays the
+        // last-resort fallback when the tune step fails.
+        components?.queryItems = Self.universalLiveQueryItems(
+            sessionPath: key,
+            sessionIdentifier: UUID().uuidString,
+            transcodeSessionId: sessionId,
+            directPlay: false,
+            authToken: authToken
+        )
+        // Consensus wire form: '+' profile-clause separators travel as %2B.
+        if let escapedQuery = components?.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B") {
+            components?.percentEncodedQuery = escapedQuery
+        }
 
         let resultURL = components?.url
 
@@ -348,31 +300,80 @@ extension PlexLiveTVChannel {
         return resultURL
     }
 
-    /// Build the X-Plex-Client-Profile-Extra parameter value.
-    /// This tells Plex what codecs and formats the client supports.
-    private func buildClientProfileExtras() -> String {
-        // Each profile directive is separated by "+"
-        // These are URL-encoded when added to the query string
-        let profiles = [
-            // Direct play profiles - what we can play without transcoding.
-            // AetherEngine demuxes MPEG-TS and software-decodes MPEG-2, so
-            // declare the raw DVB codecs too and let Plex skip the transcoder.
-            "add-direct-play-profile(type=videoProfile&protocol=http&container=mpegts&videoCodec=h264,hevc,mpeg2video&audioCodec=aac,ac3,eac3,mp2,mp3)",
-            "add-direct-play-profile(type=videoProfile&protocol=hls&container=mpegts&videoCodec=h264,hevc,mpeg2video&audioCodec=aac,ac3,eac3,mp2,mp3)",
-
-            // Transcode target - how to transcode if needed
-            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&replace=true)",
-
-            // Subtitle transcode target
-            "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
-
-            // Limitations - match Apple TV 4K capabilities
-            "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.width&value=1920&replace=true)",
-            "add-limitation(scope=videoCodec&scopeName=*&type=upperBound&name=video.height&value=1080&replace=true)",
-            "add-limitation(scope=videoAudioCodec&scopeName=*&type=upperBound&name=audio.channels&value=6&replace=true)",
+    /// The universal-transcoder query set for live sessions, shared verbatim
+    /// by /decision and /start.m3u8 (PMS links them by identical params).
+    /// Mirrors the parameter set working third-party clients ship (Plezy /
+    /// Vita_plex), verified against a live PMS. Three distinct identities:
+    /// `session` (transcode session), `X-Plex-Session-Identifier` (from tune,
+    /// links the transcode to the tuner grab's consumer), and the client
+    /// identifier.
+    static func universalLiveQueryItems(
+        sessionPath: String,
+        sessionIdentifier: String,
+        transcodeSessionId: String,
+        directPlay: Bool,
+        authToken: String
+    ) -> [URLQueryItem] {
+        let productVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            ?? "1.0"
+        return [
+            URLQueryItem(name: "hasMDE", value: "1"),
+            URLQueryItem(name: "path", value: sessionPath),
+            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "partIndex", value: "0"),
+            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "fastSeek", value: "1"),
+            // directPlay=1 asks for the raw session playlist (all original
+            // streams incl. DVB teletext / mp2); the decision response says
+            // whether the server granted it. directStream=1 is the remux
+            // fallback the server applies on its own.
+            URLQueryItem(name: "directPlay", value: directPlay ? "1" : "0"),
+            URLQueryItem(name: "directStream", value: "1"),
+            URLQueryItem(name: "directStreamAudio", value: "1"),
+            URLQueryItem(name: "subtitleSize", value: "100"),
+            URLQueryItem(name: "audioBoost", value: "100"),
+            URLQueryItem(name: "location", value: "lan"),
+            URLQueryItem(name: "addDebugOverlay", value: "0"),
+            URLQueryItem(name: "autoAdjustQuality", value: "0"),
+            URLQueryItem(name: "advancedSubtitles", value: "text"),
+            URLQueryItem(name: "mediaBufferSize", value: "157286"),
+            URLQueryItem(name: "session", value: transcodeSessionId),
+            URLQueryItem(name: "subtitles", value: "auto"),
+            URLQueryItem(name: "copyts", value: "0"),
+            URLQueryItem(name: "Accept-Language", value: "en"),
+            URLQueryItem(name: "X-Plex-Session-Identifier", value: sessionIdentifier),
+            URLQueryItem(name: "X-Plex-Client-Profile-Extra", value: Self.liveClientProfileExtras()),
+            URLQueryItem(name: "X-Plex-Incomplete-Segments", value: "1"),
+            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName),
+            URLQueryItem(name: "X-Plex-Version", value: productVersion),
+            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
+            URLQueryItem(name: "X-Plex-Platform", value: "Generic"),
+            URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
+            URLQueryItem(name: "X-Plex-Token", value: authToken),
         ]
+    }
 
-        return profiles.joined(separator: "+")
+    /// X-Plex-Client-Profile-Extra for live sessions, in the canonical
+    /// header-form: clauses joined by raw '+', comma lists pre-encoded as %2C
+    /// (the PMS OpenAPI spec's own example uses exactly this shape). The whole
+    /// value is then percent-encoded ONCE when placed in the query string —
+    /// URLComponents handles that, plus the '+'→%2B pass callers apply.
+    static func liveClientProfileExtras() -> String {
+        let clauses = [
+            // Direct-play profiles: AetherEngine demuxes raw MPEG-TS HLS and
+            // software-decodes MPEG-2 / mp2, so declare the raw broadcast
+            // codecs and let the server grant passthrough when it can.
+            "add-direct-play-profile(type=videoProfile&protocol=hls&container=mpegts&videoCodec=h264%2Chevc%2Cmpeg2video&audioCodec=aac%2Cac3%2Ceac3%2Cmp2%2Cmp3)",
+            "add-direct-play-profile(type=videoProfile&protocol=http&container=mpegts&videoCodec=h264%2Chevc%2Cmpeg2video&audioCodec=aac%2Cac3%2Ceac3%2Cmp2%2Cmp3)",
+
+            // Direct-stream target: keep mp2/mp3 so a remux COPIES broadcast
+            // audio instead of re-encoding it (the engine decodes mp2 fine).
+            "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mpegts&videoCodec=h264%2Chevc%2Cmpeg2video&audioCodec=aac%2Cac3%2Ceac3%2Cmp2%2Cmp3&replace=true)",
+
+            // Subtitle transcode target.
+            "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
+        ]
+        return clauses.joined(separator: "+")
     }
 
     /// Convert to UnifiedChannel

@@ -28,6 +28,10 @@ final class MultiStreamViewModel: ObservableObject {
         let channel: UnifiedChannel
 
         let aetherPlayer: AetherPlayer
+        /// Timeline keepalive for tuned Plex sessions (no-op for other
+        /// sources): each grid slot holds its own tuner grab, and PMS
+        /// releases an unreported grab after its 300s rolling timer.
+        let liveKeepalive = PlexLiveTimelineKeepalive()
 
         var playbackState: UniversalPlaybackState
         var currentProgram: UnifiedProgram?
@@ -60,6 +64,7 @@ final class MultiStreamViewModel: ObservableObject {
         }
 
         func stop() {
+            liveKeepalive.stop()
             aetherPlayer.stop()
         }
 
@@ -72,6 +77,7 @@ final class MultiStreamViewModel: ObservableObject {
             // enables the live clock (live-edge tracking) and the engine's
             // LiveReloadPolicy reconnect path for this slot.
             try await aetherPlayer.load(url: url, headers: headers, startTime: nil, isLive: true)
+            liveKeepalive.start(url: url)
         }
     }
 
