@@ -128,14 +128,6 @@ final class InfoTabBarView: UIView {
         }
         return pills.first.map { [$0.view] } ?? []
     }
-
-    /// Whether focus currently sits on one of this bar's pills — consulted by
-    /// `PlayerInfoTabsView.pressesBegan` to decide whether a Down press should
-    /// escape into the content below.
-    var containsFocus: Bool {
-        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return false }
-        return focused.isDescendant(of: self)
-    }
 }
 
 /// Capsule pill, one per tab. Three visual states, distinct on purpose:

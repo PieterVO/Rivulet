@@ -25,6 +25,13 @@ final class CardStatsView: UIView {
     private let scrollView = InfoScrollView()
     private let stack = UIStackView()
 
+    /// One persistent focusable shell per `SectionSpec`, in declaration
+    /// order. Rebuilds swap each shell's CONTENT and toggle its visibility,
+    /// never the shells themselves — a shell is the focus target, and tearing
+    /// it down mid-tick would yank focus out of the sheet.
+    private var sectionViews: [InfoSectionView] = []
+    private lazy var gatheringLabel = PlayerInfoSheetStyle.bodyLabel("Gathering stats…", secondary: true)
+
     private var liveTickTimer: Timer?
     private var isActiveTab = false
 
@@ -33,7 +40,8 @@ final class CardStatsView: UIView {
     private var valueLabels: [String: UILabel] = [:]
     /// The set of row titles currently rendered. When the next tick's present
     /// set differs (a field appeared/disappeared, or the empty→populated
-    /// transition), the stack is rebuilt; otherwise values update in place.
+    /// transition), the section contents are rebuilt; otherwise values update
+    /// in place.
     private var renderedSignature: Set<String> = []
     /// Distinct from an empty signature so the "Gathering stats…" placeholder
     /// and a genuinely-empty row set don't collide.
@@ -41,10 +49,6 @@ final class CardStatsView: UIView {
 
     var onFocusChange: ((Bool) -> Void)? {
         didSet { scrollView.onFocusChange = onFocusChange }
-    }
-
-    var onEscapeUp: (() -> Void)? {
-        didSet { scrollView.onEscapeUp = onEscapeUp }
     }
 
     init(provider: @escaping () -> AetherAdvancedStats?) {
@@ -114,6 +118,15 @@ final class CardStatsView: UIView {
         addSubview(scrollView)
 
         [scrollView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+
+        gatheringLabel.isHidden = true
+        stack.addArrangedSubview(gatheringLabel)
+        for _ in Self.sections {
+            let shell = InfoSectionView()
+            shell.isHidden = true
+            stack.addArrangedSubview(shell)
+            sectionViews.append(shell)
+        }
 
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
         scrollHeight.priority = .defaultHigh
@@ -219,33 +232,42 @@ final class CardStatsView: UIView {
     }
 
     private func rebuild(with stats: AetherAdvancedStats) {
-        stack.arrangedSubviews.forEach {
-            stack.removeArrangedSubview($0)
-            $0.removeFromSuperview()
-        }
         valueLabels.removeAll()
 
         if stats.isEmpty {
-            stack.addArrangedSubview(PlayerInfoSheetStyle.bodyLabel("Gathering stats…", secondary: true))
+            gatheringLabel.isHidden = false
+            sectionViews.forEach {
+                $0.isHidden = true
+                $0.setContent([])
+            }
             renderedGathering = true
             renderedSignature = []
             return
         }
 
-        for section in Self.sections {
+        gatheringLabel.isHidden = true
+        for (index, section) in Self.sections.enumerated() {
+            let shell = sectionViews[index]
             let visibleRows = section.rows.compactMap { row -> (String, String)? in
                 guard let value = row.value(stats) else { return nil }
                 return (row.title, value)
             }
-            guard !visibleRows.isEmpty else { continue }
-            stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(section.name))
+            guard !visibleRows.isEmpty else {
+                shell.isHidden = true
+                shell.setContent([])
+                continue
+            }
             var rowViews: [UIView] = []
             for (title, value) in visibleRows {
                 let row = PlayerInfoSheetStyle.infoRow(title, value)
                 rowViews.append(row)
                 valueLabels[title] = row
             }
-            stack.addArrangedSubview(PlayerInfoSheetStyle.twoColumnGrid(rowViews))
+            shell.setContent([
+                PlayerInfoSheetStyle.sectionLabel(section.name),
+                PlayerInfoSheetStyle.twoColumnGrid(rowViews),
+            ])
+            shell.isHidden = false
         }
 
         renderedGathering = false

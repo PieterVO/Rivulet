@@ -15,6 +15,13 @@
 //  no tab bar, exactly as the popup did before. The Advanced sheet is built
 //  lazily on the first tab-over and ticks only while it is the visible tab.
 //
+//  Focus: the sheets expose one invisible focus target per section
+//  (`InfoSectionView`), so the tab bar ↔ content crossings are ordinary
+//  focus-engine moves that work identically for swipes and edge clicks — no
+//  press handling here. (The previous single-focusable-sheet design drove
+//  both crossings from arrow presses, which a Siri Remote swipe never
+//  produces, so it only worked from clicks.)
+//
 //  Menu: intentionally does NOT conform to `RailPanelMenuHandling`, so
 //  `PlayerRailPanelView` dismisses the whole panel from either tab.
 //
@@ -32,14 +39,6 @@ final class PlayerInfoTabsView: UIView {
     private let advancedProvider: (() -> AetherAdvancedStats?)?
     private let tabBar: InfoTabBarView?
     private var currentTab: InfoTabBarView.Tab = .info
-
-    /// Transient directional-escape target (see `InsightsPanelContainerView`):
-    /// the focus engine ignores a `setNeedsFocusUpdate()` from an environment
-    /// that does not CONTAIN focus, so the cross-boundary move must be
-    /// requested from this container (the common ancestor of the tab bar and
-    /// the content), with `preferredFocusEnvironments` pointing at the target
-    /// for the duration of that one update.
-    private var focusEscapeTarget: UIView?
 
     private var contentTopAnchor: NSLayoutYAxisAnchor!
     private var contentTopConstant: CGFloat = 0
@@ -91,8 +90,6 @@ final class PlayerInfoTabsView: UIView {
             ])
             contentTopAnchor = tabBar.bottomAnchor
             contentTopConstant = Metrics.tabBarSpacing
-            // Only wire the Up-escape when there is a tab bar to escape to.
-            infoView.onEscapeUp = { [weak self] in self?.escapeToTabBar() }
         } else {
             contentTopAnchor = topAnchor
             contentTopConstant = 0
@@ -139,7 +136,6 @@ final class PlayerInfoTabsView: UIView {
         stats.translatesAutoresizingMaskIntoConstraints = false
         stats.isHidden = true
         stats.onFocusChange = onFocusChange
-        stats.onEscapeUp = { [weak self] in self?.escapeToTabBar() }
         addSubview(stats)
         constrainToContentArea(stats)
         statsView = stats
@@ -156,51 +152,24 @@ final class PlayerInfoTabsView: UIView {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if let focusEscapeTarget { return [focusEscapeTarget] }
-        // Prefer wherever focus already lives, so a re-resolution keeps it
-        // there instead of bouncing between the tab bar and the content. Only
-        // the INITIAL landing (focus not yet inside us) falls through to the
-        // tab bar — the content is a single scroll surface that traps swipes
-        // (a swipe is never an arrow UIPress), so a swipe-user who started in
-        // the content could never get up to the tabs. Directional Down moves
-        // into the content; a click-Up at the content's top escapes back here.
-        if contentContainsFocus { return [currentContentView] }
+        // Prefer the EXACT view that already holds focus, so a re-resolution
+        // (e.g. a directional press that finds no spatial target at the
+        // content's bottom edge) is a strict no-op instead of bouncing focus
+        // to the tab bar or to a different section. Only the INITIAL landing
+        // (focus not yet inside the content) falls through to the tab bar.
+        // The crossings themselves need no driving: the sections are ordinary
+        // focus targets, so Down from a pill and Up from the top section are
+        // native engine moves for both swipes and clicks.
+        if let focused = focusedViewInContent { return [focused] }
         if let tabBar { return [tabBar] }
         return [currentContentView]
     }
 
-    /// Whether focus currently sits inside the visible content sheet (as
-    /// opposed to the tab bar, or nowhere yet on first appearance).
-    private var contentContainsFocus: Bool {
-        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return false }
-        return focused === currentContentView || focused.isDescendant(of: currentContentView)
-    }
-
-    private func moveFocus(to target: UIView) {
-        focusEscapeTarget = target
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
-        focusEscapeTarget = nil
-    }
-
-    private func escapeToTabBar() {
-        guard let tabBar else { return }
-        moveFocus(to: tabBar)
-    }
-
-    /// Down from a pill → the current content. (Up from the content's top edge
-    /// is driven the other way, by the content's `onEscapeUp`.) The focus
-    /// engine's own directional search does not reliably cross the tab-bar ↔
-    /// scroll-view boundary, so both crossings are driven explicitly.
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if let tabBar {
-            for press in presses where press.type == .downArrow {
-                if tabBar.containsFocus {
-                    moveFocus(to: currentContentView)
-                    return
-                }
-            }
-        }
-        super.pressesBegan(presses, with: event)
+    /// The currently focused view, if it sits inside the visible content
+    /// sheet (as opposed to the tab bar, or nowhere yet on first appearance).
+    private var focusedViewInContent: UIView? {
+        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return nil }
+        guard focused === currentContentView || focused.isDescendant(of: currentContentView) else { return nil }
+        return focused
     }
 }

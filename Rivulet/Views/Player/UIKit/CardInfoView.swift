@@ -33,16 +33,10 @@ final class CardInfoView: UIView {
     private let scrollView = InfoScrollView()
     private let stack = UIStackView()
 
-    /// Fires when the scroll surface gains/loses focus, so the hosting panel
-    /// can show a focus treatment the sheet itself can't draw.
+    /// Fires when focus enters/leaves the sheet's sections, so the hosting
+    /// panel can show a focus treatment the sheet itself can't draw.
     var onFocusChange: ((Bool) -> Void)? {
         didSet { scrollView.onFocusChange = onFocusChange }
-    }
-
-    /// Fires on an Up press while the sheet is scrolled to the top — the tab
-    /// container wires this to move focus up to the tab bar.
-    var onEscapeUp: (() -> Void)? {
-        didSet { scrollView.onEscapeUp = onEscapeUp }
     }
 
     init(metadata: PlexMetadata, modes: StreamingModeInfo) {
@@ -202,10 +196,16 @@ final class CardInfoView: UIView {
         }
     }
 
-    /// Adds a section label followed by its rows laid out in two equal columns.
+    /// Adds a section (label + rows in two equal columns) wrapped in an
+    /// `InfoSectionView` — the invisible focus target that swipes and edge
+    /// clicks hop between, driving the sheet's reveal scroll.
     private func addSection(_ title: String, rows: [UIView]) {
         guard !rows.isEmpty else { return }
-        stack.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(title))
-        stack.addArrangedSubview(PlayerInfoSheetStyle.twoColumnGrid(rows))
+        let section = InfoSectionView()
+        section.setContent([
+            PlayerInfoSheetStyle.sectionLabel(title),
+            PlayerInfoSheetStyle.twoColumnGrid(rows),
+        ])
+        stack.addArrangedSubview(section)
     }
 }
