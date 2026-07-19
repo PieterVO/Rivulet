@@ -19,7 +19,7 @@ import SwiftUI
 
 /// How strong a filtered word/scene is. Lets the user keep mild language while
 /// still muting strong language. Ordered: `.mild < .moderate < .strong`.
-enum FilterSeverity: Int, Codable, Sendable, Comparable, CaseIterable, CustomStringConvertible {
+nonisolated enum FilterSeverity: Int, Codable, Sendable, Comparable, CaseIterable, CustomStringConvertible {
     case mild = 0
     case moderate = 1
     case strong = 2
@@ -49,7 +49,7 @@ enum FilterSeverity: Int, Codable, Sendable, Comparable, CaseIterable, CustomStr
 // MARK: - Action
 
 /// What the player does with a region: silence the audio, or seek past it.
-enum FilterAction: String, Codable, Sendable {
+nonisolated enum FilterAction: String, Codable, Sendable {
     case mute
     case skip
 
@@ -67,7 +67,7 @@ enum FilterAction: String, Codable, Sendable {
 /// the subtitle track — no external data needed. Scene categories can only come
 /// from an imported filter list (MCF/EDL), because dialogue text can't reveal a
 /// silent violent or nude scene.
-enum FilterCategory: String, Codable, Sendable, CaseIterable, Identifiable {
+nonisolated enum FilterCategory: String, Codable, Sendable, CaseIterable, Identifiable {
     // Detected from subtitle dialogue
     case profanity
     case blasphemy
@@ -175,7 +175,7 @@ enum FilterCategory: String, Codable, Sendable, CaseIterable, Identifiable {
 // MARK: - Region
 
 /// A single time-coded filter window from an imported list.
-struct FilterRegion: Identifiable, Codable, Sendable {
+nonisolated struct FilterRegion: Identifiable, Codable, Sendable {
     let id: Int
     let start: TimeInterval
     let end: TimeInterval
@@ -191,7 +191,7 @@ struct FilterRegion: Identifiable, Codable, Sendable {
 // MARK: - List
 
 /// An imported, time-coded filter list for one title (parsed from MCF or EDL).
-struct ContentFilterList: Codable, Sendable {
+nonisolated struct ContentFilterList: Codable, Sendable {
     /// Regions sorted by start time.
     let regions: [FilterRegion]
 

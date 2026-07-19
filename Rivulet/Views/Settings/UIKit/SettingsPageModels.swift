@@ -153,7 +153,6 @@ enum SettingsContent {
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .contentFilter:          return contentFilter
         case .contentFilterStrength:  return contentFilterStrength
-        default:           return []   // not yet ported (later clusters)
         }
     }
 

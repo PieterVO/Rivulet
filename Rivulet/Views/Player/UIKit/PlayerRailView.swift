@@ -166,6 +166,9 @@ final class PlayerRailView: UIView {
         upNextButton.onPress = { [weak self] in self?.onUpNext?() }
         filterButton.onPress = { [weak self] in self?.onFilter?() }
         insightsButton.isHidden = true
+        // Hidden until a host wires `onFilter` — the Live TV rail shares this
+        // view but has no content filter.
+        filterButton.isHidden = true
     }
 
     /// Reflect the content filter's on/off state in the toggle glyph

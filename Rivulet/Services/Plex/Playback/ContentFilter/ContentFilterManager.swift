@@ -90,8 +90,11 @@ final class ContentFilterManager: ObservableObject {
         }
         enabledCategories = categories
         // Force the next subtitle feed to re-evaluate (categories/strength or the
-        // master switch may have just changed mid-cue).
+        // master switch may have just changed mid-cue). Drop any current match
+        // too — under the new rules it may no longer apply, and holding it
+        // would keep audio muted until the next cue change re-evaluates.
         lastSubtitleTexts = []
+        subtitleMatched = false
         recomputeMute()
     }
 
@@ -201,6 +204,14 @@ final class ContentFilterManager: ObservableObject {
         }
     }
 
+    /// Install an imported list as this item's regions and re-evaluate the
+    /// mute state. The application step for both the disk cache and the
+    /// sidecar fetch.
+    func applyList(_ list: ContentFilterList) {
+        regions = list.regions
+        recomputeMute()
+    }
+
     // MARK: - Mute recompute
 
     private func recomputeMute() {
@@ -228,18 +239,18 @@ final class ContentFilterManager: ObservableObject {
         guard !candidates.isEmpty else { return }
 
         sidecarTask?.cancel()
-        sidecarTask = Task.detached { [weak self] in
+        // Runs on the main actor (the parsers share VTTParser with the subtitle
+        // pipeline, which is main-actor); only the fetch suspends. Lists are a
+        // few KB, so parsing here is negligible.
+        sidecarTask = Task { [weak self] in
             for url in candidates {
                 if Task.isCancelled { return }
                 guard let (content, sourceURL) = await Self.fetch(url) else { continue }
                 guard let list = try? ContentFilterParser.parse(content: content, url: sourceURL),
                       !list.isEmpty else { continue }
-                await MainActor.run {
-                    guard let self, self.itemRatingKey == ratingKey else { return }
-                    self.regions = list.regions
-                    self.recomputeMute()
-                }
                 Self.cacheList(list, ratingKey: ratingKey)
+                guard let self, !Task.isCancelled, self.itemRatingKey == ratingKey else { return }
+                self.applyList(list)
                 return
             }
         }

@@ -475,6 +475,18 @@ final class UniversalPlayerViewModel: ObservableObject {
                 self?.applyContentFilterMute(muting)
             }
             .store(in: &cancellables)
+
+        // A fresh player instance (e.g. the HLS fallback mid-item) starts
+        // unmuted; re-assert the filter's current decision when either player
+        // slot changes so a mute window survives the swap.
+        $aetherPlayer.combineLatest($player)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] aether, avPlayer in
+                guard let self, self.contentFilter.isFilterMuting else { return }
+                aether?.setMuted(true)
+                avPlayer?.isMuted = true
+            }
+            .store(in: &cancellables)
     }
 
     /// Silence (or restore) the active player's audio for the filter. Aether's
@@ -496,8 +508,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         contentFilter.activeSubtitlesDidChange(texts: activeSubtitleTextForFilter())
 
         guard let skipTarget = contentFilter.timeDidUpdate(time, allowSkip: !isScrubbing) else { return }
+        // A window that runs to (or past) the end of the item would otherwise
+        // seek beyond EOF; land just short so playback ends normally instead.
+        let target = duration > 0 ? min(skipTarget, max(0, duration - 0.25)) : skipTarget
         Task { [weak self] in
-            await self?.seek(to: skipTarget, revealsControls: false)
+            await self?.seek(to: target, revealsControls: false)
         }
     }
 

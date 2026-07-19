@@ -38,9 +38,12 @@ enum ContentFilterFormat {
         }
         let head = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if head.hasPrefix("WEBVTT") { return .mcf }
-        // EDL: first non-empty line is "number number number".
-        if let firstLine = head.split(separator: "\n").first,
-           EDLFilterParser.looksLikeEDLLine(String(firstLine)) {
+        // EDL: the first data line (skipping blanks and # comments, which
+        // tools like cleanvid emit as headers) is "number number number".
+        let firstDataLine = head.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty && !$0.hasPrefix("#") }
+        if let firstDataLine, EDLFilterParser.looksLikeEDLLine(firstDataLine) {
             return .edl
         }
         return nil

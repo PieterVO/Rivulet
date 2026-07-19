@@ -1131,6 +1131,7 @@ class PlayerContainerViewController: UIViewController {
             vm.contentFilter.setEnabled(newState)
             rail?.setFilterEnabled(newState)
         }
+        rail.filterButton.isHidden = false
         rail.setFilterEnabled(vm.contentFilter.isEnabled)
     }
 

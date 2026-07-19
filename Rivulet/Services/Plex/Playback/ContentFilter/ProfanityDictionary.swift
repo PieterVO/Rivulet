@@ -41,21 +41,27 @@ enum ProfanityDictionary {
         let normalized = normalize(text)
         guard !normalized.isEmpty else { return false }
 
-        // Phrase pass (multi-word terms) on the whole normalized line.
-        let paddedLine = " \(normalized) "
+        // Phrase pass (multi-word terms) on the normalized line with masking
+        // characters stripped, so "God damn!" still ends in a word boundary.
+        let phraseLine = normalized
+            .filter { !maskingCharacters.contains($0) }
+            .split(separator: " ").joined(separator: " ")
+        let paddedLine = " \(phraseLine) "
         for entry in phraseEntries where enabledCategories.contains(entry.category) {
             guard passesThreshold(entry, threshold: profanityThreshold) else { continue }
             if paddedLine.contains(" \(entry.term) ") { return true }
         }
 
-        // Word pass: tokenize once, test each token against the single-word set.
+        // Word pass: tokenize once, test each token's candidate spellings
+        // against the single-word set.
         let tokens = normalized.split(separator: " ").map(String.init)
         for token in tokens {
-            let canonical = collapseMasking(token)
-            if let entry = wordIndex[canonical],
-               enabledCategories.contains(entry.category),
-               passesThreshold(entry, threshold: profanityThreshold) {
-                return true
+            for candidate in candidateForms(token) {
+                if let entry = wordIndex[candidate],
+                   enabledCategories.contains(entry.category),
+                   passesThreshold(entry, threshold: profanityThreshold) {
+                    return true
+                }
             }
         }
         return false
@@ -79,7 +85,9 @@ enum ProfanityDictionary {
         var out = String()
         out.reserveCapacity(lowered.count)
         for ch in lowered {
-            if ch.isLetter || ch.isNumber || ch == "'" || ch == "’" {
+            if ch == "'" || ch == "’" {
+                out.append("'")  // curly → straight so phrase terms match
+            } else if ch.isLetter || ch.isNumber {
                 out.append(ch)
             } else if maskingCharacters.contains(ch) {
                 out.append(ch)
@@ -92,28 +100,47 @@ enum ProfanityDictionary {
 
     private static let maskingCharacters: Set<Character> = ["*", "!", "@", "$", "#", "%", "&"]
 
-    /// Turn a possibly-masked token into a canonical spelling for lookup.
-    /// Substitutes the usual leet/mask characters, drops apostrophes, and only
-    /// returns something different when masking was actually present.
-    private static func collapseMasking(_ token: String) -> String {
-        var result = String()
-        result.reserveCapacity(token.count)
-        for ch in token {
+    /// Candidate spellings for a token, in lookup order. Masking characters are
+    /// ambiguous — "sh!t" uses "!" as a letter, "shit!" uses it as punctuation —
+    /// so both readings are tried: dropped entirely, and leet-substituted.
+    /// Known short residues of fully-masked words ("f***" → "f") expand via
+    /// `maskedStubs`.
+    private static func candidateForms(_ token: String) -> [String] {
+        // Stub expansion ("f" → "fuck") only makes sense when the token was
+        // actually masked with a censor glyph; without this guard, innocent
+        // short tokens ("B1") would expand into hits.
+        let wasMasked = token.contains { censorGlyphs.contains($0) }
+        var forms: [String] = []
+        func add(_ raw: String) {
+            guard !raw.isEmpty else { return }
+            let form = (wasMasked ? maskedStubs[raw] : nil) ?? raw
+            if !forms.contains(form) { forms.append(form) }
+        }
+        // Apostrophes never carry meaning for the lookup; strip them once.
+        let base = token.filter { $0 != "'" && $0 != "’" }
+        // Reading 1: masking characters are punctuation — drop them.
+        // ("shit!" → "shit", "f***" → "f" → stub)
+        add(base.filter { !maskingCharacters.contains($0) })
+        // Reading 2: masking characters stand in for letters — substitute.
+        // ("sh!t" → "shit", "b@stard" → "bastard", "sh1t" → "shit")
+        var substituted = String()
+        substituted.reserveCapacity(base.count)
+        for ch in base {
             switch ch {
-            case "@": result.append("a")
-            case "$": result.append("s")
-            case "!", "1": result.append("i")
-            case "0": result.append("o")
-            case "'", "’": break
-            case "*", "#", "%", "&": break  // dropped: "f***" -> "f", handled by prefix set below
-            default: result.append(ch)
+            case "@": substituted.append("a")
+            case "$": substituted.append("s")
+            case "!", "1": substituted.append("i")
+            case "0": substituted.append("o")
+            case "*", "#", "%", "&": break
+            default: substituted.append(ch)
             }
         }
-        // A fully-masked strong word like "f***" collapses to a short stub;
-        // map known stubs to their word so they still filter.
-        if let expanded = maskedStubs[result] { return expanded }
-        return result
+        add(substituted)
+        return forms
     }
+
+    /// Characters that mark a token as deliberately censored ("f***", "s#it").
+    private static let censorGlyphs: Set<Character> = ["*", "#", "%", "&"]
 
     /// Short residues of masked strong words → canonical term.
     private static let maskedStubs: [String: String] = [
