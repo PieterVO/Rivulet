@@ -732,6 +732,11 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 )
                 vm.cancelScrub()
                 onResetRemoteInput?()
+            } else if vm.showPausedPoster {
+                // Back with the ambient pause backdrop up returns to the
+                // paused frame — it does not exit the player. The timer does
+                // not re-arm until the next pause, so the frame stays clean.
+                vm.hidePausedPoster()
             } else if vm.controlsFocusActive || vm.showControls {
                 // Back from the transport buttons (or from any visible chrome)
                 // closes the whole chrome in one press, rather than first

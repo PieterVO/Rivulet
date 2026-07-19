@@ -334,7 +334,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
     private var pausedPosterTimer: Timer?
-    private let pausedPosterDelay: TimeInterval = 5.0
+    private let pausedPosterDelay: TimeInterval = 10.0
     private var pausedPosterDimTimer: Timer?
     private let pausedPosterDimDelay: TimeInterval = 120.0
     /// True while a rail panel (Subtitles/Audio/Info/Up Next/Insights) is

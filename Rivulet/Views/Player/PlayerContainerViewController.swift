@@ -390,6 +390,12 @@ class PlayerContainerViewController: UIViewController {
                 panel.dismissPanel()
                 return
             }
+            // Ambient pause backdrop: back returns to the paused frame, it
+            // does not exit the player.
+            if vm.showPausedPoster {
+                vm.hidePausedPoster()
+                return
+            }
             // Back from the transport buttons closes the whole chrome in one
             // press (not first de-focusing onto the scrubber). Hiding
             // showControls cascades to clear controlsFocusActive via its didSet.
@@ -560,6 +566,8 @@ class PlayerContainerViewController: UIViewController {
                 if !panel.contentHandlesMenuPress() {
                     panel.dismissPanel()
                 }
+            } else if vm.showPausedPoster {
+                vm.hidePausedPoster()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {
@@ -573,7 +581,12 @@ class PlayerContainerViewController: UIViewController {
         }
 
         // If we're consuming this menu press in-app (not dismissing), block SwiftUI fallback dismiss briefly.
-        let shouldBlockDismiss = vm.postVideoState == .hidden && (vm.isScrubbing || vm.showControls)
+        // showPausedPoster counts: the coordinator's .back consumes the press by
+        // returning to the paused frame, and by the time the fallback dismiss
+        // fires the poster flag is already cleared — without this term the
+        // fallback would exit the player anyway.
+        let shouldBlockDismiss = vm.postVideoState == .hidden
+            && (vm.isScrubbing || vm.showControls || vm.showPausedPoster)
         if shouldBlockDismiss {
             blockDismissTemporarily()
         }
