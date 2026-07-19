@@ -506,10 +506,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            // The Aether engine self-manages background: it tears the video pipeline down on background
-            // and reloads + restores play state on foreground. Pausing it here would run before the
-            // engine captures its pre-background play state, clobbering it so it always returned paused.
-            // Let Aether own its lifecycle; this host pause covers the HLS/AVPlayer route only.
+            // The Aether route self-manages background: the engine tears the video pipeline down on
+            // background, and AetherPlayer reloads it + restores play state on foreground (upstream's
+            // tvOS build has no foreground recovery of its own — see observeAppLifecycle in
+            // AetherPlayer). Pausing here would flip AetherPlayer.userIntendsToPlay so a watching
+            // user always returned paused. This host pause covers the HLS/AVPlayer route only.
             if self.aetherPlayer != nil { return }
             if self.playbackState == .playing {
                 self.pausedDueToAppInactive = true

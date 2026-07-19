@@ -91,6 +91,21 @@ final class AetherPlayer: PlayerProtocol {
     /// metadata onto them.
     @Published private(set) var subtitleTracks: [MediaTrack] = []
 
+    /// Whether the USER wants playback running. Mutated only by play()/pause()
+    /// and set at load start (every load auto-plays). Deliberately NOT derived
+    /// from engine state: tvOS auto-pauses the AVPlayer on resign-active and
+    /// the engine's timeControlStatus sink flips its state to .paused
+    /// synchronously, so engine state at background time always reads "paused"
+    /// even for an actively watching user.
+    private var userIntendsToPlay = false
+
+    /// Set on didEnterBackground, cleared when the foreground reload runs.
+    /// nil means "no background transit pending" (also skips the spurious
+    /// willEnterForeground at cold launch).
+    private var backgroundedAt: Date?
+
+    private var foregroundReloadTask: Task<Void, Never>?
+
     init() {
         do {
             self.engine = try AetherEngine()
@@ -98,6 +113,7 @@ final class AetherPlayer: PlayerProtocol {
             fatalError("AetherEngine init failed: \(error)")
         }
         wireUpPublishers()
+        observeAppLifecycle()
     }
 
     private func wireUpPublishers() {
@@ -338,6 +354,54 @@ final class AetherPlayer: PlayerProtocol {
         return screen.currentEDRHeadroom > 1.001
     }
 
+    // MARK: - Background / foreground lifecycle
+
+    /// Upstream AetherEngine tears the video pipeline down on tvOS background
+    /// (releases the AVPlayer item, VT session, and loopback server; parks
+    /// state = .paused) and expects the HOST to reload on foreground — its own
+    /// foreground observer is compiled out on tvOS (#if os(iOS)). Without this
+    /// reload the session stays torn down forever and playback can never
+    /// resume (issue #215).
+    private func observeAppLifecycle() {
+        NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.backgroundedAt = Date()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reloadAfterBackgroundReturn()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func reloadAfterBackgroundReturn() {
+        guard let backgroundedAt else { return }
+        self.backgroundedAt = nil
+        let resumePlayback = userIntendsToPlay
+        foregroundReloadTask?.cancel()
+        foregroundReloadTask = Task { [weak self] in
+            // The engine's teardown holds a background task through a 3.5s
+            // loopback socket drain after its synchronous stopInternal. It
+            // exposes no handle to await, so on a quick app switch wait out
+            // the remainder before rebuilding; a real background stay has
+            // long finished and pays nothing.
+            let drain = max(0, 4.0 - Date().timeIntervalSince(backgroundedAt))
+            if drain > 0 { try? await Task.sleep(for: .seconds(drain)) }
+            guard let self, !Task.isCancelled else { return }
+            print("[AetherPlayer] foreground reload: resume=\(resumePlayback) pos=\(self.engine.currentTime)")
+            // No-ops if nothing is loaded or the session was stopped while we
+            // waited (public stop() clears the engine's loadedURL).
+            try? await self.engine.reloadAtCurrentPosition()
+            guard !Task.isCancelled else { return }
+            // Every load auto-plays; restore the user's pre-background choice.
+            if !resumePlayback { self.engine.pause() }
+        }
+    }
+
     // MARK: - PlayerProtocol state
 
     var isPlaying: Bool { engine.state == .playing }
@@ -425,6 +489,7 @@ final class AetherPlayer: PlayerProtocol {
             preferredAudioLanguages: Self.livePreferredAudioLanguages(),
             preferredSubtitleLanguages: Self.livePreferredSubtitleLanguages()
         )
+        userIntendsToPlay = true
         do {
             // Broadcast H.264 routinely mis-signals interlaced content as
             // progressive (codecpar fieldOrder=0; MBAFF is only flagged
@@ -524,6 +589,7 @@ final class AetherPlayer: PlayerProtocol {
                 )
             }
         )
+        userIntendsToPlay = true
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
         } catch {
@@ -545,9 +611,19 @@ final class AetherPlayer: PlayerProtocol {
         engine.setExternalMetadata(items)
     }
 
-    func play() { engine.play() }
-    func pause() { engine.pause() }
-    func stop() { engine.stop() }
+    func play() {
+        userIntendsToPlay = true
+        engine.play()
+    }
+    func pause() {
+        userIntendsToPlay = false
+        engine.pause()
+    }
+    func stop() {
+        foregroundReloadTask?.cancel()
+        userIntendsToPlay = false
+        engine.stop()
+    }
 
     // MARK: - Render surface
 
