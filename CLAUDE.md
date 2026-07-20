@@ -349,19 +349,32 @@ The Plex Discover API uses three different hosts:
 | Tuner Type | URL Source | Notes |
 |------------|-----------|-------|
 | HDHomeRun | `PlexLiveTVChannel.streamURL` | Direct stream, works out of box |
-| DVB (TBS, etc.) | Built via `buildPlexLiveTVStreamURL()` | Requires full transcode params |
+| DVB / cloud-EPG | Tune → decision handshake in `PlexLiveTVProvider.resolveStreamURL` | See below |
 
-### Required Transcode Parameters for DVB
-```
-X-Plex-Client-Profile-Name, X-Plex-Client-Profile-Extra
-mediaIndex, partIndex, offset
-container, segmentFormat, segmentContainer
-videoCodec, videoResolution, maxVideoBitrate, videoQuality
-audioCodec, audioBitrate, audioChannels
-session (unique UUID per session)
-```
+### Tuned-channel handshake (DVB / cloud-EPG DVRs)
 
-Without these, Plex returns errors or empty responses and the demuxer fails to open the stream.
+Channels without a direct stream URL go through a three-step, server-authoritative flow:
+
+1. **Tune**: `POST /livetv/dvrs/{dvr}/channels/{id}/tune?X-Plex-Session-Identifier={sid}`.
+   Parse the first `key` prefixed `/livetv/sessions/` (excluding `.m3u8`) as the session
+   path — some PMS variants carry NO `Media.uuid` (legacy fallback only). An HTTP 200
+   with `MediaContainer.status: -1` is a FAILED tune. Also extract the first numeric
+   `ratingKey` (the timeline keepalive 404s with `plex://` string keys).
+2. **Decision**: `GET /video/:/transcode/universal/decision` with `path={sessionPath}`,
+   `directPlay=1&directStream=1`, and the shared param set from
+   `PlexLiveTVChannel.universalLiveQueryItems`. `mdeDecisionCode == 1000` → play the
+   returned Part key verbatim (raw session HLS, teletext/mp2 intact — load it with
+   `forceEngineDemux: true`; AVPlayer can't decode broadcast mp2/teletext). Otherwise →
+   `start.m3u8` with the IDENTICAL param set.
+3. **Keepalive**: PMS releases the grab on a 300s rolling timer. `PlexLiveTimelineKeepalive`
+   pings `/:/timeline` every 10s (first ping delayed 3s — an immediate ping spawns a
+   duplicate transcode job), `time=0&duration=0&playbackTime={ms}` (avoids the
+   time-exceeds-duration 400), and sends `state=stopped` on teardown to free the tuner.
+   Wired in `LiveTVAetherPlayerViewController` and per multiview slot.
+
+`X-Plex-Client-Profile-Extra` encoding: clauses joined by raw `+`, comma lists pre-encoded
+`%2C`, whole value percent-encoded once (`URLComponents` + a `"+"→"%2B"` pass). This is the
+canonical form working Plex clients ship; do not "fix" it back to raw commas.
 
 ## Sentry Error Patterns
 
