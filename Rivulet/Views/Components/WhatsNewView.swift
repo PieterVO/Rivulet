@@ -140,7 +140,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.0.3 (68)", [  // confirm build number at release
+        ("1.0.3 (68)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
             "Language muting works on any title with subtitles, and scene skipping uses filter lists in the MCF or EDL format from a URL you provide, without ever changing your files",
             "The backdrop that appears while paused now waits ten seconds instead of five, so you have more time to look at the paused frame",
@@ -151,7 +151,9 @@ struct WhatsNewView: View {
             "Live TV streams no longer cut out after a few minutes because the server thought nobody was watching",
             "The Live TV player now shows how far into the current program you are",
             "The Live TV guide now loads program data as you scroll, so large channel lineups open faster",
+            "Fixed channel logos sometimes showing on the wrong channels while scrolling the Live TV guide",
             "Teletext subtitles now start on the page used in your region",
+            "Fixed connecting to a Plex server failing on some home networks, with a retry and an unlink option if connecting still fails",
         ]),
         ("1.0.3 (67)", [
             "Choosing forced subtitles now sticks: the next title no longer switches you to full captions",
