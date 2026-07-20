@@ -36,7 +36,15 @@ struct PlexAuthView: View {
                     serverSelectionView(servers: servers)
 
                 case .authenticated:
-                    successView
+                    // Token-only "authenticated" (account linked, no server
+                    // connected — e.g. the first connection attempt failed
+                    // before relaunch) must not show the "Connected!" dead
+                    // end; the .task below routes it into server selection.
+                    if authManager.selectedServerURL != nil {
+                        successView
+                    } else {
+                        loadingView(message: "Loading servers...")
+                    }
 
                 case .error(let message):
                     errorView(message: message)
@@ -53,6 +61,11 @@ struct PlexAuthView: View {
         .task {
             if case .idle = authManager.state {
                 await authManager.startPINAuthentication()
+            } else if case .authenticated = authManager.state,
+                      authManager.selectedServerURL == nil {
+                // Account linked but no server ever connected — recover into
+                // server selection instead of stranding the user (#224).
+                await authManager.resumeServerSelection()
             }
         }
     }
@@ -185,6 +198,16 @@ struct PlexAuthView: View {
 
             Button("Try Again") {
                 Task {
+                    // Skips the PIN step when the account is already linked —
+                    // re-runs server discovery/connection only.
+                    await authManager.retryAfterError()
+                }
+            }
+            .buttonStyle(AppStoreButtonStyle())
+
+            Button("Unlink Account") {
+                Task {
+                    authManager.signOut()
                     await authManager.startPINAuthentication()
                 }
             }

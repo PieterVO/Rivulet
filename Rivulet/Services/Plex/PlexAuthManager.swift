@@ -316,7 +316,30 @@ class PlexAuthManager: ObservableObject {
         }
 
         guard !chains.isEmpty else { return nil }
-        return await raceByPriority(chains)
+        if let winner = await raceByPriority(chains) {
+            return winner
+        }
+
+        // Every candidate failed. Capture with a privacy-trimmed candidate
+        // summary — the per-probe breadcrumbs above carry the failure detail.
+        // Address CLASS only (never the address itself).
+        let candidateSummary = sortedConnections.map { conn -> String in
+            let kind = conn.relay ? "relay" : (conn.local ? "local" : "remote")
+            let net = conn.uri.contains(".plex.direct") ? "plex.direct" : "raw"
+            return "\(conn.protocolType)/\(kind)/\(net):\(conn.port)"
+        }.joined(separator: ",")
+        let serverName = server.name
+        SentryBridge.capture(error: NSError(
+            domain: "PlexAuthConnection",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "All server connection candidates failed"]
+        )) { scope in
+            scope.setTag(value: "plex_auth", key: "component")
+            scope.setTag(value: "server_connect_failed", key: "operation")
+            scope.setExtra(value: serverName, key: "server_name")
+            scope.setExtra(value: candidateSummary, key: "candidates")
+        }
+        return nil
     }
 
     /// Run all probe chains concurrently and return the first success in
@@ -358,9 +381,29 @@ class PlexAuthManager: ObservableObject {
         }
         print("🔐 PlexAuthManager: ❌ Connection failed: \(connection.uri)")
 
-        // If HTTP failed, try HTTPS fallback
-        // This handles "Require Secure Connections" setting on Plex servers
-        guard connection.protocolType == "http" else { return nil }
+        // HTTPS candidates advertise a plex.direct URI. Routers with DNS
+        // rebinding protection refuse plex.direct names that resolve to
+        // private IPs, so the advertised URI can fail while the server itself
+        // is perfectly reachable (GitHub #224 — official clients fall back to
+        // the raw address, so "Plex app works, Rivulet doesn't"). Fall back to
+        // the raw address over HTTPS (PlexCertificateDelegate trusts the Plex
+        // cert), then plain HTTP for local connections.
+        guard connection.protocolType == "http" else {
+            let host = connection.IPv6 ? "[\(connection.address)]" : connection.address
+            let rawHTTPS = "https://\(host):\(connection.port)"
+            print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTPS)")
+            if await testConnection(rawHTTPS, serverToken: tokenToUse) {
+                return rawHTTPS
+            }
+            if connection.local {
+                let rawHTTP = "http://\(host):\(connection.port)"
+                print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTP)")
+                if await testConnection(rawHTTP, serverToken: tokenToUse) {
+                    return rawHTTP
+                }
+            }
+            return nil
+        }
 
         // Try raw HTTPS as last resort for this connection.
         // API calls can trust self-signed certs, but media playback should prefer a valid TLS endpoint.
@@ -510,13 +553,36 @@ class PlexAuthManager: ObservableObject {
             let (_, response) = try await session.data(for: request)
 
             if let httpResponse = response as? HTTPURLResponse {
-                return (200...299).contains(httpResponse.statusCode)
+                let ok = (200...299).contains(httpResponse.statusCode)
+                if !ok {
+                    Self.addConnectionTestBreadcrumb(
+                        urlString: urlString, outcome: "http_\(httpResponse.statusCode)")
+                }
+                return ok
             }
             return false
         } catch {
             print("🔐 PlexAuthManager: Connection test error: \(error.localizedDescription)")
+            let nsError = error as NSError
+            Self.addConnectionTestBreadcrumb(
+                urlString: urlString, outcome: "\(nsError.domain)#\(nsError.code)")
             return false
         }
+    }
+
+    /// One breadcrumb per failed connection probe, so a later "all candidates
+    /// failed" capture carries the exact per-candidate failure trail
+    /// (GitHub #224 — these failures used to be print-only and invisible).
+    private static func addConnectionTestBreadcrumb(urlString: String, outcome: String) {
+        let breadcrumb = Breadcrumb(level: .warning, category: "plex_auth")
+        breadcrumb.message = "Connection probe failed"
+        breadcrumb.data = [
+            "host": URL(string: urlString)?.host ?? "invalid-url",
+            "port": URL(string: urlString)?.port ?? 0,
+            "scheme": URL(string: urlString)?.scheme ?? "?",
+            "outcome": outcome
+        ]
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     /// Test connection and extract plex.direct hash from certificate if it fails
@@ -552,6 +618,8 @@ class PlexAuthManager: ObservableObject {
 
             // Try to extract plex.direct hash from certificate error
             let nsError = error as NSError
+            Self.addConnectionTestBreadcrumb(
+                urlString: urlString, outcome: "\(nsError.domain)#\(nsError.code)")
             if nsError.code == -1200 || nsError.code == -9802 { // SSL errors
                 if let certHash = extractPlexDirectHash(from: nsError) {
                     return (false, certHash)
@@ -802,6 +870,16 @@ class PlexAuthManager: ObservableObject {
         await PlexUserProfileManager.shared.fetchHomeUsers()
 
         // Fetch available servers
+        await resumeServerSelection()
+    }
+
+    /// Fetch the account's servers and enter selection (or auto-select a
+    /// single server). Used at the end of PIN auth AND to recover the
+    /// account-linked-but-no-server state: a failed first connection used to
+    /// strand users on a "Connected!" dead end with no way to retry or
+    /// unlink (GitHub #224).
+    func resumeServerSelection() async {
+        guard let token = authToken else { return }
         do {
             let servers = try await networkManager.getServers(authToken: token)
 
@@ -818,6 +896,16 @@ class PlexAuthManager: ObservableObject {
         } catch {
             state = .error(message: "Failed to fetch servers: \(error.localizedDescription)")
             scheduleErrorDismissal()
+        }
+    }
+
+    /// Retry after a connection error without repeating the PIN link when the
+    /// account is already authenticated — re-runs server selection instead.
+    func retryAfterError() async {
+        if authToken != nil {
+            await resumeServerSelection()
+        } else {
+            await startPINAuthentication()
         }
     }
 
