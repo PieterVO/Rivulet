@@ -756,7 +756,6 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
 struct UniversalPlayerView: View {
     @StateObject private var viewModel: UniversalPlayerViewModel
     @StateObject private var remoteInput = RemoteInputHandler()
-    @AppStorage("hideSpoilersForUnwatched") private var hideSpoilersForUnwatched = false
     @State private var inputTarget: UniversalPlaybackInputTarget?
     private let inputCoordinator: PlaybackInputCoordinator
     @Environment(\.dismiss) private var dismiss
