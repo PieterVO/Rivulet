@@ -140,10 +140,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.4 (70)", [ // confirm build number at release
+            "Opening a movie or show now grows its poster proportionally instead of stretching it out of shape",
+            "Settings rows now all use one title size and weight, so each page reads evenly from top to bottom",
+        ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
             "Language muting works on any title with subtitles, and scene skipping uses filter lists in the MCF or EDL format from a URL you provide, without ever changing your files",
-            "Opening a movie or show now grows its poster proportionally instead of stretching it out of shape",
             "The backdrop that appears while paused now waits ten seconds instead of five, so you have more time to look at the paused frame",
             "Pressing Back while the paused backdrop is showing now brings back the paused frame instead of closing the player",
             "Fixed playback getting stuck after leaving the app and coming back, the video now picks up right where you left off",
