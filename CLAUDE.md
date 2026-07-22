@@ -1,6 +1,6 @@
 # Rivulet - Claude Context
 
-Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player chrome) are **UIKit**; SwiftUI remains for thin navigation shells, Music, Live TV slots, and Settings.
+Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells, Music, and Live TV slots.
 
 **UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it.
 
@@ -56,7 +56,8 @@ Rivulet/
 │   ├── LiveTV/         # EPGGuideView + GuideLayoutView + LiveGuideInfoCardView (56-style guide),
 │   │                   #   LiveTVAetherPlayerViewController (UIKit live rail), LiveTVContainerView,
 │   │                   #   ChannelListView, MultiStreamViewModel, StreamSlotView, AetherSlotPlayerView
-│   ├── Settings/       # SettingsView, SettingsComponents, SettingsDescriptors, sub-pages
+│   ├── Settings/       # SettingsDescriptors, SettingsModels, PlexAuthView
+│   │   └── UIKit/      # SettingsContainer/Page VCs, SettingsCell, SettingsPageModels (canonical)
 │   ├── Components/     # CachedAsyncImage, GlassRowStyle, WhatsNewView
 │   └── TVNavigation/   # TVSidebarView, NavigationEnvironment
 └── Docs/
@@ -70,7 +71,7 @@ Rivulet/
 
 **On the primary (UIKit) surfaces, focus is the UIKit focus engine**: `preferredFocusEnvironments`, `didUpdateFocus`, `setNeedsFocusUpdate`, and `pressesBegan` for Siri Remote input. Use the `rivulet-tvos-uikit` skill before writing or debugging any of it — the focus/press/morph traps there are already solved and are not guessable.
 
-The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Music, Settings, Live TV slots, nav shells). No custom focus scope manager; isolation comes from system mechanisms:
+The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Music, Live TV slots, nav shells). No custom focus scope manager; isolation comes from system mechanisms:
 
 - **`fullScreenCover`** — automatic focus isolation for overlays/popups
 - **`TabView` with `sidebarAdaptable`** — system-managed sidebar/content focus
@@ -205,11 +206,21 @@ Every AetherEngine bump gets a changelog line.
 
 ### Adding Settings
 
-Use components from `SettingsComponents.swift`:
-- `SettingsRow` - Navigation with chevron
-- `SettingsToggleRow` - On/Off toggle
-- `SettingsPickerRow` - Cycles through options
-- `SettingsActionRow` - Action button (supports destructive)
+Settings is **UIKit**. A page is a list of `SettingsRow` values built in
+`Views/Settings/UIKit/SettingsPageModels.swift`; `SettingsPageViewController`
+renders each one through `SettingsCell`. Add a row by adding a case to the
+relevant page's builder, picking a `SettingsRow.Kind`:
+- `.navigation` / `.navigationValue` - pushes another page (chevron)
+- `.toggle` - On/Off toggle
+- `.cycle` - cycles through options in place
+- `.action` - runs a handler (supports `destructive:`)
+- `.info` - read-only value
+- `.option` / `.selectable` - checkmark rows on a picker page
+- `.textEntry` - presents `TextEntryViewController`
+
+Every row title renders at one size and weight; there is no per-row-kind
+typography. The SwiftUI settings rows are gone (`SettingsComponents.swift` and
+`UserProfileSettingsView.swift` are deleted) — do not reintroduce them.
 
 **Never put a subtitle/description inside a settings row.** Rows are title-only
 so the list stays scannable and the focus target stays compact. Any descriptive
@@ -260,7 +271,7 @@ xcodebuild -scheme Rivulet -destination 'platform=tvOS,name=My Apple TV' build
 | Focus memory | `Services/Focus/FocusMemory.swift` |
 | Plex API | `Services/Plex/PlexNetworkManager.swift` |
 | Glass row styling | `Views/Components/GlassRowStyle.swift` |
-| Settings components | `Views/Settings/SettingsComponents.swift` |
+| Settings rows / pages | `Views/Settings/UIKit/SettingsPageModels.swift` |
 | Player canon docs | `Docs/RIVULET_PLAYER.md` |
 | Design patterns | `Docs/DESIGN_GUIDE.md` |
 

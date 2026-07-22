@@ -2,214 +2,15 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  UserProfileSettingsView.swift
+//  PinEntrySheet.swift
 //  Rivulet
 //
-//  Settings view for Plex Home user profile selection
+//  tvOS number-pad PIN entry for switching to a PIN-protected Plex home
+//  profile. Presented from the profile picker overlay, the sidebar profile
+//  switcher, and the UIKit settings profile flow.
 //
 
 import SwiftUI
-
-struct UserProfileSettingsView: View {
-    @Binding var focusedSettingId: String?
-    @StateObject private var profileManager = PlexUserProfileManager.shared
-    @State private var showPinEntry = false
-    @State private var selectedUserForPin: PlexHomeUser?
-    @State private var pinEntryError: String?
-    @State private var isLoading = false
-    @State private var showForgetPinConfirmation = false
-    @State private var userToForgetPin: PlexHomeUser?
-
-    init(focusedSettingId: Binding<String?> = .constant(nil)) {
-        self._focusedSettingId = focusedSettingId
-    }
-
-    var body: some View {
-        Group {
-            if profileManager.isLoadingUsers {
-                ProgressView("Loading profiles...")
-            } else if profileManager.homeUsers.isEmpty {
-                Text("Plex Home is not set up for this account.\nYou can create managed users on plex.tv.")
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            } else {
-                ForEach(profileManager.homeUsers) { user in
-                    ProfileRow(
-                        user: user,
-                        isSelected: user.id == profileManager.selectedUser?.id,
-                        isLoading: isLoading && selectedUserForPin?.id == user.id,
-                        hasRememberedPin: profileManager.usersWithRememberedPins.contains(user.uuid),
-                        onSelect: { selectProfile(user) },
-                        onForgetPin: {
-                            userToForgetPin = user
-                            showForgetPinConfirmation = true
-                        },
-                        onFocusChange: { if $0 { focusedSettingId = "profileRow" } }
-                    )
-                }
-
-                SettingsToggleRow(
-                    title: "Profile Picker on Launch",
-                    isOn: $profileManager.showProfilePickerOnLaunch,
-                    onFocusChange: { if $0 { focusedSettingId = "profilePickerOnLaunch" } }
-                )
-            }
-        }
-        .sheet(isPresented: $showPinEntry) {
-            if let user = selectedUserForPin {
-                PinEntrySheet(
-                    user: user,
-                    error: $pinEntryError,
-                    onSubmit: { pin, rememberPin in
-                        Task {
-                            await verifyAndSwitch(user: user, pin: pin, rememberPin: rememberPin)
-                        }
-                    },
-                    onCancel: {
-                        showPinEntry = false
-                        selectedUserForPin = nil
-                        pinEntryError = nil
-                    }
-                )
-            }
-        }
-        .confirmationDialog(
-            "Forget Saved PIN?",
-            isPresented: $showForgetPinConfirmation,
-            presenting: userToForgetPin
-        ) { user in
-            Button("Forget PIN", role: .destructive) {
-                profileManager.forgetPin(for: user)
-                userToForgetPin = nil
-            }
-            Button("Cancel", role: .cancel) {
-                userToForgetPin = nil
-            }
-        } message: { user in
-            Text("You'll need to enter the PIN manually next time you switch to \(user.displayName).")
-        }
-    }
-
-    private func selectProfile(_ user: PlexHomeUser) {
-        if user.requiresPin {
-            if profileManager.hasRememberedPin(for: user) {
-                Task {
-                    isLoading = true
-                    selectedUserForPin = user
-                    let (success, pinWasInvalid) = await profileManager.selectUserWithRememberedPin(user)
-                    if success {
-                        isLoading = false
-                        selectedUserForPin = nil
-                    } else {
-                        isLoading = false
-                        pinEntryError = pinWasInvalid ? "Saved PIN is no longer valid. Please enter your PIN." : nil
-                        showPinEntry = true
-                    }
-                }
-            } else {
-                selectedUserForPin = user
-                pinEntryError = nil
-                showPinEntry = true
-            }
-        } else {
-            Task {
-                isLoading = true
-                selectedUserForPin = user
-                _ = await profileManager.selectUser(user, pin: nil)
-                isLoading = false
-                selectedUserForPin = nil
-            }
-        }
-    }
-
-    private func verifyAndSwitch(user: PlexHomeUser, pin: String, rememberPin: Bool) async {
-        isLoading = true
-        pinEntryError = nil
-
-        let success = await profileManager.selectUser(user, pin: pin)
-
-        if success {
-            if rememberPin {
-                profileManager.rememberPin(pin, for: user)
-            }
-            showPinEntry = false
-            selectedUserForPin = nil
-        } else {
-            pinEntryError = "Incorrect PIN. Please try again."
-        }
-
-        isLoading = false
-    }
-}
-
-// MARK: - Profile Row
-
-private struct ProfileRow: View {
-    let user: PlexHomeUser
-    let isSelected: Bool
-    let isLoading: Bool
-    let hasRememberedPin: Bool
-    let onSelect: () -> Void
-    let onForgetPin: () -> Void
-    var onFocusChange: ((Bool) -> Void)? = nil
-
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 20) {
-                ProfileAvatar(user: user, size: 64)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(user.displayName)
-                        .font(.system(size: 32))
-
-                    HStack(spacing: 8) {
-                        if user.admin {
-                            Text("Account Owner")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.secondary)
-                        } else if user.restricted {
-                            Text("Managed User")
-                                .font(.system(size: 22))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if user.protected {
-                            Image(systemName: hasRememberedPin ? "lock.open.fill" : "lock.fill")
-                                .font(.system(size: 18))
-                                .foregroundStyle(hasRememberedPin ? .green : .secondary)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                if isLoading {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                } else if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.green)
-                }
-            }
-        }
-        .focused($isFocused)
-        .onChange(of: isFocused) { _, focused in
-            onFocusChange?(focused)
-        }
-        .contextMenu {
-            if user.protected && hasRememberedPin {
-                Button(role: .destructive) {
-                    onForgetPin()
-                } label: {
-                    Label("Forget Saved PIN", systemImage: "lock.slash")
-                }
-            }
-        }
-    }
-}
 
 // MARK: - Profile Avatar
 
@@ -402,7 +203,7 @@ private struct RememberPinToggle: View {
                     )
             )
         }
-        .buttonStyle(SettingsButtonStyle())
+        .buttonStyle(NoFocusEffectButtonStyle())
         .scaleEffect(isFocused ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
@@ -447,7 +248,7 @@ private struct PinPadButton: View {
                 }
             }
         }
-        .buttonStyle(SettingsButtonStyle())
+        .buttonStyle(NoFocusEffectButtonStyle())
         .scaleEffect(isFocused ? 1.02 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }
@@ -494,8 +295,4 @@ private struct PinDigitView: View {
                 .foregroundStyle(.white)
         }
     }
-}
-
-#Preview {
-    UserProfileSettingsView()
 }

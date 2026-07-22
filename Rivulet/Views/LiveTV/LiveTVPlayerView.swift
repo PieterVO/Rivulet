@@ -870,7 +870,7 @@ struct LiveTVPlayerView: View {
                                     )
                             )
                     }
-                    .buttonStyle(SettingsButtonStyle())
+                    .buttonStyle(NoFocusEffectButtonStyle())
                     .focused($focusArea, equals: .exitConfirmButton(0))
                     .scaleEffect(cancelFocused ? 1.02 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: cancelFocused)
@@ -896,7 +896,7 @@ struct LiveTVPlayerView: View {
                                     )
                             )
                     }
-                    .buttonStyle(SettingsButtonStyle())
+                    .buttonStyle(NoFocusEffectButtonStyle())
                     .focused($focusArea, equals: .exitConfirmButton(1))
                     .scaleEffect(exitFocused ? 1.02 : 1.0)
                     .animation(.spring(response: 0.3, dampingFraction: 0.7), value: exitFocused)

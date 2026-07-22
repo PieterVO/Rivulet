@@ -20,9 +20,8 @@ import SwiftUI
 
 // MARK: - Profile PIN entry
 
-/// Wraps `PinEntrySheet` with the verify-and-switch logic from
-/// `UserProfileSettingsView.verifyAndSwitch`. Calls `onClose` on success or
-/// cancel; shows an inline error on a wrong PIN.
+/// Wraps `PinEntrySheet` with verify-and-switch logic. Calls `onClose` on
+/// success or cancel; shows an inline error on a wrong PIN.
 struct ProfilePinFlow: View {
     let user: PlexHomeUser
     let onClose: () -> Void

@@ -5,10 +5,10 @@
 //  TextEntryViewController.swift
 //  Rivulet
 //
-//  UIKit text entry for the settings pages — the leaf replacement for the
-//  SwiftUI `TextEntrySheet`. A centered frosted Liquid-Glass card holding a
-//  `UITextField` (system tvOS keyboard) plus optional suggestion pills, in the
-//  same chrome family as `ConfirmationPopupViewController` / `InfoPopupViewController`.
+//  UIKit text entry for the settings pages. A centered frosted Liquid-Glass
+//  card holding a `UITextField` (system tvOS keyboard) plus optional suggestion
+//  pills, in the same chrome family as `ConfirmationPopupViewController` /
+//  `InfoPopupViewController`.
 //
 //  Commit vs cancel is explicit: Done (or keyboard submit) calls `onCommit`
 //  with the final text; Menu / Cancel calls `onCancel` and leaves the caller's
@@ -25,7 +25,7 @@ import UIKit
 @MainActor
 final class TextEntryViewController: UIViewController {
 
-    /// Label + value pair for a suggestion pill (mirrors `TextEntrySuggestion`).
+    /// Label + value pair for a suggestion pill.
     typealias Suggestion = (label: String, value: String)
 
     private let titleText: String
@@ -208,7 +208,7 @@ final class TextEntryViewController: UIViewController {
 }
 
 extension TextEntryViewController: UITextFieldDelegate {
-    // Keyboard "Done" commits, matching TextEntrySheet's onSubmit.
+    // Keyboard "Done" commits.
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
         commit()
         return true

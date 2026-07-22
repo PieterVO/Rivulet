@@ -206,7 +206,7 @@ private struct ProfileAvatarButton: View {
                     .lineLimit(1)
             }
         }
-        .buttonStyle(SettingsButtonStyle())
+        .buttonStyle(NoFocusEffectButtonStyle())
         .scaleEffect(isFocused ? 1.05 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isFocused)
     }

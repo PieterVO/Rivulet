@@ -116,7 +116,7 @@ struct SettingsRowItem {
         case .info(let value): return value()
         case .selectable(_, let value, _): return value()
         // Show the current value; fall back to the placeholder (or "Not set")
-        // when empty, matching SettingsTextEntryRow.
+        // when empty.
         case .textEntry(let value, let placeholder, _, _, _, _):
             let current = value()
             return current.isEmpty ? (placeholder.isEmpty ? "Not set" : placeholder) : current
@@ -501,9 +501,8 @@ enum SettingsContent {
         return rows
     }
 
-    /// Mirrors `UserProfileSettingsView.selectProfile`: switch directly when no
-    /// PIN is needed, use a remembered PIN when present, else present the PIN
-    /// pad modal.
+    /// Switch directly when no PIN is needed, use a remembered PIN when
+    /// present, else present the PIN pad modal.
     private static func selectProfile(_ user: PlexHomeUser, on vc: UIViewController) {
         let mgr = PlexUserProfileManager.shared
         guard user.requiresPin else {
