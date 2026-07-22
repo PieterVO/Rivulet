@@ -58,12 +58,12 @@ final class SettingsCell: UICollectionViewCell {
         selectedBackgroundView = nil
         contentView.backgroundColor = .clear
 
-        titleLabel.font = .systemFont(ofSize: 32, weight: .regular)
+        titleLabel.font = .systemFont(ofSize: 36, weight: .medium)
         titleLabel.textColor = .white
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(titleLabel)
 
-        valueLabel.font = .systemFont(ofSize: 32, weight: .regular)
+        valueLabel.font = .systemFont(ofSize: 32, weight: .medium)
         valueLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         valueLabel.textAlignment = .right
         valueLabel.setContentHuggingPriority(.required, for: .horizontal)
@@ -107,11 +107,8 @@ final class SettingsCell: UICollectionViewCell {
         ])
     }
 
-    /// `titleSize` matches the SwiftUI rows: 36 for navigation rows, 32 for
-    /// toggles / cycles / actions / info.
     func configure(title: String, value: String?, showsChevron: Bool, destructive: Bool,
-                   titleSize: CGFloat, showsCheckmark: Bool = false) {
-        titleLabel.font = .systemFont(ofSize: titleSize, weight: .regular)
+                   showsCheckmark: Bool = false) {
         titleLabel.text = title
         checkmark.isHidden = !showsCheckmark
         valueLabel.text = value
