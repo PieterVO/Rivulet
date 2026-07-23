@@ -336,6 +336,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let wheelScrubbingIdleDelay: TimeInterval = 0.8
     private var appBecameActiveObserver: Any?
     private var appBackgroundObserver: Any?
+    /// Token for the block-based `.AVPlayerItemDidPlayToEndTime` observer.
+    /// Block observers are keyed by the returned token, not by `self`, so this
+    /// has to be stored to be removable.
+    private var itemDidPlayToEndObserver: Any?
     private var pausedDueToAppInactive: Bool = false
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
@@ -902,7 +906,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
 
             // End of playback
-            NotificationCenter.default.addObserver(
+            if let existing = itemDidPlayToEndObserver {
+                NotificationCenter.default.removeObserver(existing)
+            }
+            itemDidPlayToEndObserver = NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
                 queue: .main
@@ -940,7 +947,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             player.removeTimeObserver(timeObserver)
         }
         timeObserver = nil
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        if let itemDidPlayToEndObserver {
+            NotificationCenter.default.removeObserver(itemDidPlayToEndObserver)
+        }
+        itemDidPlayToEndObserver = nil
     }
 
     /// Update playback state with side effects (controls, screensaver, post-video).
@@ -4512,7 +4522,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         if let timeObserver = _timeObserverForCleanup, let player = _playerForCleanup {
             player.removeTimeObserver(timeObserver)
         }
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
 
         Task { @MainActor [subtitleClockSync] in
             subtitleClockSync.stop()
@@ -4529,6 +4538,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = appBecameActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = itemDidPlayToEndObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         // Clean up Siri user activity
