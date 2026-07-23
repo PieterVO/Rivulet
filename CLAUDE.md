@@ -290,13 +290,13 @@ xcodebuild test -scheme Rivulet -destination 'platform=tvOS Simulator,name=Apple
   -only-testing:RivuletTests/MediaItemTests/test_id_returnsRef
 ```
 
-Tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature — Parsers, Playback, Player, Preferences, Services, Siri, etc.), with shared fixtures/mocks in `RivuletTests/Fixtures/`, `RivuletTests/Helpers/`, `RivuletTests/Mocks/`.
+Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature — Parsers, Playback, Player, Preferences, Services, Siri, etc.), with shared fixtures/mocks in `RivuletTests/Fixtures/`, `RivuletTests/Helpers/`, `RivuletTests/Mocks/`. A few sit at the `RivuletTests/` root (`PlexDeviceDecodingTests.swift`).
 
 **Building requires full Xcode** (not just Command Line Tools) since it's tvOS. There is no CI test run today — `codemagic.yaml` only builds/archives/publishes to TestFlight on tag push; the two GitHub workflows (`.github/workflows/`) are Claude Code review/mention bots, not test runners. Run tests locally.
 
 **The Simulator does not fully mimic Apple TV**, especially for focus-engine behavior. Treat Simulator-only verification of tvOS focus/remote-input changes as provisional; say so rather than declaring it fixed.
 
-**`Docs/` is gitignored** (untracked on purpose, `c89b52d`) — files like `Docs/RIVULET_PLAYER.md` and `Docs/DESIGN_GUIDE.md` referenced throughout this file live only on the maintainer's machine and may not exist in a fresh clone or sandboxed checkout. The same goes for the `aether-update` and `rivulet-tvos-uikit` skills referenced above — `.claude/` is gitignored too, so they are not in the repo. If a referenced doc or skill is missing in your environment, say so and proceed carefully rather than guessing its contents.
+**`Docs/` is gitignored** (untracked on purpose, `c89b52d`), though some files under it are force-added and do ship — the `superpowers/` plans and specs, and `AETHER_ENGINE_STARTUP_NOTES.md`. What is *not* in the repo is `Docs/RIVULET_PLAYER.md` and `Docs/DESIGN_GUIDE.md`, both referenced throughout this file; they live only on the maintainer's machine. The `aether-update` and `rivulet-tvos-uikit` skills referenced above are also absent — `.claude/` is gitignored with nothing force-added. If a referenced doc or skill is missing in your environment, say so and proceed carefully rather than guessing its contents.
 
 ## Key Files
 
