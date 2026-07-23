@@ -443,3 +443,18 @@ canonical form working Plex clients ship; do not "fix" it back to raw commas.
 | `HTTP 500 on /hubs` | Plex server issue (not client-side) |
 | `NSURLErrorDomain -999 cancelled` | User navigated away, request timeout |
 | Aether/AVPlayer startup fatal → auto HLS fallback | Expected: ContentRouter falls back to `.hls` once at current playback time |
+
+### Performance tracing
+
+Sampling is driven by `options.tracesSampler`, **not** a flat `tracesSampleRate`.
+Transactions we deliberately measure (e.g. `live.join`) return 1.0; everything
+else returns 0.05, because `enableSwizzling` otherwise emits a transaction for
+every UIViewController appearance and HTTP request, and a saturated quota makes
+Sentry drop spans server-side (biasing the named measurements, not just thinning
+them). Add new measured transaction names to the sampler's 1.0 branch; do not
+restore a flat 1.0. Start transactions through `SentryBridge.startTransaction`,
+which no-ops in DEBUG.
+
+**Never send stream URLs to Sentry.** Xtream-style IPTV paths embed credentials
+(`/live/user/pass/id.ts`) and Plex URLs carry tokens. Derive a category and send
+that (see `LiveJoinTelemetry`), or use `SensitiveDataRedactor.safeURLString`.
