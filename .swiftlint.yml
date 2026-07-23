@@ -25,10 +25,9 @@ custom_rules:
     name: "SwiftUI on a UIKit surface"
     included: ".*/Views/.*/UIKit/.*\\.swift"
     # Settings is the one deliberate SwiftUI seam on a UIKit surface: the bridge
-    # and modal flows host real SwiftUI views, and SettingsLeftPanelView needs
-    # the import for `UIColor(_: Color)` because SettingsDescriptorStore vends
-    # SwiftUI Colors. Nothing outside Settings gets an exemption.
-    excluded: ".*/Settings/UIKit/(SettingsUIKitBridge|SettingsModalFlows|SettingsPageModels|SettingsLeftPanelView)\\.swift"
+    # declares the nav shell, and modal flows host real SwiftUI sheets.
+    # Nothing outside Settings gets an exemption.
+    excluded: ".*/Settings/UIKit/(SettingsUIKitBridge|SettingsModalFlows|SettingsPageModels)\\.swift"
     regex: "import SwiftUI"
     match_kinds: [keyword, identifier]
     message: "Primary surfaces are UIKit. See CLAUDE.md."

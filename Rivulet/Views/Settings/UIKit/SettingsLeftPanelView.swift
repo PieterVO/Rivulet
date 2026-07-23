@@ -13,7 +13,6 @@
 //
 
 import UIKit
-import SwiftUI   // SettingsDescriptorStore vends SwiftUI Color; UIColor(_:) needs it.
 
 final class SettingsLeftPanelView: UIView {
 
@@ -127,7 +126,7 @@ final class SettingsLeftPanelView: UIView {
     /// (on a page change), like the SwiftUI panel's symbol-replace transition.
     func configure(page: SettingsPage, animated: Bool = false) {
         let info = SettingsDescriptorStore.pageInfo(for: page)
-        let color = UIColor(info.color)
+        let color = info.color
         let apply = {
             self.iconContainer.backgroundColor = color.withAlphaComponent(0.18)
             self.iconView.image = UIImage(systemName: info.icon)

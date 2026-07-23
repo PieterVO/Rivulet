@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Setting Descriptor
 
@@ -406,29 +407,32 @@ enum SettingsDescriptorStore {
 
     // MARK: - Page Descriptors
 
-    /// Icon and title for each settings page (shown in left panel header)
-    static func pageInfo(for page: SettingsPage) -> (icon: String, color: Color) {
+    /// Icon and title for each settings page (shown in left panel header).
+    /// `UIColor` rather than SwiftUI `Color`: the only consumer is the UIKit
+    /// left panel, and vending a `Color` forced it to import SwiftUI just to
+    /// call `UIColor(_:)`. These are the same system colors either way.
+    static func pageInfo(for page: SettingsPage) -> (icon: String, color: UIColor) {
         switch page {
-        case .root: return ("gearshape.fill", .gray)
-        case .appearance: return ("paintbrush.fill", .purple)
-        case .playback: return ("play.fill", .blue)
-        case .music: return ("music.note", .pink)
-        case .liveTV: return ("tv.fill", .green)
-        case .servers: return ("server.rack", .orange)
-        case .about: return ("info.circle.fill", .gray)
-        case .plex: return ("server.rack", .orange)
-        case .iptv: return ("tv.and.mediabox", .blue)
-        case .libraries: return ("sidebar.squares.left", .purple)
-        case .cache: return ("internaldrive", .gray)
-        case .userProfiles: return ("person.crop.circle", .cyan)
-        case .displaySizePicker: return ("textformat.size", .orange)
-        case .autoplayCountdownPicker: return ("forward.end.alt", .purple)
-        case .contentFilter: return ("hand.raised.fill", .orange)
-        case .contentFilterStrength: return ("dial.medium.fill", .orange)
-        case .liveTVSourceDetail: return ("tv.and.mediabox", .blue)
-        case .addLiveTVSource: return ("plus.circle.fill", .blue)
-        case .addOwnServer: return ("server.rack", .blue)
-        case .addPlaylistURL: return ("list.bullet.rectangle", .green)
+        case .root: return ("gearshape.fill", .systemGray)
+        case .appearance: return ("paintbrush.fill", .systemPurple)
+        case .playback: return ("play.fill", .systemBlue)
+        case .music: return ("music.note", .systemPink)
+        case .liveTV: return ("tv.fill", .systemGreen)
+        case .servers: return ("server.rack", .systemOrange)
+        case .about: return ("info.circle.fill", .systemGray)
+        case .plex: return ("server.rack", .systemOrange)
+        case .iptv: return ("tv.and.mediabox", .systemBlue)
+        case .libraries: return ("sidebar.squares.left", .systemPurple)
+        case .cache: return ("internaldrive", .systemGray)
+        case .userProfiles: return ("person.crop.circle", .systemCyan)
+        case .displaySizePicker: return ("textformat.size", .systemOrange)
+        case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
+        case .contentFilter: return ("hand.raised.fill", .systemOrange)
+        case .contentFilterStrength: return ("dial.medium.fill", .systemOrange)
+        case .liveTVSourceDetail: return ("tv.and.mediabox", .systemBlue)
+        case .addLiveTVSource: return ("plus.circle.fill", .systemBlue)
+        case .addOwnServer: return ("server.rack", .systemBlue)
+        case .addPlaylistURL: return ("list.bullet.rectangle", .systemGreen)
         }
     }
 }
