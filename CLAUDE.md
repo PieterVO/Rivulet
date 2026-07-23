@@ -254,7 +254,24 @@ cp Rivulet/Config/Secrets.swift.template Rivulet/Config/Secrets.swift
 
 `Secrets.swift` is the only gitignored file in `Rivulet/Config/` — the rest (`TMDBConfig`, `InsightsConfig`, `InputConfig`) are tracked and present in a fresh clone. Copying the template is the whole step: all three targets use Xcode buildable-folder references (`PBXFileSystemSynchronizedRootGroup`), so files are picked up from disk and never need adding to the project. `RivuletApp.swift` reads `Secrets.sentryDSN`, so the app target will not compile without it.
 
-There is a single shared scheme, `Rivulet` (targets: `Rivulet`, `RivuletTests`, `TopShelfExtension`). No SwiftLint/SwiftFormat is configured — there is no lint command.
+There is a single shared scheme, `Rivulet`. No SwiftFormat is configured.
+
+SwiftLint is configured, but **every stock rule is off** (`only_rules: [custom_rules]`
+in `.swiftlint.yml`). It is not a style checker here and has no opinion about force
+casts, line length, or naming. It runs three project-specific rules: no SwiftUI on a
+UIKit surface, no `UIHostingController` in a cell, and no UIKit context menus (dead on
+tvOS 26). A PR gate runs them on Linux; there is no local hook.
+
+```bash
+swiftlint lint --strict     # or: docker run --rm -v "$PWD":/work -w /work \
+                            #       ghcr.io/realm/swiftlint:0.65.0 lint --strict
+```
+
+Do not add stock rules. A full run of the default set produced 129 violations and zero
+bugs: all 43 `force_cast` hits were `dequeueReusableCell(...) as! Cell` or
+`layer as! CAGradientLayer` behind a `layerClass` override, and all 14 `force_try` hits
+were test fixtures. The bar for a new rule is that when it fires, the response is to fix
+the code rather than suppress the rule.
 
 ```bash
 # Build for tvOS Simulator
