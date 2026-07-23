@@ -1,0 +1,50 @@
+# SwiftLint for Rivulet.
+#
+# Every stock rule is OFF. `only_rules: [custom_rules]` means SwiftLint runs as a
+# regex engine for Rivulet's own architectural rules and nothing else. It has no
+# opinion here about force casts, line length, or naming.
+#
+# Why no stock rules: a full run of the default set produced 129 violations and
+# zero bugs. All 43 force_cast hits were `dequeueReusableCell(...) as! Cell` or
+# `layer as! CAGradientLayer` behind a `layerClass` override, and all 14
+# force_try hits were test fixtures. Enabling them would fight the house style.
+#
+# The bar for adding a rule here: when it fires, the response is to fix the code,
+# not to suppress the rule.
+
+excluded:
+  - Rivulet/OpenSourceLicenses.swift   # generated
+  - Rivulet/Config/Secrets.swift       # generated in CI
+  - RivuletTests/Fixtures
+
+only_rules:
+  - custom_rules
+
+custom_rules:
+  swiftui_import_on_uikit_surface:
+    name: "SwiftUI on a UIKit surface"
+    included: ".*/Views/.*/UIKit/.*\\.swift"
+    # Settings is the one deliberate SwiftUI seam on a UIKit surface: the bridge
+    # and modal flows host real SwiftUI views, and SettingsLeftPanelView needs
+    # the import for `UIColor(_: Color)` because SettingsDescriptorStore vends
+    # SwiftUI Colors. Nothing outside Settings gets an exemption.
+    excluded: ".*/Settings/UIKit/(SettingsUIKitBridge|SettingsModalFlows|SettingsPageModels|SettingsLeftPanelView)\\.swift"
+    regex: "import SwiftUI"
+    match_kinds: [keyword, identifier]
+    message: "Primary surfaces are UIKit. See CLAUDE.md."
+    severity: error
+
+  hosting_controller_in_cell:
+    name: "UIHostingController in a cell"
+    included: ".*/Views/.*/UIKit/.*(Cell|Card|Poster|Row)\\w*\\.swift"
+    regex: "UIHostingController"
+    match_kinds: [identifier, typeidentifier]
+    message: "Per-cell hosting is the measured hitch cost the UIKit migration removed."
+    severity: error
+
+  tvos_context_menu_is_dead:
+    name: "UIKit context menus do not work on tvOS 26"
+    regex: "UIContextMenuInteraction|contextMenuConfigurationForItemsAt"
+    match_kinds: [identifier, typeidentifier]
+    message: "Dead on tvOS 26. Use a long-press plus TileMenuPopupViewController."
+    severity: error

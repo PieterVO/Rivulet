@@ -13,7 +13,7 @@
 //
 
 import UIKit
-import SwiftUI
+import SwiftUI   // SettingsDescriptorStore vends SwiftUI Color; UIColor(_:) needs it.
 
 final class SettingsLeftPanelView: UIView {
 
