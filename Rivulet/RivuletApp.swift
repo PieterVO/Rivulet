@@ -81,7 +81,23 @@ struct RivuletApp: App {
             SentrySDK.start { options in
                 options.dsn = Secrets.sentryDSN
                 options.debug = false
-                options.tracesSampleRate = 1.0
+                // Transactions we deliberately measure stay at full fidelity;
+                // everything else is sampled hard.
+                //
+                // This was a flat 1.0, which meant `enableSwizzling` was sending
+                // a transaction for EVERY UIViewController appearance and HTTP
+                // request at 100%. On a small performance quota that ambient
+                // auto-instrumentation is what consumes it, and once the quota
+                // is hit Sentry drops spans server-side — which would bias the
+                // named measurements we actually reason from rather than just
+                // thinning them.
+                options.tracesSampler = { context in
+                    context.transactionContext.name == "live.join"
+                        ? NSNumber(value: 1.0)
+                        : NSNumber(value: 0.05)
+                }
+                // Only consulted if the sampler ever returns nil.
+                options.tracesSampleRate = 0.05
                 options.attachStacktrace = true
                 options.enableAutoSessionTracking = true
                 options.enableCaptureFailedRequests = true

@@ -59,4 +59,22 @@ nonisolated enum SentryBridge {
         SentrySDK.configureScope(configure)
         #endif
     }
+
+    /// Starts a performance transaction, or returns nil when the SDK is inactive
+    /// (DEBUG, or no DSN configured). Callers hold the result optionally so the
+    /// whole measurement path compiles away to nil-checks in debug builds.
+    ///
+    /// Transactions are sampled by `options.tracesSampler` in RivuletApp, NOT by
+    /// the flat `tracesSampleRate` — named transactions we deliberately measure
+    /// stay at 1.0 while the swizzled UIViewController/HTTP transactions are
+    /// sampled down, so ambient auto-instrumentation can't crowd a small
+    /// performance quota and silently bias what lands.
+    static func startTransaction(name: String, operation: String) -> (any Span)? {
+        #if !DEBUG
+        guard isActive else { return nil }
+        return SentrySDK.startTransaction(name: name, operation: operation)
+        #else
+        return nil
+        #endif
+    }
 }

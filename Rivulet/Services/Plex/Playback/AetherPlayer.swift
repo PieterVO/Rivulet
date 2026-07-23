@@ -494,7 +494,7 @@ final class AetherPlayer: PlayerProtocol {
     /// native path fails against a server (e.g. a Plex transcode session that
     /// rejects AVPlayer's request pattern).
     func loadLive(url: URL, headers: [String: String]?, forceEngineDemux: Bool = false) async throws {
-        let isHLS = Self.isHLSURL(url) && !forceEngineDemux
+        let isHLS = Self.liveRoute(for: url, forceEngineDemux: forceEngineDemux) == .nativeHLS
         let options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
@@ -540,6 +540,18 @@ final class AetherPlayer: PlayerProtocol {
             errorSubject.send(pe)
             throw pe
         }
+    }
+
+    /// Which path `loadLive` will take for this URL. Single source of truth: the
+    /// load itself routes through this, so live-join telemetry can tag the real
+    /// decision instead of re-deriving the predicate and drifting from it.
+    ///
+    /// This is the distinction that decides whether AetherEngine's
+    /// `LoadOptions.liveJoinProfile` (`.fastZap`) can do anything at all: the
+    /// engine reads it only when building the loopback segment producer, so it
+    /// is inert on `.nativeHLS`.
+    static func liveRoute(for url: URL, forceEngineDemux: Bool) -> LiveJoinRoute {
+        (isHLSURL(url) && !forceEngineDemux) ? .nativeHLS : .loopback
     }
 
     private static func isHLSURL(_ url: URL) -> Bool {

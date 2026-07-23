@@ -76,6 +76,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// after teardown and spin a new player/keep-alive on an off-screen VC.
     private var streamLoadTask: Task<Void, Never>?
 
+    /// Measures time-to-first-frame for the in-flight join, split into handshake
+    /// / engine load / holdback fill. One per load attempt; a fallback retry
+    /// starts a fresh one so each attempt is measured separately.
+    private var joinTelemetry: LiveJoinTelemetry?
+
     // MARK: Subtitle delay (OSD stepper, sticky per channel)
 
     /// User subtitle delay for THIS channel. Engine-cue paths apply it through
@@ -211,7 +216,12 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 switch state {
                 case .playing:
                     self.loadingSpinner.stopAnimating()
+                    // Same signal the spinner uses, so the measurement ends
+                    // exactly where the user stops waiting. Finishing is
+                    // idempotent, so later resumes don't reopen the join.
+                    self.finishJoinTelemetry { $0.joined() }
                 case .failed:
+                    self.finishJoinTelemetry { $0.failed(reason: "state_failed") }
                     guard !self.isFallbackInFlight else { return }
                     self.advanceFallback()
                 default:
@@ -229,27 +239,36 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         streamLoadTask = Task { @MainActor in
             // Resolve performs the Plex tune step for cloud-EPG/DVB channels;
             // other sources pass straight through.
+            joinTelemetry = LiveJoinTelemetry()
             guard let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else {
+                finishJoinTelemetry { $0.failed(reason: "resolve_failed") }
                 if Task.isCancelled { return }
                 onDismiss?()
                 dismiss(animated: true)
                 return
             }
-            if Task.isCancelled { return }
+            if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
+            // Raw tuned-session HLS must go through the engine demuxer:
+            // AVPlayer's native HLS path can't decode broadcast mp2 audio
+            // or the DVB/teletext subtitles that direct play preserves.
+            let forceEngineDemux = url.path.hasPrefix("/livetv/sessions/")
+            joinTelemetry?.resolveFinished(
+                url: url,
+                route: AetherPlayer.liveRoute(for: url, forceEngineDemux: forceEngineDemux)
+            )
             startLiveSessionKeepAlive(for: url)
             do {
-                // Raw tuned-session HLS must go through the engine demuxer:
-                // AVPlayer's native HLS path can't decode broadcast mp2 audio
-                // or the DVB/teletext subtitles that direct play preserves.
                 try await aether.loadLive(
                     url: url,
                     headers: nil,
-                    forceEngineDemux: url.path.hasPrefix("/livetv/sessions/")
+                    forceEngineDemux: forceEngineDemux
                 )
-                if Task.isCancelled { return }
+                if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
+                joinTelemetry?.loadFinished()
                 aether.play()
             } catch {
-                if Task.isCancelled { return }
+                if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
+                finishJoinTelemetry { $0.failed(reason: "engine_load_failed") }
                 self.advanceFallback()
             }
         }
@@ -260,6 +279,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         guard isBeingDismissed || isMovingFromParent else { return }
         streamLoadTask?.cancel()
         streamLoadTask = nil
+        // Backing out before first frame still ends the transaction. An
+        // unfinished one would otherwise hang until the SDK times it out and
+        // land as a bogus outlier.
+        finishJoinTelemetry { $0.abandoned() }
         stopLiveSessionKeepAlive()
         autoHideTimer?.invalidate()
         autoHideTimer = nil
@@ -874,6 +897,16 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// Move to the next recovery stage. Each stage re-resolves the stream URL
     /// so Plex channels get a FRESH tune/session (a dead session keeps
     /// erroring). Non-Plex URLs re-resolve unchanged.
+    /// Terminates the in-flight join measurement and clears it, so no later
+    /// state change can reopen or double-report the same join. `LiveJoinTelemetry`
+    /// is itself idempotent; clearing the reference here is what keeps a
+    /// fallback retry's fresh instance from being confused with this one.
+    private func finishJoinTelemetry(_ terminate: (LiveJoinTelemetry) -> Void) {
+        guard let telemetry = joinTelemetry else { return }
+        joinTelemetry = nil
+        terminate(telemetry)
+    }
+
     private func advanceFallback() {
         fallbackStage += 1
         guard fallbackStage <= 2 else {
