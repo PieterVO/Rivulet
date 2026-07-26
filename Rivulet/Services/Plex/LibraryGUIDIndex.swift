@@ -15,7 +15,7 @@ import os.log
 private let guidIndexLog = Logger(subsystem: "com.rivulet.app", category: "LibraryGUIDIndex")
 
 extension Notification.Name {
-    /// Posted on the main thread after `LibraryGUIDIndex.shared.replace(with:)`
+    /// Posted on the main thread after `LibraryGUIDIndex.shared.replace(with:completeness:)`
     /// completes. Views observing this can re-run library-match queries.
     static let libraryGUIDIndexDidUpdate = Notification.Name("LibraryGUIDIndexDidUpdate")
 }
@@ -37,8 +37,10 @@ actor LibraryGUIDIndex {
     private var byGuid: [String: PlexMetadata] = [:]
 
     /// Live network data always supersedes a disk-hydrated snapshot. Once a real
-    /// `replace(with:)` has run this launch, a late `hydrateFromDisk()` is a no-op
-    /// so stale disk contents can't clobber fresh server data.
+    /// `replace(with:completeness:)` has run this launch, a late `hydrateFromDisk()`
+    /// is a no-op so stale disk contents can't clobber fresh server data. This is
+    /// set for partial builds too, since a partial live snapshot is still more
+    /// current than the disk copy.
     private var hasFreshData = false
 
     /// Bumped on every rebuild. Consumers (e.g. the trending hero) read this to
@@ -46,13 +48,57 @@ actor LibraryGUIDIndex {
     /// run, so overlapping triggers don't repeat identical work.
     private(set) var generation = 0
 
-    /// Rebuild the index from a freshly-fetched library snapshot, persist it to
-    /// disk for the next launch, and notify observers. This is the authoritative
-    /// path — it always wins over `hydrateFromDisk()`.
-    func replace(with items: [PlexMetadata]) {
+    /// Whether a network rebuild saw every library section, every page, all the
+    /// way through. Only a complete build is allowed to overwrite the disk cache.
+    ///
+    /// This exists because a truncated snapshot is indistinguishable from a good
+    /// one once it has been written: `DiskCache` stores only a version, a date and
+    /// the items, so the next launch's `hydrateFromDisk()` will load a half-built
+    /// index and treat it as authoritative. The failure is completely silent. The
+    /// user just sees fewer "in your library" badges, a thinner TMDB hero, and
+    /// Discover items that will not resolve to something playable, with no error
+    /// anywhere. Worse, the damage outlives the network blip that caused it: every
+    /// subsequent launch starts from the degraded snapshot until a fully successful
+    /// rebuild happens to land. A single timed-out page at offset 5000 of a 12,000
+    /// item library is enough to do this.
+    ///
+    /// So the rule is: a partial build may update the in-memory index, because
+    /// partial data still beats nothing for the current launch, but it must never
+    /// touch disk. Do not collapse this into a defaulted parameter. Every caller
+    /// has to say which it has, precisely so a new call site cannot quietly inherit
+    /// "complete" and reintroduce the silent corruption.
+    enum Completeness: Sendable {
+        /// Every visible section returned every page without error. Safe to persist.
+        case complete
+        /// At least one section failed or was cut short. In-memory only.
+        case partial
+    }
+
+    /// Rebuild the index from a freshly-fetched library snapshot and notify
+    /// observers. This is the authoritative path — it always wins over
+    /// `hydrateFromDisk()`, complete or not, because even a partial live snapshot
+    /// is more current than last launch's disk contents.
+    ///
+    /// Persists to disk only when `completeness` is `.complete`. See the
+    /// `Completeness` doc comment for why a partial build must not be written.
+    func replace(with items: [PlexMetadata], completeness: Completeness) {
         rebuild(from: items, source: "replace")
+
+        // Set regardless of completeness. `hasFreshData` guards against a late
+        // `hydrateFromDisk()` overwriting live server data with the older disk
+        // snapshot, and that ordering hazard is identical whether this build was
+        // complete or not. Leaving it false on a partial build would let a
+        // straggling hydrate replace a partial-but-current index with a
+        // possibly-worse one from disk.
         hasFreshData = true
-        persist(items)
+
+        // Deliberately no log line on the partial branch: the caller already
+        // reports the incomplete-section count when it finishes the build, and
+        // guidIndexLog carries pre-existing actor-isolation warnings we are not
+        // adding to.
+        if case .complete = completeness {
+            persist(items)
+        }
     }
 
     /// Populate the index from the last persisted snapshot. Cheap (local decode),

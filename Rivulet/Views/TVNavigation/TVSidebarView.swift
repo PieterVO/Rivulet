@@ -266,13 +266,21 @@ struct TVSidebarView: View {
                     let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
 
                     var allItems: [PlexMetadata] = []
-                    var failedSections = 0
+                    // Completeness is tracked per section, not as a single global
+                    // flag, because the two ways a build goes wrong look identical
+                    // in aggregate: a section that threw on its very first page
+                    // contributes nothing, and a section that threw at offset 5000
+                    // of 12000 contributes a plausible-looking 5000 items. Both are
+                    // incomplete, and the second one is the dangerous case, since
+                    // the totals alone give no hint that anything is missing.
+                    var incompleteSections = 0
                     let pageSize = 5000
                     for library in visible {
                         // Page through the whole section — libraries larger than one
                         // page used to be truncated, silently dropping ownership
                         // matches for everything past the first 5000 titles (#202).
                         var start = 0
+                        var sectionComplete = false
                         while true {
                             do {
                                 let result = try await PlexNetworkManager.shared.getLibraryItemsWithTotal(
@@ -285,9 +293,16 @@ struct TVSidebarView: View {
                                 )
                                 allItems.append(contentsOf: result.items)
                                 start += result.items.count
-                                if result.items.isEmpty || start >= (result.totalSize ?? 0) { break }
+                                // An empty page or reaching the reported total is the
+                                // only way out that means we actually saw the section
+                                // in full. Anything else leaves sectionComplete false.
+                                if result.items.isEmpty || start >= (result.totalSize ?? 0) {
+                                    sectionComplete = true
+                                    break
+                                }
                             } catch {
-                                failedSections += 1
+                                // The break abandons every remaining page of this
+                                // section, so the section is partial from here on.
                                 libraryIndexLog.error("[GUIDIndex] fetch failed for section \(library.key, privacy: .public) at offset \(start): \(error.localizedDescription, privacy: .public)")
                                 let crumb = Breadcrumb(level: .error, category: "guid_index")
                                 crumb.message = "Library GUID fetch failed"
@@ -296,40 +311,41 @@ struct TVSidebarView: View {
                                 break
                             }
                         }
+                        if !sectionComplete { incompleteSections += 1 }
                     }
+
+                    // Only a build where every visible section ran to completion may
+                    // overwrite the disk cache. See LibraryGUIDIndex.Completeness.
+                    let completeness: LibraryGUIDIndex.Completeness =
+                        incompleteSections == 0 ? .complete : .partial
 
                     let withGuids = allItems.filter { ($0.Guid ?? []).isEmpty == false }
                     let sample = withGuids.first.flatMap { $0.Guid?.first?.id } ?? "(none)"
-                    libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, \(failedSections) failed sections, sample=\(sample, privacy: .public)")
+                    libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, \(incompleteSections) incomplete sections, sample=\(sample, privacy: .public)")
 
                     let crumb = Breadcrumb(level: .info, category: "guid_index")
                     crumb.message = "Library GUID index rebuilt"
                     crumb.data = [
                         "libraries": visible.count,
-                        "failed_sections": failedSections,
+                        "failed_sections": incompleteSections,
                         "items": allItems.count,
                         "with_guids": withGuids.count
                     ]
                     SentryBridge.addBreadcrumb(crumb)
 
-                    // A fetch failure means Discover/Watchlist ownership matching is
-                    // degraded for this user — surface it instead of failing silently.
-                    if failedSections > 0 {
-                        let event = Event(level: .warning)
-                        event.message = SentryMessage(formatted: "GUID index build incomplete")
-                        event.extra = [
-                            "libraries": visible.count,
-                            "failed_sections": failedSections,
-                            "items": allItems.count,
-                            "with_guids": withGuids.count
-                        ]
-                        SentryBridge.capture(event: event)
-                    }
+                    // No standalone Sentry event for an incomplete build. The
+                    // underlying cause is the user's own Plex server going
+                    // unreachable, and PlexNetworkManager already captures each
+                    // transport failure with its endpoint, elapsed time and error
+                    // code. An event here only duplicated that, once per launch, for
+                    // users whose whole server was down. The breadcrumb above keeps
+                    // the context on any real downstream error at no cost.
 
-                    // If nothing came back at all, keep the disk-hydrated snapshot
-                    // rather than clobbering a working index with an empty one.
-                    if allItems.isEmpty && failedSections > 0 { return }
-                    await LibraryGUIDIndex.shared.replace(with: allItems)
+                    // An empty result with at least one section incomplete means we
+                    // learned nothing from the server, so keep whatever the disk
+                    // hydrate gave us rather than blanking a working index.
+                    if allItems.isEmpty && completeness == .partial { return }
+                    await LibraryGUIDIndex.shared.replace(with: allItems, completeness: completeness)
                 }
             }
         }
