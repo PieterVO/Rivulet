@@ -29,6 +29,7 @@
 //   - Entry + dismiss spring morphs match SwiftUI baseline timing.
 //
 
+import Combine
 import UIKit
 import os.log
 
@@ -156,6 +157,12 @@ final class PreviewCarouselViewController: UIViewController {
     /// True while a Down/Up below-fold scroll animation is in flight. Guards
     /// against overlapping scroll commands.
     private var isDetailScrolling = false
+
+    /// Watch-state refresh subscription (issue #228) — same signal Home uses.
+    private var refreshObservers = Set<AnyCancellable>()
+    /// Bumped per refresh so a slow fetch from an earlier notification can't
+    /// overwrite a newer one (or land after the user paged away).
+    private var watchRefreshToken: UInt64 = 0
 
     // MARK: - Lifecycle
 
@@ -432,6 +439,20 @@ final class PreviewCarouselViewController: UIViewController {
         // everything; it never shows and never steals visible focus.
         focusAnchor.frame = .zero
         view.addSubview(focusAnchor)
+
+        // Issue #228: the detail is all in-memory instance state seeded once in
+        // `init`, so after the player dismissed it kept rendering the
+        // pre-playback snapshot (hero AND episode rail). `.plexDataNeedsRefresh`
+        // is the correctly-ordered signal — the player posts it only AFTER its
+        // "stopped"/markAsWatched report has had time to commit server-side, so
+        // a refetch on it reads the new state. (An `onDismiss` hook would fire
+        // ~2s too early and read stale.) Same publisher Home subscribes to.
+        NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshWatchState()
+            }
+            .store(in: &refreshObservers)
 
         previewCarouselLog.info("[PCV] viewDidLoad items=\(self.items.count, privacy: .public) selected=\(self.selectedIndex, privacy: .public)")
         // NOTE: do NOT force collectionView.layoutIfNeeded() here. `view`
@@ -898,6 +919,56 @@ final class PreviewCarouselViewController: UIViewController {
             return true
         }
         return false
+    }
+
+    // MARK: - Watch-state refresh (issue #228)
+
+    /// Re-read the centered item's watch state from the server and repaint the
+    /// two surfaces that render it: the hero chrome and the episode rail.
+    ///
+    /// Both are repainted IN PLACE rather than re-seeded. Re-assigning
+    /// `items[selectedIndex]` through the normal `item` setters would rebuild
+    /// the action row and re-apply the below-fold snapshot, and the Play pill /
+    /// an episode card is almost always the focused view when the player
+    /// dismisses back onto this surface.
+    private func refreshWatchState() {
+        // Off-screen (something is presented over us, e.g. the episode detail
+        // page) we still refresh — it's one GET, and being right when the user
+        // comes back matters more than skipping it. But if the view has never
+        // loaded there is nothing to repaint.
+        guard isViewLoaded, items.indices.contains(selectedIndex) else { return }
+        let index = selectedIndex
+        let item = items[index]
+        guard !item.isMetadataOnly,
+              let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID)
+        else { return }
+
+        watchRefreshToken &+= 1
+        let token = watchRefreshToken
+
+        // Episode rail first — it owns its own fetch and its own token, and it
+        // repaints only the cards whose state actually moved.
+        expandedDetail.refreshWatchState()
+
+        // Hero: `fullDetail` is a single uncached metadata GET whose `.item` is
+        // a freshly-mapped MediaItem, so it carries the committed watch state.
+        Task { [weak self] in
+            guard let detail = try? await provider.fullDetail(for: item.ref) else { return }
+            await MainActor.run {
+                guard let self,
+                      self.watchRefreshToken == token,
+                      self.items.indices.contains(index),
+                      self.items[index].ref == detail.item.ref
+                else { return }
+                let refreshed = detail.item
+                guard refreshed != self.items[index] else { return }
+                self.items[index] = refreshed
+                self.expandedDetail.updateItemInPlace(refreshed)
+                let path = IndexPath(item: index, section: 0)
+                (self.collectionView.cellForItem(at: path) as? PreviewCardView)?
+                    .refreshWatchState(from: refreshed)
+            }
+        }
     }
 
     // MARK: - Playback

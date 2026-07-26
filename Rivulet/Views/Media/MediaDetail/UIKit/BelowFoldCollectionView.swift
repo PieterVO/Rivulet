@@ -101,6 +101,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     private let loader = BelowFoldContentLoader()
     private var loadToken: UInt64 = 0
+    /// Last item handed to `configure`/`configureEpisodesOnly`. Held so a
+    /// watch-state refresh can re-run the episode fetch without the host
+    /// having to re-plumb the item (issue #228).
+    private var configuredItem: MediaItem?
 
     private var episodesByID: [String: MediaItem] = [:]
     private var trailersByID: [String: BelowFoldTrailer] = [:]
@@ -468,6 +472,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     func configure(item: MediaItem, detail: MediaItemDetail?) {
         loadToken &+= 1
         let token = loadToken
+        configuredItem = item
         Task { [weak self] in
             guard let self else { return }
             let content = await self.loader.load(for: item, detail: detail)
@@ -504,6 +509,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     func configureEpisodesOnly(item: MediaItem) {
         loadToken &+= 1
         let token = loadToken
+        configuredItem = item
         let showRef: MediaItemRef?
         switch item.kind {
         case .show: showRef = item.ref
@@ -528,6 +534,72 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
         }
+    }
+
+    /// Re-read the episode rail's watch state from the server and repaint the
+    /// cards in place (issue #228: the rail kept rendering the pre-playback
+    /// snapshot after the player dismissed).
+    ///
+    /// Deliberately NOT a re-`configure`: the diffable identifiers are
+    /// `.episode(ratingKey)`, so a plain re-apply is an empty diff and the
+    /// cells never redraw. Instead the fresh items are swapped into
+    /// `episodesByID` and the same identifiers are `reconfigureItems`-ed, which
+    /// re-runs `cellForItemAt` on the EXISTING cells — no insert/delete, so the
+    /// focus engine keeps whatever is focused. `allEpisodes` is an uncached GET,
+    /// so this always reads the committed server state.
+    func refreshWatchState() {
+        guard let item = configuredItem else { return }
+        let showRef: MediaItemRef?
+        switch item.kind {
+        case .show: showRef = item.ref
+        case .episode: showRef = item.grandparentRef
+        default: showRef = nil
+        }
+        guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
+        // Its OWN token, not `loadToken`: bumping that one would invalidate an
+        // in-flight `configure`. Both the refresh token AND the load token are
+        // checked on landing, so a refresh is dropped if a newer refresh or ANY
+        // configure has started since.
+        refreshToken &+= 1
+        let refresh = refreshToken
+        let load = loadToken
+        Task { [weak self] in
+            guard let self else { return }
+            let eps: [MediaItem]
+            if let showRef {
+                eps = (try? await provider.allEpisodes(of: showRef)) ?? []
+            } else if item.kind == .season {
+                eps = (try? await provider.children(of: item.ref)) ?? []
+            } else {
+                eps = []
+            }
+            guard self.refreshToken == refresh, self.loadToken == load, !eps.isEmpty else { return }
+            self.applyRefreshedEpisodes(eps)
+        }
+    }
+
+    private var refreshToken: UInt64 = 0
+
+    /// Swap freshly-fetched episodes into the lookup and reconfigure only the
+    /// identifiers whose content actually changed.
+    private func applyRefreshedEpisodes(_ episodes: [MediaItem]) {
+        var changed: [BelowFoldItem] = []
+        for episode in episodes {
+            let id = episode.ref.itemID
+            guard let existing = episodesByID[id] else { continue }
+            guard existing != episode else { continue }
+            episodesByID[id] = episode
+            changed.append(.episode(id))
+        }
+        guard !changed.isEmpty else { return }
+        var snapshot = dataSource.snapshot()
+        // Only reconfigure identifiers the snapshot still holds — a refresh can
+        // land after the rail has been re-configured for a different show.
+        let present = Set(snapshot.itemIdentifiers)
+        let targets = changed.filter { present.contains($0) }
+        guard !targets.isEmpty else { return }
+        snapshot.reconfigureItems(targets)
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     private func ingestEpisodesOnly(_ episodes: [MediaItem]) {

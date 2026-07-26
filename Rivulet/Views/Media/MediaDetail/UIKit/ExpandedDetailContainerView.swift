@@ -89,9 +89,14 @@ final class ExpandedDetailContainerView: UIView {
     var item: MediaItem? {
         didSet {
             guard item != oldValue else { return }
+            guard !isSwappingItemInPlace else { return }
             applyItem()
         }
     }
+
+    /// Set while `updateItemInPlace` swaps a re-fetched copy of the current
+    /// item in, so the `didSet` skips the full rail rebuild.
+    private var isSwappingItemInPlace = false
 
     // MARK: - Subviews
 
@@ -611,6 +616,24 @@ final class ExpandedDetailContainerView: UIView {
     }
 
     // MARK: - Item
+
+    /// Refresh the episode rail's watch state in place (issue #228). Repaints
+    /// the existing cards rather than re-running `applyItem`, whose full
+    /// snapshot rebuild would knock focus out of the rail.
+    func refreshWatchState() {
+        belowFoldCollection.refreshWatchState()
+    }
+
+    /// Swap in a re-fetched copy of the SAME item (new watch state, same ref)
+    /// without re-running the episode load. `item`'s `didSet` would otherwise
+    /// rebuild the rail from scratch; here only the stored value moves so the
+    /// host can hand the fresh item back out (`onSelectSynopsis`, etc.).
+    func updateItemInPlace(_ refreshed: MediaItem) {
+        guard let current = item, current.ref == refreshed.ref else { return }
+        isSwappingItemInPlace = true
+        item = refreshed
+        isSwappingItemInPlace = false
+    }
 
     private func applyItem() {
         // Load the centered item's episodes into the single rail (episodes-only

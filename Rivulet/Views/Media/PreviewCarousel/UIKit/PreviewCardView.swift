@@ -55,6 +55,7 @@ final class PreviewCardView: UICollectionViewCell {
     var item: MediaItem? {
         didSet {
             guard item != oldValue else { return }
+            guard !isRefreshingWatchState else { return }
             applyItem()
         }
     }
@@ -331,6 +332,21 @@ final class PreviewCardView: UICollectionViewCell {
     var onPlay: ((MediaItem) -> Void)?
     /// Info button → show the structured info popup (carries the loaded detail).
     var onShowInfo: ((MediaItemDetail) -> Void)?
+
+    /// Repaint the hero chrome's watch-derived bits from a re-fetched copy of
+    /// the same item, without rebuilding the card (issue #228). Also updates
+    /// this card's own stored item so `onPlay` resumes from the new offset.
+    func refreshWatchState(from refreshed: MediaItem) {
+        guard let current = item, current.ref == refreshed.ref else { return }
+        isRefreshingWatchState = true
+        item = refreshed
+        isRefreshingWatchState = false
+        chromeView.refreshWatchState(from: refreshed)
+    }
+
+    /// Set while `refreshWatchState` swaps the re-fetched item in, so the
+    /// `item` `didSet` skips the backdrop/chrome rebuild.
+    private var isRefreshingWatchState = false
 
     private func applyItem() {
         loadToken &+= 1
