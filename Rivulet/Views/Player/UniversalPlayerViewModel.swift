@@ -592,7 +592,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Unconditional, before the Aether early-return below: a torn-down
             // engine reports buffering forever, and the watchdog's recovery
             // kick must never be what wakes the session back up.
-            self.cancelAetherStallWatchdog()
+            //
+            // Hopped onto the main actor rather than called directly. The
+            // observer is already delivered on `.main`, but the closure is not
+            // statically isolated, so calling an actor-isolated method from it
+            // is a warning today and an error under the Swift 6 language mode.
+            Task { @MainActor [weak self] in
+                self?.cancelAetherStallWatchdog()
+            }
             // The Aether route self-manages background: the engine tears the video pipeline down on
             // background, and AetherPlayer reloads it + restores play state on foreground (upstream's
             // tvOS build has no foreground recovery of its own — see observeAppLifecycle in
@@ -620,7 +627,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.cancelAetherStallWatchdog()
+            // Hopped onto the main actor for the same reason as the buffering
+            // observer above: delivery is already on `.main`, but the closure
+            // is not statically isolated. The capture is repeated on the Task
+            // rather than reusing the enclosing closure's, which would be a
+            // reference to a captured var from concurrently-executing code.
+            Task { @MainActor [weak self] in
+                self?.cancelAetherStallWatchdog()
+            }
         }
 
         // When returning from background, keep paused (user must manually resume)
