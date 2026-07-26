@@ -3598,32 +3598,53 @@ final class UniversalPlayerViewModel: ObservableObject {
             skippedRecapIds.insert(recapId)
         }
 
-        // Seek to end of marker, clamped so we never land at/after duration.
-        // Credits markers typically end AT the file end (endTimeSeconds ==
-        // duration); seeking to literal EOF stalls Aether's AVPlayer host. Land
-        // just inside the media instead: natural end-of-stream then fires within
-        // ~epsilon and drives the normal Up Next handoff. AVPlayer tolerates
-        // seek-to-duration, but just-before is correct for it too, so the
-        // clamp is unconditional (this is the single funnel for both the
-        // skip button and auto-skip).
-        let skipEpsilon: TimeInterval = 0.5
-        let target = duration > 0
-            ? max(0, min(marker.endTimeSeconds, duration - skipEpsilon))
-            : max(0, marker.endTimeSeconds)
-
         // Marker skip (manual or auto) is a user-initiated seek that bypasses
         // commitScrub/.seekAbsolute: clear any active replay window so a
         // stale invocation point can't spuriously revert subtitles later,
         // disconnected from where playback actually landed post-skip.
         clearReplayWindow()
-        // Preserve the chrome state across the skip: if the controls were
-        // hidden (the pill owned focus), the jump must NOT pop the rail open;
-        // if they were already up, keep them up.
-        await seek(to: target, revealsControls: showControls)
 
-        // Hide button
-        activeMarker = nil
-        showSkipButton = false
+        switch MarkerSkipPolicy.outcome(
+            isCredits: marker.isCredits,
+            markerEnd: marker.endTimeSeconds,
+            duration: duration
+        ) {
+        case .finish:
+            // Credits that run to the file end: there is nothing left to play,
+            // so this skip FINISHES playback instead of seeking. Seeking would
+            // park the player on the last frame forever — the landing spot sits
+            // inside AetherEngine's end-of-media epsilon, and the engine
+            // deliberately turns a seek that lands there into `.paused` while
+            // withholding the terminal `.ended` it reserves for organic
+            // completion. Without `.ended` the end-of-playback handling never
+            // runs, and the duration-45 post-video fallback can't cover for it
+            // either: that fallback is gated on there being no credits marker,
+            // and a credits marker is exactly what put this pill on screen.
+            // Calling the normal funnel directly keeps mark-watched / scrobble /
+            // Up Next semantics identical on both the aether and hls routes.
+            activeMarker = nil
+            showSkipButton = false
+            await handlePlaybackEnded()
+            // handlePlaybackEnded() bows out leaving postVideoState == .hidden
+            // for movies, for episodes with the Up Next panel disabled, and
+            // when there is no next episode. Nothing else exits the player in
+            // those cases, so dismiss it here.
+            if postVideoState == .hidden {
+                shouldDismiss = true
+            }
+
+        case .seek(let target):
+            // Intro / recap / ad, or a credits marker that ends mid-stream:
+            // ordinary seek, clamped just inside the media.
+            // Preserve the chrome state across the skip: if the controls were
+            // hidden (the pill owned focus), the jump must NOT pop the rail open;
+            // if they were already up, keep them up.
+            await seek(to: target, revealsControls: showControls)
+
+            // Hide button
+            activeMarker = nil
+            showSkipButton = false
+        }
     }
 
     /// Label for current skip button
