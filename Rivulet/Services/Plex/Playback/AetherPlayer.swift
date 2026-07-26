@@ -99,6 +99,12 @@ final class AetherPlayer: PlayerProtocol {
     /// even for an actively watching user.
     private var userIntendsToPlay = false
 
+    /// Read-only view of the intent above, for hosts that must not act on a
+    /// session the user parked. The host stall watchdog reads it: engine state
+    /// alone can't distinguish "stalled mid-playback" from "paused and idling"
+    /// once the screensaver has the display (issue #247).
+    var intendsToPlay: Bool { userIntendsToPlay }
+
     /// Set on didEnterBackground, cleared when the foreground reload runs.
     /// nil means "no background transit pending" (also skips the spurious
     /// willEnterForeground at cold launch).
@@ -380,7 +386,15 @@ final class AetherPlayer: PlayerProtocol {
             }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+        // didBecomeActive, not willEnterForeground: the engine's own teardown /
+        // restore pair is keyed on didEnterBackground / didBecomeActive, so
+        // arming and disarming have to observe the same two notifications or
+        // the reload can race the engine's restore. A resign-active-only cycle
+        // (screensaver, Control Center) delivers didBecomeActive without a
+        // preceding background, and `reloadAfterBackgroundReturn` no-ops on the
+        // nil `backgroundedAt`, so this stays a strict superset of the old
+        // trigger rather than a new one.
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.reloadAfterBackgroundReturn()

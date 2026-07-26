@@ -340,6 +340,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let wheelScrubbingIdleDelay: TimeInterval = 0.8
     private var appBecameActiveObserver: Any?
     private var appBackgroundObserver: Any?
+    private var appResignActiveObserver: Any?
     /// Token for the block-based `.AVPlayerItemDidPlayToEndTime` observer.
     /// Block observers are keyed by the returned token, not by `self`, so this
     /// has to be stored to be removable.
@@ -588,6 +589,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
+            // Unconditional, before the Aether early-return below: a torn-down
+            // engine reports buffering forever, and the watchdog's recovery
+            // kick must never be what wakes the session back up.
+            self.cancelAetherStallWatchdog()
             // The Aether route self-manages background: the engine tears the video pipeline down on
             // background, and AetherPlayer reloads it + restores play state on foreground (upstream's
             // tvOS build has no foreground recovery of its own — see observeAppLifecycle in
@@ -601,6 +606,21 @@ final class UniversalPlayerViewModel: ObservableObject {
                     self.pause()
                 }
             }
+        }
+
+        // The tvOS screensaver is a resign-active, NOT a background transition:
+        // the app keeps running with the display taken over, so none of the
+        // background handling above sees it. A paused session can start
+        // reporting buffering here, and the stall watchdog would have kicked it
+        // back into playback under the screensaver (issue #247). A genuinely
+        // playing session that stalls will re-arm the watchdog on the next
+        // buffering edge once the user comes back.
+        appResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.cancelAetherStallWatchdog()
         }
 
         // When returning from background, keep paused (user must manually resume)
@@ -987,6 +1007,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             if state == .paused {
                 startPausedPosterTimer()
+                // Every pause path funnels through here, so this is the one
+                // place that reliably disarms the stall watchdog when the user
+                // stops asking for playback (issue #247).
+                cancelAetherStallWatchdog()
             } else {
                 cancelPausedPosterTimer()
             }
@@ -2299,8 +2323,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     func stopPlayback() {
         streamPreparationTask?.cancel()
         streamPreparationTask = nil
-        aetherStallWatchdogTask?.cancel()
-        aetherStallWatchdogTask = nil
+        cancelAetherStallWatchdog()
         titleLogoResolveTask?.cancel()
         titleLogoResolveTask = nil
         subtitleClockSync.stop()
@@ -2405,16 +2428,29 @@ final class UniversalPlayerViewModel: ObservableObject {
             updatePlaybackState(.buffering)
             startAetherStallWatchdog(for: player)
         } else {
-            aetherStallWatchdogTask?.cancel()
-            aetherStallWatchdogTask = nil
+            cancelAetherStallWatchdog()
             if playbackState == .buffering {
                 updatePlaybackState(player.isPlaying ? .playing : .paused)
             }
         }
     }
 
-    private func startAetherStallWatchdog(for player: AetherPlayer) {
+    private func cancelAetherStallWatchdog() {
         aetherStallWatchdogTask?.cancel()
+        aetherStallWatchdogTask = nil
+    }
+
+    private func startAetherStallWatchdog(for player: AetherPlayer) {
+        cancelAetherStallWatchdog()
+
+        // A paused session isn't stalled, it's parked, so there is nothing to
+        // recover and a recovery kick would be a restart the user never asked
+        // for (issue #247).
+        guard StallWatchdogPolicy.shouldArm(
+            userIntendsToPlay: player.intendsToPlay,
+            playbackState: playbackState
+        ) else { return }
+
         let baselineTime = currentTime
         aetherStallWatchdogTask = Task { @MainActor [weak self, weak player] in
             guard let self, let player else { return }
@@ -2423,6 +2459,17 @@ final class UniversalPlayerViewModel: ObservableObject {
             guard !Task.isCancelled,
                   self.aetherPlayer === player,
                   player.isBuffering else { return }
+
+            // Re-checked here, not just at arm time: the delay is 20s, and the
+            // user can pause or the screensaver can take the display in that
+            // window. `play()` below may rebuild the whole Aether session (it
+            // runs any pending foreground reload), so this is the guard that
+            // keeps a dimmed, paused Apple TV from bursting back into playback.
+            guard StallWatchdogPolicy.shouldKick(
+                userIntendsToPlay: player.intendsToPlay,
+                playbackState: self.playbackState,
+                applicationState: UIApplication.shared.applicationState
+            ) else { return }
 
             let recoveryTime = self.currentTime
             guard recoveryTime <= baselineTime + 0.5 else { return }
@@ -4588,6 +4635,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = appBecameActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = appResignActiveObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = itemDidPlayToEndObserver {
