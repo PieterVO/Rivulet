@@ -865,6 +865,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                                 print("[Player] Underlying: \(underlying.domain) code=\(underlying.code) — \(underlying.localizedDescription)")
                             }
                         }
+                        // Teardown races (session ending, transcode stopped
+                        // server-side) land here as NSURLError -999 on
+                        // `item.error`. That is not a playback failure — don't
+                        // report it and don't burn the one-shot HLS fallback on
+                        // an item nobody is watching any more (RIVULET-19).
+                        if let itemError = item.error, isCancellationError(itemError) {
+                            print("[Player] AVPlayerItem failed with cancellation — ignoring")
+                            break
+                        }
                         // The AVPlayerItem error was previously only printed to
                         // the console, so a mid-playback item failure that the
                         // HLS fallback rescued left no trace in Sentry at all.
@@ -1383,6 +1392,13 @@ final class UniversalPlayerViewModel: ObservableObject {
                     externalSubtitles: aetherExternalSubtitles()
                 )
             } catch {
+                // Ordinary cancellation (the user left the player or switched
+                // items while the load was in flight) is not a playback
+                // failure: no Sentry report, no fallback, no user-facing
+                // error. Returning rather than rethrowing matters — a rethrow
+                // lands in the outer catch, which sets `.failed` and fires a
+                // second `avplayer_start_failed` event.
+                if isCancellationError(error) || Task.isCancelled { return }
                 let kind = classifyDirectPlayFailure(error)
                 // Record the ORIGINAL Aether failure before doing anything else.
                 // This is the root cause of RIVULET-19: previously `error` was

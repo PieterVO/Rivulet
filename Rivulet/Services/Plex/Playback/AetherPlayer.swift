@@ -536,6 +536,10 @@ final class AetherPlayer: PlayerProtocol {
             defer { if !isHLS { AetherEngine.setForceSoftwarePathForTesting(false) } }
             try await engine.load(url: url, startPosition: nil, options: options)
         } catch {
+            // The caller left the slot / retuned while the load was in flight.
+            // Rethrow untouched so the type survives; wrapping it in a
+            // PlayerError makes it indistinguishable from a real failure.
+            if isCancellationError(error) { throw error }
             let pe = PlayerError.loadFailed(String(describing: error))
             errorSubject.send(pe)
             throw pe
@@ -653,6 +657,11 @@ final class AetherPlayer: PlayerProtocol {
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
         } catch {
+            // User navigated away / switched items mid-load. Rethrow untouched
+            // and stay off errorSubject: wrapping it as PlayerError.loadFailed
+            // destroys the type, so downstream can no longer tell a
+            // cancellation from a genuine startup failure (RIVULET-19).
+            if isCancellationError(error) { throw error }
             let pe = PlayerError.loadFailed(String(describing: error))
             errorSubject.send(pe)
             throw pe
