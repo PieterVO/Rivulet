@@ -155,6 +155,7 @@ struct WhatsNewView: View {
             "The player's INFO panel now scrolls all the way through long sections again, and bitrate is shown in the right units for both video and audio",
             "Pausing and leaving the screensaver on no longer restarts what you were watching",
             "A Recently Added row no longer disappears from Home when its library fails to load once",
+            "Hiding a library now also hides it from Continue Watching and Featured Content, so a second copy of the same library no longer shows everything twice",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
