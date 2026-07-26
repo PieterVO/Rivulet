@@ -156,6 +156,12 @@ struct WhatsNewView: View {
             "Pausing and leaving the screensaver on no longer restarts what you were watching",
             "A Recently Added row no longer disappears from Home when its library fails to load once",
             "Hiding a library now also hides it from Continue Watching and Featured Content, so a second copy of the same library no longer shows everything twice",
+            "The Play button on the remote now starts or resumes whatever is focused on Home, in a library, in Discover, and in search",
+            "Leaving the player now fades to black, so the moment your TV switches modes no longer flashes back to Home",
+            "Titles with TrueHD or DTS-HD MA audio no longer sit on Loading forever, falling back automatically instead of waiting with no way out",
+            "The player's INFO panel no longer reports audio as transcoding when nothing is being transcoded",
+            "Reordering your libraries in Settings now works by swiping, not only by clicking, so it works on the original Siri Remote",
+            "Live TV sources from Dispatcharr now respect the channel profile you selected instead of listing every channel, and Rivulet identifies itself in the connection list",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
