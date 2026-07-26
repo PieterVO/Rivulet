@@ -40,6 +40,21 @@ final class PlayerInfoSheetStyleTests: XCTestCase {
         XCTAssertEqual(PlayerInfoSheetStyle.bitrate(128_000), "128 kbps")
     }
 
+    // `bitrate(_:)` takes BITS per second, but Plex reports kbps in both
+    // `Media.bitrate` and `Stream.bitrate`, so `CardInfoView` multiplies by
+    // 1000 at the call site (the same conversion `PlexMediaMapper` applies).
+    // Without it a 25 Mbps remux printed "25 kbps" and a 640 kbps track
+    // printed "640 bps" — issues #242 / #243.
+    func testPlexVideoKbpsRendersAsMbps() {
+        let plexKbps = 25_000
+        XCTAssertEqual(PlayerInfoSheetStyle.bitrate(plexKbps * 1000), "25.0 Mbps")
+    }
+
+    func testPlexAudioKbpsRendersAsKbps() {
+        let plexKbps = 640
+        XCTAssertEqual(PlayerInfoSheetStyle.bitrate(plexKbps * 1000), "640 kbps")
+    }
+
     func testBufferSecondsClampsNegativeToZero() {
         XCTAssertEqual(PlayerInfoSheetStyle.bufferSeconds(-2), "0s")
     }
