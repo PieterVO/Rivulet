@@ -150,6 +150,11 @@ struct WhatsNewView: View {
             "Subtitles now reappear when you seek onto a line that is already on screen, picture based subtitles with more than one element render in full, and external .sup subtitle files load",
             "Dolby Vision Profile 5 titles no longer play with a green or purple tint, and widescreen content encoded with non square pixels no longer appears squashed",
             "You can now set how far a single Left or Right press skips during playback, from 5 to 30 seconds, in Playback settings",
+            "Skip Credits now finishes the title and moves on to Up Next instead of stopping on the last frame",
+            "Show pages now update as soon as you finish an episode, so the episode you just watched is marked watched without leaving and coming back",
+            "The player's INFO panel now scrolls all the way through long sections again, and bitrate is shown in the right units for both video and audio",
+            "Pausing and leaving the screensaver on no longer restarts what you were watching",
+            "A Recently Added row no longer disappears from Home when its library fails to load once",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
