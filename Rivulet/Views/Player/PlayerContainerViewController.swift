@@ -1123,16 +1123,8 @@ class PlayerContainerViewController: UIViewController {
                 width: 640, from: rail.insightsButton)
         }
 
-        // Content filter: a quick on/off toggle. The glyph reflects state
-        // (outline = off, filled = on); per-category controls live in Settings.
-        rail.onFilter = { [weak self, weak rail] in
-            guard let vm = self?.viewModel else { return }
-            let newState = !vm.contentFilter.isEnabled
-            vm.contentFilter.setEnabled(newState)
-            rail?.setFilterEnabled(newState)
-        }
-        rail.filterButton.isHidden = false
-        rail.setFilterEnabled(vm.contentFilter.isEnabled)
+        // Content filter is not exposed in the player yet — the button stays
+        // hidden (its default in PlayerRailView) until the feature is ready.
     }
 
     /// Whether the Insights panel has anything to show: a non-empty cast
