@@ -162,6 +162,8 @@ struct WhatsNewView: View {
             "The player's INFO panel no longer reports audio as transcoding when nothing is being transcoded",
             "Reordering your libraries in Settings now works by swiping, not only by clicking, so it works on the original Siri Remote",
             "Live TV sources from Dispatcharr now respect the channel profile you selected instead of listing every channel, and Rivulet identifies itself in the connection list",
+            "Pressing left at the start of the Live TV guide stays in the guide instead of opening the sidebar",
+            "A library scan interrupted by a slow or unreachable server no longer replaces your saved library index with a partial one, so Featured Content and the in-library markers on Discover stop thinning out",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
