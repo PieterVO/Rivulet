@@ -257,6 +257,10 @@ enum SettingsDescriptorStore {
             icon: "key",
             description: "Only needed if your server asks for one. Leave it empty otherwise."
         ),
+        "channelProfileField": SettingDescriptor(
+            icon: "line.3.horizontal.decrease.circle",
+            description: "Dispatcharr only. The name of a channel profile, to load just that set of channels. Leave it empty and you get every channel on the server."
+        ),
         "m3uURLField": SettingDescriptor(
             icon: "list.bullet.rectangle",
             description: "The playlist link your IPTV provider gave you. It usually ends in .m3u or .m3u8."

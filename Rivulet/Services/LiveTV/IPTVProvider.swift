@@ -32,6 +32,11 @@ actor IPTVProvider: LiveTVProvider {
     /// API token for Dispatcharr authentication (nil if not required)
     nonisolated let apiToken: String?
 
+    /// Dispatcharr channel profile scoping this source, or nil for all channels.
+    /// The token does not imply a profile: Dispatcharr only filters the playlist
+    /// when the profile appears as a path segment. See `DispatcharrService`.
+    nonisolated let channelProfile: String?
+
     private let dispatcharrService: DispatcharrService?
 
     // Cached data
@@ -52,34 +57,32 @@ actor IPTVProvider: LiveTVProvider {
     // MARK: - Initialization
 
     /// Initialize for Dispatcharr source
-    init(dispatcharrURL: URL, sourceId: String, displayName: String, apiToken: String? = nil) {
+    init(dispatcharrURL: URL, sourceId: String, displayName: String, apiToken: String? = nil,
+         channelProfile: String? = nil) {
         self.sourceType = .dispatcharr
         self.sourceId = sourceId
         self.displayName = displayName
         self.apiToken = apiToken
 
-        // Clean the URL in case it already contains /output/m3u or /output/epg
-        // This handles URLs that were saved before the cleanup was added
-        let cleanedURL = Self.cleanDispatcharrURL(dispatcharrURL)
+        // Split off /output/m3u or /output/epg in case the stored URL still
+        // carries one. This handles URLs saved before the cleanup was added, and
+        // it now also recovers a channel profile that a user pasted as part of
+        // the endpoint rather than typing into the profile field.
+        let split = DispatcharrService.splitEndpointPath(from: dispatcharrURL.absoluteString)
+        let cleanedURL = URL(string: split.baseURL) ?? dispatcharrURL
+
+        // An explicitly configured profile wins over one recovered from the URL,
+        // so editing the field is always the last word.
+        let profile = DispatcharrService.normalizedProfile(channelProfile) ?? split.channelProfile
 
         self.baseURL = cleanedURL
-        self.dispatcharrService = DispatcharrService(baseURL: cleanedURL, apiToken: apiToken)
-        self.m3uURL = cleanedURL.appendingPathComponent("output/m3u")
-        self.epgURL = cleanedURL.appendingPathComponent("output/epg")
-    }
-
-    /// Clean a Dispatcharr URL by removing /output/m3u or /output/epg paths
-    private static func cleanDispatcharrURL(_ url: URL) -> URL {
-        var urlString = url.absoluteString
-
-        // Strip /output/m3u or /output/epg paths if present
-        if let range = urlString.range(of: "/output/m3u", options: .caseInsensitive) {
-            urlString = String(urlString[..<range.lowerBound])
-        } else if let range = urlString.range(of: "/output/epg", options: .caseInsensitive) {
-            urlString = String(urlString[..<range.lowerBound])
-        }
-
-        return URL(string: urlString) ?? url
+        self.channelProfile = profile
+        self.dispatcharrService = DispatcharrService(baseURL: cleanedURL, apiToken: apiToken,
+                                                     channelProfile: profile)
+        self.m3uURL = DispatcharrService.outputURL(base: cleanedURL, kind: "m3u",
+                                                   channelProfile: profile)
+        self.epgURL = DispatcharrService.outputURL(base: cleanedURL, kind: "epg",
+                                                   channelProfile: profile)
     }
 
     /// Initialize for generic M3U source
@@ -88,6 +91,7 @@ actor IPTVProvider: LiveTVProvider {
         self.sourceId = sourceId
         self.displayName = displayName
         self.apiToken = nil
+        self.channelProfile = nil
         self.baseURL = nil
         self.dispatcharrService = nil
         self.m3uURL = m3uURL

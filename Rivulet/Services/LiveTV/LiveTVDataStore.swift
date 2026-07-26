@@ -85,6 +85,24 @@ class LiveTVDataStore: ObservableObject {
         let m3uURL: String?
         let epgURL: String?
         let apiToken: String?
+
+        /// Dispatcharr channel profile, nil for every channel. Optional so that
+        /// source configurations written before this field existed still decode:
+        /// a missing key leaves it nil, which is the previous all-channels
+        /// behavior.
+        var channelProfile: String?
+
+        init(id: String, type: String, name: String, baseURL: String?, m3uURL: String?,
+             epgURL: String?, apiToken: String?, channelProfile: String? = nil) {
+            self.id = id
+            self.type = type
+            self.name = name
+            self.baseURL = baseURL
+            self.m3uURL = m3uURL
+            self.epgURL = epgURL
+            self.apiToken = apiToken
+            self.channelProfile = channelProfile
+        }
     }
 
     // MARK: - Source Info
@@ -96,6 +114,11 @@ class LiveTVDataStore: ObservableObject {
         let channelCount: Int
         let isConnected: Bool
         let lastSync: Date?
+
+        /// Dispatcharr channel profile scoping this source, nil for all channels.
+        /// Shown read-only on the source detail page so a user can tell at a
+        /// glance why they are seeing a subset of their channels.
+        var channelProfile: String?
     }
 
     // MARK: - EPG Errors
@@ -150,13 +173,15 @@ class LiveTVDataStore: ObservableObject {
     // MARK: - Source Management
 
     /// Add a Dispatcharr source
-    func addDispatcharrSource(baseURL: URL, name: String, apiToken: String? = nil) async {
+    func addDispatcharrSource(baseURL: URL, name: String, apiToken: String? = nil,
+                              channelProfile: String? = nil) async {
         let sourceId = "dispatcharr:\(baseURL.absoluteString)"
         let provider = IPTVProvider(
             dispatcharrURL: baseURL,
             sourceId: sourceId,
             displayName: name,
-            apiToken: apiToken
+            apiToken: apiToken,
+            channelProfile: channelProfile
         )
         providers[sourceId] = provider
         saveSources()
@@ -219,7 +244,8 @@ class LiveTVDataStore: ObservableObject {
                         dispatcharrURL: url,
                         sourceId: config.id,
                         displayName: config.name,
-                        apiToken: config.apiToken
+                        apiToken: config.apiToken,
+                        channelProfile: config.channelProfile
                     )
                     providers[config.id] = provider
                 }
@@ -278,7 +304,8 @@ class LiveTVDataStore: ObservableObject {
                         baseURL: iptvProvider.baseURL?.absoluteString,
                         m3uURL: nil,
                         epgURL: nil,
-                        apiToken: iptvProvider.apiToken
+                        apiToken: iptvProvider.apiToken,
+                        channelProfile: iptvProvider.channelProfile
                     ))
                 }
 
@@ -329,7 +356,8 @@ class LiveTVDataStore: ObservableObject {
                 displayName: provider.displayName,
                 channelCount: channelCount,
                 isConnected: isConnected,
-                lastSync: nil  // TODO: Track last sync time
+                lastSync: nil,  // TODO: Track last sync time
+                channelProfile: (provider as? IPTVProvider)?.channelProfile
             ))
         }
 

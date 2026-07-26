@@ -26,6 +26,16 @@ final class IPTVSource {
     var baseURL: String?      // For Dispatcharr (e.g., http://192.168.1.100:9191)
     var m3uURL: String?       // Direct M3U playlist URL
     var epgURL: String?       // XMLTV EPG URL
+
+    /// Dispatcharr channel profile to scope the playlist and guide to, or nil for
+    /// every channel. Dispatcharr treats the profile as a PATH segment
+    /// (`/output/m3u/<profile>`), and an API token does not scope the playlist on
+    /// its own, so with no profile the server correctly returns every channel.
+    /// Optional with no initializer assignment, matching `baseURL` and `epgURL`
+    /// above, so SwiftData's lightweight migration adds it as nil to existing
+    /// stored sources.
+    var channelProfile: String?
+
     var lastSync: Date?
     var channelCount: Int
 
@@ -45,8 +55,9 @@ final class IPTVSource {
     var resolvedM3UURL: String? {
         switch sourceType {
         case .dispatcharr:
-            guard let base = baseURL else { return nil }
-            return "\(base)/output/m3u"
+            guard let base = baseURL, let url = URL(string: base) else { return nil }
+            return DispatcharrService.outputURL(base: url, kind: "m3u",
+                                                channelProfile: channelProfile).absoluteString
         case .genericM3U:
             return m3uURL
         }
@@ -56,8 +67,9 @@ final class IPTVSource {
     var resolvedEPGURL: String? {
         switch sourceType {
         case .dispatcharr:
-            guard let base = baseURL else { return nil }
-            return "\(base)/output/epg"
+            guard let base = baseURL, let url = URL(string: base) else { return nil }
+            return DispatcharrService.outputURL(base: url, kind: "epg",
+                                                channelProfile: channelProfile).absoluteString
         case .genericM3U:
             return epgURL
         }

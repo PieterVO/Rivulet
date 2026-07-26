@@ -580,6 +580,12 @@ enum SettingsContent {
             SettingsRowItem(id: "src_channels", title: "Channels",
                             kind: .info(value: { "\(source.channelCount)" }))
         ]
+        // Only shown when a profile is actually set, so the common all-channels
+        // source keeps the page as short as it is today.
+        if let profile = source.channelProfile {
+            rows.append(SettingsRowItem(id: "src_channelProfile", title: "Channel Profile",
+                                        kind: .info(value: { profile })))
+        }
         if let lastSync = source.lastSync {
             rows.append(SettingsRowItem(id: "src_lastSync", title: "Last Synced",
                                         kind: .info(value: { lastSync.formatted(date: .abbreviated, time: .shortened) })))
