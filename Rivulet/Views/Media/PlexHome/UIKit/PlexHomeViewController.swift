@@ -2811,6 +2811,144 @@ final class PlexHomeViewController: UIViewController {
                              dy: -frame.height * (focusScale - 1) / 2)
     }
 
+    // MARK: - Play/Pause button (physical remote)
+
+    /// True while we are consuming a Play/Pause press we began handling, so the
+    /// matching `pressesEnded` can be swallowed too. An Ended phase that bubbles
+    /// up without its Began having been handled here makes the system apply its
+    /// own default handling and peel an extra layer off the presentation stack,
+    /// which is the same reason the player chrome tracks this flag.
+    private var isHandlingPlayPausePress = false
+
+    /// The physical Play/Pause button starts or resumes the focused tile,
+    /// matching what Infuse and the Plex client do. Select is untouched: it
+    /// arrives through `didSelectItemAt` on the collection view, an entirely
+    /// separate delivery path from presses, so adding this cannot change what
+    /// Select does on any row.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .playPause {
+            isHandlingPlayPausePress = true
+            playFocusedTile()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .playPause && isHandlingPlayPausePress {
+            isHandlingPlayPausePress = false
+            return
+        }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .playPause && isHandlingPlayPausePress {
+            isHandlingPlayPausePress = false
+            return
+        }
+        super.pressesCancelled(presses, with: event)
+    }
+
+    /// Resolve whatever currently holds focus to a playable MediaItem and play
+    /// it. Everything here is deliberately best-effort: a Play press on a tile
+    /// with nothing playable behind it (a Discover or watchlist entry the server
+    /// does not have, a state or skeleton cell, a music result) does nothing at
+    /// all rather than presenting a player that cannot start.
+    private func playFocusedTile() {
+        // A presented popup or player owns its own input; never play underneath
+        // one. The player itself consumes Play/Pause before it could ever reach
+        // this surface, but the tile menu popup is focusless enough that being
+        // explicit costs nothing.
+        guard presentedViewController == nil, let item = focusedPlayableItem() else { return }
+
+        // A show or a season has no playable media of its own, so Play has to
+        // resolve to a concrete episode first. Same composition as the preview
+        // carousel's Play pill (`playHeroItem`), so the two surfaces can never
+        // disagree about which episode a Play press starts.
+        guard item.kind == .show || item.kind == .season else {
+            playItem(item)
+            return
+        }
+        Task { [weak self] in
+            guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
+                await MainActor.run { self?.playItem(item) }
+                return
+            }
+            let target = await EpisodePicker.resolvePlayTarget(for: item, provider: provider)
+            await MainActor.run { self?.playItem(target ?? item) }
+        }
+    }
+
+    /// The MediaItem behind the focused tile, or nil when focus is on something
+    /// that cannot be played. Mirrors the guards `handleTap` and
+    /// `handleShelfTap` already apply so a Play press can never reach a target
+    /// a Select press would have refused.
+    private func focusedPlayableItem() -> MediaItem? {
+        // Shelf rows first: their tiles live inside the row cell's own nested
+        // collection view, so the outer collection's focused index path is the
+        // ROW, not the tile. Ask the row which of its tiles has focus.
+        for case let row as ShelfRowCell in collectionView.visibleCells {
+            guard let itemIndex = row.focusedItemIndex(),
+                  let rowIndexPath = collectionView.indexPath(for: row),
+                  rowIndexPath.section < sectionsSnapshot.count
+            else { continue }
+            return playableShelfItem(section: sectionsSnapshot[rowIndexPath.section], itemIndex: itemIndex)
+        }
+
+        // Library grid: its tiles are cells of the outer collection view, so the
+        // same lookup the grid long-press uses applies directly.
+        guard let indexPath = TileLongPress.focusedCell(in: collectionView),
+              indexPath.section < sectionsSnapshot.count
+        else { return nil }
+        // The trailing loading-skeleton card is not an item.
+        if let itemID = dataSource.itemIdentifier(for: indexPath),
+           itemID.itemID == HomeItemID.skeletonSentinel {
+            return nil
+        }
+        let section = sectionsSnapshot[indexPath.section]
+        guard case .grid = section.kind, indexPath.item < section.items.count else { return nil }
+        return playableItem(section.items[indexPath.item])
+    }
+
+    /// Per-shelf-kind resolution of a focused tile index to a playable item.
+    /// The state, prompt and hero kinds have no items at all; the watchlist is
+    /// backed by PlexWatchlistItem rather than MediaItem and its entries are
+    /// Discover metadata that need not exist on the server, so neither can
+    /// produce a play target here.
+    private func playableShelfItem(section: HomeSectionData, itemIndex: Int) -> MediaItem? {
+        switch section.kind {
+        case .continueWatching, .recentlyAdded, .recommendations, .discoverList:
+            guard itemIndex < section.items.count else { return nil }
+            return playableItem(section.items[itemIndex])
+        case .searchGrid:
+            guard itemIndex < section.items.count else { return nil }
+            // Music results route to the music surfaces and are not video the
+            // player can start, so Play ignores them.
+            if let meta = searchGroupMetas[section.id]?[safe: itemIndex],
+               ["artist", "album", "track"].contains(meta.type ?? "") {
+                return nil
+            }
+            return playableItem(section.items[itemIndex])
+        case .watchlist, .hero, .grid, .recommendationsLoading, .recommendationsError,
+             .sortHeader, .searchPrompt, .searchState:
+            return nil
+        }
+    }
+
+    /// Gate on whether an item can actually be handed to the player. A
+    /// metadata-only item comes from TMDB rather than the server and has no
+    /// ratingKey to play, and a collection or person is not playable at all.
+    private func playableItem(_ item: MediaItem) -> MediaItem? {
+        guard !item.isMetadataOnly, !item.ref.itemID.isEmpty else { return nil }
+        switch item.kind {
+        case .movie, .show, .season, .episode:
+            return item
+        case .collection, .person, .unknown:
+            return nil
+        }
+    }
+
     private func presentTileMenu(sections: [[TileMenuAction]]) {
         guard sections.contains(where: { !$0.isEmpty }), presentedViewController == nil else { return }
         // animated: false — the popup runs its own grow-from-the-tile

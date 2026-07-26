@@ -72,6 +72,20 @@ final class ShelfRowCell: UICollectionViewCell {
     /// Reports resting offsets so the owner can restore them across reuse.
     var onOffsetChanged: ((CGFloat) -> Void)?
 
+    /// Index of the tile that currently holds focus inside this row, or nil if
+    /// focus is elsewhere or has landed on the skeleton placeholder. The owning
+    /// controller needs this to service a Play/Pause press: unlike Select and
+    /// long-press, a Play/Pause press is delivered to the focused view and
+    /// bubbles up to the outer view controller, so there is no per-tile
+    /// callback to hang the lookup off. The controller has to pull the focused
+    /// index out of whichever row owns it.
+    func focusedItemIndex() -> Int? {
+        guard let indexPath = TileLongPress.focusedCell(in: rowCollectionView),
+              indexPath.item < realCount
+        else { return nil }
+        return indexPath.item
+    }
+
     // MARK: State
 
     private(set) var rowCollectionView: UICollectionView!
