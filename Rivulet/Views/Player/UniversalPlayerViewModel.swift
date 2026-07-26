@@ -1484,6 +1484,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // failed we reported the fallback's error and destroyed the only
                 // evidence of why direct play died in the first place.
                 diagnostics.recordPrimaryFailure(error, kind: kind, route: "aether")
+                // RIVULET-19 diagnostics. Fire-and-forget, deliberately NOT
+                // awaited: the user's recovery is the HLS fallback below and
+                // nothing may delay it. See `probeStreamBodyForDiagnostics`.
+                probeStreamBodyForDiagnostics(
+                    url: aetherURL,
+                    headers: aetherHeaders,
+                    error: error,
+                    kind: kind
+                )
                 guard planHasHLSFallback(plan) else { throw error }
                 // A hang and a thrown startup error get separate reason strings
                 // so they do not merge into one Sentry issue. They have
@@ -2294,6 +2303,114 @@ final class UniversalPlayerViewModel: ObservableObject {
         try loadAVPlayer(url: fallback.url, headers: fallback.headers)
         if resumeTime > 0 {
             await player?.seek(to: CMTime(seconds: resumeTime, preferredTimescale: 600))
+        }
+    }
+
+    // MARK: - RIVULET-19 Failure Probe
+
+    /// After an aether startup failure, fetch a small prefix of the stream URL
+    /// and record WHAT the server actually returned.
+    ///
+    /// Why this exists
+    /// ---------------
+    /// RIVULET-19 is `HLSVideoEngine: open failed (openFailed(code:
+    /// -1094995529))`, the project's largest unresolved error. That code is
+    /// FFmpeg's AVERROR_INVALIDDATA, raised when the demuxer opened a byte
+    /// stream and could not parse it as media. It fires on the aether route at
+    /// startup across every codec, resolution and dynamic range we ship, which
+    /// rules out a codec or container cause and points at the bytes simply not
+    /// being the media file. The engine identifies containers purely by probing
+    /// the first bytes, so any non-media body (an HTML error page, a JSON error,
+    /// a login redirect) fails exactly this way. What we cannot tell from the
+    /// current telemetry is WHICH non-media body dominates. One release of this
+    /// classification answers that.
+    ///
+    /// Why there is no preflight on the success path
+    /// ---------------------------------------------
+    /// This runs ONLY from the aether failure catch. Nobody should later
+    /// "improve" it into a check that runs before every direct play. A preflight
+    /// on the hot path would add a network round trip to every single playback
+    /// start to serve a case that, by the numbers, is rare and already
+    /// self-rescuing: roughly 95 percent of these failures are silently
+    /// recovered by the HLS fallback. That is the definition of a "just in case"
+    /// feature the project's design philosophy rejects, and it would cost every
+    /// user latency to diagnose a minority. Diagnostics belong on the path that
+    /// is already broken.
+    ///
+    /// Why it does not block the fallback
+    /// ----------------------------------
+    /// The call site does not await this. The user is already staring at a
+    /// stalled player, and the HLS fallback is their recovery, so inserting even
+    /// a few seconds of probe in front of it would trade a real user-visible
+    /// delay for a diagnostic. Running it concurrently costs the fallback
+    /// nothing measurable: it is a single ranged GET of one kilobyte against a
+    /// server the fallback is not using (the fallback targets the Plex transcode
+    /// endpoint, this targets the direct-play origin that just failed).
+    ///
+    /// Why it cannot make a failure worse
+    /// ----------------------------------
+    /// Everything inside is best-effort. The request has its own short timeout,
+    /// every error is swallowed, and no result of this function is ever read by
+    /// playback logic. If it throws, hangs or returns nothing, the fallback
+    /// proceeds exactly as it did before this existed.
+    ///
+    /// - Parameters:
+    ///   - url: The direct-play URL the engine failed to open. Used ONLY to
+    ///     build the request. It is never logged, never attached to an event,
+    ///     and never included in any string this function produces.
+    ///   - headers: The same headers the failed load used, so the probe sees
+    ///     what the engine saw rather than an unauthenticated response.
+    ///   - error: The originating aether failure, reported as the event's error
+    ///     so the probe lands on the same issue lineage.
+    ///   - kind: The classified failure, carried as a tag for filtering.
+    private func probeStreamBodyForDiagnostics(
+        url: URL,
+        headers: [String: String],
+        error: Error,
+        kind: DirectPlayFailureKind
+    ) {
+        // A deadline expiry is a hang, not a bad body. The engine never got far
+        // enough to reject the bytes, so there is no body question to answer and
+        // probing would only add noise to #245's separate investigation. Skipped
+        // deliberately rather than by omission.
+        if error is AetherLoadTimeoutPolicy.TimedOut { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            // Short on purpose. This races nothing, but a probe that outlives
+            // the player session it describes is useless, and the failure it
+            // investigates is a parse failure rather than a slow server.
+            request.timeoutInterval = 5
+            request.setValue(StreamBodyClassifier.probeRangeHeader, forHTTPHeaderField: "Range")
+            for (key, value) in headers {
+                request.addValue(value, forHTTPHeaderField: key)
+            }
+
+            // Fully defensive: any throw here is discarded and playback recovery
+            // is unaffected.
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse else {
+                return
+            }
+
+            let classification = StreamBodyClassifier.classify(data)
+            let summary = StreamBodyClassifier.describe(
+                status: http.statusCode,
+                contentType: http.value(forHTTPHeaderField: "Content-Type"),
+                classification: classification,
+                byteCount: data.count
+            )
+
+            self.diagnostics.recordFailureBodyProbe(
+                summary: summary,
+                classification: classification.rawValue,
+                status: http.statusCode,
+                error: error,
+                kind: kind
+            )
         }
     }
 
