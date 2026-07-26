@@ -779,15 +779,42 @@ final class UniversalPlayerViewModel: ObservableObject {
         return allow
     }
 
-    /// Per-category delivery mode for the INFO sheet. On the aether route the
-    /// engine plays the raw file (any software decode happens on-device, the
-    /// server does no work) so every category is Direct Play. On the HLS route
-    /// the labels mirror the inputs the transcode URL was built with. Subtitles
-    /// are always rendered client-side (engine cues on aether, /library/streams
-    /// sidecars on hls) — never burned in.
+    /// Per-category delivery mode for the INFO sheet.
+    ///
+    /// The branch is on the ROUTE, not on whether an `AetherPlayer` instance
+    /// happens to exist right now. Issue #245: `aetherPlayer` is nil before the
+    /// engine is constructed at startup and again after any teardown, so a
+    /// sheet read in either window fell through to the HLS branch and described
+    /// a Plex transcode that was never running. For TrueHD and DTS-HD MA that
+    /// produced the exact complaint in the report, an INFO panel claiming the
+    /// audio was transcoding while the server dashboard showed no session at
+    /// all. The route is decided once by ContentRouter and does not flicker,
+    /// which is what makes it the right input.
+    ///
+    /// On the aether route the server does no work in any category, so nothing
+    /// here is ever Transcode. Video is Direct Play: the engine hands the
+    /// original stream to the decoder, and software decode for codecs Apple TV
+    /// has no hardware path for is still the original bitstream. Audio splits.
+    /// Codecs the engine stream-copies stay Direct Play, but TrueHD and DTS-HD
+    /// MA are re-encoded to FLAC on-device before packaging, so calling them
+    /// Direct Play would be untrue in the other direction. Those are labelled
+    /// Direct Stream, which is the existing case for "repackaged on the way to
+    /// the decoder, no server involved" and needs no new enum case or UI string.
+    ///
+    /// On the HLS route the labels mirror the inputs the transcode URL was
+    /// built with. Subtitles are always rendered client-side on both routes
+    /// (engine cues on aether, /library/streams sidecars on hls) and are never
+    /// burned in.
     var streamingModeInfo: StreamingModeInfo {
-        if aetherPlayer != nil {
-            return StreamingModeInfo(video: .directPlay, audio: .directPlay, subtitles: .directPlay)
+        if case .aether = playbackPlan?.primary {
+            let audioCodec = metadata.Media?.first?.Part?.first?
+                .Stream?.first(where: { $0.isAudio })?.codec
+                ?? metadata.Media?.first?.audioCodec
+            return StreamingModeInfo(
+                video: .directPlay,
+                audio: AetherAudioDelivery.isReencoded(codec: audioCodec) ? .directStream : .directPlay,
+                subtitles: .directPlay
+            )
         }
         return StreamingModeInfo(
             video: ContentRouter.requiresVideoTranscode(metadata: metadata) ? .transcode : .directStream,
@@ -1406,14 +1433,21 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // (it makes its own item, so our native-path externalMetadata never
                 // reaches it). Set before load so Aether stashes + replays it.
                 ap.setExternalMetadata(buildExternalMetadata())
-                try await ap.load(
+                // Issue #245: the load is raced against a deadline rather than
+                // awaited bare. Audio the engine cannot stream-copy (TrueHD,
+                // DTS-HD MA) is re-encoded to FLAC during startup, which makes
+                // this path throughput-sensitive and, on some titles,
+                // non-terminating. A load that never returns also never throws,
+                // so without a deadline the catch below never runs, the HLS
+                // fallback never fires, and the UI stays in `.loading` forever.
+                // The stall watchdog does not cover this either: it arms off
+                // buffering edges, and a load that never completes publishes
+                // none.
+                try await runAetherLoadWithDeadline(
+                    ap,
                     url: aetherURL,
                     headers: aetherHeaders,
-                    startTime: startTime,
-                    subtitleLanguageHintsByStreamIndex: aetherSubtitleLanguageHintsByStreamIndex(),
-                    preferredAudioLanguages: aetherPreferredAudioLanguages(),
-                    preferredSubtitleLanguages: aetherPreferredSubtitleLanguages(),
-                    externalSubtitles: aetherExternalSubtitles()
+                    startTime: startTime
                 )
             } catch {
                 // Ordinary cancellation (the user left the player or switched
@@ -1422,6 +1456,12 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // error. Returning rather than rethrowing matters — a rethrow
                 // lands in the outer catch, which sets `.failed` and fires a
                 // second `avplayer_start_failed` event.
+                // The deadline error must survive this guard. It is not a
+                // cancellation in any of the three spellings `isCancellationError`
+                // knows, and racing the load in a child task means the group's
+                // cancellation of the loser never marks THIS task cancelled, so
+                // `Task.isCancelled` stays false here too. Both halves have to
+                // hold or the fallback is skipped and the hang is unfixed.
                 if isCancellationError(error) || Task.isCancelled { return }
                 let kind = classifyDirectPlayFailure(error)
                 // Record the ORIGINAL Aether failure before doing anything else.
@@ -1431,13 +1471,81 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // evidence of why direct play died in the first place.
                 diagnostics.recordPrimaryFailure(error, kind: kind, route: "aether")
                 guard planHasHLSFallback(plan) else { throw error }
+                // A hang and a thrown startup error get separate reason strings
+                // so they do not merge into one Sentry issue. They have
+                // different causes and only the hang is #245.
+                let reason = error is AetherLoadTimeoutPolicy.TimedOut
+                    ? AetherLoadTimeoutPolicy.fallbackReason
+                    : "aether_startup_load_failed"
                 try await attemptRivuletHLSFallback(
                     resumeTime: startTime ?? 0,
-                    reason: "aether_startup_load_failed",
+                    reason: reason,
                     failureKind: kind
                 )
                 return
             }
+        }
+    }
+
+    /// Run `AetherPlayer.load` with a deadline, throwing
+    /// `AetherLoadTimeoutPolicy.TimedOut` if the engine does not return in time.
+    ///
+    /// Structured on purpose. `withThrowingTaskGroup` owns both children, so
+    /// whichever finishes first, `cancelAll` plus the implicit await on group
+    /// teardown guarantees the loser is cancelled and reaped before this
+    /// function returns. Nothing outlives the call, and no detached task can
+    /// leak a half-started engine session.
+    ///
+    /// Teardown of the engine on the timeout path is deliberately NOT done
+    /// here. `attemptRivuletHLSFallback` already stops the Aether player,
+    /// clears `aetherPlayer`, tears down the AVPlayer observers, and pauses the
+    /// old player before it builds the fallback URL. Doing it twice would be
+    /// redundant, and stopping the engine here would additionally race the
+    /// cancellation of the load child that is still unwinding.
+    private func runAetherLoadWithDeadline(
+        _ ap: AetherPlayer,
+        url: URL,
+        headers: [String: String],
+        startTime: TimeInterval?
+    ) async throws {
+        let deadline = AetherLoadTimeoutPolicy.startupLoadDeadline
+        let hints = aetherSubtitleLanguageHintsByStreamIndex()
+        let audioLanguages = aetherPreferredAudioLanguages()
+        let subtitleLanguages = aetherPreferredSubtitleLanguages()
+        let externalSubtitles = aetherExternalSubtitles()
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                try await ap.load(
+                    url: url,
+                    headers: headers,
+                    startTime: startTime,
+                    subtitleLanguageHintsByStreamIndex: hints,
+                    preferredAudioLanguages: audioLanguages,
+                    preferredSubtitleLanguages: subtitleLanguages,
+                    externalSubtitles: externalSubtitles
+                )
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+                // Reached only if the sleep ran to completion, which means the
+                // load child is still in flight. `Task.sleep` throws
+                // `CancellationError` when the load wins and cancels this
+                // child, and that error is discarded with the group rather
+                // than propagated, so it can never be mistaken for a timeout.
+                print("[Player] Aether load exceeded \(Int(deadline))s deadline; falling back to HLS")
+                throw AetherLoadTimeoutPolicy.TimedOut(seconds: deadline)
+            }
+
+            do {
+                // Waits for the FIRST child to finish. A load that succeeds
+                // returns normally here; either child throwing rethrows.
+                try await group.next()
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+            group.cancelAll()
         }
     }
 
