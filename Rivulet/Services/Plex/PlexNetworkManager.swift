@@ -772,9 +772,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     }
 
     /// Get the dedicated "Continue Watching" hub. This matches what Plex's own apps
-    /// display — it respects user dismissals and library exclusion settings, unlike
-    /// `/library/onDeck` (raw in-progress list) or the per-library hubs returned by
-    /// `/hubs` (stale entries and duplicates).
+    /// display — it respects user dismissals and the SERVER's own library exclusion
+    /// settings, unlike `/library/onDeck` (raw in-progress list) or the per-library
+    /// hubs returned by `/hubs` (stale entries and duplicates).
+    ///
+    /// It is still an ACCOUNT-level endpoint: the response is one flat list
+    /// spanning every library the server exposes, and it knows nothing about
+    /// Rivulet's own hidden-library / shown-on-Home sets, which are client-side
+    /// UserDefaults that are never sent to Plex. Callers that render this on
+    /// Home must apply `PlexLibraryVisibilityFilter` themselves.
     func getContinueWatching(
         serverURL: String,
         authToken: String,

@@ -1025,15 +1025,27 @@ class PlexDataStore: ObservableObject {
         var rail: CachedHomeRail = []
 
         // Continue Watching
+        //
+        // `/hubs/continueWatching` is an ACCOUNT-level endpoint: one flat list
+        // spanning every library on the server, with no way to scope the
+        // request. Rivulet's shown-on-Home set is client-side UserDefaults that
+        // Plex never sees, so a library the user removed from Home still
+        // contributes rows here. Filter before `makeCachedHub`, because mapping
+        // to `MediaItem` discards the section attribution the predicate needs.
+        // Fails open on an unloaded library list / unattributed item — see
+        // `PlexLibraryVisibilityFilter`.
+        let homeLibraryKeys = librariesForHomeScreen.map { $0.key }
         if let cw = continueWatchingHub,
-           let items = cw.Metadata, !items.isEmpty {
+           let items = cw.Metadata, !items.isEmpty,
+           case let visible = PlexLibraryVisibilityFilter.filter(items, toLibraryKeys: homeLibraryKeys),
+           !visible.isEmpty {
             rail.append(makeCachedHub(
                 id: "hub:\(cw.id)",
                 title: cw.title ?? "Continue Watching",
                 isContinueWatching: true,
                 hubKey: cw.key ?? cw.hubKey,
                 hubIdentifier: cw.hubIdentifier,
-                metas: items
+                metas: visible
             ))
         } else if !hasFetchedContinueWatching,
                   let existingCW = homeItems.first(where: { $0.isContinueWatching }) {

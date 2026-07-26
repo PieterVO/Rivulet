@@ -928,7 +928,16 @@ final class PlexHomeViewController: UIViewController {
     /// Dedupe + restrict to known types + pinned/visible libraries.
     /// Port of PlexSearchView.filteredResults.
     private var filteredSearchResults: [PlexMetadata] {
-        let visibleKeys = Set(dataStore.visibleLibraries.map { $0.key })
+        // Same section-attribution predicate the Home hero and Continue
+        // Watching use — search is cross-library for the same reason (the
+        // server has no idea which libraries the client hides). Reusing it also
+        // normalizes the two spellings of a section id: Plex writes
+        // `librarySectionKey` as `/library/sections/3` while `PlexLibrary.key`
+        // is the bare `3`, so the old raw-string compare could drop every
+        // attributed result as soon as any library was hidden.
+        let visibleKeys = PlexLibraryVisibilityFilter.normalizedKeySet(
+            dataStore.visibleLibraries.map { $0.key }
+        )
         let types = Set(["movie", "show", "season", "episode", "artist", "album", "track"])
         var seen = Set<String>()
 
@@ -938,15 +947,7 @@ final class PlexHomeViewController: UIViewController {
             guard !seen.contains(key) else { return false }
             seen.insert(key)
 
-            if !visibleKeys.isEmpty {
-                if let sectionKey = item.librarySectionKey {
-                    return visibleKeys.contains(sectionKey)
-                }
-                if let sectionId = item.librarySectionID {
-                    return visibleKeys.contains(String(sectionId))
-                }
-            }
-            return true
+            return PlexLibraryVisibilityFilter.isVisible(item, in: visibleKeys)
         }
     }
 
@@ -2402,6 +2403,7 @@ final class PlexHomeViewController: UIViewController {
                     self.setHeroBackdrop(url: nil)
                 }
                 self.updateContentTopInset()
+                self.reprojectIfHomeLibrariesChanged()
                 self.selectHeroItemsIfNeeded()
                 if case .home = self.mode {
                     if self.enablePersonalizedRecommendations {
@@ -2415,6 +2417,44 @@ final class PlexHomeViewController: UIViewController {
                 }
             }
             .store(in: &dataStoreObservers)
+    }
+
+    /// Last-seen shown-on-Home library set, so the UserDefaults observer can
+    /// tell a library-visibility change from any other defaults write.
+    private var lastHomeLibraryKeys: Set<String>?
+
+    /// Re-derive the account-level (cross-library) Home content when the user
+    /// changes which libraries appear on Home.
+    ///
+    /// `LibrarySettingsManager` persists straight to UserDefaults with no
+    /// change notification of its own, and the Continue Watching row and the
+    /// hero are both filtered client-side from caches that were written under
+    /// the OLD visibility. Without this they stay wrong until the next 3-minute
+    /// poll. Recently Added needs nothing here — it is rebuilt per library from
+    /// `librariesForHomeScreen`, so a hidden library is structurally absent.
+    private func reprojectIfHomeLibrariesChanged() {
+        guard case .home = mode else { return }
+        let keys = Set(dataStore.librariesForHomeScreen.map { $0.key })
+        guard lastHomeLibraryKeys != nil else {
+            // First observation is the baseline, not a change.
+            lastHomeLibraryKeys = keys
+            return
+        }
+        guard lastHomeLibraryKeys != keys else { return }
+        lastHomeLibraryKeys = keys
+
+        // Re-run the projection so Continue Watching is re-filtered from the
+        // metadata still held in the data store (no refetch needed).
+        dataStore.projectHomeItems()
+
+        // Drop the hero and re-resolve. The persisted hero is PlexMetadata from
+        // the old visibility, so `selectHeroItemsIfNeeded` would just replay it;
+        // clearing forces the filtered cache read / hub fallback to run again.
+        heroItems = []
+        heroState = .idle
+        lastUpgradedIndexGeneration = -1
+        selectHeroItemsIfNeeded()
+        applySnapshot(animated: false)
     }
 
     // MARK: - Snapshot
@@ -3114,10 +3154,15 @@ final class PlexHomeViewController: UIViewController {
 
         // Warm path: the cache only ever holds a hero this controller
         // actually applied (trending or fallback) — safe to show instantly.
+        // Re-filtered on replay: both the session cache and the on-disk hero
+        // were persisted under whatever library visibility was in effect when
+        // they were written, so a library hidden since then would otherwise
+        // keep painting from cache until the next resolve.
         if heroItems.isEmpty,
            let cached = dataStore.getCachedHeroItems(forLibrary: cacheKey),
-           !cached.isEmpty {
-            heroItems = cached
+           case let visible = heroItemsVisibleOnHome(cached),
+           !visible.isEmpty {
+            heroItems = visible
             heroState = .loaded
             updateBackdropForCurrentHeroItem()
             applySnapshot(animated: false)
@@ -3183,7 +3228,40 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
+    /// Drops hero candidates belonging to a library the user removed from Home.
+    ///
+    /// The home hero is fed by the account-level `/hubs` (cross-library by
+    /// construction) and by `LibraryGUIDIndex` trending matches (which index
+    /// every library on the server). Rivulet's shown-on-Home set is client-side
+    /// UserDefaults that Plex never sees, so neither source honours it and a
+    /// hidden library keeps supplying hero slides — visibly duplicated for
+    /// anyone running mirrored libraries. Only `PlexMetadata` carries the
+    /// section attribution, so this is the last point at which it can be
+    /// applied. Fails open on an unloaded library list; see
+    /// `PlexLibraryVisibilityFilter`.
+    ///
+    /// A library-scoped hero is already single-library, so it is left alone.
+    private func heroItemsVisibleOnHome(_ items: [PlexMetadata]) -> [PlexMetadata] {
+        switch mode {
+        case .home:
+            return PlexLibraryVisibilityFilter.filter(
+                items,
+                toLibraryKeys: dataStore.librariesForHomeScreen.map { $0.key }
+            )
+        case .library, .discover, .search:
+            return items
+        }
+    }
+
     private func computeHubBackedHero(from hubs: [PlexHub]) -> [PlexMetadata] {
+        // Filter first, cap second: capping first would let hidden-library
+        // items consume the hero's 20 slots and starve the visible ones.
+        func eligible(_ items: [PlexMetadata]) -> [PlexMetadata] {
+            Array(heroItemsVisibleOnHome(items)
+                .filter { $0.ratingKey != nil }
+                .prefix(Self.heroItemCap))
+        }
+
         let curatedKeywords = ["recommended", "promoted", "featured", "spotlight"]
         let curated = hubs.first { hub in
             guard let id = hub.hubIdentifier?.lowercased(),
@@ -3191,12 +3269,13 @@ final class PlexHomeViewController: UIViewController {
             return curatedKeywords.contains(where: id.contains)
         }
         if let items = curated?.Metadata, !items.isEmpty {
-            return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
+            let candidates = eligible(items)
+            if !candidates.isEmpty { return candidates }
         }
 
         if let firstHub = hubs.first(where: { !isRecentlyAdded($0) && ($0.Metadata?.isEmpty == false) }),
            let items = firstHub.Metadata, !items.isEmpty {
-            return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
+            return eligible(items)
         }
         return []
     }
@@ -3290,7 +3369,13 @@ final class PlexHomeViewController: UIViewController {
         lastUpgradedIndexGeneration = generation
 
         homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB: starting (gen=\(generation, privacy: .public), current heroItems=\(self.heroItems.count, privacy: .public))")
-        let curated = await Self.computeTMDBHero(cap: Self.heroItemCap, type: heroType)
+        // `LibraryGUIDIndex` indexes every library on the server, so a trending
+        // match can resolve to a title in a library the user removed from Home.
+        // (Which of two mirrored copies the index returns is a separate
+        // problem; this only drops copies that are hidden outright.)
+        let curated = heroItemsVisibleOnHome(
+            await Self.computeTMDBHero(cap: Self.heroItemCap, type: heroType)
+        )
         guard curated.count >= Self.heroTMDBMinMatches else {
             homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public))")
             // A later index generation may yield enough matches; allow re-run.
