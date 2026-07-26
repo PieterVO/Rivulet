@@ -191,6 +191,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// it runs once per episode even though currentAVPlayer re-emits on every
     /// Aether internal AVPlayer swap. Reset on episode change in playNextEpisode().
     private var nextEpisodeResolvedEarly = false
+    /// Guards the Up Next panel list load so it runs once per item off the
+    /// first `.playing` transition. Reset on item change alongside
+    /// `nextEpisodeResolvedEarly`.
+    private var upNextEpisodesLoaded = false
     /// Current season's episodes (sorted by index) for the Up Next panel. When
     /// the current episode is a season finale, the next season's opener is
     /// appended so the panel can still show an up-next row. Populated by
@@ -1529,6 +1533,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 } else {
                     self.updatePlaybackState(state)
                 }
+                // Load the Up Next panel list once playback starts. The aether
+                // route never publishes a backing AVPlayer, so this can't hang
+                // off `$currentAVPlayer` (that path serves the hls route only).
+                // Driven off `.playing` — the decode-backend-independent signal.
+                if state == .playing, !self.upNextEpisodesLoaded {
+                    self.upNextEpisodesLoaded = true
+                    Task { await self.loadUpNextEpisodes() }
+                }
             }
             .store(in: &cancellables)
 
@@ -1587,7 +1599,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         player.$currentAVPlayer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avp in
-                guard let self, avp != nil else { return }  // native route only
+                guard let self, avp != nil else { return }  // hls route (AVPlayer-backed) only
                 Task { await self.resolveNextEpisodeEarlyIfNeeded() }
             }
             .store(in: &cancellables)
@@ -4427,6 +4439,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // New episode: allow the early next-episode resolve to run again.
         nextEpisodeResolvedEarly = false
+        upNextEpisodesLoaded = false
 
         // Ensure next episode has required metadata for subsequent next-up detection
         if metadata.parentRatingKey == nil || metadata.index == nil {
