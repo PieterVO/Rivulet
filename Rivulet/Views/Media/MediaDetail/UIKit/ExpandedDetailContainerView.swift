@@ -147,6 +147,12 @@ final class ExpandedDetailContainerView: UIView {
         belowFoldCollection.restoreShelfRowFocusIfNeeded()
     }
 
+    /// Release the one-shot shelf-restore target after the focus update, so it
+    /// can't hijack a later focus resolution.
+    func clearArmedShelfRestore() {
+        belowFoldCollection.clearArmedShelfRestore()
+    }
+
     /// True briefly after the episode thumb took focus. The Up handler uses this
     /// to keep focus on the thumb when it just landed there (coming up from the
     /// description or a lower row); only a deliberate Up from a resting thumb

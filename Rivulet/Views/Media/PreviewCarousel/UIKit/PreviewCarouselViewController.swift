@@ -588,6 +588,8 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.restoreShelfRowFocusIfNeeded()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+        // One-shot: consumed by the update above, so it can't capture a later one.
+        expandedDetail.clearArmedShelfRestore()
         guard !hasRunEntryMorph else { return }
         hasRunEntryMorph = true
 

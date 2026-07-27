@@ -169,7 +169,20 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     required init?(coder: NSCoder) { fatalError("BelowFoldCollectionView is not Storyboard-backed") }
 
     /// Forward focus into the collection (the engine finds the first focusable cell).
-    override var preferredFocusEnvironments: [UIFocusEnvironment] { [collectionView] }
+    ///
+    /// EXCEPT when restoring into a shelf-host row (Related) after a modal: that
+    /// row is one cell wrapping its own collection, so it cannot be expressed
+    /// through `indexPathForPreferredFocusedView` — returning the host path
+    /// makes the nested collection restart at item 0. Prefer the host CELL
+    /// directly instead, and its own `preferredFocusEnvironments` (armed by
+    /// `restoreShelfRowFocusIfNeeded`) lands the tile that had focus.
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let shelf = armedShelfRestoreCell { return [shelf] }
+        return [collectionView]
+    }
+
+    /// Shelf-host cell armed for focus restore, consumed by the next focus update.
+    private weak var armedShelfRestoreCell: ShelfRowCell?
 
     // MARK: - Layout
 
@@ -975,8 +988,19 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
               dataSource.itemIdentifier(for: path) != nil,
               let shelf = collectionView.cellForItem(at: path) as? ShelfRowCell,
               let item = shelf.lastFocusedItemIndex else { return }
+        // Position the row's horizontal window and arm the tile...
         shelf.prepareFocusRestore(on: item)
+        // ...and route the pending focus update INTO this cell, so the engine
+        // asks the row which tile it wants instead of picking the first
+        // focusable cell in the whole collection (the primary row).
+        armedShelfRestoreCell = shelf
+        // Vertical position is NOT set here on purpose: the collection's own
+        // didUpdateFocus drives that off the newly focused cell, and adding a
+        // second scroll driver here would fight it mid-flight.
     }
+
+    /// Clear the one-shot shelf restore target once focus has resolved.
+    func clearArmedShelfRestore() { armedShelfRestoreCell = nil }
 
     func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
         // Order matters: the armed/pending targets are one-shot intents for a
