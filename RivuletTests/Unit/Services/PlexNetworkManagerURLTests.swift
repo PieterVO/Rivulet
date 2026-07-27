@@ -332,6 +332,25 @@ final class PlexNetworkManagerURLTests: XCTestCase {
         XCTAssertTrue(url!.absoluteString.contains(partKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? partKey))
     }
 
+    /// Issue #255: a part key can carry its own query string (IVA extras arrive
+    /// as .../video.mp4?fmt=4&bitrate=5000). This builder ASSIGNED queryItems
+    /// rather than appending, silently dropping them — while its sibling
+    /// buildDirectPlayURL, 25 lines above, preserved them by name.
+    func testBuildPlaybackDirectPlayURLPreservesPartKeyQueryItems() {
+        let url = networkManager.buildPlaybackDirectPlayURL(
+            serverURL: testServerURL,
+            authToken: testAuthToken,
+            partKey: "/services/iva/assets/715933/video.mp4?fmt=4&bitrate=5000"
+        )
+
+        XCTAssertNotNil(url)
+        let items = URLComponents(url: url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.first(where: { $0.name == "fmt" })?.value, "4")
+        XCTAssertEqual(items.first(where: { $0.name == "bitrate" })?.value, "5000")
+        XCTAssertEqual(items.first(where: { $0.name == "X-Plex-Token" })?.value, testAuthToken)
+        XCTAssertEqual(url!.path, "/services/iva/assets/715933/video.mp4")
+    }
+
     func testBuildPlaybackDirectPlayURLIncludesAllPlexHeaders() {
         let url = networkManager.buildPlaybackDirectPlayURL(
             serverURL: testServerURL,

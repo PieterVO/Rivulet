@@ -82,6 +82,25 @@ enum PlexMediaMapper {
         return URL(string: "\(serverURL)\(path)?X-Plex-Token=\(authToken)")
     }
 
+    /// Build a tokenized URL for a PLAYABLE Plex key (a Part key, an extra key).
+    ///
+    /// Distinct from `artworkURL` because a playable key can carry its own query
+    /// string — Plex's IVA extras arrive as
+    /// `/services/iva/assets/715933/video.mp4?fmt=4&bitrate=5000`. Interpolating
+    /// `"...\(key)?X-Plex-Token=..."` around that produces TWO '?', so the token
+    /// is absorbed into the last parameter's value (`bitrate=5000?X-Plex-Token=…`)
+    /// and never authenticates. Split the key and merge instead, matching
+    /// ContentRouter.buildDirectPlayURL.
+    static func playableURL(_ key: String?, serverURL: String, authToken: String) -> URL? {
+        guard let key, !key.isEmpty else { return nil }
+        guard var components = URLComponents(string: serverURL) else { return nil }
+
+        let (path, inherited) = ContentRouter.splitPartKey(key)
+        components.path = path
+        components.queryItems = inherited + [URLQueryItem(name: "X-Plex-Token", value: authToken)]
+        return components.url
+    }
+
     /// Map a Plex Common Sense Media object → the agnostic `ContentAdvisory`.
     /// Works for both the LOCAL partial (age + oneLiner) and the full Discover
     /// object (adds parentsNeedToKnow + topics).
@@ -288,7 +307,7 @@ enum PlexMediaMapper {
         let subtitleTracks = (part.Stream ?? []).compactMap {
             subtitleTrack($0, serverURL: serverURL, authToken: authToken)
         }
-        let url = URL(string: "\(serverURL)\(part.key)?X-Plex-Token=\(authToken)")
+        let url = playableURL(part.key, serverURL: serverURL, authToken: authToken)
         let durationMs = part.duration ?? media.duration ?? 0
         return MediaSource(
             id: "\(media.id)",
@@ -391,7 +410,7 @@ enum PlexMediaMapper {
         let trailerURL: URL? = allExtras
             .first(where: { ExtraSubtype.from(subtype: $0.subtype, extraType: $0.extraType).isTrailer })
             .flatMap { $0.key }
-            .flatMap { URL(string: "\(serverURL)\($0)?X-Plex-Token=\(authToken)") }
+            .flatMap { playableURL($0, serverURL: serverURL, authToken: authToken) }
 
         let extras: [MediaItemDetail.Extra] = allExtras.enumerated().map { idx, ex in
             MediaItemDetail.Extra(

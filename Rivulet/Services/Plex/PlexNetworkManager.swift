@@ -1324,13 +1324,19 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             return nil
         }
 
-        components.queryItems = [
+        // Preserve existing query items, exactly as buildDirectPlayURL above
+        // does. A part key can carry its own parameters (IVA extras arrive as
+        // .../video.mp4?fmt=4&bitrate=5000); ASSIGNING queryItems here instead
+        // of appending silently dropped them.
+        var existingItems = components.queryItems ?? []
+        existingItems.append(contentsOf: [
             URLQueryItem(name: "X-Plex-Token", value: authToken),
             URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
             URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
             URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
             URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName)
-        ]
+        ])
+        components.queryItems = existingItems
 
         return components.url
     }
