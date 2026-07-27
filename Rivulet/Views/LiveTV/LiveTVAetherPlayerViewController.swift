@@ -1002,12 +1002,21 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 // shortcut). Plex URLs also drop directPlay → 0 here: if the
                 // server refused raw passthrough on the first attempt, the
                 // fresh session retries as a pure direct-stream remux.
+                //
+                // Only a raw source can take the demuxer. Forcing it on a
+                // playlist hands an m3u8 body to the engine's raw path, which
+                // fails closed by design, so the retry would be spent before
+                // it ran. A re-resolve that lands on the start.m3u8 consensus
+                // leg therefore retries natively: a fresh tune is still a real
+                // second chance at a session that died server-side.
                 let retryURL = Self.forcingDirectStream(freshURL)
+                let isPlaylist = AetherPlayer.liveRoute(for: retryURL,
+                                                        forceEngineDemux: false) == .nativeHLS
                 do {
                     aetherPlayer?.stop()
                     try await aetherPlayer?.loadLive(url: retryURL,
                                                      headers: LiveTVClientIdentity.streamHeaders,
-                                                     forceEngineDemux: true)
+                                                     forceEngineDemux: !isPlaylist)
                     if Task.isCancelled { return }
                     aetherPlayer?.play()
                 } catch {
