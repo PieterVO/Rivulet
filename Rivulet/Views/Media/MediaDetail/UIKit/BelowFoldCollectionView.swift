@@ -994,10 +994,18 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             + "cell=\(dbgCell.map { String(describing: type(of: $0)) } ?? "nil") "
             + "shelfItem=\(String(describing: (dbgCell as? ShelfRowCell)?.lastFocusedItemIndex))")
 
-        guard let path = collectionView.lastFocusedIndexPath,
-              dataSource.itemIdentifier(for: path) != nil,
-              let shelf = collectionView.cellForItem(at: path) as? ShelfRowCell,
+        // Find the shelf host by identity, not by `lastFocusedIndexPath`: a shelf
+        // row is ONE cell, so its index path is the same value for every tile in
+        // it and can never say which tile had focus. The tile index lives on the
+        // row itself (`lastFocusedItemIndex`).
+        guard let shelf = collectionView.visibleCells
+            .compactMap({ $0 as? ShelfRowCell })
+            .first(where: { $0.lastFocusedItemIndex != nil }),
               let item = shelf.lastFocusedItemIndex else { return }
+        // The row's target cell may not be realized yet (the trace showed
+        // cellRealized=false), and prepareFocusRestore silently no-ops when it
+        // can't find the cell. Lay the collection out first so the tile exists.
+        collectionView.layoutIfNeeded()
         // Position the row's horizontal window and arm the tile...
         shelf.prepareFocusRestore(on: item)
         // ...and route the pending focus update INTO this cell, so the engine

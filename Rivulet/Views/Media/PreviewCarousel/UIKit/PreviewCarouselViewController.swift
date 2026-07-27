@@ -998,16 +998,33 @@ final class PreviewCarouselViewController: UIViewController {
         // TEMP #255-focus instrumentation — remove once diagnosed.
         NSLog("[FOCUSDBG] presentStandaloneDetail from phase=\(String(describing: state.phase)) "
             + "standalone=\(standaloneDetail)")
+        // The standalone detail is presented .overFullScreen, so THIS controller
+        // never disappears and therefore never re-appears — viewDidAppear does
+        // not fire on the way back. Restore focus from the dismiss callback,
+        // which is the only signal the presenter gets.
         let detail = PreviewCarouselViewController(
             items: [item],
             selectedIndex: 0,
             sourceFrame: .zero,
             sourceTarget: nil,
             standaloneDetail: true,
-            onDismiss: { _ in })
+            onDismiss: { [weak self] _ in self?.restoreBelowFoldFocusAfterReturn() })
         var top: UIViewController = self
         while let presented = top.presentedViewController { top = presented }
         top.present(detail, animated: true)
+    }
+
+    /// Put focus back where it was in the below-fold after returning from a
+    /// standalone detail (Related / cast filmography).
+    ///
+    /// Called from the presented VC's dismiss callback because `.overFullScreen`
+    /// means this controller's appearance methods never fire for that round trip.
+    func restoreBelowFoldFocusAfterReturn() {
+        guard state.phase == .detailsStable else { return }
+        expandedDetail.restoreShelfRowFocusIfNeeded()
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        expandedDetail.clearArmedShelfRestore()
     }
 
     /// Person filmography poster Select → open the item's full expanded detail.

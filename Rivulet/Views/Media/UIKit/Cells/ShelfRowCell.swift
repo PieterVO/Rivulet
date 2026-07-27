@@ -258,6 +258,9 @@ final class ShelfRowCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         pendingFocusIndex = nil
+        // Belongs to the row this cell WAS showing; carrying it into a
+        // different row would restore focus to an unrelated tile index.
+        lastFocusedItemIndex = nil
         hasBoundContent = false
         offsetLink?.invalidate()
         offsetLink = nil
