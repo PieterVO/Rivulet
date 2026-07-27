@@ -216,6 +216,12 @@ final class DisplayCriteriaManager {
 
     /// Reset display criteria to default (SDR, system frame rate)
     /// Call this when playback ends
+    ///
+    /// Callable more than once per session. The `hasSetCriteria` guard makes
+    /// every call after the first a no-op, which is what lets the player exit
+    /// reset early (behind its fade to black, so the TV renegotiates HDMI while
+    /// the screen is already dark) and still leave `stopPlayback()` calling this
+    /// unconditionally for every other teardown path.
     func reset() {
         guard hasSetCriteria else { return }
 

@@ -99,6 +99,12 @@ final class AetherPlayer: PlayerProtocol {
     /// even for an actively watching user.
     private var userIntendsToPlay = false
 
+    /// Read-only view of the intent above, for hosts that must not act on a
+    /// session the user parked. The host stall watchdog reads it: engine state
+    /// alone can't distinguish "stalled mid-playback" from "paused and idling"
+    /// once the screensaver has the display (issue #247).
+    var intendsToPlay: Bool { userIntendsToPlay }
+
     /// Set on didEnterBackground, cleared when the foreground reload runs.
     /// nil means "no background transit pending" (also skips the spurious
     /// willEnterForeground at cold launch).
@@ -380,7 +386,15 @@ final class AetherPlayer: PlayerProtocol {
             }
             .store(in: &cancellables)
 
-        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+        // didBecomeActive, not willEnterForeground: the engine's own teardown /
+        // restore pair is keyed on didEnterBackground / didBecomeActive, so
+        // arming and disarming have to observe the same two notifications or
+        // the reload can race the engine's restore. A resign-active-only cycle
+        // (screensaver, Control Center) delivers didBecomeActive without a
+        // preceding background, and `reloadAfterBackgroundReturn` no-ops on the
+        // nil `backgroundedAt`, so this stays a strict superset of the old
+        // trigger rather than a new one.
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.reloadAfterBackgroundReturn()
@@ -536,6 +550,10 @@ final class AetherPlayer: PlayerProtocol {
             defer { if !isHLS { AetherEngine.setForceSoftwarePathForTesting(false) } }
             try await engine.load(url: url, startPosition: nil, options: options)
         } catch {
+            // The caller left the slot / retuned while the load was in flight.
+            // Rethrow untouched so the type survives; wrapping it in a
+            // PlayerError makes it indistinguishable from a real failure.
+            if isCancellationError(error) { throw error }
             let pe = PlayerError.loadFailed(String(describing: error))
             errorSubject.send(pe)
             throw pe
@@ -653,6 +671,11 @@ final class AetherPlayer: PlayerProtocol {
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
         } catch {
+            // User navigated away / switched items mid-load. Rethrow untouched
+            // and stay off errorSubject: wrapping it as PlayerError.loadFailed
+            // destroys the type, so downstream can no longer tell a
+            // cancellation from a genuine startup failure (RIVULET-19).
+            if isCancellationError(error) { throw error }
             let pe = PlayerError.loadFailed(String(describing: error))
             errorSubject.send(pe)
             throw pe

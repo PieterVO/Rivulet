@@ -18,6 +18,7 @@
 //  Below-fold info columns (3b) and the custom blur-fade (3c) land next.
 //
 
+import Combine
 import UIKit
 
 /// A diagonal dark scrim (bottom-left → top-right) so the title stack stays
@@ -42,7 +43,9 @@ private final class ScrimGradientView: UIView {
 
 final class MediaItemDetailPageViewController: UIViewController {
 
-    private let item: MediaItem
+    /// Mutable so a post-playback refresh can swap in the re-fetched copy
+    /// (issue #228). The ref never changes — only the user state does.
+    private var item: MediaItem
     private let onPlay: (MediaItem) -> Void
 
     private let backdrop = UIImageView()
@@ -69,6 +72,9 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let dateLabel = UILabel()
     private let badgeRow = UIStackView()
     private var playButton: FocusableActionButton?
+    /// The Play pill's own label, held so a post-playback refresh can flip
+    /// Play ↔ Resume without rebuilding (and re-focusing) the action row.
+    private weak var playTitleLabel: UILabel?
     private weak var watchedButton: FocusableActionButton?
     private weak var watchlistButton: FocusableActionButton?
     private var onWatchlist = false
@@ -159,6 +165,15 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         loadBackdrop()
         loadDetail()
+
+        // Issue #228: this page is seeded from an immutable snapshot, so
+        // playing the episode and coming back left it showing the old state.
+        NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshWatchState()
+            }
+            .store(in: &refreshObservers)
     }
 
     // MARK: - Down/Up page scroll
@@ -363,6 +378,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         pill.invertOnFocus = [icon, title]
         pill.onPrimaryAction = { [weak self] in guard let self else { return }; self.onPlay(self.item) }
         playButton = pill
+        playTitleLabel = title
 
         // Match the carousel chrome: Watched = checkmark, Watchlist = plus.
         let watched = circleButton(systemImage: isWatched ? "checkmark.circle.fill" : "checkmark")
@@ -551,6 +567,33 @@ final class MediaItemDetailPageViewController: UIViewController {
             if !text.isEmpty { badgeRow.addArrangedSubview(Self.badge(text)) }
         }
     }
+
+    // MARK: - Watch-state refresh (issue #228)
+
+    /// Re-read this item's watch state after playback and repaint the two bits
+    /// that show it: the Watched glyph and the Play / Resume label. Driven by
+    /// `.plexDataNeedsRefresh`, which the player posts only once its final
+    /// progress report has had time to commit server-side — an `onDismiss`
+    /// hook would fire ~2s early and read the stale value.
+    private func refreshWatchState() {
+        guard isViewLoaded, !item.isMetadataOnly, let provider else { return }
+        watchRefreshToken &+= 1
+        let token = watchRefreshToken
+        let ref = item.ref
+        Task { [weak self] in
+            guard let detail = try? await provider.fullDetail(for: ref) else { return }
+            await MainActor.run {
+                guard let self, self.watchRefreshToken == token, detail.item.ref == ref else { return }
+                self.item = detail.item
+                self.isWatched = detail.item.isWatched
+                self.setCircleIcon(self.watchedButton, self.isWatched ? "checkmark.circle.fill" : "checkmark")
+                self.playTitleLabel?.text = detail.item.userState.viewOffset > 0 ? "Resume" : "Play"
+            }
+        }
+    }
+
+    private var watchRefreshToken: UInt64 = 0
+    private var refreshObservers = Set<AnyCancellable>()
 
     private func toggleWatched() {
         isWatched.toggle()

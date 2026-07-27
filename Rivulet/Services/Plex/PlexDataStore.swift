@@ -10,6 +10,7 @@
 
 import Foundation
 import Combine
+import Sentry
 import UIKit
 
 @MainActor
@@ -40,6 +41,15 @@ class PlexDataStore: ObservableObject {
     /// Per-library hubs for Home screen (keyed by library key)
     @Published var libraryHubs: [String: [PlexHub]] = [:]
     @Published var isLoadingLibraryHubs = false
+
+    /// Library keys whose most recent hub fetch THREW (timeout, transport
+    /// error, server 500). Distinguishes the two meanings a nil
+    /// `libraryHubs[key]` otherwise conflates: "never loaded" vs. "tried and
+    /// failed". `projectHomeItems()` needs the difference — a failed library
+    /// must carry its previously-projected Recently Added row over rather than
+    /// silently drop the shelf (GitHub #236). Cleared per key on a successful
+    /// fetch, and wholesale on sign-out / profile switch.
+    private var libraryHubFetchFailures: Set<String> = []
 
     /// Increments whenever hubs content changes (not just count)
     /// Views should watch this to trigger UI updates when items change
@@ -478,6 +488,7 @@ class PlexDataStore: ObservableObject {
         libraries = []
         hasLoadedLibraries = false
         libraryHubs.removeAll()
+        libraryHubFetchFailures.removeAll()
         homeItems = []
         libraryItemsByKey.removeAll()
         hubsVersion = UUID()
@@ -883,16 +894,14 @@ class PlexDataStore: ObservableObject {
                                 return (library.key, library.title, hubs)
                             } catch {
                                 print("📦 PlexDataStore: ❌ Failed to load hubs for \(library.title): \(error)")
+                                Self.reportLibraryHubFetchFailure(library: library, error: error)
                                 return (library.key, library.title, nil)
                             }
                         }
                     }
 
                     for await (key, _, hubs) in group {
-                        if let hubs {
-                            libraryHubs[key] = hubs
-                            recordFetch(for: "libraryHubs:\(key)")
-                        }
+                        noteLibraryHubFetchResult(key: key, hubs: hubs)
                     }
                 }
             }
@@ -915,16 +924,15 @@ class PlexDataStore: ObservableObject {
                                 )
                                 return (library.key, library.title, hubs)
                             } catch {
+                                print("📦 PlexDataStore: ❌ Failed to refresh hubs for \(library.title): \(error)")
+                                Self.reportLibraryHubFetchFailure(library: library, error: error)
                                 return (library.key, library.title, nil)
                             }
                         }
                     }
 
                     for await (key, _, hubs) in group {
-                        if let hubs {
-                            libraryHubs[key] = hubs
-                            recordFetch(for: "libraryHubs:\(key)")
-                        }
+                        noteLibraryHubFetchResult(key: key, hubs: hubs)
                     }
                 }
             }
@@ -942,8 +950,39 @@ class PlexDataStore: ObservableObject {
     /// Refresh hubs for all libraries on Home screen
     func refreshLibraryHubs() async {
         libraryHubs.removeAll()
+        libraryHubFetchFailures.removeAll()
         await cacheManager.clearLibraryHubsCache()
         await loadLibraryHubsIfNeeded()
+    }
+
+    /// Apply one library's hub-fetch outcome. Success stores the hubs and
+    /// clears any prior failure mark; failure (nil) leaves the last-known hubs
+    /// in place and marks the key so `projectHomeItems()` carries that
+    /// library's Recently Added row over instead of dropping it.
+    private func noteLibraryHubFetchResult(key: String, hubs: [PlexHub]?) {
+        guard let hubs else {
+            libraryHubFetchFailures.insert(key)
+            return
+        }
+        libraryHubs[key] = hubs
+        libraryHubFetchFailures.remove(key)
+        recordFetch(for: "libraryHubs:\(key)")
+    }
+
+    /// Breadcrumb a per-library hub fetch failure so a missing Home shelf is
+    /// diagnosable in the field (GitHub #236). Carries only the library's
+    /// title/type and an error description — never a request URL. The
+    /// description is redacted anyway because a `URLError`'s own text embeds
+    /// the failing URL, and a Plex URL carries `X-Plex-Token`.
+    nonisolated private static func reportLibraryHubFetchFailure(library: PlexLibrary, error: Error) {
+        let breadcrumb = Breadcrumb(level: .warning, category: "plex_home")
+        breadcrumb.message = "Library hubs fetch failed"
+        breadcrumb.data = [
+            "library_title": library.title,
+            "library_type": library.type,
+            "error": SensitiveDataRedactor.redact(error.localizedDescription)
+        ]
+        SentryBridge.addBreadcrumb(breadcrumb)
     }
 
     // MARK: - MediaItem home projection (Stage 1 — additive, no UI consumer)
@@ -986,15 +1025,27 @@ class PlexDataStore: ObservableObject {
         var rail: CachedHomeRail = []
 
         // Continue Watching
+        //
+        // `/hubs/continueWatching` is an ACCOUNT-level endpoint: one flat list
+        // spanning every library on the server, with no way to scope the
+        // request. Rivulet's shown-on-Home set is client-side UserDefaults that
+        // Plex never sees, so a library the user removed from Home still
+        // contributes rows here. Filter before `makeCachedHub`, because mapping
+        // to `MediaItem` discards the section attribution the predicate needs.
+        // Fails open on an unloaded library list / unattributed item — see
+        // `PlexLibraryVisibilityFilter`.
+        let homeLibraryKeys = librariesForHomeScreen.map { $0.key }
         if let cw = continueWatchingHub,
-           let items = cw.Metadata, !items.isEmpty {
+           let items = cw.Metadata, !items.isEmpty,
+           case let visible = PlexLibraryVisibilityFilter.filter(items, toLibraryKeys: homeLibraryKeys),
+           !visible.isEmpty {
             rail.append(makeCachedHub(
                 id: "hub:\(cw.id)",
                 title: cw.title ?? "Continue Watching",
                 isContinueWatching: true,
                 hubKey: cw.key ?? cw.hubKey,
                 hubIdentifier: cw.hubIdentifier,
-                metas: items
+                metas: visible
             ))
         } else if !hasFetchedContinueWatching,
                   let existingCW = homeItems.first(where: { $0.isContinueWatching }) {
@@ -1016,18 +1067,33 @@ class PlexDataStore: ObservableObject {
 
         // Recently Added per home library (same order as librariesForHomeScreen)
         for library in librariesForHomeScreen {
-            guard let hubs = libraryHubs[library.key],
-                  let recent = hubs.first(where: { isRecentlyAddedHub($0) }),
-                  let items = recent.Metadata, !items.isEmpty
-            else { continue }
-            rail.append(makeCachedHub(
-                id: "hub:\(library.key):recent",
-                title: "Recently Added \(library.title)",
-                isContinueWatching: false,
-                hubKey: recent.key ?? recent.hubKey,
-                hubIdentifier: recent.hubIdentifier,
-                metas: items
-            ))
+            let rowID = Self.recentlyAddedRowID(forLibraryKey: library.key)
+            if let hubs = libraryHubs[library.key],
+               let recent = hubs.first(where: { isRecentlyAddedHub($0) }),
+               let items = recent.Metadata, !items.isEmpty {
+                rail.append(makeCachedHub(
+                    id: rowID,
+                    title: "Recently Added \(library.title)",
+                    isContinueWatching: false,
+                    hubKey: recent.key ?? recent.hubKey,
+                    hubIdentifier: recent.hubIdentifier,
+                    metas: items
+                ))
+            } else if Self.shouldCarryOverRecentlyAddedRow(
+                hubs: libraryHubs[library.key],
+                fetchFailed: libraryHubFetchFailures.contains(library.key)
+            ), let existing = homeItems.first(where: { $0.id == rowID }) {
+                // Same guard as Continue Watching above, per library: a
+                // library whose hub fetch threw or has not landed yet must NOT
+                // lose the Recently Added row the cache-paint already showed.
+                // Dropping it here is permanent, not transient — setHomeItems()
+                // re-persists the rail, so one timed-out fetch would bake the
+                // missing shelf into every subsequent warm launch (GitHub #236).
+                //
+                // Only a library that ANSWERED — hubs present, no recentlyAdded
+                // hub or an empty one — correctly projects no row.
+                rail.append(existing)
+            }
         }
 
         setHomeItems(rail)
@@ -1157,6 +1223,30 @@ class PlexDataStore: ObservableObject {
         let id = hub.hubIdentifier?.lowercased() ?? ""
         let title = hub.title?.lowercased() ?? ""
         return id.contains("recentlyadded") || title.contains("recently added")
+    }
+
+    /// Stable projection row id for a library's "Recently Added" shelf. Shared
+    /// by the fresh-projection and carry-over paths so they can never disagree
+    /// about which cached row belongs to which library.
+    nonisolated static func recentlyAddedRowID(forLibraryKey key: String) -> String {
+        "hub:\(key):recent"
+    }
+
+    /// Whether a library that produced no usable Recently Added hub this pass
+    /// should keep its previously-projected row (GitHub #236).
+    ///
+    /// The distinction that matters is whether the library ANSWERED:
+    /// - `hubs == nil` — never loaded, or loaded and threw. Either way we know
+    ///   nothing about this library's content, so dropping its shelf would be
+    ///   an assertion we can't back. Carry over.
+    /// - `fetchFailed` — the last fetch threw. `hubs` may still hold a stale
+    ///   non-nil payload from an earlier pass, so nil-ness alone misses this.
+    ///   Carry over.
+    /// - otherwise — the server answered with this library's hubs and they
+    ///   contain no non-empty recentlyAdded hub. The library is genuinely
+    ///   empty (or has the row disabled server-side); omit it.
+    nonisolated static func shouldCarryOverRecentlyAddedRow(hubs: [PlexHub]?, fetchFailed: Bool) -> Bool {
+        hubs == nil || fetchFailed
     }
 
     /// Replica of `PlexHomeViewController.isContinueWatchingHub(_:)` for the
@@ -1665,6 +1755,7 @@ class PlexDataStore: ObservableObject {
         libraries = []
         hasLoadedLibraries = false
         libraryHubs.removeAll()
+        libraryHubFetchFailures.removeAll()
         homeItems = []
         libraryItemsByKey.removeAll()
         hubsVersion = UUID()

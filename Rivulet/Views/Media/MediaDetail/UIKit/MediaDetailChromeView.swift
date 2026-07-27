@@ -89,6 +89,7 @@ final class MediaDetailChromeView: UIView {
     var item: MediaItem? {
         didSet {
             guard item != oldValue else { return }
+            guard !isRefreshingWatchState else { return }
             applyItem()
         }
     }
@@ -468,6 +469,37 @@ final class MediaDetailChromeView: UIView {
     }
 
     // MARK: - Apply / load
+
+    /// Repaint only the watch-derived hero bits from a re-fetched copy of the
+    /// SAME item (issue #228: the hero kept showing the pre-playback state
+    /// after the player dismissed).
+    ///
+    /// Deliberately NOT `self.item = refreshed`: that `didSet` runs the full
+    /// `applyItem()`, which tears down and rebuilds the action row — and the
+    /// Play pill is very often the focused view when the player dismisses back
+    /// onto the hero. Only the watched glyph and the Next Up / Resume label
+    /// depend on watch state, so both are updated in place.
+    func refreshWatchState(from refreshed: MediaItem) {
+        guard let current = item, current.ref == refreshed.ref else { return }
+        // Keep the stored item current so a later toggle/Play reads fresh state.
+        isRefreshingWatchState = true
+        item = refreshed
+        isRefreshingWatchState = false
+
+        heroWatched = refreshed.isWatched
+        updateWatchedIcon()
+
+        // Shows/seasons: the "Next Up: S1E3 · Title" line moves to the next
+        // unwatched episode. Clear it first so a show that just finished isn't
+        // left promising the episode the user has now watched.
+        nextUpLabel.isHidden = true
+        nextUpLabel.text = nil
+        resolveNextUpLabel(for: refreshed, token: loadToken)
+    }
+
+    /// Set while `refreshWatchState` swaps the re-fetched item in, so the
+    /// `item` `didSet` skips the full rebuild.
+    private var isRefreshingWatchState = false
 
     private func applyItem() {
         loadToken &+= 1

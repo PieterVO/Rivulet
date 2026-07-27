@@ -55,6 +55,21 @@ class PlayerContainerViewController: UIViewController {
     private var panGestureRecognizer: UIPanGestureRecognizer?
     private var touchSurfaceTapGesture: UITapGestureRecognizer?
 
+    /// Opaque black plate that covers the whole player while it fades out on
+    /// exit. Created lazily on the first exit and never removed, since the
+    /// controller is being torn down anyway.
+    private var exitFadeView: UIView?
+    /// Strong reference to the exit fade's animator. A `UIViewPropertyAnimator`
+    /// is not retained by the run loop until it starts, and a paused one aborts
+    /// outright if it is released, so it has to be owned here for the duration.
+    private var exitFadeAnimator: UIViewPropertyAnimator?
+    /// True from the moment the exit fade starts until the dismissal is handed
+    /// to `super`. The dismiss override can be re-entered (the system's Menu
+    /// gesture echoes one in, and `$shouldDismiss` can fire alongside it), and
+    /// without this a second call would restart the fade from black or strand
+    /// the player behind a fully opaque plate.
+    private var isFadingOut = false
+
     // Directional gesture recognizers for IR remote support
     private var dPadLeftTapGesture: UITapGestureRecognizer?
     private var dPadRightTapGesture: UITapGestureRecognizer?
@@ -363,6 +378,12 @@ class PlayerContainerViewController: UIViewController {
     /// Override dismiss to intercept system-triggered dismissals (e.g., from Menu button)
     /// and only allow dismissal when we've explicitly decided to dismiss.
     override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        // Already fading out: this is a re-entrant call (the system's Menu
+        // gesture echo, or `$shouldDismiss` firing alongside a press we already
+        // acted on). Swallow it so the fade runs once and its completion stays
+        // the sole owner of the actual dismissal.
+        if isFadingOut { return }
+
         // If we just handled a menu action that closed something, block this dismiss
         if blockNextDismiss {
             blockNextDismiss = false
@@ -379,7 +400,7 @@ class PlayerContainerViewController: UIViewController {
             if vm.postVideoState != .hidden {
                 print("🎮 [DISMISS INTERCEPT] Post-video visible - dismissing normally")
                 vm.dismissPostVideo()
-                super.dismiss(animated: flag, completion: completion)
+                fadeOutThenDismiss(animated: flag, completion: completion)
                 return
             }
             if vm.isScrubbing {
@@ -407,7 +428,104 @@ class PlayerContainerViewController: UIViewController {
             }
         }
         // Nothing to close, allow normal dismiss
+        fadeOutThenDismiss(animated: flag, completion: completion)
+    }
+
+    // MARK: - Exit Fade
+
+    /// How long the player takes to fade to black on the way out.
+    ///
+    /// This is a functional mask, not decoration. tvOS "Match Content" makes the
+    /// TV renegotiate HDMI when `preferredDisplayCriteria` goes back to nil, and
+    /// many sets black the picture out for around a second while they do it. The
+    /// fade puts the screen at black before that starts, so the blackout reads as
+    /// part of the exit rather than as a flash on the freshly revealed home
+    /// screen (issue #249).
+    ///
+    /// 0.4s is the value: long enough that the ramp reads as intentional at 60fps
+    /// and that the display reset (kicked off at fade start) is well under way
+    /// before anything else is on screen, short enough that Menu still feels like
+    /// it responded immediately. Below roughly 0.3s the fade stops reading as a
+    /// fade and starts reading as a stutter; past about 0.5s the remote feels
+    /// unresponsive.
+    private static let exitFadeDuration: TimeInterval = 0.4
+
+    /// Fade the player to black, then hand the dismissal to `super`.
+    ///
+    /// The fade runs on every exit rather than only on sessions that set display
+    /// criteria. The criteria state is not knowable from here without reaching
+    /// into playback internals, the cost of an unnecessary fade is 0.4s of a
+    /// calm ramp, and having the exit behave identically every time is worth more
+    /// than saving that on SDR content. The one thing the criteria state does
+    /// gate is the early reset below.
+    private func fadeOutThenDismiss(animated flag: Bool, completion: (() -> Void)?) {
+        isFadingOut = true
+
+        // Kick the display reset off at the START of the fade so the roughly
+        // one second HDMI handshake overlaps the fade and then continues behind
+        // an already-black screen. `stopPlayback()` still calls reset() on
+        // teardown; the second call is a no-op. Nothing in stopPlayback() has to
+        // precede this: reset() only writes preferredDisplayCriteria and drops
+        // its own asset reference, and it touches no player state.
+        DisplayCriteriaManager.shared.reset()
+
+        let cover = exitFadeView ?? makeExitFadeView()
+        cover.alpha = 0
+        view.bringSubviewToFront(cover)
+
+        // One clock. The whole exit is this single animator's alpha ramp; there
+        // is no second CA animation and no other layer moving alongside it.
+        let animator = UIViewPropertyAnimator(duration: Self.exitFadeDuration, curve: .easeOut) {
+            cover.alpha = 1
+        }
+        animator.addCompletion { [weak self] _ in
+            guard let self else { return }
+            self.exitFadeAnimator = nil
+            self.performSuperDismiss(animated: flag, completion: completion)
+        }
+        exitFadeAnimator = animator
+        animator.startAnimation()
+    }
+
+    /// Thin wrapper so the fade's completion closure can reach `super.dismiss`.
+    /// Swift does not allow `super` inside a closure that explicitly captures
+    /// `self`, which the weak capture there is, so the call has to live in a
+    /// method body.
+    private func performSuperDismiss(animated flag: Bool, completion: (() -> Void)?) {
         super.dismiss(animated: flag, completion: completion)
+    }
+
+    /// Full-bleed opaque black plate for the exit fade. Non-interactive and
+    /// non-focusable so it cannot pull focus off the chrome while the fade runs
+    /// (the player is on its way out, and a focus move here would be visible as
+    /// a chrome state change under the fade).
+    private func makeExitFadeView() -> UIView {
+        let cover = UIView()
+        cover.backgroundColor = .black
+        cover.isUserInteractionEnabled = false
+        cover.isOpaque = true
+        cover.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(cover)
+        NSLayoutConstraint.activate([
+            cover.topAnchor.constraint(equalTo: view.topAnchor),
+            cover.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            cover.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            cover.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        // Lay the plate out now so its first animated frame is already
+        // full-bleed rather than zero-sized.
+        view.layoutIfNeeded()
+        exitFadeView = cover
+        return cover
+    }
+
+    deinit {
+        // A UIViewPropertyAnimator that is still running when its owner goes
+        // away aborts on release, which on tvOS has already cost this codebase
+        // one crash. Stop it explicitly and finish at the current position.
+        if let animator = exitFadeAnimator, animator.state != .inactive {
+            animator.stopAnimation(true)
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -799,8 +917,11 @@ class PlayerContainerViewController: UIViewController {
     }
 
     private func dismissPlayer() {
-        // Use super.dismiss to bypass our override checks
-        super.dismiss(animated: true) { [weak self] in
+        // This is the decided exit: the override's "is there a panel to close
+        // first" checks have already been made by the caller, so route straight
+        // to the fade, which ends in super.dismiss and bypasses them.
+        guard !isFadingOut else { return }
+        fadeOutThenDismiss(animated: true) { [weak self] in
             self?.onDismiss?()
         }
     }
@@ -1123,16 +1244,8 @@ class PlayerContainerViewController: UIViewController {
                 width: 640, from: rail.insightsButton)
         }
 
-        // Content filter: a quick on/off toggle. The glyph reflects state
-        // (outline = off, filled = on); per-category controls live in Settings.
-        rail.onFilter = { [weak self, weak rail] in
-            guard let vm = self?.viewModel else { return }
-            let newState = !vm.contentFilter.isEnabled
-            vm.contentFilter.setEnabled(newState)
-            rail?.setFilterEnabled(newState)
-        }
-        rail.filterButton.isHidden = false
-        rail.setFilterEnabled(vm.contentFilter.isEnabled)
+        // Content filter is not exposed in the player yet — the button stays
+        // hidden (its default in PlayerRailView) until the feature is ready.
     }
 
     /// Whether the Insights panel has anything to show: a non-empty cast

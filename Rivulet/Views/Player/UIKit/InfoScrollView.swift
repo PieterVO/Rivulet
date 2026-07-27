@@ -24,6 +24,15 @@
 //  focus targets give the engine real geometry, so the tab bar ↔ content
 //  crossings need no press handling at all.
 //
+//  Focus targets alone can't reach every pixel, though: a sheet has only a
+//  handful of sections, and one section taller than the panel has no focus
+//  target in its lower half, so nothing reveals it (issue #242). The sections
+//  therefore stay the primary mechanism and arrow presses are a SUPPLEMENT,
+//  handled here on the responder chain above the focused section: when the
+//  engine has somewhere to move focus it consumes the press first and this
+//  never runs; only a press the engine declined (end of travel, or inside an
+//  over-tall section) reaches us, and then we step the offset ourselves.
+//
 
 import UIKit
 
@@ -79,12 +88,26 @@ final class InfoScrollView: UIScrollView {
     /// against the clip edge.
     nonisolated static let revealPadding: CGFloat = 12
 
+    /// How far one declined arrow press nudges the sheet. Deliberately less
+    /// than a viewport so the reader keeps an overlap line between steps.
+    nonisolated static let pressStep: CGFloat = 240
+
+    /// Window after a focus move inside the sheet during which an arrow press
+    /// is assumed to BE that move. tvOS fires `didUpdateFocus` a few ms before
+    /// the `pressesBegan` for the same press, so without this gate every
+    /// section hop would also step the offset and overshoot (the same-press
+    /// race that bites directional handlers generally).
+    private static let samePressWindow: CFTimeInterval = 0.2
+
+    private var lastFocusMoveTime: CFTimeInterval = -.greatestFiniteMagnitude
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         // Focus-driven scrolling: the engine's own focus-scroll fights a
         // self-driven offset, and a pan-scrolling sheet swallows the very
-        // swipes the focus engine needs (see header). Scroll is driven only
-        // from didUpdateFocus below.
+        // swipes the focus engine needs (see header). Scroll is driven from
+        // didUpdateFocus below, plus the declined-press fallback in
+        // pressesBegan for content no focus target can reach.
         isScrollEnabled = false
     }
 
@@ -101,7 +124,54 @@ final class InfoScrollView: UIScrollView {
             onFocusChange?(isInside)
         }
         guard isInside, let next = context.nextFocusedView else { return }
+        lastFocusMoveTime = CACurrentMediaTime()
         reveal(sectionContaining: next)
+    }
+
+    // MARK: - Declined-press scrolling
+
+    /// Steps the offset for an arrow press the focus engine declined. This
+    /// override sits on the responder chain ABOVE the focused section, so a
+    /// press that did move focus has already been acted on by the engine —
+    /// `lastFocusMoveTime` detects that case and leaves the offset to
+    /// `reveal(sectionContaining:)`. What is left is exactly the content no
+    /// focus target can reach: the interior of a section taller than the
+    /// viewport, and the tail below the last section.
+    ///
+    /// Swipes never produce an arrow press, so this adds nothing for them and
+    /// (crucially) takes nothing away — the section hops they rely on are
+    /// untouched. Up is not swallowed at the top edge: the tab bar sits above
+    /// and must stay reachable.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            let delta: CGFloat
+            switch press.type {
+            case .upArrow: delta = -Self.pressStep
+            case .downArrow: delta = Self.pressStep
+            default: continue
+            }
+            if step(by: delta) { return }
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    /// Moves `contentOffset.y` by `delta`, clamped to the scrollable range.
+    /// Returns false — leaving the press to bubble — when the engine just
+    /// moved focus for this same press, or when there is nowhere to scroll.
+    private func step(by delta: CGFloat) -> Bool {
+        guard CACurrentMediaTime() - lastFocusMoveTime > Self.samePressWindow else { return false }
+        let target = Self.steppedOffsetY(
+            current: contentOffset.y,
+            delta: delta,
+            viewportHeight: bounds.height,
+            contentHeight: contentSize.height
+        )
+        guard abs(target - contentOffset.y) > 0.5 else { return false }
+        UIView.animate(withDuration: FocusScrollMotion.settleDuration, delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
+            self.contentOffset.y = target
+        }
+        return true
     }
 
     private func reveal(sectionContaining view: UIView) {
@@ -151,5 +221,19 @@ final class InfoScrollView: UIScrollView {
             target = paddedMinY < current ? paddedMaxY - viewportHeight : paddedMinY
         }
         return min(max(0, target), maxOffset)
+    }
+
+    /// Target offset for a declined arrow press: the current offset moved by
+    /// `delta` and clamped to the scrollable range (which is empty when the
+    /// content fits, so a short sheet never moves). Pure so it is
+    /// unit-testable alongside `revealOffsetY`.
+    nonisolated static func steppedOffsetY(
+        current: CGFloat,
+        delta: CGFloat,
+        viewportHeight: CGFloat,
+        contentHeight: CGFloat
+    ) -> CGFloat {
+        let maxOffset = max(0, contentHeight - viewportHeight)
+        return min(max(0, current + delta), maxOffset)
     }
 }

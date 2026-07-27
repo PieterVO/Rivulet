@@ -18,13 +18,25 @@ actor DispatcharrService {
 
     let baseURL: URL
     let apiToken: String?
+
+    /// Dispatcharr channel profile to scope the playlist and guide to, or nil for
+    /// every channel. In Dispatcharr this is a PATH segment, not a query item and
+    /// not something the API token implies: `apps/output/urls.py` routes
+    /// `^m3u(?:/(?P<profile_name>[^/]+))?/?$`, and `generate_m3u` only filters on
+    /// `channelprofilemembership__channel_profile` when that segment is present.
+    /// A DRF `Authorization: Token` header authenticates the request but does not
+    /// scope it, so without this segment the server correctly returns every
+    /// channel regardless of which profiles exist. See GitHub issue #246.
+    let channelProfile: String?
+
     private let session: URLSession
 
     // MARK: - Initialization
 
-    init(baseURL: URL, apiToken: String? = nil) {
+    init(baseURL: URL, apiToken: String? = nil, channelProfile: String? = nil) {
         self.baseURL = baseURL
         self.apiToken = apiToken
+        self.channelProfile = Self.normalizedProfile(channelProfile)
 
         // Configure session with reasonable timeouts for potentially large M3U/EPG files
         let config = URLSessionConfiguration.default
@@ -34,7 +46,31 @@ actor DispatcharrService {
     }
 
     /// Create a DispatcharrService from a URL string, cleaning up the URL if needed
-    static func create(from urlString: String, apiToken: String? = nil) -> DispatcharrService? {
+    ///
+    /// An explicit `channelProfile` always wins. When none is passed, a profile
+    /// found in the pasted URL is adopted, because a user who pastes
+    /// `.../output/m3u/Kids` is telling us exactly which profile they want, and
+    /// silently discarding it is what made every channel come back (issue #246).
+    static func create(from urlString: String, apiToken: String? = nil,
+                       channelProfile: String? = nil) -> DispatcharrService? {
+        let split = splitEndpointPath(from: urlString)
+        guard let url = URL(string: split.baseURL) else {
+            return nil
+        }
+        let profile = normalizedProfile(channelProfile) ?? split.channelProfile
+        return DispatcharrService(baseURL: url, apiToken: apiToken, channelProfile: profile)
+    }
+
+    /// Separates a pasted address into the server base URL and, when the user
+    /// pasted a full endpoint, the channel profile that followed it.
+    ///
+    /// We still have to cut `/output/m3u` and `/output/epg` off the base so the
+    /// later `appendingPathComponent` calls do not double them up, but the
+    /// trailing segment after the endpoint is a Dispatcharr channel profile name
+    /// and is now kept rather than thrown away. Do not "simplify" this back to a
+    /// plain prefix truncation: discarding that segment is the bug behind
+    /// issue #246.
+    static func splitEndpointPath(from urlString: String) -> (baseURL: String, channelProfile: String?) {
         // Clean up the URL string
         var cleanedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -48,20 +84,37 @@ actor DispatcharrService {
             cleanedURL = "http://\(cleanedURL)"
         }
 
-        // Strip /output/m3u or /output/epg paths if user pasted a full endpoint URL
-        // This prevents URL duplication when we append these paths later
-        // Handles: /output/m3u, /output/m3u/, /output/m3u/ProfileName, etc.
-        if let range = cleanedURL.range(of: "/output/m3u", options: .caseInsensitive) {
-            cleanedURL = String(cleanedURL[..<range.lowerBound])
-        } else if let range = cleanedURL.range(of: "/output/epg", options: .caseInsensitive) {
-            cleanedURL = String(cleanedURL[..<range.lowerBound])
+        for endpoint in ["/output/m3u", "/output/epg"] {
+            guard let range = cleanedURL.range(of: endpoint, options: .caseInsensitive) else { continue }
+
+            let base = String(cleanedURL[..<range.lowerBound])
+            var remainder = String(cleanedURL[range.upperBound...])
+
+            // A query string or fragment is not part of the profile name, and
+            // Dispatcharr's route matches a single segment, so anything past the
+            // next slash is not ours to interpret.
+            if let cut = remainder.firstIndex(where: { $0 == "?" || $0 == "#" }) {
+                remainder = String(remainder[..<cut])
+            }
+            let segment = remainder.split(separator: "/", omittingEmptySubsequences: true)
+                .first.map(String.init)
+
+            // A pasted profile arrives percent-encoded, because that is how a
+            // browser hands back a name containing a space. Decode it here so
+            // exactly one encode happens at request time and "Kids%20TV" does
+            // not become the double-encoded "Kids%2520TV".
+            return (base, normalizedProfile(segment?.removingPercentEncoding ?? segment))
         }
 
-        guard let url = URL(string: cleanedURL) else {
-            return nil
-        }
+        return (cleanedURL, nil)
+    }
 
-        return DispatcharrService(baseURL: url, apiToken: apiToken)
+    /// Trims a profile name and treats whitespace-only as no profile at all, so a
+    /// user who opens the field and backs out does not get an empty path segment.
+    static func normalizedProfile(_ profile: String?) -> String? {
+        guard let trimmed = profile?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     // MARK: - Public Methods
@@ -69,7 +122,7 @@ actor DispatcharrService {
     /// Fetch the M3U playlist from Dispatcharr
     /// - Returns: Raw M3U data
     func fetchM3U() async throws -> Data {
-        let url = baseURL.appendingPathComponent("output/m3u")
+        let url = m3uURL
         let request = authenticatedRequest(for: url)
 
         let (data, response) = try await session.data(for: request)
@@ -82,7 +135,7 @@ actor DispatcharrService {
     /// Fetch the XMLTV EPG from Dispatcharr
     /// - Returns: Raw XMLTV data
     func fetchEPG() async throws -> Data {
-        let url = baseURL.appendingPathComponent("output/epg")
+        let url = epgURL
         let request = authenticatedRequest(for: url)
 
         let (data, response) = try await session.data(for: request)
@@ -96,7 +149,7 @@ actor DispatcharrService {
     /// - Returns: Status information about the server
     func getStatus() async throws -> DispatcharrStatus {
         // Try to fetch a small portion of the M3U to verify connectivity
-        let request = authenticatedRequest(for: baseURL.appendingPathComponent("output/m3u"), method: "HEAD")
+        let request = authenticatedRequest(for: m3uURL, method: "HEAD")
 
         let (_, response) = try await session.data(for: request)
 
@@ -208,12 +261,31 @@ enum DispatcharrError: LocalizedError {
 extension DispatcharrService {
     /// Build the M3U URL for this Dispatcharr instance
     var m3uURL: URL {
-        baseURL.appendingPathComponent("output/m3u")
+        Self.outputURL(base: baseURL, kind: "m3u", channelProfile: channelProfile)
     }
 
     /// Build the EPG URL for this Dispatcharr instance
     var epgURL: URL {
-        baseURL.appendingPathComponent("output/epg")
+        Self.outputURL(base: baseURL, kind: "epg", channelProfile: channelProfile)
+    }
+
+    /// Builds an output endpoint URL, appending the channel profile as its own
+    /// path segment when one is set. Dispatcharr scopes a playlist by profile
+    /// only through this segment, so a profile that is set but not appended has
+    /// no effect at all.
+    ///
+    /// `appendingPathComponent` performs the encoding: it escapes a space as
+    /// `%20` and leaves already-legal path characters alone, so a profile named
+    /// "Kids TV" yields `/output/m3u/Kids%20TV`. Interpolating the name into a
+    /// string instead would emit a raw space and produce a URL that fails to
+    /// construct.
+    ///
+    /// With no profile set this returns exactly `base/output/<kind>`, byte for
+    /// byte what every existing source already requests.
+    static func outputURL(base: URL, kind: String, channelProfile: String?) -> URL {
+        let url = base.appendingPathComponent("output/\(kind)")
+        guard let profile = normalizedProfile(channelProfile) else { return url }
+        return url.appendingPathComponent(profile)
     }
 
     /// Build the Swagger API URL (for reference/debugging)

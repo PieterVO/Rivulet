@@ -118,6 +118,20 @@ struct GuideLayoutView: View {
     @State private var focusedChannel: UnifiedChannel?
     @State private var focusedProgram: UnifiedProgram?
 
+    // Backdrop transition state. The wash crossfades to the new programme's
+    // image while the crisp artwork fades in over it.
+    @State private var outgoingBackdropImage: UIImage?
+    @State private var incomingBackdropImage: UIImage?
+    @State private var backdropProgress: Double = 1
+    @State private var displayedArtworkImage: UIImage?
+    @State private var artworkOpacity: Double = 0
+
+    /// How long focus has to rest on a programme before its backdrop loads.
+    /// Holding a direction to cross the guide should not fire an image load or
+    /// a transition per channel.
+    private let backdropSettleDelay = Duration.milliseconds(180)
+    private let backdropFadeDuration = 0.35
+
     private let tick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -270,57 +284,124 @@ struct GuideLayoutView: View {
     /// is used; otherwise the stock settings background shows through the clear.
     private var ambiance: some View {
         GeometryReader { geo in
-            if let url = guideBackdropURL {
-                ZStack(alignment: .topTrailing) {
-                    // Vibrant wash: the SOURCE image itself, blurred + stretched
-                    // to fill the whole guide, so its real colours bleed across
-                    // and down the screen. A left + bottom scrim keeps the
-                    // metadata column and grid readable.
-                    backdropImage(url)
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        .clipped()
-                        .blur(radius: 70, opaque: true)
-                        .overlay(
-                            LinearGradient(
-                                colors: [Color.black.opacity(0.72), Color.black.opacity(0.05)],
-                                startPoint: .leading, endPoint: .trailing)
-                        )
-                        .overlay(
-                            LinearGradient(
-                                colors: [Color.clear, Color.black.opacity(0.65)],
-                                startPoint: .top, endPoint: .bottom)
-                        )
-
-                    // Crisp image in the top-right quarter; its left + bottom
-                    // edges fade into the blurred wash.
-                    backdropImage(url)
-                        .frame(width: geo.size.width * 0.5, height: geo.size.height * 0.55)
-                        .clipped()
-                        .mask(
-                            LinearGradient(colors: [.clear, .white],
-                                           startPoint: .leading, endPoint: .trailing)
-                        )
-                        .mask(
-                            LinearGradient(stops: [
-                                .init(color: .white, location: 0.0),
-                                .init(color: .white, location: 0.45),
-                                .init(color: .clear, location: 1.0)
-                            ], startPoint: .top, endPoint: .bottom)
-                        )
+            ZStack(alignment: .topTrailing) {
+                if let outgoingBackdropImage {
+                    blurredBackdrop(outgoingBackdropImage, size: geo.size)
+                        .opacity(1 - backdropProgress)
                 }
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .topTrailing)
+
+                if let incomingBackdropImage {
+                    blurredBackdrop(incomingBackdropImage, size: geo.size)
+                        .opacity(backdropProgress)
+                }
+
+                if let displayedArtworkImage {
+                    crispArtwork(displayedArtworkImage, size: geo.size)
+                        .opacity(artworkOpacity)
+                }
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topTrailing)
         }
         .ignoresSafeArea()
+        .task(id: guideBackdropURL) {
+            await transitionBackdrop(to: guideBackdropURL)
+        }
     }
 
-    @ViewBuilder private func backdropImage(_ url: URL) -> some View {
-        CachedAsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let img): img.resizable().scaledToFill()
-            default: Color.clear
-            }
+    private func blurredBackdrop(_ image: UIImage, size: CGSize) -> some View {
+        // Existing main-branch treatment: the source image is blurred and
+        // stretched across the guide, with the same readability scrims.
+        backdropImage(image)
+            .frame(width: size.width, height: size.height)
+            .clipped()
+            .blur(radius: 70, opaque: true)
+            .overlay(
+                LinearGradient(
+                    colors: [Color.black.opacity(0.72), Color.black.opacity(0.05)],
+                    startPoint: .leading, endPoint: .trailing)
+            )
+            .overlay(
+                LinearGradient(
+                    colors: [Color.clear, Color.black.opacity(0.65)],
+                    startPoint: .top, endPoint: .bottom)
+            )
+    }
+
+    private func crispArtwork(_ image: UIImage, size: CGSize) -> some View {
+        // Existing main-branch image size and masks are intentionally unchanged.
+        backdropImage(image)
+            .frame(width: size.width * 0.5, height: size.height * 0.55)
+            .clipped()
+            .mask(
+                LinearGradient(colors: [.clear, .white],
+                               startPoint: .leading, endPoint: .trailing)
+            )
+            .mask(
+                LinearGradient(stops: [
+                    .init(color: .white, location: 0.0),
+                    .init(color: .white, location: 0.45),
+                    .init(color: .clear, location: 1.0)
+                ], startPoint: .top, endPoint: .bottom)
+            )
+    }
+
+    private func transitionBackdrop(to newURL: URL?) async {
+        // Settle first, and mutate nothing before it. `.task(id:)` cancels this
+        // on every focus change, so anything written ahead of the first suspend
+        // survives a cancel while the rest of the transition never runs —
+        // browsing the guide would leave the artwork faded out indefinitely.
+        // Returning here instead leaves the current backdrop exactly as it is.
+        do {
+            try await Task.sleep(for: backdropSettleDelay)
+        } catch {
+            return
         }
+
+        let newImage = await loadBackdrop(newURL)
+        guard !Task.isCancelled else { return }
+
+        // Seed the crossfade without animating: the outgoing wash at full
+        // opacity, the incoming at zero. A plain assignment here can be
+        // coalesced into the animation below and jump straight to the new blur.
+        var seed = Transaction()
+        seed.disablesAnimations = true
+        withTransaction(seed) {
+            // Continue from the most recently shown wash, rather than briefly
+            // restoring an older programme's image.
+            outgoingBackdropImage = incomingBackdropImage ?? outgoingBackdropImage
+            incomingBackdropImage = newImage
+            displayedArtworkImage = newImage
+            backdropProgress = 0
+            artworkOpacity = 0
+        }
+
+        // Wash and artwork move together. Staging them sequentially reads as a
+        // slow reveal and holds two full-screen blurs on screen for longer.
+        withAnimation(.easeInOut(duration: backdropFadeDuration)) {
+            backdropProgress = 1
+            artworkOpacity = newImage == nil ? 0 : 1
+        }
+
+        do {
+            try await Task.sleep(for: .seconds(backdropFadeDuration))
+        } catch {
+            return
+        }
+        guard !Task.isCancelled else { return }
+
+        // Drop the outgoing wash so only one blurred layer stays composited.
+        outgoingBackdropImage = nil
+    }
+
+    private func loadBackdrop(_ url: URL?) async -> UIImage? {
+        guard let url else { return nil }
+        return await ImageCacheManager.shared.image(for: url)
+    }
+
+    private func backdropImage(_ image: UIImage) -> some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFill()
     }
 
     // MARK: - Player layer (fullscreen + PiP)

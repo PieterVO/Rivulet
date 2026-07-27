@@ -274,7 +274,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             do {
                 try await aether.loadLive(
                     url: url,
-                    headers: nil,
+                    headers: LiveTVClientIdentity.streamHeaders,
                     forceEngineDemux: forceEngineDemux
                 )
                 if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
@@ -1005,7 +1005,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 let retryURL = Self.forcingDirectStream(freshURL)
                 do {
                     aetherPlayer?.stop()
-                    try await aetherPlayer?.loadLive(url: retryURL, headers: nil, forceEngineDemux: true)
+                    try await aetherPlayer?.loadLive(url: retryURL,
+                                                     headers: LiveTVClientIdentity.streamHeaders,
+                                                     forceEngineDemux: true)
                     if Task.isCancelled { return }
                     aetherPlayer?.play()
                 } catch {

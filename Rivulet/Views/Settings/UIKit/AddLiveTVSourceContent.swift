@@ -31,6 +31,7 @@ final class AddSourceDraft {
     var serverURL = ""
     var displayName = ""
     var apiToken = ""
+    var channelProfile = ""
     var m3uURL = ""
     var epgURL = ""
     var status: Status = .idle
@@ -208,6 +209,10 @@ extension SettingsContent {
                             kind: .textEntry(value: { draft.apiToken }, placeholder: "Optional",
                                              hint: nil, suggestions: [], keyboardType: .default,
                                              set: { draft.apiToken = $0 })),
+            SettingsRowItem(id: "channelProfileField", title: "Channel Profile",
+                            kind: .textEntry(value: { draft.channelProfile }, placeholder: "Optional",
+                                             hint: nil, suggestions: [], keyboardType: .default,
+                                             set: { draft.channelProfile = $0; draft.status = .idle })),
             SettingsRowItem(id: "addSourceConfirm", title: actionTitle(draft),
                             kind: .action(destructive: false, handler: { vc in
                                 saveOwnServer(draft, on: vc)
@@ -258,9 +263,18 @@ extension SettingsContent {
             return
         }
         let cleaned = sanitizeURL(draft.serverURL)
-        guard let url = URL(string: cleaned),
-              let service = DispatcharrService.create(from: cleaned,
-                                                      apiToken: draft.apiToken.isEmpty ? nil : draft.apiToken) else {
+        let token = draft.apiToken.isEmpty ? nil : draft.apiToken
+
+        // A profile typed into the field wins, but if the user instead pasted a
+        // full endpoint such as .../output/m3u/Kids we adopt the profile from the
+        // URL. Dispatcharr scopes the playlist only by that path segment, so
+        // whichever way the user expressed it has to survive to the request.
+        let split = DispatcharrService.splitEndpointPath(from: cleaned)
+        let profile = DispatcharrService.normalizedProfile(draft.channelProfile) ?? split.channelProfile
+
+        guard let url = URL(string: split.baseURL),
+              let service = DispatcharrService.create(from: cleaned, apiToken: token,
+                                                      channelProfile: profile) else {
             draft.status = .failed("Couldn't reach that server. Check the address and port.")
             page?.reloadRows()
             return
@@ -273,7 +287,12 @@ extension SettingsContent {
             do {
                 let channels = try await service.fetchChannels()
                 guard !channels.isEmpty else {
-                    draft.status = .failed("Connected, but found no channels.")
+                    // An empty playlist with a profile set is nearly always a
+                    // profile name that does not match one on the server, so
+                    // point at the field rather than at the connection.
+                    draft.status = .failed(profile == nil
+                                           ? "Connected, but found no channels."
+                                           : "Connected, but that channel profile has no channels. Check the name.")
                     page?.reloadRows()
                     return
                 }
@@ -281,7 +300,8 @@ extension SettingsContent {
                 await store.addDispatcharrSource(
                     baseURL: url,
                     name: draft.displayName.isEmpty ? "Live TV" : draft.displayName,
-                    apiToken: draft.apiToken.isEmpty ? nil : draft.apiToken)
+                    apiToken: token,
+                    channelProfile: profile)
                 await store.loadChannels()
                 await store.loadEPG(startDate: Date(), hours: 6)
                 finish(page)

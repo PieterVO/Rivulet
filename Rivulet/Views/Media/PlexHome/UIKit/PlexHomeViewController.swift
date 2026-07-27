@@ -928,7 +928,16 @@ final class PlexHomeViewController: UIViewController {
     /// Dedupe + restrict to known types + pinned/visible libraries.
     /// Port of PlexSearchView.filteredResults.
     private var filteredSearchResults: [PlexMetadata] {
-        let visibleKeys = Set(dataStore.visibleLibraries.map { $0.key })
+        // Same section-attribution predicate the Home hero and Continue
+        // Watching use — search is cross-library for the same reason (the
+        // server has no idea which libraries the client hides). Reusing it also
+        // normalizes the two spellings of a section id: Plex writes
+        // `librarySectionKey` as `/library/sections/3` while `PlexLibrary.key`
+        // is the bare `3`, so the old raw-string compare could drop every
+        // attributed result as soon as any library was hidden.
+        let visibleKeys = PlexLibraryVisibilityFilter.normalizedKeySet(
+            dataStore.visibleLibraries.map { $0.key }
+        )
         let types = Set(["movie", "show", "season", "episode", "artist", "album", "track"])
         var seen = Set<String>()
 
@@ -938,15 +947,7 @@ final class PlexHomeViewController: UIViewController {
             guard !seen.contains(key) else { return false }
             seen.insert(key)
 
-            if !visibleKeys.isEmpty {
-                if let sectionKey = item.librarySectionKey {
-                    return visibleKeys.contains(sectionKey)
-                }
-                if let sectionId = item.librarySectionID {
-                    return visibleKeys.contains(String(sectionId))
-                }
-            }
-            return true
+            return PlexLibraryVisibilityFilter.isVisible(item, in: visibleKeys)
         }
     }
 
@@ -2402,6 +2403,7 @@ final class PlexHomeViewController: UIViewController {
                     self.setHeroBackdrop(url: nil)
                 }
                 self.updateContentTopInset()
+                self.reprojectIfHomeLibrariesChanged()
                 self.selectHeroItemsIfNeeded()
                 if case .home = self.mode {
                     if self.enablePersonalizedRecommendations {
@@ -2415,6 +2417,44 @@ final class PlexHomeViewController: UIViewController {
                 }
             }
             .store(in: &dataStoreObservers)
+    }
+
+    /// Last-seen shown-on-Home library set, so the UserDefaults observer can
+    /// tell a library-visibility change from any other defaults write.
+    private var lastHomeLibraryKeys: Set<String>?
+
+    /// Re-derive the account-level (cross-library) Home content when the user
+    /// changes which libraries appear on Home.
+    ///
+    /// `LibrarySettingsManager` persists straight to UserDefaults with no
+    /// change notification of its own, and the Continue Watching row and the
+    /// hero are both filtered client-side from caches that were written under
+    /// the OLD visibility. Without this they stay wrong until the next 3-minute
+    /// poll. Recently Added needs nothing here — it is rebuilt per library from
+    /// `librariesForHomeScreen`, so a hidden library is structurally absent.
+    private func reprojectIfHomeLibrariesChanged() {
+        guard case .home = mode else { return }
+        let keys = Set(dataStore.librariesForHomeScreen.map { $0.key })
+        guard lastHomeLibraryKeys != nil else {
+            // First observation is the baseline, not a change.
+            lastHomeLibraryKeys = keys
+            return
+        }
+        guard lastHomeLibraryKeys != keys else { return }
+        lastHomeLibraryKeys = keys
+
+        // Re-run the projection so Continue Watching is re-filtered from the
+        // metadata still held in the data store (no refetch needed).
+        dataStore.projectHomeItems()
+
+        // Drop the hero and re-resolve. The persisted hero is PlexMetadata from
+        // the old visibility, so `selectHeroItemsIfNeeded` would just replay it;
+        // clearing forces the filtered cache read / hub fallback to run again.
+        heroItems = []
+        heroState = .idle
+        lastUpgradedIndexGeneration = -1
+        selectHeroItemsIfNeeded()
+        applySnapshot(animated: false)
     }
 
     // MARK: - Snapshot
@@ -2771,6 +2811,144 @@ final class PlexHomeViewController: UIViewController {
                              dy: -frame.height * (focusScale - 1) / 2)
     }
 
+    // MARK: - Play/Pause button (physical remote)
+
+    /// True while we are consuming a Play/Pause press we began handling, so the
+    /// matching `pressesEnded` can be swallowed too. An Ended phase that bubbles
+    /// up without its Began having been handled here makes the system apply its
+    /// own default handling and peel an extra layer off the presentation stack,
+    /// which is the same reason the player chrome tracks this flag.
+    private var isHandlingPlayPausePress = false
+
+    /// The physical Play/Pause button starts or resumes the focused tile,
+    /// matching what Infuse and the Plex client do. Select is untouched: it
+    /// arrives through `didSelectItemAt` on the collection view, an entirely
+    /// separate delivery path from presses, so adding this cannot change what
+    /// Select does on any row.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .playPause {
+            isHandlingPlayPausePress = true
+            playFocusedTile()
+            return
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .playPause && isHandlingPlayPausePress {
+            isHandlingPlayPausePress = false
+            return
+        }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .playPause && isHandlingPlayPausePress {
+            isHandlingPlayPausePress = false
+            return
+        }
+        super.pressesCancelled(presses, with: event)
+    }
+
+    /// Resolve whatever currently holds focus to a playable MediaItem and play
+    /// it. Everything here is deliberately best-effort: a Play press on a tile
+    /// with nothing playable behind it (a Discover or watchlist entry the server
+    /// does not have, a state or skeleton cell, a music result) does nothing at
+    /// all rather than presenting a player that cannot start.
+    private func playFocusedTile() {
+        // A presented popup or player owns its own input; never play underneath
+        // one. The player itself consumes Play/Pause before it could ever reach
+        // this surface, but the tile menu popup is focusless enough that being
+        // explicit costs nothing.
+        guard presentedViewController == nil, let item = focusedPlayableItem() else { return }
+
+        // A show or a season has no playable media of its own, so Play has to
+        // resolve to a concrete episode first. Same composition as the preview
+        // carousel's Play pill (`playHeroItem`), so the two surfaces can never
+        // disagree about which episode a Play press starts.
+        guard item.kind == .show || item.kind == .season else {
+            playItem(item)
+            return
+        }
+        Task { [weak self] in
+            guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
+                await MainActor.run { self?.playItem(item) }
+                return
+            }
+            let target = await EpisodePicker.resolvePlayTarget(for: item, provider: provider)
+            await MainActor.run { self?.playItem(target ?? item) }
+        }
+    }
+
+    /// The MediaItem behind the focused tile, or nil when focus is on something
+    /// that cannot be played. Mirrors the guards `handleTap` and
+    /// `handleShelfTap` already apply so a Play press can never reach a target
+    /// a Select press would have refused.
+    private func focusedPlayableItem() -> MediaItem? {
+        // Shelf rows first: their tiles live inside the row cell's own nested
+        // collection view, so the outer collection's focused index path is the
+        // ROW, not the tile. Ask the row which of its tiles has focus.
+        for case let row as ShelfRowCell in collectionView.visibleCells {
+            guard let itemIndex = row.focusedItemIndex(),
+                  let rowIndexPath = collectionView.indexPath(for: row),
+                  rowIndexPath.section < sectionsSnapshot.count
+            else { continue }
+            return playableShelfItem(section: sectionsSnapshot[rowIndexPath.section], itemIndex: itemIndex)
+        }
+
+        // Library grid: its tiles are cells of the outer collection view, so the
+        // same lookup the grid long-press uses applies directly.
+        guard let indexPath = TileLongPress.focusedCell(in: collectionView),
+              indexPath.section < sectionsSnapshot.count
+        else { return nil }
+        // The trailing loading-skeleton card is not an item.
+        if let itemID = dataSource.itemIdentifier(for: indexPath),
+           itemID.itemID == HomeItemID.skeletonSentinel {
+            return nil
+        }
+        let section = sectionsSnapshot[indexPath.section]
+        guard case .grid = section.kind, indexPath.item < section.items.count else { return nil }
+        return playableItem(section.items[indexPath.item])
+    }
+
+    /// Per-shelf-kind resolution of a focused tile index to a playable item.
+    /// The state, prompt and hero kinds have no items at all; the watchlist is
+    /// backed by PlexWatchlistItem rather than MediaItem and its entries are
+    /// Discover metadata that need not exist on the server, so neither can
+    /// produce a play target here.
+    private func playableShelfItem(section: HomeSectionData, itemIndex: Int) -> MediaItem? {
+        switch section.kind {
+        case .continueWatching, .recentlyAdded, .recommendations, .discoverList:
+            guard itemIndex < section.items.count else { return nil }
+            return playableItem(section.items[itemIndex])
+        case .searchGrid:
+            guard itemIndex < section.items.count else { return nil }
+            // Music results route to the music surfaces and are not video the
+            // player can start, so Play ignores them.
+            if let meta = searchGroupMetas[section.id]?[safe: itemIndex],
+               ["artist", "album", "track"].contains(meta.type ?? "") {
+                return nil
+            }
+            return playableItem(section.items[itemIndex])
+        case .watchlist, .hero, .grid, .recommendationsLoading, .recommendationsError,
+             .sortHeader, .searchPrompt, .searchState:
+            return nil
+        }
+    }
+
+    /// Gate on whether an item can actually be handed to the player. A
+    /// metadata-only item comes from TMDB rather than the server and has no
+    /// ratingKey to play, and a collection or person is not playable at all.
+    private func playableItem(_ item: MediaItem) -> MediaItem? {
+        guard !item.isMetadataOnly, !item.ref.itemID.isEmpty else { return nil }
+        switch item.kind {
+        case .movie, .show, .season, .episode:
+            return item
+        case .collection, .person, .unknown:
+            return nil
+        }
+    }
+
     private func presentTileMenu(sections: [[TileMenuAction]]) {
         guard sections.contains(where: { !$0.isEmpty }), presentedViewController == nil else { return }
         // animated: false — the popup runs its own grow-from-the-tile
@@ -3114,10 +3292,15 @@ final class PlexHomeViewController: UIViewController {
 
         // Warm path: the cache only ever holds a hero this controller
         // actually applied (trending or fallback) — safe to show instantly.
+        // Re-filtered on replay: both the session cache and the on-disk hero
+        // were persisted under whatever library visibility was in effect when
+        // they were written, so a library hidden since then would otherwise
+        // keep painting from cache until the next resolve.
         if heroItems.isEmpty,
            let cached = dataStore.getCachedHeroItems(forLibrary: cacheKey),
-           !cached.isEmpty {
-            heroItems = cached
+           case let visible = heroItemsVisibleOnHome(cached),
+           !visible.isEmpty {
+            heroItems = visible
             heroState = .loaded
             updateBackdropForCurrentHeroItem()
             applySnapshot(animated: false)
@@ -3183,7 +3366,40 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
+    /// Drops hero candidates belonging to a library the user removed from Home.
+    ///
+    /// The home hero is fed by the account-level `/hubs` (cross-library by
+    /// construction) and by `LibraryGUIDIndex` trending matches (which index
+    /// every library on the server). Rivulet's shown-on-Home set is client-side
+    /// UserDefaults that Plex never sees, so neither source honours it and a
+    /// hidden library keeps supplying hero slides — visibly duplicated for
+    /// anyone running mirrored libraries. Only `PlexMetadata` carries the
+    /// section attribution, so this is the last point at which it can be
+    /// applied. Fails open on an unloaded library list; see
+    /// `PlexLibraryVisibilityFilter`.
+    ///
+    /// A library-scoped hero is already single-library, so it is left alone.
+    private func heroItemsVisibleOnHome(_ items: [PlexMetadata]) -> [PlexMetadata] {
+        switch mode {
+        case .home:
+            return PlexLibraryVisibilityFilter.filter(
+                items,
+                toLibraryKeys: dataStore.librariesForHomeScreen.map { $0.key }
+            )
+        case .library, .discover, .search:
+            return items
+        }
+    }
+
     private func computeHubBackedHero(from hubs: [PlexHub]) -> [PlexMetadata] {
+        // Filter first, cap second: capping first would let hidden-library
+        // items consume the hero's 20 slots and starve the visible ones.
+        func eligible(_ items: [PlexMetadata]) -> [PlexMetadata] {
+            Array(heroItemsVisibleOnHome(items)
+                .filter { $0.ratingKey != nil }
+                .prefix(Self.heroItemCap))
+        }
+
         let curatedKeywords = ["recommended", "promoted", "featured", "spotlight"]
         let curated = hubs.first { hub in
             guard let id = hub.hubIdentifier?.lowercased(),
@@ -3191,12 +3407,13 @@ final class PlexHomeViewController: UIViewController {
             return curatedKeywords.contains(where: id.contains)
         }
         if let items = curated?.Metadata, !items.isEmpty {
-            return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
+            let candidates = eligible(items)
+            if !candidates.isEmpty { return candidates }
         }
 
         if let firstHub = hubs.first(where: { !isRecentlyAdded($0) && ($0.Metadata?.isEmpty == false) }),
            let items = firstHub.Metadata, !items.isEmpty {
-            return Array(items.prefix(Self.heroItemCap)).filter { $0.ratingKey != nil }
+            return eligible(items)
         }
         return []
     }
@@ -3290,7 +3507,13 @@ final class PlexHomeViewController: UIViewController {
         lastUpgradedIndexGeneration = generation
 
         homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB: starting (gen=\(generation, privacy: .public), current heroItems=\(self.heroItems.count, privacy: .public))")
-        let curated = await Self.computeTMDBHero(cap: Self.heroItemCap, type: heroType)
+        // `LibraryGUIDIndex` indexes every library on the server, so a trending
+        // match can resolve to a title in a library the user removed from Home.
+        // (Which of two mirrored copies the index returns is a separate
+        // problem; this only drops copies that are hidden outright.)
+        let curated = heroItemsVisibleOnHome(
+            await Self.computeTMDBHero(cap: Self.heroItemCap, type: heroType)
+        )
         guard curated.count >= Self.heroTMDBMinMatches else {
             homeUIKitLog.debug("[Hero] upgradeHeroFromTMDB bailed: only \(curated.count, privacy: .public) matches (need \(Self.heroTMDBMinMatches, privacy: .public))")
             // A later index generation may yield enough matches; allow re-run.

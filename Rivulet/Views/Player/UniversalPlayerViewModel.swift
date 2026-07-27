@@ -160,6 +160,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Chapter Thumbnails
     private var chapterThumbnails: [Int: Data] = [:]  // index → image data
 
+    /// Part whose BIF is currently held by PlexThumbnailService. Tracked so the
+    /// outgoing item's BIF can be released on teardown and across episode swaps —
+    /// a BIF holds every trickplay frame of the item, so a binge would otherwise
+    /// accumulate them for the process lifetime.
+    private var preloadedThumbnailPartId: Int?
+
     // MARK: - Skip Marker State
     @Published private(set) var activeMarker: PlexMarker?
     @Published private(set) var showSkipButton = false
@@ -191,6 +197,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// it runs once per episode even though currentAVPlayer re-emits on every
     /// Aether internal AVPlayer swap. Reset on episode change in playNextEpisode().
     private var nextEpisodeResolvedEarly = false
+    /// Guards the Up Next panel list load so it runs once per item off the
+    /// first `.playing` transition. Reset on item change alongside
+    /// `nextEpisodeResolvedEarly`.
+    private var upNextEpisodesLoaded = false
     /// Current season's episodes (sorted by index) for the Up Next panel. When
     /// the current episode is a season finale, the next season's opener is
     /// appended so the panel can still show an up-next row. Populated by
@@ -336,6 +346,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let wheelScrubbingIdleDelay: TimeInterval = 0.8
     private var appBecameActiveObserver: Any?
     private var appBackgroundObserver: Any?
+    private var appResignActiveObserver: Any?
     /// Token for the block-based `.AVPlayerItemDidPlayToEndTime` observer.
     /// Block observers are keyed by the returned token, not by `self`, so this
     /// has to be stored to be removable.
@@ -584,6 +595,17 @@ final class UniversalPlayerViewModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
+            // Unconditional, before the Aether early-return below: a torn-down
+            // engine reports buffering forever, and the watchdog's recovery
+            // kick must never be what wakes the session back up.
+            //
+            // Hopped onto the main actor rather than called directly. The
+            // observer is already delivered on `.main`, but the closure is not
+            // statically isolated, so calling an actor-isolated method from it
+            // is a warning today and an error under the Swift 6 language mode.
+            Task { @MainActor [weak self] in
+                self?.cancelAetherStallWatchdog()
+            }
             // The Aether route self-manages background: the engine tears the video pipeline down on
             // background, and AetherPlayer reloads it + restores play state on foreground (upstream's
             // tvOS build has no foreground recovery of its own — see observeAppLifecycle in
@@ -596,6 +618,28 @@ final class UniversalPlayerViewModel: ObservableObject {
                 Task { @MainActor in
                     self.pause()
                 }
+            }
+        }
+
+        // The tvOS screensaver is a resign-active, NOT a background transition:
+        // the app keeps running with the display taken over, so none of the
+        // background handling above sees it. A paused session can start
+        // reporting buffering here, and the stall watchdog would have kicked it
+        // back into playback under the screensaver (issue #247). A genuinely
+        // playing session that stalls will re-arm the watchdog on the next
+        // buffering edge once the user comes back.
+        appResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Hopped onto the main actor for the same reason as the buffering
+            // observer above: delivery is already on `.main`, but the closure
+            // is not statically isolated. The capture is repeated on the Task
+            // rather than reusing the enclosing closure's, which would be a
+            // reference to a captured var from concurrently-executing code.
+            Task { @MainActor [weak self] in
+                self?.cancelAetherStallWatchdog()
             }
         }
 
@@ -755,15 +799,42 @@ final class UniversalPlayerViewModel: ObservableObject {
         return allow
     }
 
-    /// Per-category delivery mode for the INFO sheet. On the aether route the
-    /// engine plays the raw file (any software decode happens on-device, the
-    /// server does no work) so every category is Direct Play. On the HLS route
-    /// the labels mirror the inputs the transcode URL was built with. Subtitles
-    /// are always rendered client-side (engine cues on aether, /library/streams
-    /// sidecars on hls) — never burned in.
+    /// Per-category delivery mode for the INFO sheet.
+    ///
+    /// The branch is on the ROUTE, not on whether an `AetherPlayer` instance
+    /// happens to exist right now. Issue #245: `aetherPlayer` is nil before the
+    /// engine is constructed at startup and again after any teardown, so a
+    /// sheet read in either window fell through to the HLS branch and described
+    /// a Plex transcode that was never running. For TrueHD and DTS-HD MA that
+    /// produced the exact complaint in the report, an INFO panel claiming the
+    /// audio was transcoding while the server dashboard showed no session at
+    /// all. The route is decided once by ContentRouter and does not flicker,
+    /// which is what makes it the right input.
+    ///
+    /// On the aether route the server does no work in any category, so nothing
+    /// here is ever Transcode. Video is Direct Play: the engine hands the
+    /// original stream to the decoder, and software decode for codecs Apple TV
+    /// has no hardware path for is still the original bitstream. Audio splits.
+    /// Codecs the engine stream-copies stay Direct Play, but TrueHD and DTS-HD
+    /// MA are re-encoded to FLAC on-device before packaging, so calling them
+    /// Direct Play would be untrue in the other direction. Those are labelled
+    /// Direct Stream, which is the existing case for "repackaged on the way to
+    /// the decoder, no server involved" and needs no new enum case or UI string.
+    ///
+    /// On the HLS route the labels mirror the inputs the transcode URL was
+    /// built with. Subtitles are always rendered client-side on both routes
+    /// (engine cues on aether, /library/streams sidecars on hls) and are never
+    /// burned in.
     var streamingModeInfo: StreamingModeInfo {
-        if aetherPlayer != nil {
-            return StreamingModeInfo(video: .directPlay, audio: .directPlay, subtitles: .directPlay)
+        if case .aether = playbackPlan?.primary {
+            let audioCodec = metadata.Media?.first?.Part?.first?
+                .Stream?.first(where: { $0.isAudio })?.codec
+                ?? metadata.Media?.first?.audioCodec
+            return StreamingModeInfo(
+                video: .directPlay,
+                audio: AetherAudioDelivery.isReencoded(codec: audioCodec) ? .directStream : .directPlay,
+                subtitles: .directPlay
+            )
         }
         return StreamingModeInfo(
             video: ContentRouter.requiresVideoTranscode(metadata: metadata) ? .transcode : .directStream,
@@ -860,6 +931,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                             if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
                                 print("[Player] Underlying: \(underlying.domain) code=\(underlying.code) — \(underlying.localizedDescription)")
                             }
+                        }
+                        // Teardown races (session ending, transcode stopped
+                        // server-side) land here as NSURLError -999 on
+                        // `item.error`. That is not a playback failure — don't
+                        // report it and don't burn the one-shot HLS fallback on
+                        // an item nobody is watching any more (RIVULET-19).
+                        if let itemError = item.error, isCancellationError(itemError) {
+                            print("[Player] AVPlayerItem failed with cancellation — ignoring")
+                            break
                         }
                         // The AVPlayerItem error was previously only printed to
                         // the console, so a mid-playback item failure that the
@@ -974,6 +1054,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             if state == .paused {
                 startPausedPosterTimer()
+                // Every pause path funnels through here, so this is the one
+                // place that reliably disarms the stall watchdog when the user
+                // stops asking for playback (issue #247).
+                cancelAetherStallWatchdog()
             } else {
                 cancelPausedPosterTimer()
             }
@@ -1369,16 +1453,36 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // (it makes its own item, so our native-path externalMetadata never
                 // reaches it). Set before load so Aether stashes + replays it.
                 ap.setExternalMetadata(buildExternalMetadata())
-                try await ap.load(
+                // Issue #245: the load is raced against a deadline rather than
+                // awaited bare. Audio the engine cannot stream-copy (TrueHD,
+                // DTS-HD MA) is re-encoded to FLAC during startup, which makes
+                // this path throughput-sensitive and, on some titles,
+                // non-terminating. A load that never returns also never throws,
+                // so without a deadline the catch below never runs, the HLS
+                // fallback never fires, and the UI stays in `.loading` forever.
+                // The stall watchdog does not cover this either: it arms off
+                // buffering edges, and a load that never completes publishes
+                // none.
+                try await runAetherLoadWithDeadline(
+                    ap,
                     url: aetherURL,
                     headers: aetherHeaders,
-                    startTime: startTime,
-                    subtitleLanguageHintsByStreamIndex: aetherSubtitleLanguageHintsByStreamIndex(),
-                    preferredAudioLanguages: aetherPreferredAudioLanguages(),
-                    preferredSubtitleLanguages: aetherPreferredSubtitleLanguages(),
-                    externalSubtitles: aetherExternalSubtitles()
+                    startTime: startTime
                 )
             } catch {
+                // Ordinary cancellation (the user left the player or switched
+                // items while the load was in flight) is not a playback
+                // failure: no Sentry report, no fallback, no user-facing
+                // error. Returning rather than rethrowing matters — a rethrow
+                // lands in the outer catch, which sets `.failed` and fires a
+                // second `avplayer_start_failed` event.
+                // The deadline error must survive this guard. It is not a
+                // cancellation in any of the three spellings `isCancellationError`
+                // knows, and racing the load in a child task means the group's
+                // cancellation of the loser never marks THIS task cancelled, so
+                // `Task.isCancelled` stays false here too. Both halves have to
+                // hold or the fallback is skipped and the hang is unfixed.
+                if isCancellationError(error) || Task.isCancelled { return }
                 let kind = classifyDirectPlayFailure(error)
                 // Record the ORIGINAL Aether failure before doing anything else.
                 // This is the root cause of RIVULET-19: previously `error` was
@@ -1386,14 +1490,91 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // failed we reported the fallback's error and destroyed the only
                 // evidence of why direct play died in the first place.
                 diagnostics.recordPrimaryFailure(error, kind: kind, route: "aether")
+                // RIVULET-19 diagnostics. Fire-and-forget, deliberately NOT
+                // awaited: the user's recovery is the HLS fallback below and
+                // nothing may delay it. See `probeStreamBodyForDiagnostics`.
+                probeStreamBodyForDiagnostics(
+                    url: aetherURL,
+                    headers: aetherHeaders,
+                    error: error,
+                    kind: kind
+                )
                 guard planHasHLSFallback(plan) else { throw error }
+                // A hang and a thrown startup error get separate reason strings
+                // so they do not merge into one Sentry issue. They have
+                // different causes and only the hang is #245.
+                let reason = error is AetherLoadTimeoutPolicy.TimedOut
+                    ? AetherLoadTimeoutPolicy.fallbackReason
+                    : "aether_startup_load_failed"
                 try await attemptRivuletHLSFallback(
                     resumeTime: startTime ?? 0,
-                    reason: "aether_startup_load_failed",
+                    reason: reason,
                     failureKind: kind
                 )
                 return
             }
+        }
+    }
+
+    /// Run `AetherPlayer.load` with a deadline, throwing
+    /// `AetherLoadTimeoutPolicy.TimedOut` if the engine does not return in time.
+    ///
+    /// Structured on purpose. `withThrowingTaskGroup` owns both children, so
+    /// whichever finishes first, `cancelAll` plus the implicit await on group
+    /// teardown guarantees the loser is cancelled and reaped before this
+    /// function returns. Nothing outlives the call, and no detached task can
+    /// leak a half-started engine session.
+    ///
+    /// Teardown of the engine on the timeout path is deliberately NOT done
+    /// here. `attemptRivuletHLSFallback` already stops the Aether player,
+    /// clears `aetherPlayer`, tears down the AVPlayer observers, and pauses the
+    /// old player before it builds the fallback URL. Doing it twice would be
+    /// redundant, and stopping the engine here would additionally race the
+    /// cancellation of the load child that is still unwinding.
+    private func runAetherLoadWithDeadline(
+        _ ap: AetherPlayer,
+        url: URL,
+        headers: [String: String],
+        startTime: TimeInterval?
+    ) async throws {
+        let deadline = AetherLoadTimeoutPolicy.startupLoadDeadline
+        let hints = aetherSubtitleLanguageHintsByStreamIndex()
+        let audioLanguages = aetherPreferredAudioLanguages()
+        let subtitleLanguages = aetherPreferredSubtitleLanguages()
+        let externalSubtitles = aetherExternalSubtitles()
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                try await ap.load(
+                    url: url,
+                    headers: headers,
+                    startTime: startTime,
+                    subtitleLanguageHintsByStreamIndex: hints,
+                    preferredAudioLanguages: audioLanguages,
+                    preferredSubtitleLanguages: subtitleLanguages,
+                    externalSubtitles: externalSubtitles
+                )
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+                // Reached only if the sleep ran to completion, which means the
+                // load child is still in flight. `Task.sleep` throws
+                // `CancellationError` when the load wins and cancels this
+                // child, and that error is discarded with the group rather
+                // than propagated, so it can never be mistaken for a timeout.
+                print("[Player] Aether load exceeded \(Int(deadline))s deadline; falling back to HLS")
+                throw AetherLoadTimeoutPolicy.TimedOut(seconds: deadline)
+            }
+
+            do {
+                // Waits for the FIRST child to finish. A load that succeeds
+                // returns normally here; either child throwing rethrows.
+                try await group.next()
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+            group.cancelAll()
         }
     }
 
@@ -1529,6 +1710,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 } else {
                     self.updatePlaybackState(state)
                 }
+                // Load the Up Next panel list once playback starts. The aether
+                // route never publishes a backing AVPlayer, so this can't hang
+                // off `$currentAVPlayer` (that path serves the hls route only).
+                // Driven off `.playing` — the decode-backend-independent signal.
+                if state == .playing, !self.upNextEpisodesLoaded {
+                    self.upNextEpisodesLoaded = true
+                    Task { await self.loadUpNextEpisodes() }
+                }
             }
             .store(in: &cancellables)
 
@@ -1587,7 +1776,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         player.$currentAVPlayer
             .receive(on: DispatchQueue.main)
             .sink { [weak self] avp in
-                guard let self, avp != nil else { return }  // native route only
+                guard let self, avp != nil else { return }  // hls route (AVPlayer-backed) only
                 Task { await self.resolveNextEpisodeEarlyIfNeeded() }
             }
             .store(in: &cancellables)
@@ -2123,6 +2312,114 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - RIVULET-19 Failure Probe
+
+    /// After an aether startup failure, fetch a small prefix of the stream URL
+    /// and record WHAT the server actually returned.
+    ///
+    /// Why this exists
+    /// ---------------
+    /// RIVULET-19 is `HLSVideoEngine: open failed (openFailed(code:
+    /// -1094995529))`, the project's largest unresolved error. That code is
+    /// FFmpeg's AVERROR_INVALIDDATA, raised when the demuxer opened a byte
+    /// stream and could not parse it as media. It fires on the aether route at
+    /// startup across every codec, resolution and dynamic range we ship, which
+    /// rules out a codec or container cause and points at the bytes simply not
+    /// being the media file. The engine identifies containers purely by probing
+    /// the first bytes, so any non-media body (an HTML error page, a JSON error,
+    /// a login redirect) fails exactly this way. What we cannot tell from the
+    /// current telemetry is WHICH non-media body dominates. One release of this
+    /// classification answers that.
+    ///
+    /// Why there is no preflight on the success path
+    /// ---------------------------------------------
+    /// This runs ONLY from the aether failure catch. Nobody should later
+    /// "improve" it into a check that runs before every direct play. A preflight
+    /// on the hot path would add a network round trip to every single playback
+    /// start to serve a case that, by the numbers, is rare and already
+    /// self-rescuing: roughly 95 percent of these failures are silently
+    /// recovered by the HLS fallback. That is the definition of a "just in case"
+    /// feature the project's design philosophy rejects, and it would cost every
+    /// user latency to diagnose a minority. Diagnostics belong on the path that
+    /// is already broken.
+    ///
+    /// Why it does not block the fallback
+    /// ----------------------------------
+    /// The call site does not await this. The user is already staring at a
+    /// stalled player, and the HLS fallback is their recovery, so inserting even
+    /// a few seconds of probe in front of it would trade a real user-visible
+    /// delay for a diagnostic. Running it concurrently costs the fallback
+    /// nothing measurable: it is a single ranged GET of one kilobyte against a
+    /// server the fallback is not using (the fallback targets the Plex transcode
+    /// endpoint, this targets the direct-play origin that just failed).
+    ///
+    /// Why it cannot make a failure worse
+    /// ----------------------------------
+    /// Everything inside is best-effort. The request has its own short timeout,
+    /// every error is swallowed, and no result of this function is ever read by
+    /// playback logic. If it throws, hangs or returns nothing, the fallback
+    /// proceeds exactly as it did before this existed.
+    ///
+    /// - Parameters:
+    ///   - url: The direct-play URL the engine failed to open. Used ONLY to
+    ///     build the request. It is never logged, never attached to an event,
+    ///     and never included in any string this function produces.
+    ///   - headers: The same headers the failed load used, so the probe sees
+    ///     what the engine saw rather than an unauthenticated response.
+    ///   - error: The originating aether failure, reported as the event's error
+    ///     so the probe lands on the same issue lineage.
+    ///   - kind: The classified failure, carried as a tag for filtering.
+    private func probeStreamBodyForDiagnostics(
+        url: URL,
+        headers: [String: String],
+        error: Error,
+        kind: DirectPlayFailureKind
+    ) {
+        // A deadline expiry is a hang, not a bad body. The engine never got far
+        // enough to reject the bytes, so there is no body question to answer and
+        // probing would only add noise to #245's separate investigation. Skipped
+        // deliberately rather than by omission.
+        if error is AetherLoadTimeoutPolicy.TimedOut { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            // Short on purpose. This races nothing, but a probe that outlives
+            // the player session it describes is useless, and the failure it
+            // investigates is a parse failure rather than a slow server.
+            request.timeoutInterval = 5
+            request.setValue(StreamBodyClassifier.probeRangeHeader, forHTTPHeaderField: "Range")
+            for (key, value) in headers {
+                request.addValue(value, forHTTPHeaderField: key)
+            }
+
+            // Fully defensive: any throw here is discarded and playback recovery
+            // is unaffected.
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse else {
+                return
+            }
+
+            let classification = StreamBodyClassifier.classify(data)
+            let summary = StreamBodyClassifier.describe(
+                status: http.statusCode,
+                contentType: http.value(forHTTPHeaderField: "Content-Type"),
+                classification: classification,
+                byteCount: data.count
+            )
+
+            self.diagnostics.recordFailureBodyProbe(
+                summary: summary,
+                classification: classification.rawValue,
+                status: http.statusCode,
+                error: error,
+                kind: kind
+            )
+        }
+    }
+
     // MARK: - HLS Transcode Preflight
 
     /// Wait for the HLS transcode session to be ready before loading playback.
@@ -2271,13 +2568,13 @@ final class UniversalPlayerViewModel: ObservableObject {
     func stopPlayback() {
         streamPreparationTask?.cancel()
         streamPreparationTask = nil
-        aetherStallWatchdogTask?.cancel()
-        aetherStallWatchdogTask = nil
+        cancelAetherStallWatchdog()
         titleLogoResolveTask?.cancel()
         titleLogoResolveTask = nil
         subtitleClockSync.stop()
         clearReplayWindow()
         contentFilter.reset()
+        releaseThumbnailCache()
 
         // Clear the active playback route and content from the App Hang scope
         // (RIVULET-41) so a later hang off the player isn't tagged with a stale
@@ -2377,16 +2674,29 @@ final class UniversalPlayerViewModel: ObservableObject {
             updatePlaybackState(.buffering)
             startAetherStallWatchdog(for: player)
         } else {
-            aetherStallWatchdogTask?.cancel()
-            aetherStallWatchdogTask = nil
+            cancelAetherStallWatchdog()
             if playbackState == .buffering {
                 updatePlaybackState(player.isPlaying ? .playing : .paused)
             }
         }
     }
 
-    private func startAetherStallWatchdog(for player: AetherPlayer) {
+    private func cancelAetherStallWatchdog() {
         aetherStallWatchdogTask?.cancel()
+        aetherStallWatchdogTask = nil
+    }
+
+    private func startAetherStallWatchdog(for player: AetherPlayer) {
+        cancelAetherStallWatchdog()
+
+        // A paused session isn't stalled, it's parked, so there is nothing to
+        // recover and a recovery kick would be a restart the user never asked
+        // for (issue #247).
+        guard StallWatchdogPolicy.shouldArm(
+            userIntendsToPlay: player.intendsToPlay,
+            playbackState: playbackState
+        ) else { return }
+
         let baselineTime = currentTime
         aetherStallWatchdogTask = Task { @MainActor [weak self, weak player] in
             guard let self, let player else { return }
@@ -2395,6 +2705,17 @@ final class UniversalPlayerViewModel: ObservableObject {
             guard !Task.isCancelled,
                   self.aetherPlayer === player,
                   player.isBuffering else { return }
+
+            // Re-checked here, not just at arm time: the delay is 20s, and the
+            // user can pause or the screensaver can take the display in that
+            // window. `play()` below may rebuild the whole Aether session (it
+            // runs any pending foreground reload), so this is the guard that
+            // keeps a dimmed, paused Apple TV from bursting back into playback.
+            guard StallWatchdogPolicy.shouldKick(
+                userIntendsToPlay: player.intendsToPlay,
+                playbackState: self.playbackState,
+                applicationState: UIApplication.shared.applicationState
+            ) else { return }
 
             let recoveryTime = self.currentTime
             guard recoveryTime <= baselineTime + 0.5 else { return }
@@ -2776,11 +3097,20 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
         // print("🖼️ Preloading BIF thumbnails for part \(partId)")
+        preloadedThumbnailPartId = partId
         PlexThumbnailService.shared.preloadBIF(
             partId: partId,
             serverURL: serverURL,
             authToken: authToken
         )
+    }
+
+    /// Drop the outgoing item's BIF. Safe to call when nothing is cached; a
+    /// later scrub re-fetches on demand.
+    private func releaseThumbnailCache() {
+        guard let partId = preloadedThumbnailPartId else { return }
+        preloadedThumbnailPartId = nil
+        PlexThumbnailService.shared.clearCache(partId: partId)
     }
 
     // MARK: - Track Selection
@@ -3570,32 +3900,53 @@ final class UniversalPlayerViewModel: ObservableObject {
             skippedRecapIds.insert(recapId)
         }
 
-        // Seek to end of marker, clamped so we never land at/after duration.
-        // Credits markers typically end AT the file end (endTimeSeconds ==
-        // duration); seeking to literal EOF stalls Aether's AVPlayer host. Land
-        // just inside the media instead: natural end-of-stream then fires within
-        // ~epsilon and drives the normal Up Next handoff. AVPlayer tolerates
-        // seek-to-duration, but just-before is correct for it too, so the
-        // clamp is unconditional (this is the single funnel for both the
-        // skip button and auto-skip).
-        let skipEpsilon: TimeInterval = 0.5
-        let target = duration > 0
-            ? max(0, min(marker.endTimeSeconds, duration - skipEpsilon))
-            : max(0, marker.endTimeSeconds)
-
         // Marker skip (manual or auto) is a user-initiated seek that bypasses
         // commitScrub/.seekAbsolute: clear any active replay window so a
         // stale invocation point can't spuriously revert subtitles later,
         // disconnected from where playback actually landed post-skip.
         clearReplayWindow()
-        // Preserve the chrome state across the skip: if the controls were
-        // hidden (the pill owned focus), the jump must NOT pop the rail open;
-        // if they were already up, keep them up.
-        await seek(to: target, revealsControls: showControls)
 
-        // Hide button
-        activeMarker = nil
-        showSkipButton = false
+        switch MarkerSkipPolicy.outcome(
+            isCredits: marker.isCredits,
+            markerEnd: marker.endTimeSeconds,
+            duration: duration
+        ) {
+        case .finish:
+            // Credits that run to the file end: there is nothing left to play,
+            // so this skip FINISHES playback instead of seeking. Seeking would
+            // park the player on the last frame forever — the landing spot sits
+            // inside AetherEngine's end-of-media epsilon, and the engine
+            // deliberately turns a seek that lands there into `.paused` while
+            // withholding the terminal `.ended` it reserves for organic
+            // completion. Without `.ended` the end-of-playback handling never
+            // runs, and the duration-45 post-video fallback can't cover for it
+            // either: that fallback is gated on there being no credits marker,
+            // and a credits marker is exactly what put this pill on screen.
+            // Calling the normal funnel directly keeps mark-watched / scrobble /
+            // Up Next semantics identical on both the aether and hls routes.
+            activeMarker = nil
+            showSkipButton = false
+            await handlePlaybackEnded()
+            // handlePlaybackEnded() bows out leaving postVideoState == .hidden
+            // for movies, for episodes with the Up Next panel disabled, and
+            // when there is no next episode. Nothing else exits the player in
+            // those cases, so dismiss it here.
+            if postVideoState == .hidden {
+                shouldDismiss = true
+            }
+
+        case .seek(let target):
+            // Intro / recap / ad, or a credits marker that ends mid-stream:
+            // ordinary seek, clamped just inside the media.
+            // Preserve the chrome state across the skip: if the controls were
+            // hidden (the pill owned focus), the jump must NOT pop the rail open;
+            // if they were already up, keep them up.
+            await seek(to: target, revealsControls: showControls)
+
+            // Hide button
+            activeMarker = nil
+            showSkipButton = false
+        }
     }
 
     /// Label for current skip button
@@ -4396,6 +4747,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // schedules a fresh one for the new item if needed.
         insightsRecheckTask?.cancel()
         insightsRecheckTask = nil
+        // Release the outgoing episode's BIF; preloadThumbnails() loads the new
+        // one. Without this a binge retains every episode's trickplay frames.
+        releaseThumbnailCache()
 
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
@@ -4427,6 +4781,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // New episode: allow the early next-episode resolve to run again.
         nextEpisodeResolvedEarly = false
+        upNextEpisodesLoaded = false
 
         // Ensure next episode has required metadata for subsequent next-up detection
         if metadata.parentRatingKey == nil || metadata.index == nil {
@@ -4538,6 +4893,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = appBecameActiveObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = appResignActiveObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         if let observer = itemDidPlayToEndObserver {

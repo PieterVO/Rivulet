@@ -140,7 +140,9 @@ final class CardInfoView: UIView {
                 video.append(PlayerInfoSheetStyle.infoRow("Frame Rate", frameRate))
             }
             if let bitrate = media.bitrate {
-                video.append(PlayerInfoSheetStyle.infoRow("Bitrate", PlayerInfoSheetStyle.bitrate(bitrate)))
+                // Plex reports bitrate in kbps; the formatter takes bits/sec
+                // (same conversion PlexMediaMapper applies).
+                video.append(PlayerInfoSheetStyle.infoRow("Bitrate", PlayerInfoSheetStyle.bitrate(bitrate * 1000)))
             }
         }
         addSection("VIDEO", rows: video)
@@ -150,8 +152,11 @@ final class CardInfoView: UIView {
             for (index, stream) in audioStreams.enumerated() {
                 let title = stream.displayTitle ?? stream.extendedDisplayTitle ?? "Track \(index + 1)"
                 var detail = title
-                if let bitrate = stream.bitrate {
-                    detail += " · \(PlayerInfoSheetStyle.bitrate(bitrate))"
+                // Plex reports stream bitrate in kbps; the formatter takes
+                // bits/sec. Often absent for lossless/embedded tracks — the
+                // segment is then simply omitted rather than printing a zero.
+                if let bitrate = stream.bitrate, bitrate > 0 {
+                    detail += " · \(PlayerInfoSheetStyle.bitrate(bitrate * 1000))"
                 }
                 if let sampleRate = stream.samplingRate {
                     detail += " · \(sampleRate / 1000) kHz"

@@ -328,6 +328,46 @@ struct EPGGuide: UIViewRepresentable {
             }
         }
 
+        /// Hold Left at the start of the timeline instead of letting it escape
+        /// to the sidebar. `apply` builds one section per channel and sorts that
+        /// channel's programmes by start time, so `item == 0` is the earliest
+        /// programme in the row: the leftmost cell. There is nothing focusable
+        /// to its left, so the focus engine walks up the chain and hands focus
+        /// to the enclosing `.sidebarAdaptable` TabView. That is the sidebar
+        /// opening on its own, which is what makes the guide feel like it
+        /// cannot be scrolled back left once the user has moved right.
+        ///
+        /// This is deliberately `shouldUpdateFocusIn` and NOT `pressesBegan`.
+        /// Siri Remote swipes arrive as indirect touches and never synthesize
+        /// arrow `UIPress` events, so a press handler would only catch the
+        /// click wheel (and a keyboard in the Simulator) and would silently do
+        /// nothing for anyone who swipes. Both input paths ultimately request a
+        /// focus update, so vetoing here covers both.
+        ///
+        /// There is also no backward scrolling to offer. `setupStartTime` pins
+        /// `timelineStart` to the current half hour and fetching only ever runs
+        /// forward, so there is no past programming loaded to reveal; scrolling
+        /// left would just expose empty grid. Do not "fix" this by allowing the
+        /// move through. The edge is a real boundary, not a missing feature.
+        func collectionView(_ collectionView: UICollectionView,
+                            shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
+            guard context.focusHeading == .left,
+                  let prev = context.previouslyFocusedIndexPath,
+                  prev.item == 0
+            else { return true }
+
+            // Only swallow the move when focus is actually leaving the grid. If
+            // the engine already found another cell inside the collection view
+            // it has picked a sensible neighbour and we stay out of its way.
+            let nextIsInside = context.nextFocusedView?.isDescendant(of: collectionView) ?? false
+            guard !nextIsInside else { return true }
+
+            // A plain no-op. Only `.left` headings reach here, so Up, Down and
+            // Right at this same cell are untouched, and Menu is not a focus
+            // heading at all and still escapes to the sidebar as usual.
+            return false
+        }
+
         // Snap horizontal scrolling so a full 30-min cell sits next to the date.
         func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
                                        targetContentOffset: UnsafeMutablePointer<CGPoint>) {

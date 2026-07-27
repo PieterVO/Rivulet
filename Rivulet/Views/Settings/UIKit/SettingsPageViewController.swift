@@ -97,7 +97,9 @@ final class SettingsPageViewController: UIViewController {
         moveGestures = [
             moveGesture(.upArrow, #selector(moveUp)),
             moveGesture(.downArrow, #selector(moveDown)),
-            moveGesture(.select, #selector(dropGrab))
+            moveGesture(.select, #selector(dropGrab)),
+            moveSwipe(.up, #selector(moveUp)),
+            moveSwipe(.down, #selector(moveDown))
         ]
         moveGestures.forEach { $0.isEnabled = false; collectionView.addGestureRecognizer($0) }
 
@@ -109,6 +111,28 @@ final class SettingsPageViewController: UIViewController {
     private func moveGesture(_ type: UIPress.PressType, _ action: Selector) -> UITapGestureRecognizer {
         let gr = UITapGestureRecognizer(target: self, action: action)
         gr.allowedPressTypes = [NSNumber(value: type.rawValue)]
+        return gr
+    }
+
+    /// Issue #239: the press-keyed recognizers above are reachable only by the
+    /// click wheel. `allowedPressTypes` filters the `UIPress` stream, and a
+    /// Siri Remote touch-surface swipe never enters that stream at all: it
+    /// arrives as `.indirect` `UITouch`es, and only a directional CLICK
+    /// synthesises `.upArrow`/`.downArrow`. So reordering by swipe was
+    /// structurally impossible, not merely unresponsive. These recognizers
+    /// give the swipe a home; do not "simplify" them back into
+    /// `moveGesture(_:_:)`, the two input streams are disjoint.
+    ///
+    /// They live in `moveGestures` alongside the press ones, so they are
+    /// enabled ONLY while a row is grabbed. Outside move mode the focus engine
+    /// keeps the indirect touches and ordinary swipe-to-scroll is untouched.
+    private func moveSwipe(_ direction: UISwipeGestureRecognizer.Direction, _ action: Selector) -> UISwipeGestureRecognizer {
+        let gr = UISwipeGestureRecognizer(target: self, action: action)
+        gr.direction = direction
+        gr.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+        // On tvOS a swipe recognizer otherwise also waits for a .select press,
+        // which would race the grab/drop handling above.
+        gr.allowedPressTypes = []
         return gr
     }
 

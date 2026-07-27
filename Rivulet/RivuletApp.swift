@@ -118,13 +118,25 @@ struct RivuletApp: App {
                 options.enableReportNonFullyBlockingAppHangs = true
 
                 options.beforeSend = { event in
-                    // Drop cancelled URL request errors — these are normal when navigating away
+                    // Drop cancelled URL request errors — these are normal when
+                    // navigating away. "CancellationError" is listed explicitly:
+                    // Swift's structured-concurrency error stringifies as
+                    // "CancellationError()", which matches neither "Code=-999"
+                    // nor the lowercase double-l "cancelled" (RIVULET-19). This
+                    // is a backstop; the real fix is not raising the event.
+                    func isCancellationText(_ text: String) -> Bool {
+                        text.contains("Code=-999")
+                            || text.contains("cancelled")
+                            || text.contains("CancellationError")
+                    }
                     if let exceptions = event.exceptions,
-                       exceptions.contains(where: { $0.value?.contains("Code=-999") == true || $0.value?.contains("cancelled") == true }) {
+                       exceptions.contains(where: { isCancellationText($0.value ?? "") }) {
                         return nil
                     }
                     if let message = event.message?.formatted,
-                       message.contains("Code=-999") || (message.contains("NSURLErrorDomain") && message.contains("cancelled")) {
+                       message.contains("Code=-999")
+                        || message.contains("CancellationError")
+                        || (message.contains("NSURLErrorDomain") && message.contains("cancelled")) {
                         return nil
                     }
                     // Plex passes `X-Plex-Token` as a URL query parameter, and

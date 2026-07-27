@@ -78,4 +78,57 @@ final class InfoSectionRevealTests: XCTestCase {
     func testContentShorterThanViewportNeverScrolls() {
         XCTAssertEqual(reveal(current: 0, section: (40, 200), viewport: 400, content: 300), 0)
     }
+
+    // MARK: - Declined-press stepping (`steppedOffsetY`)
+    //
+    // The reveal math above can only reach content a section wrapper covers.
+    // A section taller than the panel has no focus target in its lower half,
+    // so an arrow press the engine declines steps the offset instead (#242).
+
+    private func step(
+        current: CGFloat,
+        delta: CGFloat,
+        viewport: CGFloat,
+        content: CGFloat
+    ) -> CGFloat {
+        InfoScrollView.steppedOffsetY(
+            current: current,
+            delta: delta,
+            viewportHeight: viewport,
+            contentHeight: content
+        )
+    }
+
+    func testStepDownMovesByDelta() {
+        XCTAssertEqual(step(current: 0, delta: 240, viewport: 400, content: 1200), 240)
+    }
+
+    func testStepUpMovesByDelta() {
+        XCTAssertEqual(step(current: 240, delta: -240, viewport: 400, content: 1200), 0)
+    }
+
+    func testStepDownClampsToMaxOffset() {
+        // Content 1200 in a 400 viewport → max offset 800.
+        XCTAssertEqual(step(current: 700, delta: 240, viewport: 400, content: 1200), 800)
+    }
+
+    func testStepUpClampsToTop() {
+        XCTAssertEqual(step(current: 100, delta: -240, viewport: 400, content: 1200), 0)
+    }
+
+    func testStepIsANoOpWhenContentFitsViewport() {
+        // Nothing to scroll — the press should leave the offset alone so it
+        // can bubble instead of silently swallowing a focus move.
+        XCTAssertEqual(step(current: 0, delta: 240, viewport: 400, content: 300), 0)
+    }
+
+    func testStepThroughSectionTallerThanViewport() {
+        // The exact #242 shape: one 900pt section in a 560pt panel. Three
+        // downward steps walk the offset to the bottom of the content.
+        var offset: CGFloat = 0
+        for _ in 0..<3 {
+            offset = step(current: offset, delta: 240, viewport: 560, content: 900)
+        }
+        XCTAssertEqual(offset, 340)
+    }
 }
