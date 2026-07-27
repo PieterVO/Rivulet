@@ -177,6 +177,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// directly instead, and its own `preferredFocusEnvironments` (armed by
     /// `restoreShelfRowFocusIfNeeded`) lands the tile that had focus.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        // TEMP #255-focus instrumentation — remove once diagnosed.
+        NSLog("[FOCUSDBG] belowFold.preferredFocusEnvironments armed=\(armedShelfRestoreCell != nil)")
         if let shelf = armedShelfRestoreCell { return [shelf] }
         return [collectionView]
     }
@@ -984,6 +986,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// the host cell's path would hand focus to the nested collection, which
     /// restarts at item 0.
     func restoreShelfRowFocusIfNeeded() {
+        // TEMP #255-focus instrumentation — remove once diagnosed.
+        let dbgPath = collectionView.lastFocusedIndexPath
+        let dbgCell = dbgPath.flatMap { collectionView.cellForItem(at: $0) }
+        NSLog("[FOCUSDBG] restore: lastFocusedIndexPath=\(String(describing: dbgPath)) "
+            + "identifier=\(String(describing: dbgPath.flatMap { dataSource.itemIdentifier(for: $0) })) "
+            + "cell=\(dbgCell.map { String(describing: type(of: $0)) } ?? "nil") "
+            + "shelfItem=\(String(describing: (dbgCell as? ShelfRowCell)?.lastFocusedItemIndex))")
+
         guard let path = collectionView.lastFocusedIndexPath,
               dataSource.itemIdentifier(for: path) != nil,
               let shelf = collectionView.cellForItem(at: path) as? ShelfRowCell,

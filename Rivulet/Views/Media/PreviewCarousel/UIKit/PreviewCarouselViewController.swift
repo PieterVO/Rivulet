@@ -585,6 +585,9 @@ final class PreviewCarouselViewController: UIViewController {
         // the row back on that tile BEFORE the focus update resolves — the
         // host cell can't be preferred directly, so the row has to be
         // positioned and armed first. No-op unless a shelf row had focus.
+        // TEMP #255-focus instrumentation — remove once diagnosed.
+        NSLog("[FOCUSDBG] carousel.viewDidAppear phase=\(String(describing: state.phase)) "
+            + "belowFoldEnv=\(expandedDetail.belowFoldFocusEnvironment.map { String(describing: type(of: $0)) } ?? "nil")")
         expandedDetail.restoreShelfRowFocusIfNeeded()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
