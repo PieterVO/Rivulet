@@ -350,6 +350,14 @@ Every PR review — contributor or AI-generated — requires two assessments, no
 
 Good code that adds the wrong thing is still a no. A verdict of MERGE requires both assessments to pass.
 
+**Re-check the head SHA immediately before posting a review**, not just before
+starting one. `gh pr view N --json headRefOid,files,state,isDraft` — compare
+against the SHA the review was written from. `mergeable` and the merge-base can
+both be unchanged while the author has pushed a fix; a changed file count is the
+visible tell. A submitted review cannot be retracted: deleting one returns 422,
+and dismissing silently no-ops on a closed PR, leaving only a follow-up comment
+as cleanup.
+
 ## Troubleshooting
 
 ### Focus Not Working in Overlay
