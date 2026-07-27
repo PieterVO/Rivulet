@@ -141,6 +141,8 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.4 (70)", [ // confirm build number at release
+            "The TV guide now refreshes itself when you come back to the app, and again whenever you open Live TV and the listings are more than half an hour old, so you no longer arrive at an empty or out of date guide",
+            "The Live TV player controls now include a channel list, opening on the channel you are watching, with programme artwork and what is on right now for every channel",
             "Opening a movie or show now grows its poster proportionally instead of stretching it out of shape",
             "Settings rows now all use one title size and weight, so each page reads evenly from top to bottom",
             "Updated AetherEngine to 5.23.3. Fixes titles that never finished playing at the very end, resuming near the end of a movie getting stuck on Loading, Dolby Vision being dropped when you resume close to the end, and a crash after several minutes of playback on fast connections. Also: some MP4 movies that opened to a frozen frame now play and use less power, Dolby Vision titles streamed from a slow server no longer jump the scrubber backward or stall when you seek, the Atmos badge is now accurate, long Live TV sessions no longer slowly use up memory until the app closes, and leaving a Dolby Atmos title no longer leaves your receiver looping the last sound",

@@ -195,6 +195,7 @@ final class PlayerRailPanelView: UIView {
         // above, against not-yet-laid-out geometry) makes the correction
         // visibly animate in as the real layout lands.
         (content as? UpNextListView)?.prepareForPresentation()
+        (content as? ChannelListPanelView)?.prepareForPresentation()
 
         UIView.animate(withDuration: Metrics.presentDuration) {
             panel.alpha = 1

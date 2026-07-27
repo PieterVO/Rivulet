@@ -205,6 +205,17 @@ final class PlayerRailView: UIView {
         upNextButton.isHidden = !available
     }
 
+    /// Repurposes the Up Next slot as the Live TV channel list. Same button,
+    /// same position and `onUpNext` action — only the icon and label change,
+    /// because on a live channel there is no "next episode" but the identical
+    /// affordance (jump to another thing to watch, in a list) applies.
+    func setChannelListAvailable(_ available: Bool) {
+        upNextButton.isHidden = !available
+        guard available else { return }
+        upNextButton.setIcon(UIImage(systemName: "tv.inset.filled"))
+        upNextButton.accessibilityLabel = "Channels"
+    }
+
     func setInsightsAvailable(_ available: Bool) {
         insightsButton.isHidden = !available
     }

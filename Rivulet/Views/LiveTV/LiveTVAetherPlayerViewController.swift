@@ -331,7 +331,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         focusCatcher.backgroundColor = .clear
         view.addSubview(focusCatcher)
 
-        railView.setUpNextAvailable(false)
+        // The Up Next slot becomes the channel list on live (same button,
+        // same action hook — see PlayerRailView.setChannelListAvailable).
+        railView.setChannelListAvailable(true)
         railView.setInsightsAvailable(false)
         railView.setLoading(false)
         railView.alpha = 0
@@ -361,6 +363,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         railView.onSubtitles = { [weak self] in self?.presentSubtitlePanel() }
         railView.onAudio = { [weak self] in self?.presentAudioPanel() }
         railView.onInfo = { [weak self] in self?.presentInfoPanel() }
+        railView.onUpNext = { [weak self] in self?.presentChannelListPanel() }
 
         updateRailContent()
 
@@ -800,6 +803,42 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         guard !runs.isEmpty else { return nil }
 
         return StyledLine(runs: runs)
+    }
+
+    /// The live counterpart of the VOD OSD's season list: every channel in
+    /// guide order, opened scrolled to the one playing, with 16:9 programme
+    /// art, "504 · Fox Footy", and the current programme title.
+    private func presentChannelListPanel() {
+        let store = LiveTVDataStore.shared
+        let channels = store.channels
+        guard !channels.isEmpty else { return }
+
+        let list = ChannelListPanelView(
+            channels: channels,
+            currentChannelId: channel.id,
+            programProvider: { store.getCurrentProgram(for: $0) }
+        ) { [weak self] selected in
+            self?.activePanel?.dismissPanel()
+            self?.switchChannel(to: selected)
+        }
+        presentPanel(content: list, width: 520)
+    }
+
+    /// Switches channels by dismissing this player and presenting a fresh one
+    /// for the chosen channel — the same way the guide launches a channel.
+    /// Deliberately not an in-place reload: the whole session (tuned stream
+    /// URL, Plex keepalive, join telemetry, subtitle-delay key, engine
+    /// binding) is scoped to one channel, and `viewDidDisappear`'s teardown
+    /// already unwinds it correctly. Both transitions are unanimated so the
+    /// swap reads as a channel change rather than a trip back to the guide.
+    private func switchChannel(to newChannel: UnifiedChannel) {
+        guard newChannel.id != channel.id else { return }
+        guard let presenter = presentingViewController else { return }
+        dismiss(animated: false) {
+            let vc = LiveTVAetherPlayerViewController(channel: newChannel)
+            vc.modalPresentationStyle = .fullScreen
+            presenter.present(vc, animated: false)
+        }
     }
 
     private func presentInfoPanel() {

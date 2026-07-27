@@ -45,6 +45,12 @@ struct LiveTVContainerView: View {
         .task {
             // Elevate EPG loading priority when user visits Live TV
             await dataStore.elevatePreloadPriority()
+            // ...and re-fetch when what we already have has gone stale (older
+            // than 30 minutes, or a window that no longer covers now). Both
+            // layouts below only load when their data is EMPTY, so without
+            // this a returning visit keeps showing an outdated — or
+            // entirely past-dated, hence blank — grid.
+            await dataStore.refreshIfStale()
         }
     }
 }

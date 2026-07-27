@@ -69,6 +69,9 @@ struct ChannelListView: View {
             if dataStore.epg.isEmpty && !dataStore.isLoadingEPG {
                 await dataStore.loadEPG(startDate: Date(), hours: 6)
             }
+            // Already-populated but stale data would otherwise persist for the
+            // life of the process: the two guards above only fire on empty.
+            await dataStore.refreshIfStale()
         }
     }
 
