@@ -183,6 +183,30 @@ struct ContentRouter {
 
     // MARK: - Private: Route Building
 
+    /// Split a Part key into its path and any query items it already carries.
+    ///
+    /// Handles the key arriving either raw (`...mp4?fmt=4`) or already
+    /// percent-encoded (`...mp4%3Ffmt=4`) — assigning the latter to
+    /// `URLComponents.path` would double-encode it to `%253F`.
+    static func splitPartKey(_ key: String) -> (path: String, queryItems: [URLQueryItem]) {
+        // Normalize an encoded delimiter so both spellings take the same path.
+        // Only the FIRST %3F is the delimiter; anything after it belongs to the
+        // query string and is left alone.
+        var working = key
+        if !key.contains("?"), let encoded = key.range(of: "%3F", options: [.caseInsensitive]) {
+            working = key.replacingCharacters(in: encoded, with: "?")
+        }
+
+        guard let split = working.firstIndex(of: "?") else {
+            return (working, [])
+        }
+        let path = String(working[working.startIndex..<split])
+        let query = String(working[working.index(after: split)...])
+        // Parse via URLComponents so escaping in the values is preserved.
+        let items = URLComponents(string: "?" + query)?.queryItems ?? []
+        return (path, items)
+    }
+
     /// Build the direct Plex URL for raw file access.
     private static func buildDirectPlayURL(context: ContentRoutingContext) -> (url: URL, headers: [String: String])? {
         guard let media = context.metadata.Media?.first,
@@ -191,9 +215,20 @@ struct ContentRouter {
         }
 
         var components = URLComponents(url: context.serverURL, resolvingAgainstBaseURL: false)!
-        components.path = part.key
 
-        var queryItems = components.queryItems ?? []
+        // A Part key can carry its OWN query string. Library parts don't
+        // (/library/parts/1/2/file.mkv), but Plex's IVA extras do:
+        // /services/iva/assets/715933/video.mp4?fmt=4&bitrate=5000
+        //
+        // Assigning that whole string to `.path` percent-encodes the '?' to
+        // %3F, so the server sees a path literally containing "?fmt=4..." —
+        // it 404s, the demuxer probes the error page, and startup fails with
+        // AVERROR_INVALIDDATA. Split the key and merge its parameters with the
+        // token instead. Keys with no query string are unaffected.
+        let (path, inheritedItems) = Self.splitPartKey(part.key)
+        components.path = path
+
+        var queryItems = inheritedItems
         queryItems.append(URLQueryItem(name: "X-Plex-Token", value: context.authToken))
         components.queryItems = queryItems
 
