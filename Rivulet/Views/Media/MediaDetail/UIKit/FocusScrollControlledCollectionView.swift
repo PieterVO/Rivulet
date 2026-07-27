@@ -105,14 +105,11 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         // rendered as a single full-width ShelfRowCell), the focused view is a
         // nested subview and indexPath(for:) returns nil — walk up to the direct
         // UICollectionViewCell child of self to resolve the section.
-        var cellIndexPath = indexPath(for: cell)
-        if cellIndexPath == nil {
-            var view: UIView = cell
-            while let parent = view.superview, !(parent is UICollectionView) { view = parent }
-            if let hostCell = view as? UICollectionViewCell {
-                cellIndexPath = indexPath(for: hostCell)
-            }
-        }
+        // Resolve against the cell THIS collection owns. The previous walk-up
+        // stopped at the first enclosing UICollectionView, which for a shelf
+        // host is the row's OWN nested collection — so Related never resolved
+        // and `lastFocusedIndexPath` was never recorded for it.
+        let cellIndexPath = indexPath(for: cell) ?? ownedCell(containing: nextView)?.indexPath
         let isTop = topSectionIndex != nil && cellIndexPath?.section == topSectionIndex
         focusedCellIsTopSection = isTop
         focusedEpisodeIndexPath = isTop ? cellIndexPath : nil
@@ -177,6 +174,23 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         while let cur = v {
             if let cell = cur as? UICollectionViewCell { return cell }
             if cur === self { return nil }
+            v = cur.superview
+        }
+        return nil
+    }
+
+    /// The cell of THIS collection that contains `view`.
+    ///
+    /// `enclosingCell` returns the FIRST cell walking up, which for a shelf-host
+    /// row (Related) is the inner `PosterCell` belonging to the row's own nested
+    /// collection — `indexPath(for:)` then returns nil because that cell isn't
+    /// ours. Keep walking until we find a cell this collection actually owns.
+    func ownedCell(containing view: UIView) -> (cell: UICollectionViewCell, indexPath: IndexPath)? {
+        var v: UIView? = view
+        while let cur = v, cur !== self {
+            if let cell = cur as? UICollectionViewCell, let ip = indexPath(for: cell) {
+                return (cell, ip)
+            }
             v = cur.superview
         }
         return nil

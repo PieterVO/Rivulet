@@ -30,7 +30,14 @@ enum PreviewBackAction: Equatable {
 }
 
 struct PreviewStateMachine {
-    private(set) var phase: PreviewPhase = .entryMorph
+    // TEMP #255-focus instrumentation — remove once diagnosed.
+    private(set) var phase: PreviewPhase = .entryMorph {
+        didSet {
+            if phase != oldValue {
+                NSLog("[FOCUSDBG] phase \(String(describing: oldValue)) → \(String(describing: phase))")
+            }
+        }
+    }
     private(set) var motionLocked = true
 
     var isCarouselInputEnabled: Bool {

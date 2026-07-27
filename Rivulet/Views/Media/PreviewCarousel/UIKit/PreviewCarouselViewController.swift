@@ -995,6 +995,9 @@ final class PreviewCarouselViewController: UIViewController {
     /// Present an item's FULL expanded detail standalone (no carousel) — reuses
     /// this same VC in `standaloneDetail` mode. Used for Related drill-ins.
     private func presentStandaloneDetail(_ item: MediaItem) {
+        // TEMP #255-focus instrumentation — remove once diagnosed.
+        NSLog("[FOCUSDBG] presentStandaloneDetail from phase=\(String(describing: state.phase)) "
+            + "standalone=\(standaloneDetail)")
         let detail = PreviewCarouselViewController(
             items: [item],
             selectedIndex: 0,
