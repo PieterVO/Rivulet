@@ -964,9 +964,15 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     }
 
     func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
+        // Order matters: the armed/pending targets are one-shot intents for a
+        // specific interaction and must win. `lastFocusedIndexPath` is the
+        // last-resort restore after a modal (playing a trailer, an extra, or
+        // anything on Related) — without it the engine picks for itself and
+        // lands on item 0 of the first row.
         let candidate = armedEpisodeFocusIndexPath
             ?? pendingInitialFocus
             ?? (pillEntryArmed ? currentSeasonFirstEpisode : nil)
+            ?? self.collectionView.lastFocusedIndexPath
         guard let candidate else { return nil }
         return realizedFocusTarget(candidate, in: collectionView)
     }

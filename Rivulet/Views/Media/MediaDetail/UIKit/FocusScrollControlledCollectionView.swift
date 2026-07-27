@@ -68,6 +68,17 @@ final class FocusScrollControlledCollectionView: UICollectionView {
     /// redirect Left/Right from a description to the adjacent episode's thumb.
     private(set) var focusedEpisodeIndexPath: IndexPath?
 
+    /// Index path of the last cell focused ANYWHERE in this collection, kept
+    /// across a modal presentation so focus can return to it.
+    ///
+    /// The carousel sets `restoresFocusAfterTransition = false` and this
+    /// collection sets `remembersLastFocusedIndexPath = false` — both
+    /// deliberate — so nothing else remembers where focus was. Playing a
+    /// trailer therefore came back to item 0 of the first row. Unlike
+    /// `focusedEpisodeIndexPath` this is NOT cleared when focus leaves the
+    /// collection: leaving is exactly when it has to survive.
+    private(set) var lastFocusedIndexPath: IndexPath?
+
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         let ctx = context as? UICollectionViewFocusUpdateContext
         super.didUpdateFocus(in: context, with: coordinator)
@@ -105,6 +116,11 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         let isTop = topSectionIndex != nil && cellIndexPath?.section == topSectionIndex
         focusedCellIsTopSection = isTop
         focusedEpisodeIndexPath = isTop ? cellIndexPath : nil
+        // Remember where focus was for restoration after a modal (the player).
+        // Recorded here because this is the one place the index path is already
+        // resolved for EVERY row shape, including the shelf-host walk-up above
+        // that plain `indexPath(for:)` returns nil for.
+        if let cellIndexPath { lastFocusedIndexPath = cellIndexPath }
         let targetY = isTop ? (frame.minY - topBand) : (frame.midY - bounds.height / 2)
         let clamped = max(minY, min(targetY, maxY))
         animateOffset(to: clamped)
