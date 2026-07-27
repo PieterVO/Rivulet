@@ -199,6 +199,10 @@ final class ChannelRowButton: UIControl {
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private var imageLoadTask: Task<Void, Never>?
+    /// Elapsed-progress bar drawn across the bottom of the artwork. Hidden
+    /// when the row has no programme to measure.
+    private let progressTrack = UIView()
+    private let progressFill = UIView()
 
     // Matched to UpNextRowButton so both panels read as one component.
     private static let restBackground = UIColor.white.withAlphaComponent(0.06)
@@ -241,10 +245,7 @@ final class ChannelRowButton: UIControl {
         accentBar.backgroundColor = Self.accentColor
         accentBar.isHidden = !isCurrent
 
-        // "504 · Fox Footy" — number first, matching how viewers refer to a
-        // channel and how the guide lists it. Numberless sources (some M3U
-        // playlists) just show the name.
-        titleLabel.text = channel.channelNumber.map { "\($0) · \(channel.name)" } ?? channel.name
+        titleLabel.text = channel.name
         titleLabel.font = .systemFont(ofSize: 19, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
@@ -259,10 +260,30 @@ final class ChannelRowButton: UIControl {
         textStack.spacing = 4
         textStack.isUserInteractionEnabled = false
 
+        // Same shape as the VOD play pill's resume bar (MediaProgressInfoBar):
+        // white fill, 4pt tall, 2pt radius. The TRACK is darkened rather than
+        // translucent-white, because here it sits on artwork rather than on a
+        // dark button, and a white-on-white track leaves the bar unreadable
+        // over a bright frame.
+        progressTrack.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        progressTrack.layer.cornerRadius = 2
+        progressTrack.layer.cornerCurve = .continuous
+        progressTrack.clipsToBounds = true
+        progressFill.backgroundColor = .white
+        progressFill.layer.cornerRadius = 2
+        progressFill.layer.cornerCurve = .continuous
+        progressTrack.addSubview(progressFill)
+
         [accentBar, thumbView, textStack].forEach {
             addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
+        [progressTrack, progressFill].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+        }
+        // Inside the artwork, so it reads as "how far through this programme
+        // is" rather than as a row-level control.
+        thumbView.addSubview(progressTrack)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 92),
@@ -280,7 +301,49 @@ final class ChannelRowButton: UIControl {
             textStack.leadingAnchor.constraint(equalTo: thumbView.trailingAnchor, constant: 14),
             textStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
             textStack.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            progressTrack.leadingAnchor.constraint(equalTo: thumbView.leadingAnchor, constant: 8),
+            progressTrack.trailingAnchor.constraint(equalTo: thumbView.trailingAnchor, constant: -8),
+            progressTrack.bottomAnchor.constraint(equalTo: thumbView.bottomAnchor, constant: -8),
+            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+
+            progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
         ])
+
+        applyProgress(for: program)
+    }
+
+    /// Sizes the fill to the fraction of the programme already elapsed. A
+    /// snapshot taken when the panel opens: programmes run for tens of
+    /// minutes, so a live-updating bar would buy nothing for the seconds the
+    /// panel is on screen.
+    private func applyProgress(for program: UnifiedProgram?) {
+        guard let program else {
+            progressTrack.isHidden = true
+            return
+        }
+        let total = program.endTime.timeIntervalSince(program.startTime)
+        // A zero or negative duration is malformed EPG data; show no bar
+        // rather than a full or nonsensical one.
+        guard total > 0 else {
+            progressTrack.isHidden = true
+            return
+        }
+        let elapsed = Date().timeIntervalSince(program.startTime)
+        let fraction = min(max(elapsed / total, 0), 1)
+        progressTrack.isHidden = false
+        // Multiplier against the track means the fill follows the track's
+        // real width, with no hardcoded thumbnail geometry to keep in sync.
+        // A multiplier must be > 0, so nothing-elapsed pins the width to 0.
+        if fraction <= 0 {
+            progressFill.widthAnchor.constraint(equalToConstant: 0).isActive = true
+        } else {
+            progressFill.widthAnchor.constraint(
+                equalTo: progressTrack.widthAnchor, multiplier: fraction
+            ).isActive = true
+        }
     }
 
     /// Programme title, prefixed on the playing channel so the current row
@@ -290,19 +353,23 @@ final class ChannelRowButton: UIControl {
         return isCurrent ? "Now playing · \(program.title)" : program.title
     }
 
-    /// 16:9 programme art, the same artwork the guide's selector uses, with
-    /// the channel logo as the fallback for a channel whose EPG carries no
-    /// landscape image (or no programme at all).
+    /// Fills the 16:9 box with genuinely landscape programme art whenever the
+    /// EPG offers it (`landscapeURL`, which XMLTVParser only populates for an
+    /// icon declaring an aspect ratio >= 1.3 — so it is never a logo or a
+    /// poster in disguise).
+    ///
+    /// Everything else is FIT, not filled. `iconURL` / `posterURL` are
+    /// routinely 2:3 posters, and cropping a portrait poster to 16:9 keeps
+    /// only a band across its middle. The channel logo is preferred over a
+    /// poster as the fallback: in a channel list, identifying the channel
+    /// beats showing a sliver of programme art.
     private func loadThumbnail(channel: UnifiedChannel, program: UnifiedProgram?) {
-        guard let url = program?.landscapeURL ?? program?.iconURL ?? channel.logoURL else { return }
+        let landscape = program?.landscapeURL
+        guard let url = landscape ?? channel.logoURL ?? program?.posterURL ?? program?.iconURL else { return }
+        if landscape == nil { thumbView.contentMode = .scaleAspectFit }
         imageLoadTask = Task { [weak self] in
             let image = await ImageCacheManager.shared.image(for: url)
             guard let self, !Task.isCancelled else { return }
-            // A logo fallback is a small transparent mark, not a 16:9 still —
-            // fit it inside the box instead of cropping it to fill.
-            if program?.landscapeURL == nil {
-                self.thumbView.contentMode = .scaleAspectFit
-            }
             self.thumbView.image = image
         }
     }
