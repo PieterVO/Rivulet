@@ -175,14 +175,20 @@ final class CardStatsView: UIView {
 
     private func startLiveTick() {
         guard isActiveTab, window != nil, liveTickTimer == nil else { return }
-        // The timer fires on the main runloop, so hop straight to the main
-        // actor rather than spawning a Task (avoids capturing self across a
-        // Sendable boundary).
-        liveTickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        // Scheduled in `.common` modes rather than through
+        // `Timer.scheduledTimer`, which installs the timer in `.default` only.
+        // This sheet scrolls, and while a scroll is tracking the main runloop
+        // leaves `.default`, so a default-mode timer stops firing for the
+        // duration. The rows stay on screen holding whatever values they last
+        // received, which reads exactly like the engine has stopped reporting
+        // telemetry when in fact nothing is asking it for a new snapshot.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refresh()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        liveTickTimer = timer
     }
 
     private func stopLiveTick() {
