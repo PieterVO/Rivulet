@@ -118,17 +118,19 @@ struct GuideLayoutView: View {
     @State private var focusedChannel: UnifiedChannel?
     @State private var focusedProgram: UnifiedProgram?
 
-    // Backdrop transition state. Keep the existing artwork treatment, but let
-    // the wash settle before revealing the crisp image for the new programme.
+    // Backdrop transition state. The wash crossfades to the new programme's
+    // image while the crisp artwork fades in over it.
     @State private var outgoingBackdropImage: UIImage?
     @State private var incomingBackdropImage: UIImage?
     @State private var backdropProgress: Double = 1
     @State private var displayedArtworkImage: UIImage?
     @State private var artworkOpacity: Double = 0
 
-    private let artworkFadeOutDuration = 0.18
-    private let backdropFadeDuration = 0.55
-    private let artworkFadeInDuration = 0.42
+    /// How long focus has to rest on a programme before its backdrop loads.
+    /// Holding a direction to cross the guide should not fire an image load or
+    /// a transition per channel.
+    private let backdropSettleDelay = Duration.milliseconds(180)
+    private let backdropFadeDuration = 0.35
 
     private let tick = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
@@ -343,45 +345,41 @@ struct GuideLayoutView: View {
             )
     }
 
-    @MainActor
     private func transitionBackdrop(to newURL: URL?) async {
-        withAnimation(.easeOut(duration: artworkFadeOutDuration)) {
-            artworkOpacity = 0
-        }
-
+        // Settle first, and mutate nothing before it. `.task(id:)` cancels this
+        // on every focus change, so anything written ahead of the first suspend
+        // survives a cancel while the rest of the transition never runs —
+        // browsing the guide would leave the artwork faded out indefinitely.
+        // Returning here instead leaves the current backdrop exactly as it is.
         do {
-            try await Task.sleep(for: .seconds(artworkFadeOutDuration))
+            try await Task.sleep(for: backdropSettleDelay)
         } catch {
             return
         }
-        guard !Task.isCancelled else { return }
 
-        // Remove the old artwork once its fade has completed. Keep the old blur
-        // visible while the replacement image loads, so no stale artwork can
-        // leak into the background crossfade.
-        displayedArtworkImage = nil
         let newImage = await loadBackdrop(newURL)
         guard !Task.isCancelled else { return }
 
-        // Continue from the most recently selected wash when focus changes
-        // quickly, rather than briefly restoring an older programme image.
-        outgoingBackdropImage = incomingBackdropImage ?? outgoingBackdropImage
-        incomingBackdropImage = newImage
-        backdropProgress = 0
-        displayedArtworkImage = newImage
-
-        // Commit the old-at-100% / new-at-0% state before starting the
-        // animation. Without this frame SwiftUI can coalesce both mutations and
-        // jump directly to the replacement blur.
-        do {
-            try await Task.sleep(for: .milliseconds(16))
-        } catch {
-            return
+        // Seed the crossfade without animating: the outgoing wash at full
+        // opacity, the incoming at zero. A plain assignment here can be
+        // coalesced into the animation below and jump straight to the new blur.
+        var seed = Transaction()
+        seed.disablesAnimations = true
+        withTransaction(seed) {
+            // Continue from the most recently shown wash, rather than briefly
+            // restoring an older programme's image.
+            outgoingBackdropImage = incomingBackdropImage ?? outgoingBackdropImage
+            incomingBackdropImage = newImage
+            displayedArtworkImage = newImage
+            backdropProgress = 0
+            artworkOpacity = 0
         }
-        guard !Task.isCancelled else { return }
 
+        // Wash and artwork move together. Staging them sequentially reads as a
+        // slow reveal and holds two full-screen blurs on screen for longer.
         withAnimation(.easeInOut(duration: backdropFadeDuration)) {
             backdropProgress = 1
+            artworkOpacity = newImage == nil ? 0 : 1
         }
 
         do {
@@ -391,12 +389,8 @@ struct GuideLayoutView: View {
         }
         guard !Task.isCancelled else { return }
 
+        // Drop the outgoing wash so only one blurred layer stays composited.
         outgoingBackdropImage = nil
-        guard newImage != nil else { return }
-
-        withAnimation(.easeInOut(duration: artworkFadeInDuration)) {
-            artworkOpacity = 1
-        }
     }
 
     private func loadBackdrop(_ url: URL?) async -> UIImage? {

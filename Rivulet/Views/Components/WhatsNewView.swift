@@ -167,6 +167,7 @@ struct WhatsNewView: View {
             "A library scan interrupted by a slow or unreachable server no longer replaces your saved library index with a partial one, so Featured Content and the in-library markers on Discover stop thinning out",
             "Watching several episodes in a row no longer builds up memory from each one's scrubbing previews",
             "Live TV with a large channel list no longer freezes the app while the lineup loads or refreshes",
+            "The Live TV guide now fades between programme backgrounds as you move through it, instead of cutting straight to the next one",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
