@@ -149,6 +149,11 @@ final class ShelfRowCell: UICollectionViewCell {
     /// restoration). One-shot.
     private var pendingFocusIndex: Int?
 
+    /// Item index last focused inside this row, so a caller can restore focus
+    /// to it after a modal. The row's own `remembersLastFocusedIndexPath` is
+    /// off (the layout ignores it), so without this the row restores to item 0.
+    private(set) var lastFocusedItemIndex: Int?
+
     // Driven offset settle (CADisplayLink), sharing FocusScrollMotion's
     // duration + curve with the vertical focus-scroll so horizontal and
     // vertical row motion feel identical. (The focus coordinator's default
@@ -584,6 +589,7 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
         guard let next = context.nextFocusedIndexPath else { return }
+        lastFocusedItemIndex = next.item
         let target = snappedOffset(toShow: next.item)
         guard abs(target - collectionView.contentOffset.x) > 0.5 else { return }
         animateOffset(to: target)

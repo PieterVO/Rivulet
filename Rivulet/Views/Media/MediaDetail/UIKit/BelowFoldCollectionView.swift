@@ -963,6 +963,21 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         onScroll?(max(0, off))
     }
 
+    /// If focus was inside a shelf-host row (Related) when a modal went up,
+    /// put that row back on the tile it was on and arm it as the focus target.
+    ///
+    /// Must run BEFORE the focus update resolves. `indexPathForPreferredFocusedView`
+    /// can't do this itself: it's a pure query called mid-update, and returning
+    /// the host cell's path would hand focus to the nested collection, which
+    /// restarts at item 0.
+    func restoreShelfRowFocusIfNeeded() {
+        guard let path = collectionView.lastFocusedIndexPath,
+              dataSource.itemIdentifier(for: path) != nil,
+              let shelf = collectionView.cellForItem(at: path) as? ShelfRowCell,
+              let item = shelf.lastFocusedItemIndex else { return }
+        shelf.prepareFocusRestore(on: item)
+    }
+
     func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
         // Order matters: the armed/pending targets are one-shot intents for a
         // specific interaction and must win. `lastFocusedIndexPath` is the
@@ -997,6 +1012,20 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         guard dataSource.itemIdentifier(for: indexPath) != nil else { return nil }
         // Deep episodes live in an orthogonal rail and have no cell until that
         // stretch is scrolled in. Preferring an unrealized path is the crash.
-        return collectionView.cellForItem(at: indexPath) != nil ? indexPath : nil
+        guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
+
+        // A shelf-host row (Related) is ONE full-width cell hosting its own
+        // nested collection, so this index path identifies the ROW, not the
+        // tile that was focused. Preferring the host hands focus to the nested
+        // collection, which starts over at its first item — and because Related
+        // sits below the primary peek row, the resulting focus scroll reads as
+        // "focus jumped up to Trailers". Restore inside the row instead.
+        // (This method is a pure query — see the note above — so returning the
+        // host cell's path is not an option and neither is scrolling the row
+        // here. `restoreShelfRowFocusIfNeeded` does that work before the focus
+        // update, and by the time we're asked the row is already positioned;
+        // the nested cell's own preferredFocusEnvironments then lands the tile.)
+        if cell is ShelfRowCell { return nil }
+        return indexPath
     }
 }

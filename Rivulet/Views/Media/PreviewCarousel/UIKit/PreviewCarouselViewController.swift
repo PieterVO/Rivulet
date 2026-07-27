@@ -581,6 +581,11 @@ final class PreviewCarouselViewController: UIViewController {
         // the modal. becomeFirstResponder is kept as belt-and-suspenders but
         // focus (not first-responder) is what makes presses reach us on tvOS.
         becomeFirstResponder()
+        // If focus was inside a shelf-host row (Related) before a modal, put
+        // the row back on that tile BEFORE the focus update resolves — the
+        // host cell can't be preferred directly, so the row has to be
+        // positioned and armed first. No-op unless a shelf row had focus.
+        expandedDetail.restoreShelfRowFocusIfNeeded()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
         guard !hasRunEntryMorph else { return }

@@ -141,6 +141,12 @@ final class ExpandedDetailContainerView: UIView {
     /// engine move up one row instead of jumping to the pills.
     var focusIsOnEpisodes: Bool { belowFoldCollection.focusIsOnEpisodes }
 
+    /// Re-arm focus inside a shelf-host row (Related) after a modal. No-op
+    /// unless focus was in such a row when the modal went up.
+    func restoreShelfRowFocusIfNeeded() {
+        belowFoldCollection.restoreShelfRowFocusIfNeeded()
+    }
+
     /// True briefly after the episode thumb took focus. The Up handler uses this
     /// to keep focus on the thumb when it just landed there (coming up from the
     /// description or a lower row); only a deliberate Up from a resting thumb
