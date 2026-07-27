@@ -140,11 +140,11 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.0.4 (70)", [ // confirm build number at release
+        ("1.0.4 (71)", [
             "Updated AetherEngine to 5.23.11",
             "Playback starts and seeks more reliably: resuming part way in is faster, jumping far ahead no longer stalls, and titles with TrueHD or DTS-HD MA audio no longer sit on Loading forever",
             "Fixed picture and colour problems on several kinds of file, including Dolby Vision Profile 5 titles that played with a green or purple tint and widescreen content that looked squashed",
-            "Live TV is steadier: interlaced channels play with sound, HDR channels switch your TV into HDR, channels that rebuffered on opening now start cleanly, and a channel that loses its source recovers on its own",
+            "Live TV is steadier: interlaced channels play with sound, HDR channels switch your TV into HDR, channels that rebuffered on opening now start cleanly, and a channel that loses its source recovers on its own instead of giving up on the retry",
             "The Live TV player now has a channel list showing what is on right now, and the guide refreshes itself so you no longer arrive at an out of date listing",
             "Live TV sources from Dispatcharr now respect the channel profile you selected instead of listing every channel",
             "Subtitles keep working through a whole title, reappear when you seek onto a line already on screen, and external .sup files now load",
