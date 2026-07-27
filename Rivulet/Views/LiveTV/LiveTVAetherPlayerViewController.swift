@@ -41,7 +41,10 @@ import UIKit
 
 final class LiveTVAetherPlayerViewController: UIViewController {
 
-    private let channel: UnifiedChannel
+    /// The channel on screen. A `var` because the OSD channel list switches
+    /// channels IN PLACE (`switchChannel`) rather than by presenting a new
+    /// player — see that method for why.
+    private var channel: UnifiedChannel
 
     private var aetherPlayer: AetherPlayer?
 
@@ -200,7 +203,18 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         observeCaptionAppearance()
         setupChrome()
 
-        // Sticky per-channel subtitle delay (OSD stepper).
+        startPlayback()
+    }
+
+    /// Builds the player for `channel` and starts the join. Called on load and
+    /// again for every in-place channel switch, so it must assume NOTHING is
+    /// left over from a previous session — `teardownPlaybackSession()` is the
+    /// matching half.
+    private func startPlayback() {
+        loadingSpinner.startAnimating()
+
+        // Sticky per-channel subtitle delay (OSD stepper). Re-read per channel:
+        // the key is derived from the channel id.
         subtitleDelaySeconds = SubtitleAdjustments.delay(forKey: subtitleDelayKey)
         subtitleModel.delaySeconds = subtitleDelaySeconds
 
@@ -277,13 +291,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         guard isBeingDismissed || isMovingFromParent else { return }
-        streamLoadTask?.cancel()
-        streamLoadTask = nil
-        // Backing out before first frame still ends the transaction. An
-        // unfinished one would otherwise hang until the SDK times it out and
-        // land as a bogus outlier.
-        finishJoinTelemetry { $0.abandoned() }
-        stopLiveSessionKeepAlive()
+        teardownPlaybackSession()
         autoHideTimer?.invalidate()
         autoHideTimer = nil
         programInfoTimer?.invalidate()
@@ -303,6 +311,20 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             name: CaptionAppearance.changedNotification,
             object: nil
         )
+        onDismiss?()
+    }
+
+    /// Unwinds everything `startPlayback()` set up, leaving the VC's chrome
+    /// (rail, overlay host, observers) intact. Used both by dismissal and by
+    /// an in-place channel switch, so the two can never drift apart.
+    private func teardownPlaybackSession() {
+        streamLoadTask?.cancel()
+        streamLoadTask = nil
+        // Backing out before first frame still ends the transaction. An
+        // unfinished one would otherwise hang until the SDK times it out and
+        // land as a bogus outlier.
+        finishJoinTelemetry { $0.abandoned() }
+        stopLiveSessionKeepAlive()
         lastResortPlayer?.pause()
         lastResortPlayer = nil
         lastResortLayer?.removeFromSuperlayer()
@@ -316,11 +338,19 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         nativeLegibleItem = nil
         nativeLegibleGroup = nil
         resetNativeLegibleState()
+        // Drop the outgoing channel's cues: on a switch the overlay would
+        // otherwise keep painting them until the new session publishes.
+        subtitleModel.update(cues: [])
         aetherPlayer?.stop()
         aetherPlayer?.unbind(view: engineSurfaceView)
         aetherPlayer = nil
+        // Every subscription in this set is bound to the player built by
+        // startPlayback(); a stale one would feed the next session's UI from
+        // the dead player.
         cancellables.removeAll()
-        onDismiss?()
+        // Fallback ladder is per-session: a new channel starts at the top.
+        fallbackStage = 0
+        isFallbackInFlight = false
     }
 
     // MARK: - Chrome (glass rail + panels)
@@ -824,21 +854,26 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         presentPanel(content: list, width: 520)
     }
 
-    /// Switches channels by dismissing this player and presenting a fresh one
-    /// for the chosen channel — the same way the guide launches a channel.
-    /// Deliberately not an in-place reload: the whole session (tuned stream
-    /// URL, Plex keepalive, join telemetry, subtitle-delay key, engine
-    /// binding) is scoped to one channel, and `viewDidDisappear`'s teardown
-    /// already unwinds it correctly. Both transitions are unanimated so the
-    /// swap reads as a channel change rather than a trip back to the guide.
+    /// Switches channels IN PLACE: tear the current session down, adopt the
+    /// new channel, start again. The VC, its chrome, and the render surface
+    /// all survive.
+    ///
+    /// Deliberately not "dismiss self and present a fresh player": this VC is
+    /// presented from a SwiftUI host whose view leaves the window hierarchy
+    /// while the player covers it, so the re-present landed on a detached
+    /// controller ("whose view is not in the window hierarchy") — the new
+    /// player loaded its stream but never appeared, and the outgoing one kept
+    /// running because its teardown is driven by `viewDidDisappear`, which
+    /// never came. Reloading in place has no such dependency, and skips a
+    /// full modal transition per channel change.
     private func switchChannel(to newChannel: UnifiedChannel) {
         guard newChannel.id != channel.id else { return }
-        guard let presenter = presentingViewController else { return }
-        dismiss(animated: false) {
-            let vc = LiveTVAetherPlayerViewController(channel: newChannel)
-            vc.modalPresentationStyle = .fullScreen
-            presenter.present(vc, animated: false)
-        }
+        teardownPlaybackSession()
+        channel = newChannel
+        // Rail must not keep showing the old channel's programme while the
+        // new one resolves.
+        updateRailContent()
+        startPlayback()
     }
 
     private func presentInfoPanel() {

@@ -205,15 +205,22 @@ final class PlayerRailView: UIView {
         upNextButton.isHidden = !available
     }
 
-    /// Repurposes the Up Next slot as the Live TV channel list. Same button,
-    /// same position and `onUpNext` action — only the icon and label change,
-    /// because on a live channel there is no "next episode" but the identical
-    /// affordance (jump to another thing to watch, in a list) applies.
+    /// Repurposes the Up Next slot as the Live TV channel list: same button
+    /// and `onUpNext` action, new icon and label, moved to the FRONT of the
+    /// cluster (left of Subtitles) and made the rail's default landing.
+    /// Changing channels is the primary thing a viewer does on live TV, so it
+    /// gets the first position and the first highlight — where Subtitles sits
+    /// on VOD.
     func setChannelListAvailable(_ available: Bool) {
         upNextButton.isHidden = !available
         guard available else { return }
         upNextButton.setIcon(UIImage(systemName: "tv.inset.filled"))
         upNextButton.accessibilityLabel = "Channels"
+        // removeArrangedSubview alone leaves it in the view hierarchy, which
+        // would double-add it; insertArrangedSubview re-parents cleanly.
+        cluster.removeArrangedSubview(upNextButton)
+        cluster.insertArrangedSubview(upNextButton, at: 0)
+        defaultFocusButton = upNextButton
     }
 
     func setInsightsAvailable(_ available: Bool) {
@@ -259,9 +266,15 @@ final class PlayerRailView: UIView {
     /// left off rather than yanking focus back down to the scrubber.
     weak var scrubberFocusProxy: UIView?
 
+    /// Button the rail lands on when there's no remembered one and no
+    /// scrubber proxy. Defaults to Subtitles (VOD); Live TV points it at the
+    /// channel list via `setChannelListAvailable`.
+    private weak var defaultFocusButton: TransportControlButton?
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let last = lastFocusedButton, !last.isHidden { return [last] }
         if let proxy = scrubberFocusProxy, proxy.canBecomeFocused { return [proxy] }
+        if let preferred = defaultFocusButton, !preferred.isHidden { return [preferred] }
         return [subtitlesButton]
     }
 
