@@ -54,6 +54,12 @@ struct BelowFoldTrailer: Hashable, Sendable {
     let artworkURL: URL?
     let durationFormatted: String?
     var subtype: ExtraSubtype = .unknown
+    /// Plex's handle for actually PLAYING this extra, which is not always the
+    /// same thing as `id`. User-added (disc-ripped) extras carry a real library
+    /// ratingKey; Plex's own IVA-supplied extras carry only a `key` path like
+    /// `/services/iva/assets/...`. Feeding the latter to /library/metadata/{id}
+    /// 404s, which is what made trailer playback fail more often than not.
+    var playbackKey: String?
 }
 
 @MainActor
@@ -90,7 +96,8 @@ final class BelowFoldContentLoader {
                 title: extra.title,
                 artworkURL: extra.thumbnailURL ?? fallbackArt,
                 durationFormatted: extra.duration.map(Self.formatTrailerDuration),
-                subtype: extra.subtype
+                subtype: extra.subtype,
+                playbackKey: extra.playbackKey
             )
         }
         let allExtras = resolvedDetail?.extras ?? []

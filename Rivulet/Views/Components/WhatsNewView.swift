@@ -157,6 +157,7 @@ struct WhatsNewView: View {
             "You can now set how far a single Left or Right press skips during playback, from 5 to 30 seconds, in Playback settings",
             "Leaving the player now fades to black, so the moment your TV switches modes no longer flashes back to Home",
             "Pausing and leaving the screensaver on no longer restarts what you were watching",
+            "Trailers and extras now play reliably instead of showing Couldn't Load Video most of the time",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",

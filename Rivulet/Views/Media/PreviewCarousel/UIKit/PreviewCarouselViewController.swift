@@ -30,6 +30,7 @@
 //
 
 import Combine
+import Sentry
 import UIKit
 import os.log
 
@@ -336,9 +337,10 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.onPlayEpisode = { [weak self] episode in
             self?.playMediaItem(episode)
         }
-        // Trailer / extra Select → play that video (by Plex ratingKey, no resume).
+        // Trailer / extra Select → play that video (no resume). Routed on the
+        // extra's playbackKey, NOT its id: IVA extras have no library ratingKey.
         expandedDetail.onPlayTrailer = { [weak self] trailer in
-            self?.presentPlayer(ratingKey: trailer.id, resumeOffset: nil)
+            self?.presentExtraPlayer(trailer)
         }
         // Episode description Select → reusable detail page (blur-fade in Stage 3c).
         expandedDetail.onShowEpisodeDetails = { [weak self] episode in
@@ -1059,21 +1061,97 @@ final class PreviewCarouselViewController: UIViewController {
                 }
             }
             await MainActor.run {
-                guard let self else { return }
-                let viewModel = UniversalPlayerViewModel(
-                    metadata: playItem,
-                    serverURL: serverURL,
-                    authToken: token,
-                    startOffset: resumeOffset
-                )
-                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
-                // Present from the topmost VC so Play works both directly on the
-                // carousel AND from the episode detail page presented over it.
-                var top: UIViewController = self
-                while let presented = top.presentedViewController { top = presented }
-                top.present(playerVC, animated: true)
+                self?.present(playItem: playItem, serverURL: serverURL, token: token, resumeOffset: resumeOffset)
             }
         }
+    }
+
+    /// Play a trailer/extra. Extras come in two flavors and only one of them is
+    /// addressable as a library item:
+    ///
+    /// - **User-added** (disc rips): real library ratingKey. `/library/metadata/{key}`
+    ///   resolves, so these take the normal metadata-fetch path.
+    /// - **Plex IVA** (studio-supplied): NO library ratingKey. The only handle is
+    ///   `key`, an absolute part path (`/services/iva/assets/...`). Feeding that to
+    ///   `/library/metadata/{id}` builds a nonsense URL that 404s — the cause of
+    ///   issue #255, where trailers failed "more times than not" because IVA extras
+    ///   are the common case on most libraries.
+    ///
+    /// For the IVA case the part path is already directly playable, so we skip the
+    /// metadata round-trip entirely and hand ContentRouter a synthetic PlexMetadata
+    /// whose Part.key IS that path. buildDirectPlayURL then appends the token and
+    /// the aether route plays it.
+    private func presentExtraPlayer(_ trailer: BelowFoldTrailer) {
+        let key = trailer.playbackKey ?? trailer.id
+        let route = ExtraPlaybackKey.route(for: key)
+
+        // Which flavor we took. PlexNetworkManager.request() already captures any
+        // resulting HTTP/transport/decode failure, but its endpoint tag normalizes
+        // on NUMERIC path segments — an IVA path has none, so those failures never
+        // grouped under /library/metadata/{id} and this bug stayed invisible in
+        // Sentry despite firing constantly. This breadcrumb is the missing context
+        // on that capture, not a second report of it.
+        let crumb = Breadcrumb(level: .info, category: "playback.extra")
+        crumb.message = "Playing extra"
+        crumb.data = [
+            "route": route.telemetryName,
+            "subtype": trailer.subtype.displayName,
+            "key_shape": ExtraPlaybackKey.keyShape(key),
+            "had_playback_key": trailer.playbackKey != nil
+        ]
+        SentryBridge.addBreadcrumb(crumb)
+
+        switch route {
+        case .libraryMetadata(let ratingKey):
+            presentPlayer(ratingKey: ratingKey, resumeOffset: nil)
+
+        case .directPartPath(let path):
+            guard let serverURL = PlexAuthManager.shared.selectedServerURL,
+                  let token = PlexAuthManager.shared.selectedServerToken else {
+                previewCarouselLog.error("[PCV] extra play: no server/token")
+                return
+            }
+            previewCarouselLog.info("[PCV] extra play: direct part path (non-library extra)")
+            present(
+                playItem: Self.syntheticMetadata(forPartKey: path, trailer: trailer),
+                serverURL: serverURL,
+                token: token,
+                resumeOffset: nil
+            )
+        }
+    }
+
+    /// Minimal PlexMetadata standing in for a non-library extra, carrying the
+    /// part path ContentRouter needs to build a direct-play URL.
+    private static func syntheticMetadata(forPartKey key: String, trailer: BelowFoldTrailer) -> PlexMetadata {
+        let part = PlexPart(id: 0, key: key, duration: nil, file: nil, size: nil, container: nil, Stream: nil)
+        let media = PlexMedia(
+            id: 0, duration: nil, bitrate: nil, width: nil, height: nil, aspectRatio: nil,
+            audioChannels: nil, audioCodec: nil, videoCodec: nil, videoResolution: nil,
+            container: nil, videoFrameRate: nil, Part: [part]
+        )
+        return PlexMetadata(
+            ratingKey: trailer.id,
+            key: key,
+            type: "clip",
+            title: trailer.title,
+            Media: [media]
+        )
+    }
+
+    private func present(playItem: PlexMetadata, serverURL: String, token: String, resumeOffset: Double?) {
+        let viewModel = UniversalPlayerViewModel(
+            metadata: playItem,
+            serverURL: serverURL,
+            authToken: token,
+            startOffset: resumeOffset
+        )
+        let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
+        // Present from the topmost VC so Play works both directly on the
+        // carousel AND from the episode detail page presented over it.
+        var top: UIViewController = self
+        while let presented = top.presentedViewController { top = presented }
+        top.present(playerVC, animated: true)
     }
 
     // NOTE: Menu is owned SOLELY by the .menu UITapGestureRecognizer
