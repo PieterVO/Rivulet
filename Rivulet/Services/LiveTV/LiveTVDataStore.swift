@@ -11,6 +11,7 @@
 import Foundation
 import Combine
 import Sentry
+import UIKit
 
 @MainActor
 class LiveTVDataStore: ObservableObject {
@@ -70,6 +71,30 @@ class LiveTVDataStore: ObservableObject {
 
     /// Whether EPG has been preloaded in background
     @Published private(set) var isEPGPreloaded = false
+
+    // MARK: - Freshness tracking
+
+    /// When the channel list and the EPG grid were last successfully loaded.
+    /// nil until the first successful load. These drive `refreshIfStale`, the
+    /// single entry point every surface uses to decide whether the guide it is
+    /// about to show is still trustworthy.
+    private(set) var lastChannelsLoad: Date?
+    private(set) var lastEPGLoad: Date?
+
+    /// How old the guide may get before a visit re-fetches it. `nonisolated`
+    /// because it is a default argument below, and default arguments are
+    /// evaluated in the caller's context, so reaching a @MainActor constant
+    /// from there is an error under the Swift 6 language mode.
+    nonisolated static let defaultMaxAge: TimeInterval = 30 * 60
+
+    /// EPG window a staleness refresh fetches. Matches the guide's own
+    /// initial window (EPGTheme.initialGuideHours); the guide extends from
+    /// there as the user scrolls right.
+    static let refreshWindowHours = 6
+
+    /// Guards `refreshIfStale` so several surfaces appearing at once (the tab
+    /// switching in while a foreground notification lands) run ONE refresh.
+    private var staleRefreshTask: Task<Void, Never>?
 
     private let userDefaults = UserDefaults.standard
     private let favoritesKey = "liveTVFavoriteChannelIds"
@@ -168,6 +193,74 @@ class LiveTVDataStore: ObservableObject {
     private init() {
         loadFavorites()
         loadSavedSources()
+        observeAppLifecycle()
+    }
+
+    // MARK: - Freshness / refresh
+
+    /// True when the guide on screen can no longer be trusted, for either of
+    /// two independent reasons:
+    ///
+    /// 1. AGE — the grid was fetched more than `maxAge` ago, so "now playing"
+    ///    has almost certainly moved on.
+    /// 2. COVERAGE — the loaded EPG window no longer reaches the current time.
+    ///    This is the case behind "I came back and the guide wasn't loaded":
+    ///    the window is anchored at the load time, so after a long sleep every
+    ///    programme in it is in the past and the grid renders empty even though
+    ///    `epg` is non-empty. Age alone would miss a short window (the tab
+    ///    loads only 6 hours), so both are checked.
+    ///
+    /// A never-loaded (or emptied) store is always stale.
+    func isStale(maxAge: TimeInterval = defaultMaxAge, now: Date = Date()) -> Bool {
+        if channels.isEmpty || epg.isEmpty { return true }
+        guard let lastEPGLoad, let lastChannelsLoad else { return true }
+        if now.timeIntervalSince(lastEPGLoad) > maxAge { return true }
+        if now.timeIntervalSince(lastChannelsLoad) > maxAge { return true }
+        if let through = epgLoadedThrough, through <= now { return true }
+        return false
+    }
+
+    /// Re-fetch channels + EPG when `isStale`, otherwise do nothing. This is
+    /// the entry point for every "user arrived at a Live TV surface" and
+    /// "app came back to the foreground" moment; it is cheap to call often.
+    ///
+    /// Concurrent callers share one refresh: the tab's `.task` and the
+    /// foreground notification routinely fire together, and two overlapping
+    /// EPG fetches would cancel each other through `epgLoadTask` and leave
+    /// the grid empty — the very failure this is meant to fix.
+    func refreshIfStale(maxAge: TimeInterval = defaultMaxAge) async {
+        guard !providers.isEmpty else { return }
+        if let staleRefreshTask {
+            await staleRefreshTask.value
+            return
+        }
+        guard isStale(maxAge: maxAge) else { return }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            // Channels first: the EPG fetch is keyed by the channel list, so
+            // a source whose line-up changed needs the new list in hand.
+            await self.loadChannels()
+            guard !self.channels.isEmpty else { return }
+            await self.loadEPG(startDate: Date(), hours: Self.refreshWindowHours)
+            self.isEPGPreloaded = true
+        }
+        staleRefreshTask = task
+        await task.value
+        staleRefreshTask = nil
+    }
+
+    /// Refresh the guide when the app returns to the foreground. tvOS suspends
+    /// for long stretches, so this is the most common way the grid goes stale.
+    private func observeAppLifecycle() {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshIfStale()
+            }
+        }
     }
 
     // MARK: - Source Management
@@ -463,6 +556,11 @@ class LiveTVDataStore: ObservableObject {
                 if !merged.errors.isEmpty {
                     self.channelsError = merged.errors.joined(separator: "\n")
                 }
+                // Only a run that actually produced channels counts as fresh;
+                // an all-providers-failed run must stay stale so the next
+                // visit retries rather than sitting on an empty list for 30
+                // minutes.
+                if !merged.channels.isEmpty { self.lastChannelsLoad = Date() }
             }
 
             await self.updateSourceInfo()
@@ -600,6 +698,8 @@ class LiveTVDataStore: ObservableObject {
                 self.epgIssues = finalIssues
                 self.epgLoadedThrough = endDate
                 self.applyXMLTVChannelLogos(finalLogos)
+                // See the note in loadChannels: an empty grid is not "fresh".
+                if !finalEPG.isEmpty { self.lastEPGLoad = Date() }
             }
         }
 
