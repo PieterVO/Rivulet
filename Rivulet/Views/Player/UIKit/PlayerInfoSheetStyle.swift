@@ -66,26 +66,33 @@ enum PlayerInfoSheetStyle {
 
     // MARK: - Layout
 
-    /// Lays a flat row list into a two-column grid: a vertical stack of
-    /// horizontal pairs, each column taking half the width. An odd final row
-    /// pairs with an empty spacer so it stays a half-width left column.
-    /// Shared by both sheets so Info and Advanced read identically.
+    /// An empty vertical grid container, ready for `InfoFocusRowView`s. Shared
+    /// so both sheets space their rows identically.
     @MainActor
-    static func twoColumnGrid(_ rows: [UIView]) -> UIView {
+    static func gridContainer() -> UIStackView {
         let grid = UIStackView()
         grid.axis = .vertical
         grid.spacing = 8
         grid.alignment = .fill
+        return grid
+    }
+
+    /// Lays a flat row list into a two-column grid: a vertical stack of
+    /// `InfoFocusRowView`s, each holding two half-width columns. An odd final
+    /// row pairs with an empty spacer so it stays a half-width left column.
+    ///
+    /// Each pair row is a FOCUS TARGET (see `InfoFocusRowView`) — that
+    /// granularity is what lets swipes walk the sheet. Static sheets use this;
+    /// the live Advanced sheet builds its own persistent pool of the same rows
+    /// so focus survives a tick (see `CardStatsView`).
+    @MainActor
+    static func twoColumnGrid(_ rows: [UIView]) -> UIView {
+        let grid = gridContainer()
         var index = 0
         while index < rows.count {
-            let pair = UIStackView()
-            pair.axis = .horizontal
-            pair.spacing = 20
-            pair.distribution = .fillEqually
-            pair.alignment = .top
-            pair.addArrangedSubview(rows[index])
-            pair.addArrangedSubview(index + 1 < rows.count ? rows[index + 1] : UIView())
-            grid.addArrangedSubview(pair)
+            let row = InfoFocusRowView()
+            row.setPair(rows[index], index + 1 < rows.count ? rows[index + 1] : nil)
+            grid.addArrangedSubview(row)
             index += 2
         }
         return grid

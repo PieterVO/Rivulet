@@ -6,15 +6,15 @@
 //  Rivulet
 //
 //  Scroll surface shared by the player's info sheets (Info tab `CardInfoView`
-//  and Advanced tab `CardStatsView`), plus the invisible focusable section
-//  wrapper (`InfoSectionView`) that makes it work on a real Siri Remote.
+//  and Advanced tab `CardStatsView`), plus the invisible focusable row
+//  wrapper (`InfoFocusRowView`) that makes it work on a real Siri Remote.
 //
-//  The scroll view itself is NOT focusable and never pan-scrolls. Each
-//  section of a sheet (label + row grid) is wrapped in an `InfoSectionView`,
-//  an ordinary focus target with no visible focus treatment. Swipes and edge
-//  clicks are then the same thing — focus moves between sections — and this
-//  view reveals the newly focused section by driving `contentOffset` itself
-//  from `didUpdateFocus` (same self-driven pattern as `InsightsActorView`).
+//  The scroll view itself is NOT focusable and never pan-scrolls. Each two-up
+//  ROW of a sheet is wrapped in an `InfoFocusRowView`, an ordinary focus target
+//  with no visible focus treatment. Swipes and edge clicks are then the same
+//  thing — focus moves between rows — and this view reveals the newly focused
+//  row by driving `contentOffset` itself from `didUpdateFocus` (same
+//  self-driven pattern as `InsightsActorView`).
 //
 //  Why not a single focusable pan-scrolling sheet: a swipe is never an arrow
 //  UIPress, it is an indirect touch the focus engine turns into a focus move.
@@ -24,14 +24,14 @@
 //  focus targets give the engine real geometry, so the tab bar ↔ content
 //  crossings need no press handling at all.
 //
-//  Focus targets alone can't reach every pixel, though: a sheet has only a
-//  handful of sections, and one section taller than the panel has no focus
-//  target in its lower half, so nothing reveals it (issue #242). The sections
-//  therefore stay the primary mechanism and arrow presses are a SUPPLEMENT,
-//  handled here on the responder chain above the focused section: when the
-//  engine has somewhere to move focus it consumes the press first and this
+//  Focus targets alone can't reach every pixel, though: a row whose text wraps
+//  to more lines than the viewport has no focus target in its lower half, so
+//  nothing reveals it (issue #242, which bit far harder when the targets were
+//  whole sections). Rows stay the primary mechanism and arrow presses are a
+//  SUPPLEMENT, handled here on the responder chain above the focused row: when
+//  the engine has somewhere to move focus it consumes the press first and this
 //  never runs; only a press the engine declined (end of travel, or inside an
-//  over-tall section) reaches us, and then we step the offset ourselves.
+//  over-tall row) reaches us, and then we step the offset ourselves.
 //
 
 import UIKit
@@ -42,10 +42,24 @@ import os
 /// tab's content" report is confirmed and fixed from a captured log.
 private let infoTabLog = Logger(subsystem: "com.rivulet.app", category: "PlayerInfoTab")
 
-/// Invisible focus target wrapping one section of an info sheet (its label +
-/// row grid). Carries no focus visuals on purpose — these sheets are
-/// read-only, and the feedback is the panel ring plus the reveal scroll.
-final class InfoSectionView: UIView {
+/// Invisible focus target wrapping ONE two-up row of an info sheet. Carries no
+/// focus visuals on purpose — these sheets are read-only, and the feedback is
+/// the panel ring plus the reveal scroll.
+///
+/// Granularity is the whole point. This used to wrap a whole SECTION (label +
+/// its entire row grid), which gave a sheet only ~4 focus targets, each
+/// possibly taller than the panel. A `UIScrollView` clips, and **a clipped view
+/// cannot be focused**, so everything past the first tall section had no
+/// reachable target and Down did nothing. Arrow presses were patched around
+/// that (`pressesBegan` below), but swipes never emit arrow presses — they are
+/// indirect touches the focus engine turns into focus moves — so on a Siri
+/// Remote the sheet simply dead-ended. One target per ROW keeps the next target
+/// always within reach, which is what makes the Insights/trivia panel work.
+///
+/// The wrapper persists across rebuilds (see `CardStatsView`, which keeps a
+/// pool of these and only ever swaps the labels inside them), so focus survives
+/// a live tick that reshuffles which rows are present.
+final class InfoFocusRowView: UIView {
 
     private let stack = UIStackView()
 
@@ -54,11 +68,12 @@ final class InfoSectionView: UIView {
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        stack.axis = .vertical
-        // Matches the sheet stack's inter-section spacing so the label→grid
-        // gap reads identically to the pre-wrapper layout.
-        stack.spacing = 12
-        stack.alignment = .fill
+        // Two equal columns, top-aligned — the geometry the sheets' two-column
+        // grid used to build inline, now owned here so every row is identical.
+        stack.axis = .horizontal
+        stack.spacing = 20
+        stack.distribution = .fillEqually
+        stack.alignment = .top
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -72,15 +87,16 @@ final class InfoSectionView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Replaces the section's content. The wrapper itself persists across
-    /// rebuilds (see `CardStatsView`), so focus on it survives a live tick
-    /// that reshuffles rows.
-    func setContent(_ views: [UIView]) {
+    /// Puts `left` (and `right`, or an empty spacer so a lone final row stays a
+    /// half-width left column) into this row. Re-parents the passed views; the
+    /// row itself — the focus target — is never torn down.
+    func setPair(_ left: UIView, _ right: UIView?) {
         stack.arrangedSubviews.forEach {
             stack.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
-        views.forEach { stack.addArrangedSubview($0) }
+        stack.addArrangedSubview(left)
+        stack.addArrangedSubview(right ?? UIView())
     }
 }
 
@@ -132,7 +148,7 @@ final class InfoScrollView: UIScrollView {
         }
         guard isInside, let next = context.nextFocusedView else { return }
         lastFocusMoveTime = CACurrentMediaTime()
-        reveal(sectionContaining: next)
+        reveal(rowContaining: next)
     }
 
     // MARK: - Declined-press scrolling
@@ -181,12 +197,12 @@ final class InfoScrollView: UIScrollView {
         return true
     }
 
-    private func reveal(sectionContaining view: UIView) {
+    private func reveal(rowContaining view: UIView) {
         var candidate: UIView? = view
-        while let current = candidate, !(current is InfoSectionView), current !== self {
+        while let current = candidate, !(current is InfoFocusRowView), current !== self {
             candidate = current.superview
         }
-        guard let section = candidate as? InfoSectionView else { return }
+        guard let section = candidate as? InfoFocusRowView else { return }
         let frame = section.convert(section.bounds, to: self)
         let target = Self.revealOffsetY(
             current: contentOffset.y,

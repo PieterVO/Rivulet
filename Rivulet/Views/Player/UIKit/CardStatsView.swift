@@ -25,19 +25,26 @@ final class CardStatsView: UIView {
     private let scrollView = InfoScrollView()
     private let stack = UIStackView()
 
-    /// One persistent focusable shell per `SectionSpec`, in declaration
-    /// order. Rebuilds swap each shell's CONTENT and toggle its visibility,
-    /// never the shells themselves — a shell is the focus target, and tearing
-    /// it down mid-tick would yank focus out of the sheet.
-    private var sectionViews: [InfoSectionView] = []
+    /// Per-section UI, built ONCE in declaration order. The `pairRows` are the
+    /// focus targets and are never torn down — a redistribute only re-parents
+    /// the persistent labels into them and toggles `isHidden`. Tearing a focus
+    /// target down mid-tick would yank focus out of the sheet, which is exactly
+    /// why the pool exists rather than rebuilding rows per tick.
+    private struct SectionUI {
+        let container: UIStackView          // non-focusable: label + grid
+        let pairRows: [InfoFocusRowView]    // persistent focus targets
+    }
+    private var sectionUIs: [SectionUI] = []
+
+    /// One persistent label per declared row, keyed by row title. A same-shape
+    /// tick just rewrites `attributedText` here and never touches the view
+    /// hierarchy at all.
+    private var rowLabels: [String: UILabel] = [:]
     private lazy var gatheringLabel = PlayerInfoSheetStyle.bodyLabel("Gathering stats…", secondary: true)
 
     private var liveTickTimer: Timer?
     private var isActiveTab = false
 
-    /// Value labels keyed by row title, so a same-shape tick updates text in
-    /// place instead of rebuilding (keeps focus/scroll undisturbed).
-    private var valueLabels: [String: UILabel] = [:]
     /// The set of row titles currently rendered. When the next tick's present
     /// set differs (a field appeared/disappeared, or the empty→populated
     /// transition), the section contents are rebuilt; otherwise values update
@@ -121,11 +128,33 @@ final class CardStatsView: UIView {
 
         gatheringLabel.isHidden = true
         stack.addArrangedSubview(gatheringLabel)
-        for _ in Self.sections {
-            let shell = InfoSectionView()
-            shell.isHidden = true
-            stack.addArrangedSubview(shell)
-            sectionViews.append(shell)
+        for spec in Self.sections {
+            // Plain, NON-focusable container: the focus targets are the pair
+            // rows below, so a focusable wrapper here would nest two targets.
+            let container = UIStackView()
+            container.axis = .vertical
+            container.spacing = 12
+            container.alignment = .fill
+            container.isHidden = true
+            container.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(spec.name))
+
+            // One pair row per two DECLARED rows, so the pool is always big
+            // enough for however many turn out to be present.
+            let grid = PlayerInfoSheetStyle.gridContainer()
+            var pairRows: [InfoFocusRowView] = []
+            for _ in stride(from: 0, to: spec.rows.count, by: 2) {
+                let row = InfoFocusRowView()
+                row.isHidden = true
+                grid.addArrangedSubview(row)
+                pairRows.append(row)
+            }
+            container.addArrangedSubview(grid)
+            stack.addArrangedSubview(container)
+            sectionUIs.append(SectionUI(container: container, pairRows: pairRows))
+
+            for rowSpec in spec.rows {
+                rowLabels[rowSpec.title] = PlayerInfoSheetStyle.infoRow(rowSpec.title, "")
+            }
         }
 
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
@@ -214,10 +243,12 @@ final class CardStatsView: UIView {
         let titles = presentTitles(for: stats)
         let gathering = stats.isEmpty
         if gathering != renderedGathering || Set(titles) != renderedSignature {
-            rebuild(with: stats)
+            redistribute(with: stats)
         } else {
-            for (title, label) in valueLabels {
-                if let value = Self.value(for: title, stats: stats) {
+            // Same shape as last tick: rewrite text only. No re-parenting, so
+            // focus and scroll position are untouched.
+            for title in renderedSignature {
+                if let value = Self.value(for: title, stats: stats), let label = rowLabels[title] {
                     label.attributedText = PlayerInfoSheetStyle.infoRowText(title, value)
                 }
             }
@@ -234,49 +265,45 @@ final class CardStatsView: UIView {
     }
 
     private func rebuild() {
-        rebuild(with: snapshot())
+        redistribute(with: snapshot())
     }
 
-    private func rebuild(with stats: AetherAdvancedStats) {
-        valueLabels.removeAll()
-
+    /// Re-pairs the persistent labels into the persistent pair rows for the
+    /// current present-set, and toggles visibility. Runs only when the set of
+    /// present rows CHANGES (a telemetry field appeared or disappeared), not on
+    /// every tick. Nothing is created or destroyed here, so focus survives it.
+    private func redistribute(with stats: AetherAdvancedStats) {
         if stats.isEmpty {
             gatheringLabel.isHidden = false
-            sectionViews.forEach {
-                $0.isHidden = true
-                $0.setContent([])
-            }
+            sectionUIs.forEach { $0.container.isHidden = true }
             renderedGathering = true
             renderedSignature = []
             return
         }
 
         gatheringLabel.isHidden = true
+        var present: Set<String> = []
         for (index, section) in Self.sections.enumerated() {
-            let shell = sectionViews[index]
-            let visibleRows = section.rows.compactMap { row -> (String, String)? in
-                guard let value = row.value(stats) else { return nil }
-                return (row.title, value)
+            let ui = sectionUIs[index]
+            let visible: [UILabel] = section.rows.compactMap { row in
+                guard let value = row.value(stats), let label = rowLabels[row.title] else { return nil }
+                label.attributedText = PlayerInfoSheetStyle.infoRowText(row.title, value)
+                present.insert(row.title)
+                return label
             }
-            guard !visibleRows.isEmpty else {
-                shell.isHidden = true
-                shell.setContent([])
-                continue
+            ui.container.isHidden = visible.isEmpty
+            for (rowIndex, pairRow) in ui.pairRows.enumerated() {
+                let left = rowIndex * 2
+                guard left < visible.count else {
+                    pairRow.isHidden = true
+                    continue
+                }
+                pairRow.setPair(visible[left], left + 1 < visible.count ? visible[left + 1] : nil)
+                pairRow.isHidden = false
             }
-            var rowViews: [UIView] = []
-            for (title, value) in visibleRows {
-                let row = PlayerInfoSheetStyle.infoRow(title, value)
-                rowViews.append(row)
-                valueLabels[title] = row
-            }
-            shell.setContent([
-                PlayerInfoSheetStyle.sectionLabel(section.name),
-                PlayerInfoSheetStyle.twoColumnGrid(rowViews),
-            ])
-            shell.isHidden = false
         }
 
         renderedGathering = false
-        renderedSignature = Set(valueLabels.keys)
+        renderedSignature = present
     }
 }

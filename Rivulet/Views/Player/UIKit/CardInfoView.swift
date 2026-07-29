@@ -201,16 +201,20 @@ final class CardInfoView: UIView {
         }
     }
 
-    /// Adds a section (label + rows in two equal columns) wrapped in an
-    /// `InfoSectionView` — the invisible focus target that swipes and edge
-    /// clicks hop between, driving the sheet's reveal scroll.
+    /// Adds a section: a label plus rows in two equal columns, where each
+    /// two-up row is an `InfoFocusRowView` — the invisible focus target that
+    /// swipes and edge clicks hop between, driving the sheet's reveal scroll.
     private func addSection(_ title: String, rows: [UIView]) {
         guard !rows.isEmpty else { return }
-        let section = InfoSectionView()
-        section.setContent([
-            PlayerInfoSheetStyle.sectionLabel(title),
-            PlayerInfoSheetStyle.twoColumnGrid(rows),
-        ])
+        // Plain (NON-focusable) container: the focus targets are the individual
+        // pair rows inside the grid, so a focusable section wrapper here would
+        // nest two focus targets and let the engine settle on the outer one.
+        let section = UIStackView()
+        section.axis = .vertical
+        section.spacing = 12
+        section.alignment = .fill
+        section.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(title))
+        section.addArrangedSubview(PlayerInfoSheetStyle.twoColumnGrid(rows))
         stack.addArrangedSubview(section)
     }
 }

@@ -15,8 +15,8 @@
 //  no tab bar, exactly as the popup did before. The Advanced sheet is built
 //  lazily on the first tab-over and ticks only while it is the visible tab.
 //
-//  Focus: the sheets expose one invisible focus target per section
-//  (`InfoSectionView`), so the tab bar ↔ content crossings are ordinary
+//  Focus: the sheets expose one invisible focus target per two-up ROW
+//  (`InfoFocusRowView`), so the tab bar ↔ content crossings are ordinary
 //  focus-engine moves that work identically for swipes and edge clicks — no
 //  press handling here. (The previous single-focusable-sheet design drove
 //  both crossings from arrow presses, which a Siri Remote swipe never
