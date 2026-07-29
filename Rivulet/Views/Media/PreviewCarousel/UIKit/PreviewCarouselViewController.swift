@@ -585,9 +585,6 @@ final class PreviewCarouselViewController: UIViewController {
         // the row back on that tile BEFORE the focus update resolves — the
         // host cell can't be preferred directly, so the row has to be
         // positioned and armed first. No-op unless a shelf row had focus.
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        NSLog("[FOCUSDBG] carousel.viewDidAppear phase=\(String(describing: state.phase)) "
-            + "belowFoldEnv=\(expandedDetail.belowFoldFocusEnvironment.map { String(describing: type(of: $0)) } ?? "nil")")
         expandedDetail.restoreShelfRowFocusIfNeeded()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
@@ -995,9 +992,6 @@ final class PreviewCarouselViewController: UIViewController {
     /// Present an item's FULL expanded detail standalone (no carousel) — reuses
     /// this same VC in `standaloneDetail` mode. Used for Related drill-ins.
     private func presentStandaloneDetail(_ item: MediaItem) {
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        NSLog("[FOCUSDBG] presentStandaloneDetail from phase=\(String(describing: state.phase)) "
-            + "standalone=\(standaloneDetail)")
         // The standalone detail is presented .overFullScreen, so THIS controller
         // never disappears and therefore never re-appears — viewDidAppear does
         // not fire on the way back. Restore focus from the dismiss callback,

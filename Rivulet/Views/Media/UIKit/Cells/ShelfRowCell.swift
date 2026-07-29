@@ -424,10 +424,6 @@ final class ShelfRowCell: UICollectionViewCell {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        NSLog("[FOCUSDBG] shelf.preferredFocusEnvironments pending=\(String(describing: pendingFocusIndex)) "
-            + "cellRealized=\(pendingFocusIndex.flatMap { rowCollectionView.cellForItem(at: IndexPath(item: $0, section: 0)) } != nil) "
-            + "lastFocusedItemIndex=\(String(describing: lastFocusedItemIndex))")
         if let index = pendingFocusIndex,
            let cell = rowCollectionView.cellForItem(at: IndexPath(item: index, section: 0)) {
             pendingFocusIndex = nil
@@ -595,8 +591,6 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView,
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        NSLog("[FOCUSDBG] shelf.didUpdateFocus next=\(String(describing: context.nextFocusedIndexPath?.item))")
         guard let next = context.nextFocusedIndexPath else { return }
         lastFocusedItemIndex = next.item
         let target = snappedOffset(toShow: next.item)

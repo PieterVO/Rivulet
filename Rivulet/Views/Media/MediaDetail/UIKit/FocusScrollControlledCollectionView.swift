@@ -117,10 +117,6 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         // Recorded here because this is the one place the index path is already
         // resolved for EVERY row shape, including the shelf-host walk-up above
         // that plain `indexPath(for:)` returns nil for.
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        NSLog("[FOCUSDBG] belowFold.didUpdateFocus resolved=\(String(describing: cellIndexPath)) "
-            + "cellType=\(String(describing: type(of: cell))) "
-            + "nextView=\(String(describing: type(of: nextView)))")
         if let cellIndexPath { lastFocusedIndexPath = cellIndexPath }
         let targetY = isTop ? (frame.minY - topBand) : (frame.midY - bounds.height / 2)
         let clamped = max(minY, min(targetY, maxY))

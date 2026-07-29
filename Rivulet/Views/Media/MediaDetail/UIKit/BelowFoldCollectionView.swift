@@ -177,8 +177,6 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// directly instead, and its own `preferredFocusEnvironments` (armed by
     /// `restoreShelfRowFocusIfNeeded`) lands the tile that had focus.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        NSLog("[FOCUSDBG] belowFold.preferredFocusEnvironments armed=\(armedShelfRestoreCell != nil)")
         if let shelf = armedShelfRestoreCell { return [shelf] }
         return [collectionView]
     }
@@ -983,14 +981,6 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// the host cell's path would hand focus to the nested collection, which
     /// restarts at item 0.
     func restoreShelfRowFocusIfNeeded() {
-        // TEMP #255-focus instrumentation — remove once diagnosed.
-        let dbgPath = collectionView.lastFocusedIndexPath
-        let dbgCell = dbgPath.flatMap { collectionView.cellForItem(at: $0) }
-        NSLog("[FOCUSDBG] restore: lastFocusedIndexPath=\(String(describing: dbgPath)) "
-            + "identifier=\(String(describing: dbgPath.flatMap { dataSource.itemIdentifier(for: $0) })) "
-            + "cell=\(dbgCell.map { String(describing: type(of: $0)) } ?? "nil") "
-            + "shelfItem=\(String(describing: (dbgCell as? ShelfRowCell)?.lastFocusedItemIndex))")
-
         // Find the shelf host by identity, not by `lastFocusedIndexPath`: a shelf
         // row is ONE cell, so its index path is the same value for every tile in
         // it and can never say which tile had focus. The tile index lives on the
