@@ -140,24 +140,18 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.4 (72)", [ // confirm build number at release
+            "Updated AetherEngine to 6.0.2",
+        ]),
         ("1.0.4 (71)", [
             "Updated AetherEngine to 5.23.11",
-            "Playback starts and seeks more reliably: resuming part way in is faster, jumping far ahead no longer stalls, and titles with TrueHD or DTS-HD MA audio no longer sit on Loading forever",
-            "Fixed picture and colour problems on several kinds of file, including Dolby Vision Profile 5 titles that played with a green or purple tint and widescreen content that looked squashed",
-            "Live TV is steadier: interlaced channels play with sound, HDR channels switch your TV into HDR, channels that rebuffered on opening now start cleanly, and a channel that loses its source recovers on its own instead of giving up on the retry",
-            "The Live TV player now has a channel list showing what is on right now, and the guide refreshes itself so you no longer arrive at an out of date listing",
-            "Live TV sources from Dispatcharr now respect the channel profile you selected instead of listing every channel",
-            "Subtitles keep working through a whole title, reappear when you seek onto a line already on screen, and external .sup files now load",
-            "Skip Credits now finishes the title and moves on to Up Next instead of stopping on the last frame",
-            "The Play button on the remote starts or resumes whatever is focused on Home, in a library, in Discover, and in search",
-            "Pressing Menu takes you back to the top of the page first, so you no longer lose your place jumping straight out to the sidebar",
-            "Reordering your libraries in Settings now works by swiping, not only by clicking, so it works on the original Siri Remote",
-            "Hiding a library now hides it everywhere, including Continue Watching and Featured Content, so a second copy of the same library no longer shows everything twice",
-            "Show pages update as soon as you finish an episode, and a Recently Added row no longer disappears when its library fails to load once",
-            "You can now set how far a single Left or Right press skips during playback, from 5 to 30 seconds, in Playback settings",
-            "Leaving the player now fades to black, so the moment your TV switches modes no longer flashes back to Home",
-            "Pausing and leaving the screensaver on no longer restarts what you were watching",
-            "Trailers and extras now play reliably instead of showing Couldn't Load Video most of the time",
+            "Playback starts and seeks more reliably",
+            "Fixed picture and colour problems on several kinds of file",
+            "Live TV is steadier and recovers on its own when a channel drops",
+            "Subtitles are more reliable, and external .sup files now load",
+            "The Play button on the remote starts or resumes whatever is focused",
+            "You can now set the skip length for a single Left or Right press in Playback settings",
+            "Trailers and extras now play reliably",
         ]),
         ("1.0.4 (69)", [
             "New Content Filtering in Playback settings can mute strong language and skip scenes during playback, with per category controls and a quick toggle in the player",
