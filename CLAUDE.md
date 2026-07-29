@@ -204,7 +204,10 @@ Entries are keyed by build-qualified version (`"1.0.3 (65)"`), newest first.
 Settings → About → Changelog renders the full history; the fresh-launch
 "What's New" shows only the current build's entry. Write bullets as simple,
 user-facing sentences (what users get, not internal details); no em dashes.
-Every AetherEngine bump gets a changelog line.
+Every AetherEngine bump gets a changelog line, and it states **only the
+version** (`"Updated AetherEngine to X.Y.Z"`). Do not list what the engine
+release fixes: engine internals are not the user's mental model, and a long
+engine-fix paragraph crowds out the app's own notes.
 
 ### Adding Settings
 
