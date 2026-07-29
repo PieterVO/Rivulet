@@ -35,6 +35,12 @@
 //
 
 import UIKit
+import os
+
+/// TEMP diagnostic instrumentation — see the matching note in
+/// `PlayerInfoTabsView.swift`. Remove once the "can't move Down into the
+/// tab's content" report is confirmed and fixed from a captured log.
+private let infoTabLog = Logger(subsystem: "com.rivulet.app", category: "PlayerInfoTab")
 
 /// Invisible focus target wrapping one section of an info sheet (its label +
 /// row grid). Carries no focus visuals on purpose — these sheets are
@@ -51,7 +57,7 @@ final class InfoSectionView: UIView {
         stack.axis = .vertical
         // Matches the sheet stack's inter-section spacing so the label→grid
         // gap reads identically to the pre-wrapper layout.
-        stack.spacing = 16
+        stack.spacing = 12
         stack.alignment = .fill
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -120,6 +126,7 @@ final class InfoScrollView: UIScrollView {
         let wasInside = context.previouslyFocusedView.map { $0.isDescendant(of: self) } ?? false
         let isInside = context.nextFocusedView.map { $0.isDescendant(of: self) } ?? false
         if isInside != wasInside {
+            infoTabLog.notice("InfoScrollView focus \(isInside ? "ENTERED" : "LEFT"): next=\(String(describing: context.nextFocusedView))")
             if isInside { flashScrollIndicators() }
             onFocusChange?(isInside)
         }

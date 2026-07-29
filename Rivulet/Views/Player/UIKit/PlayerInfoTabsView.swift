@@ -27,6 +27,14 @@
 //
 
 import UIKit
+import os
+
+/// TEMP diagnostic instrumentation for the intermittent "Info tab doesn't
+/// switch" / "can't move Down into the tab's content" reports — no confirmed
+/// repro yet (simulator can't reliably reproduce tvOS focus behavior), so
+/// this traces the actual on-device sequence for the next session. Remove
+/// once the real cause is confirmed from a captured log.
+private let infoTabLog = Logger(subsystem: "com.rivulet.app", category: "PlayerInfoTab")
 
 final class PlayerInfoTabsView: UIView {
 
@@ -112,7 +120,11 @@ final class PlayerInfoTabsView: UIView {
     // MARK: - Tab switching
 
     private func handleTabSelected(_ tab: InfoTabBarView.Tab) {
-        guard tab != currentTab else { return }
+        infoTabLog.notice("tab select requested: \(String(describing: tab)) (current: \(String(describing: self.currentTab)))")
+        guard tab != currentTab else {
+            infoTabLog.notice("tab select no-op: already on \(String(describing: tab))")
+            return
+        }
         currentTab = tab
         switch tab {
         case .info:
@@ -160,8 +172,15 @@ final class PlayerInfoTabsView: UIView {
         // The crossings themselves need no driving: the sections are ordinary
         // focus targets, so Down from a pill and Up from the top section are
         // native engine moves for both swipes and clicks.
-        if let focused = focusedViewInContent { return [focused] }
-        if let tabBar { return [tabBar] }
+        if let focused = focusedViewInContent {
+            infoTabLog.debug("preferredFocusEnvironments: re-affirming focused view in content")
+            return [focused]
+        }
+        if let tabBar {
+            infoTabLog.debug("preferredFocusEnvironments: landing on tab bar")
+            return [tabBar]
+        }
+        infoTabLog.debug("preferredFocusEnvironments: landing on content (no tab bar)")
         return [currentContentView]
     }
 

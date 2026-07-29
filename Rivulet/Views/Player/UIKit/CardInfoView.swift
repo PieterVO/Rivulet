@@ -53,7 +53,7 @@ final class CardInfoView: UIView {
 
     private func setupViews() {
         stack.axis = .vertical
-        stack.spacing = 16
+        stack.spacing = 12
         // .fill (not .leading) so the two-column section grids stretch to the
         // full sheet width and their columns split it evenly.
         stack.alignment = .fill

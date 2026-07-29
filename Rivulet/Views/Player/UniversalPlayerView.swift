@@ -26,8 +26,8 @@ final class RemoteInputHandler: ObservableObject {
         case keyboardRight
     }
 
-    private var holdTimers: [DirectionalInputKey: Timer] = [:]
-    private var holdDirections: [DirectionalInputKey: Bool] = [:]
+    /// One tap-vs-hold detector per key — see `DirectionalPressDetector`.
+    private var directionalDetectors: [DirectionalInputKey: DirectionalPressDetector] = [:]
     private var clickedDirection: Bool?
     private var currentDpadDirection: Bool?
     private var isButtonDown = false
@@ -142,9 +142,7 @@ final class RemoteInputHandler: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
             keyboardDisconnectObserver = nil
         }
-        holdTimers.values.forEach { $0.invalidate() }
-        holdTimers.removeAll()
-        holdDirections.removeAll()
+        directionalDetectors.values.forEach { $0.cancel() }
     }
 
     private func setupController(_ controller: GCController) {
@@ -449,6 +447,16 @@ final class RemoteInputHandler: ObservableObject {
         clickedDirection = nil
     }
 
+    /// Lazily creates the one `DirectionalPressDetector` slot owns per key —
+    /// each key tracks an independent press (e.g. an extended gamepad's Left
+    /// AND a keyboard's Right could both be held at once).
+    private func detector(for key: DirectionalInputKey) -> DirectionalPressDetector {
+        if let existing = directionalDetectors[key] { return existing }
+        let detector = DirectionalPressDetector()
+        directionalDetectors[key] = detector
+        return detector
+    }
+
     private func beginDirectionalInput(key: DirectionalInputKey, forward: Bool, source: PlaybackInputSource) {
         if isErrorCheck?() == true {
             return
@@ -463,14 +471,10 @@ final class RemoteInputHandler: ObservableObject {
             return
         }
 
-        holdDirections[key] = forward
-        holdTimers[key]?.invalidate()
-        holdTimers[key] = Timer.scheduledTimer(withTimeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.holdDirections[key] != nil else { return }
-                self.emit(.scrubNudge(forward: forward), source: source)
-            }
-        }
+        let slot = detector(for: key)
+        slot.onHold = { [weak self] forward in self?.emit(.scrubNudge(forward: forward), source: source) }
+        slot.onTap = { [weak self] forward in self?.emit(.stepSeek(forward: forward), source: source) }
+        slot.begin(forward: forward)
     }
 
     private func endDirectionalInput(
@@ -478,29 +482,16 @@ final class RemoteInputHandler: ObservableObject {
         source: PlaybackInputSource,
         tapAction: PlaybackInputAction? = nil
     ) {
-        defer {
-            holdTimers[key]?.invalidate()
-            holdTimers[key] = nil
-            holdDirections[key] = nil
-        }
-
-        guard let timer = holdTimers[key], timer.isValid else { return }
-        timer.invalidate()
-
+        guard let slot = directionalDetectors[key] else { return }
         if let tapAction {
-            emit(tapAction, source: source)
-            return
-        }
-
-        if let forward = holdDirections[key] {
-            emit(.stepSeek(forward: forward), source: source)
+            slot.end(tapOverride: { [weak self] in self?.emit(tapAction, source: source) })
+        } else {
+            slot.end()
         }
     }
 
     func reset() {
-        holdTimers.values.forEach { $0.invalidate() }
-        holdTimers.removeAll()
-        holdDirections.removeAll()
+        directionalDetectors.values.forEach { $0.cancel() }
         clickedDirection = nil
         currentDpadDirection = nil
         isButtonDown = false

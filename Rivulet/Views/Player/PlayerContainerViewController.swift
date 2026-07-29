@@ -789,6 +789,17 @@ class PlayerContainerViewController: UIViewController {
     /// Sets up gesture recognizers for left/right arrow key presses.
     /// IR remotes (learned remotes, One For All, Harmony, etc.) send UIPress events
     /// rather than GameController events. This ensures FF/RW works on all remote types.
+    ///
+    /// These serve the CONTENT-focused case only. `applyChromeVisibility`
+    /// disables all four the instant controls-focus mode takes over, so they
+    /// never race `ScrubberFocusProxyView`'s own press handling for the same
+    /// press (a live recognizer on an ancestor of the focused view can cancel
+    /// a press before that view sees it, which dropped seeks intermittently).
+    ///
+    /// Deliberately NOT built on `DirectionalPressDetector`: a
+    /// `UILongPressGestureRecognizer` + `require(toFail:)` already gets the
+    /// same tap-vs-hold split from native UIKit gesture state, so there is no
+    /// hand-rolled timer here to consolidate.
     private func setupDirectionalGestures() {
         // Tap gestures for short press (skip 10 seconds)
         let leftTap = UITapGestureRecognizer(target: self, action: #selector(handleDPadLeftTap))
@@ -1419,6 +1430,25 @@ class PlayerContainerViewController: UIViewController {
         scrubberProxy?.isFocusEnabled =
             (railVisible && !isLoading) || (proxyHasFocus && !isLoading && !ambient)
 
+        // The `setupDirectionalGestures()` recognizers (IR-remote-style
+        // Left/Right tap/hold) live on `view` for the content-focused case —
+        // nothing else claims arrow presses once chrome is fully hidden. Once
+        // controls-focus mode is active, ScrubberFocusProxyView's own
+        // pressesBegan/Ended is the sole handler for a focused proxy (native
+        // focus movement handles every other rail button), and their own
+        // `handleDPadLeft/RightTap` guards already no-op in that state — but a
+        // live UIGestureRecognizer on an ancestor of the focused view can
+        // intercept/cancel a press before it ever reaches that view's own
+        // pressesBegan (confirmed tvOS behavior, not just the no-op guard), so
+        // leaving them enabled races the proxy for the same press and
+        // intermittently drops the skip instead of firing it twice. Disabling
+        // them outright while controls-focus is active removes the race
+        // instead of relying on the no-op to paper over it.
+        let irArrowGesturesEnabled = !vm.controlsFocusActive
+        [dPadLeftTapGesture, dPadRightTapGesture, dPadLeftLongPressGesture, dPadRightLongPressGesture].forEach {
+            $0?.isEnabled = irArrowGesturesEnabled
+        }
+
         // The skip pill lives independently of the rail: it stays up whenever a
         // marker is active (chrome shown OR hidden), so the user can jump forward
         // without first surfacing the controls. Hidden only while loading, during
@@ -1554,12 +1584,19 @@ private final class ScrubberFocusProxyView: UIView {
 
     override var canBecomeFocused: Bool { isFocusEnabled }
 
-    // Tap-vs-hold detection for the directional press, mirroring
-    // RemoteInputHandler.beginDirectionalInput so both focus regimes behave
-    // identically.
-    private var holdTimer: Timer?
-    private var holdForward: Bool?
-    private var holdFired = false
+    // Tap-vs-hold detection for the directional press — the same
+    // `DirectionalPressDetector` RemoteInputHandler uses, so both focus
+    // regimes behave identically by construction rather than by two hand
+    // -rolled timers staying in sync.
+    private let directionalDetector = DirectionalPressDetector()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        directionalDetector.onHold = { [weak self] forward in self?.onShuttle?(forward) }
+        directionalDetector.onTap = { [weak self] forward in self?.onSkip?(forward) }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
@@ -1612,37 +1649,20 @@ private final class ScrubberFocusProxyView: UIView {
     }
 
     private func beginArrow(forward: Bool) {
-        // Already shuttling: bump/redirect immediately, no tap-vs-hold wait
-        // (matches RemoteInputHandler.beginDirectionalInput).
+        // Already shuttling: bump/redirect immediately, no tap-vs-hold wait.
         if isScrubbingProvider?() == true {
             onShuttle?(forward)
             return
         }
-        holdForward = forward
-        holdFired = false
-        holdTimer?.invalidate()
-        holdTimer = Timer.scheduledTimer(withTimeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
-            guard let self, let forward = self.holdForward else { return }
-            self.holdFired = true
-            self.onShuttle?(forward)
-        }
+        directionalDetector.begin(forward: forward)
     }
 
     private func endArrow() {
-        holdTimer?.invalidate()
-        holdTimer = nil
-        defer { holdForward = nil; holdFired = false }
-        // Released before the hold fired the shuttle → it was a tap → skip.
-        if !holdFired, let forward = holdForward {
-            onSkip?(forward)
-        }
+        directionalDetector.end()
     }
 
     private func cancelArrow() {
-        holdTimer?.invalidate()
-        holdTimer = nil
-        holdForward = nil
-        holdFired = false
+        directionalDetector.cancel()
     }
 }
 

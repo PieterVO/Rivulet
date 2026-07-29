@@ -25,7 +25,7 @@ enum PlayerInfoSheetStyle {
     static func sectionLabel(_ text: String) -> UILabel {
         let label = UILabel()
         label.text = text
-        label.font = .systemFont(ofSize: 14, weight: .bold)
+        label.font = .systemFont(ofSize: 15, weight: .bold)
         label.textColor = UIColor.white.withAlphaComponent(0.5)
         return label
     }
@@ -34,7 +34,7 @@ enum PlayerInfoSheetStyle {
     static func bodyLabel(_ text: String, secondary: Bool) -> UILabel {
         let label = UILabel()
         label.text = text
-        label.font = .systemFont(ofSize: 18, weight: .regular)
+        label.font = .systemFont(ofSize: 20, weight: .regular)
         label.textColor = secondary ? UIColor.white.withAlphaComponent(0.6) : .white
         label.numberOfLines = 0
         return label
@@ -55,11 +55,11 @@ enum PlayerInfoSheetStyle {
     static func infoRowText(_ label: String, _ value: String) -> NSAttributedString {
         let text = NSMutableAttributedString(
             string: "\(label): ",
-            attributes: [.font: UIFont.systemFont(ofSize: 16, weight: .medium), .foregroundColor: UIColor.white.withAlphaComponent(0.6)]
+            attributes: [.font: UIFont.systemFont(ofSize: 17, weight: .medium), .foregroundColor: UIColor.white.withAlphaComponent(0.6)]
         )
         text.append(NSAttributedString(
             string: value,
-            attributes: [.font: UIFont.systemFont(ofSize: 18, weight: .regular), .foregroundColor: UIColor.white]
+            attributes: [.font: UIFont.systemFont(ofSize: 20, weight: .regular), .foregroundColor: UIColor.white]
         ))
         return text
     }
@@ -74,13 +74,13 @@ enum PlayerInfoSheetStyle {
     static func twoColumnGrid(_ rows: [UIView]) -> UIView {
         let grid = UIStackView()
         grid.axis = .vertical
-        grid.spacing = 12
+        grid.spacing = 8
         grid.alignment = .fill
         var index = 0
         while index < rows.count {
             let pair = UIStackView()
             pair.axis = .horizontal
-            pair.spacing = 24
+            pair.spacing = 20
             pair.distribution = .fillEqually
             pair.alignment = .top
             pair.addArrangedSubview(rows[index])

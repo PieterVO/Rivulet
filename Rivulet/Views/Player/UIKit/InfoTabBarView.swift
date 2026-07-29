@@ -14,6 +14,12 @@
 //
 
 import UIKit
+import os
+
+/// TEMP diagnostic instrumentation — see the matching note in
+/// `PlayerInfoTabsView.swift`. Remove once the intermittent tab-switch /
+/// can't-move-Down reports are confirmed and fixed from a captured log.
+private let infoTabBarLog = Logger(subsystem: "com.rivulet.app", category: "PlayerInfoTab")
 
 final class InfoTabBarView: UIView {
 
@@ -110,11 +116,18 @@ final class InfoTabBarView: UIView {
     /// through to the content below.
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
         guard context.focusHeading == .left || context.focusHeading == .right else {
+            // TEMP: the engine only calls this once it has already FOUND a
+            // candidate, so a Down press that logs a press but never logs here
+            // means no candidate existed at all — see pressesBegan's note.
+            infoTabBarLog.notice("shouldUpdateFocus (non-horizontal): heading=\(context.focusHeading.rawValue) next=\(String(describing: context.nextFocusedView))")
             return super.shouldUpdateFocus(in: context)
         }
         let prevIsPill = context.previouslyFocusedView.map(containsPill) ?? false
         let nextIsPill = context.nextFocusedView.map(containsPill) ?? false
-        if prevIsPill && !nextIsPill { return false }
+        if prevIsPill && !nextIsPill {
+            infoTabBarLog.notice("shouldUpdateFocus VETOED horizontal exit from pill row")
+            return false
+        }
         return super.shouldUpdateFocus(in: context)
     }
 
@@ -195,8 +208,22 @@ private final class InfoTabPillView: UIControl {
     // tvOS; handle the press directly.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .select {
+            infoTabBarLog.notice("pill Select received, isFocused=\(self.isFocused)")
             onSelected?()
             return
+        }
+        // TEMP: log arrow presses WITHOUT consuming them (super still runs, so
+        // the engine's own handling is untouched). This is the discriminator
+        // for the "can't move Down into the content" report — pair it with the
+        // shouldUpdateFocus/didUpdateFocus logs and read it as:
+        //   press logged, then focus ENTERED  → working
+        //   press logged, shouldUpdateFocus false → a veto is blocking it
+        //   press logged, nothing else       → engine found NO candidate
+        //                                      (geometry/focusability)
+        //   nothing logged at all            → the press never arrived
+        //                                      (something upstream ate it)
+        for press in presses where press.type == .downArrow || press.type == .upArrow {
+            infoTabBarLog.notice("pill '\(self.label.text ?? "?")' got \(press.type == .downArrow ? "DOWN" : "UP") arrow, isFocused=\(self.isFocused)")
         }
         super.pressesBegan(presses, with: event)
     }
@@ -210,6 +237,11 @@ private final class InfoTabPillView: UIControl {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         isFocusedPill = context.nextFocusedView === self
+        if isFocusedPill {
+            infoTabBarLog.notice("pill '\(self.label.text ?? "?")' GAINED focus")
+        } else if context.previouslyFocusedView === self {
+            infoTabBarLog.notice("pill '\(self.label.text ?? "?")' LOST focus, next=\(String(describing: context.nextFocusedView))")
+        }
         coordinator.addCoordinatedAnimations({
             self.applyStyle()
             self.transform = self.isFocusedPill ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity
