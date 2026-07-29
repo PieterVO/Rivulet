@@ -199,6 +199,19 @@ final class SettingsPageViewController: UIViewController {
         }
     }
 
+    /// Re-apply the dimmed state of every visible row after a toggle, since one
+    /// row's value can disable another. Deliberately NOT a `reloadData()` — that
+    /// recreates the focused cell mid-press and drops focus on tvOS.
+    private func refreshDimmedRows() {
+        guard let collectionView else { return }
+        for cell in collectionView.visibleCells {
+            guard let cell = cell as? SettingsCell,
+                  let path = collectionView.indexPath(for: cell),
+                  path.item < rows.count else { continue }
+            cell.setDimmed(!rows[path.item].isEnabled())
+        }
+    }
+
     /// Rebuild rows from current state and reload the list. For action rows
     /// that mutate this page's OWN data and need the list to refresh in place
     /// (e.g. Libraries' Add All / Remove All).
@@ -222,7 +235,8 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellID, for: indexPath) as! SettingsCell
         let item = rows[indexPath.item]
         cell.configure(title: item.title, value: item.valueText, showsChevron: item.showsChevron,
-                       destructive: item.isDestructive, showsCheckmark: item.showsCheckmark)
+                       destructive: item.isDestructive, showsCheckmark: item.showsCheckmark,
+                       dimmed: !item.isEnabled())
         cell.onFocusGained = { [weak self] in self?.onFocusRow?(item.id) }
         return cell
     }
@@ -245,6 +259,7 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         case .toggle(let get, let set):
             set(!get())
             (collectionView.cellForItem(at: indexPath) as? SettingsCell)?.updateValue(get() ? "On" : "Off")
+            refreshDimmedRows()
             markLibraryEdit()
         case .cycle(let value, let next):
             next()

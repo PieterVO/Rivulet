@@ -95,7 +95,7 @@ enum SettingsDescriptorStore {
         ),
         "hideTriviaSpoilers": SettingDescriptor(
             icon: "sparkles",
-            description: "Hides spoiler-tagged trivia facts in the player's Insights panel so a later reveal never appears over what you're watching. On by default."
+            description: "Hides spoiler-tagged trivia facts in the player's Insights panel so a later reveal never appears over what you're watching."
         ),
 
         // MARK: Playback
@@ -117,11 +117,15 @@ enum SettingsDescriptorStore {
         ),
         "useIntroDB": SettingDescriptor(
             icon: "magnifyingglass",
-            description: "Off by default. When on, Rivulet fills in missing intro, recap, and credits markers from the community database introdb.app, sending only the show's ID and episode number. Your own server's markers are always used first."
+            description: "Fills in missing intro, recap, and credits markers from the community database introdb.app, sending only the show's ID and episode number. Your own server's markers are always used first."
         ),
         "promptResumeOrRestart": SettingDescriptor(
             icon: "questionmark.circle",
-            description: "Off by default. When on, in-progress items show a Resume / Start from Beginning prompt before playing, like Apple TV."
+            description: "In-progress items show a Resume / Start from Beginning prompt before playing, like Apple TV."
+        ),
+        "instantResume": SettingDescriptor(
+            icon: "play.rectangle.on.rectangle",
+            description: "Selecting a Continue Watching tile resumes it immediately. Turn this off to open the preview instead, the same as every other Home row, which also disables the Resume or Restart Prompt below."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",
@@ -295,7 +299,7 @@ enum SettingsDescriptorStore {
         ),
         "cf_master": SettingDescriptor(
             icon: "hand.raised.fill",
-            description: "Turn the local content filter on. When on, Rivulet mutes and skips in real time based on the categories below. Off by default."
+            description: "Turn the local content filter on. Rivulet then mutes and skips in real time based on the categories below."
         ),
         "cf_profanity": SettingDescriptor(
             icon: "exclamationmark.bubble.fill",

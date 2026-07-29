@@ -108,14 +108,21 @@ final class SettingsCell: UICollectionViewCell {
     }
 
     func configure(title: String, value: String?, showsChevron: Bool, destructive: Bool,
-                   showsCheckmark: Bool = false) {
+                   showsCheckmark: Bool = false, dimmed: Bool = false) {
         titleLabel.text = title
         checkmark.isHidden = !showsCheckmark
         valueLabel.text = value
         valueLabel.isHidden = (value == nil || value?.isEmpty == true)
         chevron.isHidden = !showsChevron
         self.destructive = destructive
+        setDimmed(dimmed)
         applyAppearance(focused: isFocused)
+    }
+
+    /// Grayed-out state for a row disabled by another setting. It is also
+    /// unfocusable (`SettingsRowItem.isFocusable`), so it never focuses while dim.
+    func setDimmed(_ dimmed: Bool) {
+        contentView.alpha = dimmed ? 0.35 : 1
     }
 
     func updateValue(_ value: String?) {
@@ -128,6 +135,7 @@ final class SettingsCell: UICollectionViewCell {
         onFocusGained = nil
         transform = .identity
         bg.layer.removeAnimation(forKey: "reorderWiggle")
+        setDimmed(false)
         applyAppearance(focused: false)
     }
 

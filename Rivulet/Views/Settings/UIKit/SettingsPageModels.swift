@@ -79,10 +79,14 @@ struct SettingsRowItem {
     /// mode). Called with `up` to move it one slot and persist the new order.
     var onReorder: ((_ up: Bool) -> Void)?
     var isReorderable: Bool { onReorder != nil }
+    /// A row whose meaning depends on another row's state renders dimmed and
+    /// unfocusable while that state is off. Evaluated live (not cached at build
+    /// time) so flipping the row it depends on takes effect without a rebuild.
+    var isEnabled: () -> Bool = { true }
 
     var isFocusable: Bool {
         if case .info = kind { return false }
-        return true
+        return isEnabled()
     }
     var showsChevron: Bool {
         switch kind {
@@ -230,7 +234,11 @@ enum SettingsContent {
             toggle("autoSkipAds", "Auto-Skip Ads", key: "autoSkipAds", default: false),
             toggle("autoSkipRecap", "Auto-Skip Recap", key: "autoSkipRecap", default: false),
             toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
-            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false),
+            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
+            // The prompt only has anything to interrupt while a Continue
+            // Watching tile plays on Select, so it dims with Instant Resume off.
+            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
+                   enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
             SettingsRowItem(id: "autoplayCountdown", title: "Autoplay Countdown",
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
                                 AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
@@ -687,10 +695,13 @@ enum SettingsContent {
 
     // MARK: Helpers
 
-    private static func toggle(_ id: String, _ title: String, key: String, default def: Bool) -> SettingsRowItem {
+    /// `enabledWhen` marks the row as depending on another setting: while it
+    /// returns false the row renders dimmed and cannot be focused or toggled.
+    private static func toggle(_ id: String, _ title: String, key: String, default def: Bool,
+                               enabledWhen: (() -> Bool)? = nil) -> SettingsRowItem {
         SettingsRowItem(id: id, title: title, kind: .toggle(
             get: { SettingsStore.bool(key, default: def) },
             set: { SettingsStore.setBool(key, $0) }
-        ))
+        ), isEnabled: enabledWhen ?? { true })
     }
 }

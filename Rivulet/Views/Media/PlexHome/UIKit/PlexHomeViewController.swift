@@ -2738,7 +2738,13 @@ final class PlexHomeViewController: UIViewController {
         guard itemIndex < shelfRealCount(section) else { return }
         switch section.kind {
         case .continueWatching:
-            playItem(section.items[itemIndex])
+            // Instant Resume on: a CW tile resumes straight away. Off: it
+            // behaves like every other shelf row and opens the preview carousel.
+            if SettingsStore.bool("continueWatchingInstantResume", default: true) {
+                playItem(section.items[itemIndex])
+            } else {
+                presentPreview(forSection: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
+            }
         case .recentlyAdded, .recommendations:
             presentPreview(forSection: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
         case .discoverList:
