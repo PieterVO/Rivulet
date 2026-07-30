@@ -2439,6 +2439,13 @@ final class PlexHomeViewController: UIViewController {
                         self.applySnapshot(animated: false)
                     }
                 }
+                // A library page's row set is computed from the Recent/Discovery
+                // Rows gates at snapshot time, so flipping either only shows up
+                // on a re-apply. Cheap: the diffable snapshot is a no-op when
+                // the row set is unchanged.
+                if case .library = self.mode {
+                    self.applySnapshot(animated: false)
+                }
             }
             .store(in: &dataStoreObservers)
     }
@@ -3178,7 +3185,17 @@ final class PlexHomeViewController: UIViewController {
         // old row set 1:1 (one row per library hub in Plex's order, de-duped by
         // hub identity, hero/sort-header/grid excluded). No PlexMetadata
         // materialized here.
+        //
+        // Row visibility gates ("Recent Rows" / "Discovery Rows"). Applied here,
+        // at render time, and never in `projectLibraryItems` — that writes the
+        // on-disk rail, so filtering there would persist a UI preference and a
+        // later toggle-on would repaint from the pruned cache.
+        let showRecentRows = (UserDefaults.standard.object(forKey: "showLibraryRecentRows") as? Bool) ?? true
+        let showDiscoveryRows = (UserDefaults.standard.object(forKey: "showLibraryRecommendations") as? Bool) ?? true
+
         for hub in dataStore.libraryItemsByKey[key] ?? [] {
+            if !showRecentRows, isRecentRow(hub) { continue }
+            if !showDiscoveryRows, !isEssentialRow(hub) { continue }
             let id = HomeSectionID(raw: hub.id)
             let merged = mergedItems(forSection: id, initial: hub.items)
             var items = merged.items
@@ -3205,6 +3222,27 @@ final class PlexHomeViewController: UIViewController {
         sections.append(.grid(items: mapToMediaItems(gridItems)))
 
         return sections
+    }
+
+    /// A "recent" library row: Recently Added, Recently Released, Newest
+    /// Releases. Gated by the "Recent Rows" setting.
+    private func isRecentRow(_ hub: CachedHomeHub) -> Bool {
+        let id = (hub.hubIdentifier ?? "").lowercased()
+        let title = hub.title.lowercased()
+        return id.contains("recentlyadded") || title.contains("recently added")
+            || id.contains("recentlyreleased") || title.contains("recently released")
+            || id.contains("newestreleases") || title.contains("newest releases")
+    }
+
+    /// An "essential" library row: Continue Watching / On Deck, the recent rows,
+    /// or Recently Played (music). Everything else is a discovery row (genre,
+    /// studio, director, Rediscover, …) and is gated by "Discovery Rows".
+    /// Continue Watching is not re-detected here — `CachedHomeHub` already
+    /// carries the flag the CW cell and metrics run on.
+    private func isEssentialRow(_ hub: CachedHomeHub) -> Bool {
+        if hub.isContinueWatching || isRecentRow(hub) { return true }
+        let id = (hub.hubIdentifier ?? "").lowercased()
+        return id.contains("recentlyplayed") || hub.title.lowercased().contains("recently played")
     }
 
     /// A library's own "Continue Watching" hub, detected by identifier/title
