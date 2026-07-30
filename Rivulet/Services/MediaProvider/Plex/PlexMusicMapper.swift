@@ -17,10 +17,9 @@ enum PlexMusicMapper {
 
     static func userState(_ meta: PlexMetadata) -> MusicUserState {
         // Plex userRating is 0-10; normalize to 0.0-5.0 for the music layer.
-        // isFavorite is true whenever any rating has been set (>0).
         let rating: Double? = meta.userRating.map { $0 / 2.0 }
         return MusicUserState(
-            isFavorite: (meta.userRating ?? 0) > 0,
+            isFavorite: PlexUserRating.isFavorite(meta.userRating),
             userRating: rating,
             playCount: meta.viewCount ?? 0,
             lastPlayedAt: meta.lastViewedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }

@@ -144,6 +144,7 @@ struct WhatsNewView: View {
             "Marking an item as watched now updates the Play button instead of saying Resume",
             "Marking an item as watched now updates Home and Continue Watching right away",
             "Pausing now registers on your Plex server instead of showing as still playing",
+            "Music marks a song as a favorite only when you rate it above three stars",
         ]),
         ("1.0.4 (72)", [
             "Updated AetherEngine to 6.1.3",

@@ -46,7 +46,7 @@ enum PlexMediaMapper {
         MediaUserState(
             isPlayed: isFullyWatched(meta),
             viewOffset: TimeInterval(meta.viewOffset ?? 0) / 1000,
-            isFavorite: (meta.userRating ?? 0) > 0,
+            isFavorite: PlexUserRating.isFavorite(meta.userRating),
             lastViewedAt: meta.lastViewedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
         )
     }
