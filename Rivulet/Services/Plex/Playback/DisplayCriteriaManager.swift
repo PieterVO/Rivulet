@@ -217,23 +217,36 @@ final class DisplayCriteriaManager {
     /// Reset display criteria to default (SDR, system frame rate)
     /// Call this when playback ends
     ///
-    /// Callable more than once per session. The `hasSetCriteria` guard makes
-    /// every call after the first a no-op, which is what lets the player exit
-    /// reset early (behind its fade to black, so the TV renegotiates HDMI while
-    /// the screen is already dark) and still leave `stopPlayback()` calling this
-    /// unconditionally for every other teardown path.
+    /// Unconditional on purpose, and it has to stay that way. This used to be
+    /// gated on `hasSetCriteria`, which is only ever true when *this* manager did
+    /// the writing, and nothing has called a configure entry point since
+    /// AetherEngine took over the handshake. So the early reset the player exit
+    /// fires at fade start was a silent no-op, and the only real nil write was the
+    /// engine's own inside `engine.stop()`, reached from `stopPlayback()` off
+    /// SwiftUI `.onDisappear` — i.e. after the modal is already gone. The ~1s HDMI
+    /// renegotiation therefore played out on the freshly revealed home screen no
+    /// matter how long the exit fade ran (#249). Writing nil here regardless is
+    /// what actually starts the handshake behind the black plate; the engine's
+    /// later write is then nil onto nil.
+    ///
+    /// Both callers are teardown paths, so there is no in-flight `apply()` on the
+    /// engine side for this write to race.
     func reset() {
-        guard hasSetCriteria else { return }
+        hasSetCriteria = false
+        lastCriteriaWasHDR = false
+        assetForCriteria = nil  // Release the asset
 
         guard let displayManager = getDisplayManager() else {
             playerDebugLog("🖥️ DisplayCriteria: No display manager available for reset")
             return
         }
+        guard displayManager.preferredDisplayCriteria != nil else {
+            playerDebugLog("🖥️ DisplayCriteria: reset — panel already at default, no handshake expected")
+            return
+        }
 
         displayManager.preferredDisplayCriteria = nil
-        hasSetCriteria = false
-        lastCriteriaWasHDR = false
-        assetForCriteria = nil  // Release the asset
+        playerDebugLog("🖥️ DisplayCriteria: reset — criteria released, HDMI handshake starts now")
     }
 
     // MARK: - Convenience Methods

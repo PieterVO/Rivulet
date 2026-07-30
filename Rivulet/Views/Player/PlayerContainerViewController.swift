@@ -464,9 +464,17 @@ class PlayerContainerViewController: UIViewController {
         // Kick the display reset off at the START of the fade so the roughly
         // one second HDMI handshake overlaps the fade and then continues behind
         // an already-black screen. `stopPlayback()` still calls reset() on
-        // teardown; the second call is a no-op. Nothing in stopPlayback() has to
-        // precede this: reset() only writes preferredDisplayCriteria and drops
-        // its own asset reference, and it touches no player state.
+        // teardown; by then the criteria are already nil and it writes nothing.
+        // Nothing in stopPlayback() has to precede this: reset() only writes
+        // preferredDisplayCriteria and drops its own asset reference, and it
+        // touches no player state.
+        //
+        // This is the load-bearing line of the exit fade, not a nicety. Until it
+        // actually wrote nil (it was gated on a flag only this app's own writer
+        // ever set, and AetherEngine has owned the criteria for a long time) the
+        // fade masked nothing: the engine dropped the criteria during
+        // `engine.stop()`, which the player only reaches from `.onDisappear`,
+        // after the dismissal. Do not re-gate it.
         DisplayCriteriaManager.shared.reset()
 
         let cover = exitFadeView ?? makeExitFadeView()

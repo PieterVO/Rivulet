@@ -143,6 +143,7 @@ struct WhatsNewView: View {
         ("1.0.4 (73)", [  // confirm build number at release
             "Reaching the end of a movie, a trailer, or the last episode of a show now closes the player instead of leaving it on the final frame",
             "The player's INFO panel now opens on a Description tab with the title and summary of what is playing, so you can check what an episode is about without leaving playback",
+            "Leaving the player now fades to black while your TV switches display modes, so the picture no longer flashes on the Home Screen part way through",
         ]),
         ("1.0.4 (72)", [
             "Updated AetherEngine to 6.0.2",
