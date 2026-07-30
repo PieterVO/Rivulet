@@ -96,12 +96,13 @@ class PlayerContainerViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
 
         self.modalPresentationStyle = .fullScreen
-        // Dissolve in and out rather than taking UIKit's default vertical slide,
-        // which is what every other modal in the app already does (InfoPopup,
-        // ConfirmationPopup, PreviewCarousel, TextEntry). On the way out this is
-        // also the whole transition for anyone with Match Content off: they get no
-        // exit fade, because there is no display handshake to mask, and a direct
-        // video-to-home dissolve reads better there than a fade to black would.
+        // State the transition explicitly, like every other modal in the app
+        // (InfoPopup, ConfirmationPopup, PreviewCarousel, TextEntry), instead of
+        // inheriting the UIKit default. Housekeeping, NOT a visual change: on
+        // tvOS this renders indistinguishably from the default, so do not credit
+        // any transition polish to this line or reach for it as one. The only
+        // exit that looks different is the display-handshake one, and that is the
+        // fade below.
         self.modalTransitionStyle = .crossDissolve
 
         let hosting = UIHostingController(rootView: AnyView(rootView))
@@ -1283,13 +1284,20 @@ class PlayerContainerViewController: UIViewController {
                     cast: self.insightsCastCache,
                     trivia: self.insightsTriviaCache,
                     suppressedTriviaIDs: self.suppressedTriviaIDsCache,
-                    hideSpoilers: SettingsStore.bool("hideTriviaSpoilers", default: true)),
+                    hideSpoilers: Self.hideTriviaSpoilers),
                 width: 640, from: rail.insightsButton)
         }
 
         // Content filter is not exposed in the player yet — the button stays
         // hidden (its default in PlayerRailView) until the feature is ready.
     }
+
+    /// Spoiler filtering is forced OFF for everyone for now, and the Appearance
+    /// setting that used to drive it is gone. `TriviaFact` fails CLOSED on a
+    /// missing or malformed spoiler tag, so filtering on it dropped facts that
+    /// were never spoilers. The `hideSpoilers:` plumbing stays — flip this one
+    /// constant (or re-add the setting behind it) to bring the filter back.
+    private static let hideTriviaSpoilers = false
 
     /// Whether the Insights panel has anything to show: a non-empty cast
     /// list, or at least one trivia fact left after the hide-spoilers /
@@ -1298,8 +1306,8 @@ class PlayerContainerViewController: UIViewController {
     private var insightsButtonShouldBeAvailable: Bool {
         if !insightsCastCache.isEmpty { return true }
         guard let trivia = insightsTriviaCache else { return false }
-        let hideSpoilers = SettingsStore.bool("hideTriviaSpoilers", default: true)
-        return !trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDsCache).isEmpty
+        return !trivia.visibleFacts(hideSpoilers: Self.hideTriviaSpoilers,
+                                    suppressed: suppressedTriviaIDsCache).isEmpty
     }
 
     /// Re-derives the rail's Insights button visibility from the current
