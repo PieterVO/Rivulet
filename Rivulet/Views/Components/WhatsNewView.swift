@@ -143,6 +143,7 @@ struct WhatsNewView: View {
         ("1.0.4 (72)", [
             "Updated AetherEngine to 6.0.2",
             "New Instant Resume setting in Playback, on by default. Turn it off and Continue Watching tiles open the preview like every other Home row instead of playing right away",
+            "Shows with more than eight seasons now scroll the season row, so every season is reachable",
         ]),
         ("1.0.4 (71)", [
             "Updated AetherEngine to 5.23.11",

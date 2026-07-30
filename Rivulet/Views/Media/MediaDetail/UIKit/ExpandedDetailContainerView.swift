@@ -75,6 +75,9 @@ final class ExpandedDetailContainerView: UIView {
     /// near-full-bleed. The inset animates on expand (driven by the VC, Step 3).
     /// Carousel-stable: clip spans the card width (card edge = 88) so the 4
     /// thumbs center within the card.
+    /// Vertical slack inside the season-pill scroller so a focused pill's 1.05
+    /// scale isn't clipped by the scroller's bounds.
+    private static let seasonPillFocusPad: CGFloat = 8
     private static let peekLeadingCarousel: CGFloat = 88
     private static let peekTrailingCarousel: CGFloat = 88
     private static let peekLeadingExpanded: CGFloat = 0
@@ -108,6 +111,7 @@ final class ExpandedDetailContainerView: UIView {
     /// Season pill bar — the scrolled-in header. Lives in the reserve gap above
     /// the episodes; fades in with `scrollProgress` (invisible at rest).
     private let seasonsHeader = UIView()
+    private let seasonPillScroll = UIScrollView()
     private let seasonPillRow = UIStackView()
     private var seasonPills: [SeasonPillView] = []
     private var seasonRefIDs: [String] = []   // parallel to seasonPills (pill → season ref.itemID)
@@ -273,16 +277,37 @@ final class ExpandedDetailContainerView: UIView {
         seasonsHeader.translatesAutoresizingMaskIntoConstraints = false
         seasonsHeader.alpha = 0
         addSubview(seasonsHeader)
+        // A show can have more seasons than fit the screen (~8). The scroller is
+        // what makes the overflow reachable at all: UIScrollView is a
+        // UIFocusItemScrollableContainer, so the engine treats pills outside the
+        // visible window as focus candidates and scrolls them in itself.
+        seasonPillScroll.translatesAutoresizingMaskIntoConstraints = false
+        seasonPillScroll.showsHorizontalScrollIndicator = false
+        seasonsHeader.addSubview(seasonPillScroll)
         seasonPillRow.translatesAutoresizingMaskIntoConstraints = false
         seasonPillRow.axis = .horizontal
         seasonPillRow.spacing = 34
         seasonPillRow.alignment = .center
-        seasonsHeader.addSubview(seasonPillRow)
+        seasonPillScroll.addSubview(seasonPillRow)
+        let pillContent = seasonPillScroll.contentLayoutGuide
+        // Hug the row when it fits; the header's width cap (below) clamps it to
+        // the screen when it doesn't.
+        let pillScrollHug = seasonPillScroll.widthAnchor.constraint(equalTo: pillContent.widthAnchor)
+        pillScrollHug.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            seasonPillRow.topAnchor.constraint(equalTo: seasonsHeader.topAnchor),
-            seasonPillRow.bottomAnchor.constraint(equalTo: seasonsHeader.bottomAnchor),
-            seasonPillRow.leadingAnchor.constraint(equalTo: seasonsHeader.leadingAnchor),
-            seasonPillRow.trailingAnchor.constraint(equalTo: seasonsHeader.trailingAnchor),
+            seasonPillScroll.topAnchor.constraint(equalTo: seasonsHeader.topAnchor),
+            seasonPillScroll.bottomAnchor.constraint(equalTo: seasonsHeader.bottomAnchor),
+            seasonPillScroll.leadingAnchor.constraint(equalTo: seasonsHeader.leadingAnchor),
+            seasonPillScroll.trailingAnchor.constraint(equalTo: seasonsHeader.trailingAnchor),
+            pillScrollHug,
+            seasonPillScroll.heightAnchor.constraint(equalTo: pillContent.heightAnchor),
+            // The pad keeps the pills' 1.05 focus scale off the scroller's clip
+            // edges. The header's top/leading constants back it out, so the
+            // pills sit exactly where they did before the scroller.
+            seasonPillRow.topAnchor.constraint(equalTo: pillContent.topAnchor, constant: Self.seasonPillFocusPad),
+            seasonPillRow.bottomAnchor.constraint(equalTo: pillContent.bottomAnchor, constant: -Self.seasonPillFocusPad),
+            seasonPillRow.leadingAnchor.constraint(equalTo: pillContent.leadingAnchor, constant: Self.seasonPillFocusPad),
+            seasonPillRow.trailingAnchor.constraint(equalTo: pillContent.trailingAnchor, constant: -Self.seasonPillFocusPad),
         ])
 
         episodesClip.translatesAutoresizingMaskIntoConstraints = false
@@ -351,11 +376,20 @@ final class ExpandedDetailContainerView: UIView {
             // Seasons header: in the reserve gap just above the episodes, left-
             // aligned with them. +20pt below the logo (which ends at y150) for a
             // gap between the title logo and the season pills.
-            seasonsHeader.topAnchor.constraint(equalTo: topAnchor, constant: 170),
+            seasonsHeader.topAnchor.constraint(equalTo: topAnchor, constant: 170 - Self.seasonPillFocusPad),
             // The season-pill CAPSULE left edge sits on the shared content edge
             // (same X as the thumbnails / headers / hero metadata). The pill text
             // is naturally indented inside the capsule, matching the ATV+ ref.
-            seasonsHeader.leadingAnchor.constraint(equalTo: leadingAnchor, constant: PreviewCarouselGeometry.expandedChromeInset),
+            seasonsHeader.leadingAnchor.constraint(
+                equalTo: leadingAnchor,
+                constant: PreviewCarouselGeometry.expandedChromeInset - Self.seasonPillFocusPad
+            ),
+            // Cap the header at the screen so the pill scroller has a bounded
+            // window to scroll inside. Without it the row just runs off-screen.
+            seasonsHeader.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailingAnchor,
+                constant: -PreviewCarouselGeometry.expandedChromeInset
+            ),
             // No fixed height/width — the pill row hugs the header (equality pins
             // below), so the chunky pills define both. They were crushed to 44pt.
         ])
@@ -844,6 +878,8 @@ final class ExpandedDetailContainerView: UIView {
             seasonPills.append(pill)
         }
         applyPillFocusability()   // match the current target (.episodes at build → non-focusable)
+        // Open on the current season even when it's past the visible window.
+        revealSeasonPill(selectedSeasonIndex, animated: false)
     }
 
     /// Mark a season pill selected (others deselected). Called when a pill takes
@@ -852,6 +888,20 @@ final class ExpandedDetailContainerView: UIView {
         guard index >= 0, index < seasonPills.count else { return }
         selectedSeasonIndex = index
         for (i, pill) in seasonPills.enumerated() { pill.setSelected(i == index) }
+        // While focus is in the row the engine scrolls the pill in itself; don't
+        // run a second scroll against it. This covers the other direction — the
+        // pill following the focused episode's season.
+        if !focusIsOnPills { revealSeasonPill(index, animated: true) }
+    }
+
+    /// Scroll a pill into the scroller's window.
+    private func revealSeasonPill(_ index: Int, animated: Bool) {
+        guard index >= 0, index < seasonPills.count else { return }
+        layoutIfNeeded()
+        let pill = seasonPills[index]
+        let rect = seasonPillScroll.convert(pill.bounds, from: pill)
+            .insetBy(dx: -seasonPillRow.spacing, dy: 0)   // show the neighbour's gap
+        seasonPillScroll.scrollRectToVisible(rect, animated: animated)
     }
 
     /// Select the pill for a focused episode's parent season (episode-scroll
