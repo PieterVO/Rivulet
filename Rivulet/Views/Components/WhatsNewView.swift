@@ -142,6 +142,7 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.4 (73)", [
             "Updated AetherEngine to 6.1.3",
+            "The progress bar no longer jumps back after a seek on a slow server",
             "Reaching the end of a movie or a show's last episode now closes the player",
             "The player's INFO panel now opens on a Description tab with the title and summary",
             "Leaving the player now fades to black while your TV switches display modes",

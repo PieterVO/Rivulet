@@ -525,6 +525,29 @@ final class AetherPlayer: PlayerProtocol {
         errorSubject.eraseToAnyPublisher()
     }
 
+    /// Seek lifecycle (AetherEngine 6.1.0), mapped to host terms. `seek(to:)`
+    /// returns on accept, not on landing, so the clock ticks in between report
+    /// a position the picture has left; this says which seek landed where, and
+    /// which gave up. Aether only — the hls route's AVPlayer has no
+    /// equivalent, and its `seek(to:)` completion already means landed.
+    ///
+    /// `.rejected` is dropped rather than forwarded: it stands alone with no
+    /// `.began`, so there is never a hold for it to release.
+    var seekEvents: AnyPublisher<SeekHoldEvent, Never> {
+        engine.seekEvents
+            .compactMap { event -> SeekHoldEvent? in
+                let outcome: SeekHoldEvent.Outcome
+                switch event.outcome {
+                case .began: outcome = .began
+                case .landed(let rendered): outcome = .landed(renderedTime: rendered)
+                case .stalled, .superseded: outcome = .settledElsewhere
+                case .rejected: return nil
+                }
+                return SeekHoldEvent(id: event.id, outcome: outcome, target: event.target)
+            }
+            .eraseToAnyPublisher()
+    }
+
     // MARK: - Controls
 
     func load(url: URL, headers: [String: String]?, startTime: TimeInterval?) async throws {

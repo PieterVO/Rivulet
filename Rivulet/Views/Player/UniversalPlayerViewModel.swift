@@ -342,6 +342,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var controlsTimer: Timer?
     private let controlsHideDelay: TimeInterval = 5
     private var scrubTimer: Timer?
+    /// Holds the rail at a seek's target until the picture lands there. Fed by
+    /// Aether's `seekEvents`; inert on the hls route, whose AVPlayer seek
+    /// completion already means landed.
+    private var seekHold = SeekHoldLogic()
     private var wheelScrubbingTimer: Timer?
     private let wheelScrubbingIdleDelay: TimeInterval = 0.8
     private var appBecameActiveObserver: Any?
@@ -1721,19 +1725,37 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Ids are monotonic per engine instance, so a fresh player starts over.
+        seekHold = SeekHoldLogic()
+        player.seekEvents
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in
+                guard let self else { return }
+                if let time = self.seekHold.apply(event) {
+                    self.currentTime = time
+                }
+            }
+            .store(in: &cancellables)
+
         player.timePublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] time in
-                self?.currentTime = time
+                guard let self else { return }
+                // A tick that predates the landing reports the position the
+                // picture has already left: it would snap the rail back to
+                // where the seek started, and hand markers and the content
+                // filter a stale playhead to act on.
+                guard !self.seekHold.isHolding else { return }
+                self.currentTime = time
                 // Drive marker handling for Aether (skip intro/credits/ad buttons,
                 // auto-skip, and the real Plex credits-marker post-video trigger).
                 // Mirrors the AVPlayer periodic observer (~line 979). Aether
                 // ticks at 0.1s (native host)
                 // or 0.25s (software host), both finer than checkMarkers' ~0.5s
                 // assumption, so no throttle change is needed.
-                self?.checkMarkers(at: time)
-                self?.tickReplayWindow(at: time)
-                self?.applyContentFilter(at: time)
+                self.checkMarkers(at: time)
+                self.tickReplayWindow(at: time)
+                self.applyContentFilter(at: time)
             }
             .store(in: &cancellables)
 
