@@ -52,6 +52,8 @@ final class PlaybackInputTelemetry {
         increment(&receivedBySource, key: sourceName)
         increment(&receivedByAction, key: actionName)
 
+        InputProbe.action(actionName, source: sourceName)
+
         let breadcrumb = Breadcrumb(level: .info, category: "playback_input_received")
         breadcrumb.message = actionName
         breadcrumb.data = [

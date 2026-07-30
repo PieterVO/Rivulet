@@ -278,6 +278,10 @@ enum SettingsDescriptorStore {
             icon: "doc.text.fill",
             description: "Rivulet's license and the open-source software it uses, including FFmpeg (LGPL), libdovi, and Sentry."
         ),
+        "inputDiagnostics": SettingDescriptor(
+            icon: "dot.radiowaves.left.and.right",
+            description: "Show every remote button press on screen, with how long it was held and which remote sent it. Helpful when reporting a problem with a third-party remote. Leave this off for normal viewing."
+        ),
 
         // MARK: Content Filtering
         "cat_contentFilter": SettingDescriptor(

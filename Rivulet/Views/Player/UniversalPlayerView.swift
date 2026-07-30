@@ -198,6 +198,7 @@ final class RemoteInputHandler: ObservableObject {
 
                 // Track left/right direction for tap/hold detection
                 if self.currentDpadDirection != dir {
+                    InputProbe.gamepad("micro dpad dir=\(dir.map { $0 ? "right" : "left" } ?? "center")")
                 }
                 self.currentDpadDirection = dir
 
@@ -236,6 +237,10 @@ final class RemoteInputHandler: ObservableObject {
             guard let self else { return }
 
             Task { @MainActor in
+                // Logged before the gates below, so a swallowed click is still
+                // visible as a click that arrived.
+                InputProbe.gamepad("micro buttonA \(pressed ? "down" : "up")")
+
                 // Don't capture clicks in error state - let SwiftUI dismiss button work
                 if self.isErrorCheck?() == true {
                     return

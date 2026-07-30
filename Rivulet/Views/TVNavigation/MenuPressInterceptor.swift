@@ -128,6 +128,11 @@ enum MenuPressInterceptor {
                 return
             }
             let withhold = MainActor.assumeIsolated { () -> Bool in
+                // This is the only layer that sees a press before a responder or
+                // gesture recognizer can consume it, which is exactly what the
+                // input probe needs. No-ops unless Input Diagnostics is on.
+                InputProbe.record(presses: pressesEvent.allPresses)
+
                 // Withholding drops the whole event, so a non-Menu press
                 // batched into the same one goes with it. The remote delivers
                 // Menu on its own in practice, and there is no way to forward

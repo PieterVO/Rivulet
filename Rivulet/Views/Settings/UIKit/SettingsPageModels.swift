@@ -635,7 +635,13 @@ enum SettingsContent {
             })),
             SettingsRowItem(id: "licensesLegal", title: "Licenses & Legal", kind: .action(destructive: false, handler: { vc in
                 presentAcknowledgements(on: vc)
-            }))
+            })),
+            // Writes through InputProbe rather than SettingsStore directly so
+            // the HUD appears and disappears with the toggle.
+            SettingsRowItem(id: "inputDiagnostics", title: "Input Diagnostics", kind: .toggle(
+                get: { InputProbe.isEnabled },
+                set: { InputProbe.setEnabled($0) }
+            ))
         ]
     }
 
