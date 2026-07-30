@@ -15,8 +15,32 @@ actor PlexProgressReporter {
     static let shared = PlexProgressReporter()
 
     private var lastReportedTimes: [String: TimeInterval] = [:]
+    private var lastReportedStates: [String: String] = [:]
 
     private init() {}
+
+    /// Seconds of playback that must pass before the same state is re-reported.
+    static let reportThrottle: TimeInterval = 5
+
+    /// Whether a timeline report is worth sending.
+    ///
+    /// A changed `state` always gets through, whatever the position. The
+    /// throttle is measured in PLAYBACK time, which stops advancing the moment
+    /// the user pauses, so a paused report sits at the same position as the
+    /// playing report before it: gating on position alone swallowed it and left
+    /// the server believing the item was still playing. The "stopped" report at
+    /// an episode transition was dropped the same way, landing within a few
+    /// seconds of the last periodic one.
+    static func shouldReport(state: String,
+                             time: TimeInterval,
+                             lastState: String?,
+                             lastTime: TimeInterval?,
+                             force: Bool) -> Bool {
+        if force { return true }
+        if lastState != state { return true }
+        guard let lastTime else { return true }
+        return abs(time - lastTime) >= reportThrottle
+    }
 
     // MARK: - Progress Reporting
 
@@ -36,11 +60,13 @@ actor PlexProgressReporter {
     ) async {
         guard !ratingKey.isEmpty else { return }
 
-        // Throttle reports - only report if time changed significantly (unless forced)
-        if !forceReport, let lastTime = lastReportedTimes[ratingKey], abs(time - lastTime) < 5 {
-            return
-        }
+        guard Self.shouldReport(state: state,
+                                time: time,
+                                lastState: lastReportedStates[ratingKey],
+                                lastTime: lastReportedTimes[ratingKey],
+                                force: forceReport) else { return }
         lastReportedTimes[ratingKey] = time
+        lastReportedStates[ratingKey] = state
 
         guard let server = await getServer() else { return }
 
