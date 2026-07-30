@@ -151,6 +151,23 @@ final class PlayerInfoPopupLayoutTests: XCTestCase {
                              "sections taller than the sheet must scroll, not compress")
     }
 
+    // MARK: - Same-press gate
+
+    func testPressArrivingWithTheFocusMoveIsGated() {
+        // tvOS delivers the press a few ms AFTER the focus move it caused, so a
+        // just-moved timestamp must read as "this press is that move".
+        XCTAssertTrue(SamePressFocusGate.justMovedFocus(at: CACurrentMediaTime()))
+    }
+
+    func testLaterPressIsNotGated() {
+        let wellBefore = CACurrentMediaTime() - (SamePressFocusGate.window + 0.1)
+        XCTAssertFalse(SamePressFocusGate.justMovedFocus(at: wellBefore))
+    }
+
+    func testNeverMovedFocusIsNotGated() {
+        XCTAssertFalse(SamePressFocusGate.justMovedFocus(at: -.greatestFiniteMagnitude))
+    }
+
     // MARK: - Section headings
 
     func testSectionHeadingRuleFillsTheRemainingWidth() throws {

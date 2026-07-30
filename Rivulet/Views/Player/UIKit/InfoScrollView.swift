@@ -168,13 +168,9 @@ final class InfoScrollView: UIScrollView {
     /// than a viewport so the reader keeps an overlap line between steps.
     nonisolated static let pressStep: CGFloat = 240
 
-    /// Window after a focus move inside the sheet during which an arrow press
-    /// is assumed to BE that move. tvOS fires `didUpdateFocus` a few ms before
-    /// the `pressesBegan` for the same press, so without this gate every
-    /// section hop would also step the offset and overshoot (the same-press
-    /// race that bites directional handlers generally).
-    private static let samePressWindow: CFTimeInterval = 0.2
-
+    /// When focus last moved inside this sheet. Gated through
+    /// `SamePressFocusGate`: without it every section hop would also step the
+    /// offset and overshoot, because the press arrives after the move it caused.
     private var lastFocusMoveTime: CFTimeInterval = -.greatestFiniteMagnitude
 
     override init(frame: CGRect) {
@@ -241,7 +237,7 @@ final class InfoScrollView: UIScrollView {
     /// Returns false — leaving the press to bubble — when the engine just
     /// moved focus for this same press, or when there is nowhere to scroll.
     private func step(by delta: CGFloat) -> Bool {
-        guard CACurrentMediaTime() - lastFocusMoveTime > Self.samePressWindow else { return false }
+        guard !SamePressFocusGate.justMovedFocus(at: lastFocusMoveTime) else { return false }
         let target = Self.steppedOffsetY(
             current: contentOffset.y,
             delta: delta,
@@ -261,13 +257,11 @@ final class InfoScrollView: UIScrollView {
     /// True when an Up press should leave this sheet for the tab bar: focus
     /// sits on the FIRST row and the engine did not just move it there.
     ///
-    /// That second half is not optional. tvOS fires `didUpdateFocus` a few ms
-    /// BEFORE the `pressesBegan` for the same press, so without the gate a
-    /// single Up press that moves focus row-2 → row-1 would also be read as an
-    /// escape, and focus would shoot past the row to the pills. Same race
-    /// `step(by:)` guards against, same window.
+    /// That second half is not optional: without it a single Up press that
+    /// moves focus row-2 → row-1 would also be read as an escape, and focus
+    /// would shoot past the row to the pills. See `SamePressFocusGate`.
     var canEscapeUpward: Bool {
-        guard CACurrentMediaTime() - lastFocusMoveTime > Self.samePressWindow else { return false }
+        guard !SamePressFocusGate.justMovedFocus(at: lastFocusMoveTime) else { return false }
         guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView,
               focused.isDescendant(of: self),
               let first = Self.firstRow(in: self) else { return false }

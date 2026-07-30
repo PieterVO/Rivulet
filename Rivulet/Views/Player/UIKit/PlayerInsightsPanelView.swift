@@ -54,6 +54,9 @@ final class InsightsCastListView: UIView {
     /// so a denied edge move re-resolves in place instead of looping to the
     /// first row (see there).
     private weak var lastFocusedRow: UIView?
+    /// When focus last moved within this list, for `canEscapeUpward`'s
+    /// same-press gate. Starts outside any window.
+    private var lastFocusMoveTime: CFTimeInterval = -.greatestFiniteMagnitude
 
     private let cast: [MediaPerson]
     private let trivia: TitleTrivia?
@@ -241,15 +244,23 @@ final class InsightsCastListView: UIView {
         // remember which row holds focus (see preferredFocusEnvironments).
         hasPinnedInitialFocus = true
         lastFocusedRow = row
+        lastFocusMoveTime = CACurrentMediaTime()
         scrollFocusedRowIntoView(row, coordinator: coordinator)
     }
 
-    /// Consulted by `InsightsPanelContainerView.pressesBegan` to decide
-    /// whether an Up press should escape to the tab bar above (the focus
-    /// engine's own directional search does not reliably cross this list's
-    /// scroll-view boundary). True only when focus is currently on this
-    /// list's first row.
-    func isFocusOnFirstRow() -> Bool {
+    /// Consulted by `InsightsPanelContainerView.pressesBegan` to decide whether
+    /// an Up press should escape to the tab bar above (the focus engine's own
+    /// directional search does not reliably cross this list's scroll-view
+    /// boundary). True when focus is on this list's first row AND the engine did
+    /// not just move it there.
+    ///
+    /// Without that second half, an Up press from row 1 escaped to the tabs:
+    /// the engine moves focus to row 0 a few ms before this press arrives, so
+    /// the first-row test was already true and row 0 was jumped over. See
+    /// `SamePressFocusGate`. Named to match `InfoScrollView.canEscapeUpward`,
+    /// which answers the same question for the Info popup.
+    var canEscapeUpward: Bool {
+        guard !SamePressFocusGate.justMovedFocus(at: lastFocusMoveTime) else { return false }
         guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView,
               let first = focusableRows.first
         else { return false }

@@ -270,7 +270,7 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if state == .list, let tabBar {
             for press in presses {
-                if press.type == .upArrow, listView.isFocusOnFirstRow() {
+                if press.type == .upArrow, listView.canEscapeUpward {
                     moveFocus(to: tabBar)
                     return
                 }
