@@ -91,12 +91,24 @@ final class InfoFocusRowView: UIView {
     /// half-width left column) into this row. Re-parents the passed views; the
     /// row itself — the focus target — is never torn down.
     func setPair(_ left: UIView, _ right: UIView?) {
+        emptyStack()
+        stack.addArrangedSubview(left)
+        stack.addArrangedSubview(right ?? UIView())
+    }
+
+    /// Puts one view across BOTH columns. Prose (the Description tab) reads
+    /// badly in a half-width column, and `.fillEqually` gives a lone arranged
+    /// subview the full width.
+    func setFullWidth(_ view: UIView) {
+        emptyStack()
+        stack.addArrangedSubview(view)
+    }
+
+    private func emptyStack() {
         stack.arrangedSubviews.forEach {
             stack.removeArrangedSubview($0)
             $0.removeFromSuperview()
         }
-        stack.addArrangedSubview(left)
-        stack.addArrangedSubview(right ?? UIView())
     }
 }
 

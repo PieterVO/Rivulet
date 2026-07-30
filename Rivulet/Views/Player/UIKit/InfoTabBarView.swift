@@ -5,10 +5,10 @@
 //  InfoTabBarView.swift
 //  Rivulet
 //
-//  Two-pill tab bar (Info | Advanced) for the player's Now Playing popup —
-//  the sibling of `InsightsTabBarView` for the trivia panel. Kept as its own
-//  type rather than sharing that bar: this one has a fixed two-tab enum and
-//  needs no horizontal scroll (two pills always fit the panel width). The pill
+//  Pill tab bar (Description | Info | Advanced) for the player's Now Playing
+//  popup — the sibling of `InsightsTabBarView` for the trivia panel. Kept as
+//  its own type rather than sharing that bar: this one has a fixed tab enum and
+//  needs no horizontal scroll (all three pills fit the panel width). The pill
 //  visuals are copied token-for-token from `InsightsTabPillView`; if you
 //  restyle one, restyle both so the two tab bars stay identical.
 //
@@ -24,10 +24,12 @@ private let infoTabBarLog = Logger(subsystem: "com.rivulet.app", category: "Play
 final class InfoTabBarView: UIView {
 
     enum Tab: CaseIterable {
+        case description
         case info
         case advanced
         var title: String {
             switch self {
+            case .description: return "Description"
             case .info: return "Info"
             case .advanced: return "Advanced"
             }
@@ -43,9 +45,13 @@ final class InfoTabBarView: UIView {
 
     private let stack = UIStackView()
     private var pills: [(tab: Tab, view: InfoTabPillView)] = []
+    private let tabs: [Tab]
     private var selected: Tab
 
-    init(selected: Tab) {
+    /// `tabs` is the set actually available for this item (Description needs a
+    /// summary, Advanced needs the aether route), not `Tab.allCases`.
+    init(tabs: [Tab], selected: Tab) {
+        self.tabs = tabs
         self.selected = selected
         super.init(frame: .zero)
         setUp()
@@ -78,12 +84,12 @@ final class InfoTabBarView: UIView {
         // text never overflows a width computed from a lighter weight. Same
         // idiom as InsightsTabBarView.
         let measuringFont = UIFont.systemFont(ofSize: 20, weight: .heavy)
-        let widestTitle = Tab.allCases
+        let widestTitle = tabs
             .map { ceil(($0.title as NSString).size(withAttributes: [.font: measuringFont]).width) }
             .max() ?? 0
         let pillWidth = widestTitle + 40
 
-        for tab in Tab.allCases {
+        for tab in tabs {
             let pill = InfoTabPillView()
             pill.configure(title: tab.title, isSelected: tab == selected)
             pill.onSelected = { [weak self] in self?.handlePillSelected(tab) }

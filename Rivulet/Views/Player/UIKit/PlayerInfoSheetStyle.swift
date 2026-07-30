@@ -30,6 +30,18 @@ enum PlayerInfoSheetStyle {
         return label
     }
 
+    /// Item title, used by the Description tab. Bigger than a body row because
+    /// it is that sheet's heading, not one of its values.
+    @MainActor
+    static func titleLabel(_ text: String) -> UILabel {
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 28, weight: .semibold)
+        label.textColor = .white
+        label.numberOfLines = 0
+        return label
+    }
+
     @MainActor
     static func bodyLabel(_ text: String, secondary: Bool) -> UILabel {
         let label = UILabel()
