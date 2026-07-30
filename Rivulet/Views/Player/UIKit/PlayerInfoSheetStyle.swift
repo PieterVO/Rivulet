@@ -19,15 +19,44 @@ import UIKit
 
 enum PlayerInfoSheetStyle {
 
+    /// No info-sheet label may be squeezed vertically. Every sheet hugs its
+    /// content at `.defaultHigh` so the panel sizes to it, and a label's own
+    /// vertical compression resistance defaults to the SAME priority — a tie
+    /// Auto Layout is free to settle by shortening the text instead of growing
+    /// the scroll content. Measured: a 12-paragraph summary in a 448pt sheet
+    /// reported `contentSize.height == 448`, so it was clipped with nothing to
+    /// scroll rather than overflowing. Required resistance breaks the tie the
+    /// only way that can be right.
+    @MainActor
+    private static func resistVerticalSqueeze(_ label: UILabel) {
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
+    }
+
     // MARK: - Row builders
 
+    /// Section heading: the title, then a hairline rule running out to the
+    /// sheet's trailing edge so the sections read apart at a glance.
     @MainActor
-    static func sectionLabel(_ text: String) -> UILabel {
+    static func sectionLabel(_ text: String) -> UIView {
         let label = UILabel()
         label.text = text
         label.font = .systemFont(ofSize: 15, weight: .bold)
         label.textColor = UIColor.white.withAlphaComponent(0.5)
-        return label
+        // Explicit, so the stack stretches the rule and not the title. Both
+        // default to 250 horizontally, and `.fill` then stretches whichever
+        // comes first — which would be the label.
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let rule = UIView()
+        rule.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+        rule.heightAnchor.constraint(equalToConstant: 2).isActive = true
+
+        let heading = UIStackView(arrangedSubviews: [label, rule])
+        heading.axis = .horizontal
+        heading.alignment = .center
+        heading.spacing = 12
+        return heading
     }
 
     /// Item title, used by the Description tab. Bigger than a body row because
@@ -39,6 +68,7 @@ enum PlayerInfoSheetStyle {
         label.font = .systemFont(ofSize: 28, weight: .semibold)
         label.textColor = .white
         label.numberOfLines = 0
+        resistVerticalSqueeze(label)
         return label
     }
 
@@ -49,6 +79,7 @@ enum PlayerInfoSheetStyle {
         label.font = .systemFont(ofSize: 20, weight: .regular)
         label.textColor = secondary ? UIColor.white.withAlphaComponent(0.6) : .white
         label.numberOfLines = 0
+        resistVerticalSqueeze(label)
         return label
     }
 
@@ -57,6 +88,7 @@ enum PlayerInfoSheetStyle {
         let row = UILabel()
         row.numberOfLines = 0
         row.attributedText = infoRowText(label, value)
+        resistVerticalSqueeze(row)
         return row
     }
 

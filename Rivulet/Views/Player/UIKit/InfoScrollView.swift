@@ -63,7 +63,21 @@ final class InfoFocusRowView: UIView {
 
     private let stack = UIStackView()
 
-    override var canBecomeFocused: Bool { true }
+    /// Focusable ONLY while the enclosing sheet needs scrolling.
+    ///
+    /// Focus in the content exists to scroll it. A sheet that fits on screen
+    /// has nothing to scroll, so putting focus in it buys nothing and costs
+    /// the user a way back: they walk into a row and then have to find the way
+    /// out to the pills again. When everything is visible, focus stays on the
+    /// pills and Down does nothing at all.
+    override var canBecomeFocused: Bool {
+        var candidate: UIView? = superview
+        while let current = candidate {
+            if let scroll = current as? InfoScrollView { return scroll.needsFocusableRows }
+            candidate = current.superview
+        }
+        return true
+    }
 
     init() {
         super.init(frame: .zero)
@@ -114,13 +128,13 @@ final class InfoFocusRowView: UIView {
 
 /// One tab's content sheet in the Info popup (`CardDescriptionView`,
 /// `CardInfoView`, `CardStatsView`). `PlayerInfoTabsView` drives the
-/// pills ↔ sheet focus crossings itself, because the focus engine does not
+/// pills ↔ sheet focus crossing itself, because the focus engine does not
 /// reliably cross the nested scroll views between them — the same conclusion
-/// `InsightsPanelContainerView` reached for the trivia panel. This is what it
-/// needs to ask of whichever sheet is visible.
+/// `InsightsPanelContainerView` reached for the trivia panel. Every sheet is an
+/// `InfoScrollView` wrapped in some content, and that scroll view owns the
+/// focus and scroll mechanics, so exposing it is all the container needs.
 protocol InfoTabSheet: UIView {
-    /// Whether an Up press should now leave this sheet for the tab bar.
-    var canEscapeUpward: Bool { get }
+    var infoScrollView: InfoScrollView { get }
 }
 
 final class InfoScrollView: UIScrollView {
@@ -128,6 +142,23 @@ final class InfoScrollView: UIScrollView {
     /// Fires when focus enters/leaves this sheet's sections, so the hosting
     /// panel can brighten its own boundary (the sheet draws no focus ring).
     var onFocusChange: ((Bool) -> Void)?
+
+    /// Fires when an Up press has nowhere left to scroll and focus sits on the
+    /// first row: the host escapes focus back to the tab bar.
+    ///
+    /// A callback rather than letting the press bubble to the host's own
+    /// `pressesBegan`. Bubbling out of a `UIScrollView` did not get there on
+    /// device, and this is the exact spot that knows the press was declined —
+    /// re-deriving "at the top, not a same-press artifact" one level up would
+    /// duplicate the two gates below.
+    var onDeclinedUpPress: (() -> Void)?
+
+    /// Whether this sheet's rows should be focus targets at all: only when the
+    /// content overflows the viewport and therefore needs scrolling. Read by
+    /// `InfoFocusRowView.canBecomeFocused`.
+    var needsFocusableRows: Bool {
+        contentSize.height > bounds.height + 0.5
+    }
 
     /// Breathing room above/below a revealed section so it never sits flush
     /// against the clip edge.
@@ -190,13 +221,18 @@ final class InfoScrollView: UIScrollView {
     /// and must stay reachable.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
-            let delta: CGFloat
             switch press.type {
-            case .upArrow: delta = -Self.pressStep
-            case .downArrow: delta = Self.pressStep
+            case .upArrow:
+                if step(by: -Self.pressStep) { return }
+                // Nowhere left to scroll: hand the way out to the host.
+                if canEscapeUpward {
+                    onDeclinedUpPress?()
+                    return
+                }
+            case .downArrow:
+                if step(by: Self.pressStep) { return }
             default: continue
             }
-            if step(by: delta) { return }
         }
         super.pressesBegan(presses, with: event)
     }

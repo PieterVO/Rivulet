@@ -68,7 +68,7 @@ final class CardStatsView: UIView, InfoTabSheet {
         didSet { scrollView.onFocusChange = onFocusChange }
     }
 
-    var canEscapeUpward: Bool { scrollView.canEscapeUpward }
+    var infoScrollView: InfoScrollView { scrollView }
 
     init(provider: @escaping () -> AetherAdvancedStats?) {
         self.provider = provider

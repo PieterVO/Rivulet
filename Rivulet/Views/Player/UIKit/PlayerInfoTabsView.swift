@@ -125,11 +125,13 @@ final class PlayerInfoTabsView: UIView {
         infoView.translatesAutoresizingMaskIntoConstraints = false
         infoView.isHidden = currentTab != .info
         addSubview(infoView)
+        wireUpwardEscape(infoView)
 
         if let descriptionView {
             descriptionView.translatesAutoresizingMaskIntoConstraints = false
             descriptionView.isHidden = currentTab != .description
             addSubview(descriptionView)
+            wireUpwardEscape(descriptionView)
         }
 
         if let tabBar {
@@ -199,6 +201,7 @@ final class PlayerInfoTabsView: UIView {
         stats.onFocusChange = onFocusChange
         addSubview(stats)
         constrainToContentArea(stats)
+        wireUpwardEscape(stats)
         statsView = stats
         return stats
     }
@@ -247,42 +250,56 @@ final class PlayerInfoTabsView: UIView {
         focusEscapeTarget = nil
     }
 
-    /// Drives the two crossings between the pills and the visible sheet.
+    /// Drives Down from the pills into the visible sheet. It does not happen
+    /// natively: the pills and the sheet rows live in separate self-driven
+    /// scroll views and the focus engine's directional search does not reliably
+    /// cross that boundary — Down did nothing at all on device.
+    /// `InsightsPanelContainerView` reached the same conclusion for the trivia
+    /// panel and drives its crossings the same way.
     ///
-    /// Neither happens natively: the pills and the sheet rows live in separate
-    /// self-driven scroll views, and the focus engine's directional search does
-    /// not reliably cross that boundary — Down from a pill did nothing at all
-    /// on device. `InsightsPanelContainerView` reached the same conclusion for
-    /// the trivia panel and drives both crossings the same way.
+    /// The way back up is the sheet's own `onDeclinedUpPress` (wired in
+    /// `wireUpwardEscape`), not a branch here: only the scroll view knows
+    /// whether an Up press still had somewhere to scroll.
     ///
-    /// Presses are delivered to the FOCUSED view and bubble up, so this runs
-    /// for a press on a pill or on a row. Ordering matters for Up: the sheet's
-    /// own `InfoScrollView.pressesBegan` sits below this in the chain and gets
-    /// first refusal, so a press that still had somewhere to scroll never
-    /// reaches here.
+    /// A sheet that fits on screen is skipped entirely — its rows are not even
+    /// focusable (see `InfoFocusRowView.canBecomeFocused`), so Down stays on
+    /// the pills rather than walking focus into content that cannot scroll.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if let tabBar {
-            for press in presses {
-                if press.type == .downArrow, tabBar.containsFocus {
-                    infoTabLog.notice("driving focus: pills → content")
-                    moveFocus(to: currentContentView)
+            for press in presses where press.type == .downArrow {
+                guard tabBar.containsFocus else { break }
+                guard currentContentView.infoScrollView.needsFocusableRows else {
+                    infoTabLog.notice("Down ignored: sheet fits, no focus needed in content")
                     return
                 }
-                if press.type == .upArrow, currentContentView.canEscapeUpward {
-                    infoTabLog.notice("driving focus: content → pills")
-                    moveFocus(to: tabBar)
-                    return
-                }
+                infoTabLog.notice("driving focus: pills → content")
+                moveFocus(to: currentContentView)
+                return
             }
         }
         super.pressesBegan(presses, with: event)
     }
 
+    /// Gives a sheet its way back to the pills. Called once per sheet, as each
+    /// is built.
+    private func wireUpwardEscape(_ sheet: InfoTabSheet) {
+        sheet.infoScrollView.onDeclinedUpPress = { [weak self] in
+            guard let self, let tabBar = self.tabBar else { return }
+            infoTabLog.notice("driving focus: content → pills")
+            self.moveFocus(to: tabBar)
+        }
+    }
+
     /// The currently focused view, if it sits inside the visible content
     /// sheet (as opposed to the tab bar, or nowhere yet on first appearance).
+    ///
+    /// `canBecomeFocused` is re-checked because it can change under focus: the
+    /// Advanced sheet's rows come and go with the telemetry, and once it fits
+    /// on screen its rows stop being focus targets. Re-affirming a view that
+    /// can no longer take focus would wedge the update.
     private var focusedViewInContent: UIView? {
         guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return nil }
         guard focused === currentContentView || focused.isDescendant(of: currentContentView) else { return nil }
-        return focused
+        return focused.canBecomeFocused ? focused : nil
     }
 }

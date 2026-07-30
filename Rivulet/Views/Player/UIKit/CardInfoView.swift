@@ -39,7 +39,7 @@ final class CardInfoView: UIView, InfoTabSheet {
         didSet { scrollView.onFocusChange = onFocusChange }
     }
 
-    var canEscapeUpward: Bool { scrollView.canEscapeUpward }
+    var infoScrollView: InfoScrollView { scrollView }
 
     init(metadata: PlexMetadata, modes: StreamingModeInfo) {
         self.metadata = metadata

@@ -99,6 +99,80 @@ final class PlayerInfoPopupLayoutTests: XCTestCase {
                           "spacers must collapse once the summary overflows the sheet")
     }
 
+    // MARK: - Focus only where there is something to scroll
+
+    private func firstRow(in view: UIView) -> InfoFocusRowView? {
+        for subview in view.subviews where !subview.isHidden {
+            if let row = subview as? InfoFocusRowView { return row }
+            if let found = firstRow(in: subview) { return found }
+        }
+        return nil
+    }
+
+    func testSheetThatFitsOnScreenTakesNoFocus() throws {
+        let view = descriptionView(summary: "A short summary.")
+        XCTAssertFalse(view.infoScrollView.needsFocusableRows)
+        let row = try XCTUnwrap(firstRow(in: view))
+        XCTAssertFalse(row.canBecomeFocused,
+                       "nothing to scroll, so focus must stay on the pills")
+    }
+
+    func testOverflowingSheetTakesFocus() throws {
+        let paragraphs = (1...12).map { "Paragraph number \($0) of a very long summary that wraps onto more than one line on its own." }
+        let view = descriptionView(summary: paragraphs.joined(separator: "\n"))
+        // The content must OVERFLOW, not squeeze: a sheet reporting
+        // contentSize == bounds has clipped its text with nothing to scroll.
+        XCTAssertGreaterThan(view.infoScrollView.contentSize.height, view.infoScrollView.bounds.height,
+                             "a long summary must grow the scroll content, not compress its labels")
+        XCTAssertTrue(view.infoScrollView.needsFocusableRows)
+        let row = try XCTUnwrap(firstRow(in: view))
+        XCTAssertTrue(row.canBecomeFocused, "an overflowing sheet needs focus to scroll it")
+    }
+
+    func testInfoSheetWithManySectionsOverflowsRatherThanClipping() {
+        // The Info tab is the sheet that actually overflows in practice, and it
+        // routes every row through the same builders.
+        var movie = PlexMetadata()
+        movie.type = "movie"
+        movie.title = "Some Movie"
+        movie.Media = [PlexMedia(
+            id: 1, duration: 7_200_000, bitrate: 20_000, width: 3840, height: 2160,
+            aspectRatio: 1.78, audioChannels: 6, audioCodec: "eac3", videoCodec: "hevc",
+            videoResolution: "4k", container: "mkv", videoFrameRate: "24p", Part: nil)]
+        let view = CardInfoView(
+            metadata: movie,
+            modes: StreamingModeInfo(video: .directPlay, audio: .directPlay, subtitles: .directPlay))
+        // Deliberately shorter than one VIDEO section, which is all this
+        // fixture has (no Part/Stream, so no AUDIO/SUBTITLES/FILE).
+        view.frame = CGRect(x: 0, y: 0, width: 504, height: 100)
+        view.layoutIfNeeded()
+
+        XCTAssertGreaterThan(view.infoScrollView.contentSize.height, view.infoScrollView.bounds.height,
+                             "sections taller than the sheet must scroll, not compress")
+    }
+
+    // MARK: - Section headings
+
+    func testSectionHeadingRuleFillsTheRemainingWidth() throws {
+        let heading = try XCTUnwrap(PlayerInfoSheetStyle.sectionLabel("VIDEO") as? UIStackView)
+        let host = UIView(frame: CGRect(x: 0, y: 0, width: 504, height: 40))
+        heading.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(heading)
+        NSLayoutConstraint.activate([
+            heading.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            heading.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            heading.topAnchor.constraint(equalTo: host.topAnchor),
+        ])
+        host.layoutIfNeeded()
+
+        let label = try XCTUnwrap(heading.arrangedSubviews.first as? UILabel)
+        let rule = try XCTUnwrap(heading.arrangedSubviews.last)
+        XCTAssertEqual(label.bounds.width, label.intrinsicContentSize.width, accuracy: 1,
+                       "the title must keep its own width; the rule takes the slack")
+        XCTAssertGreaterThan(rule.bounds.width, 300)
+        XCTAssertEqual(rule.bounds.height, 2)
+    }
+
     // MARK: - Advanced tab: values must not reflow as they tick
 
     func testInfoRowValueUsesMonospacedDigits() throws {
