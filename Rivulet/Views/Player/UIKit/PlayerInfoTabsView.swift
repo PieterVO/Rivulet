@@ -73,6 +73,7 @@ final class PlayerInfoTabsView: UIView {
 
     private var contentTopAnchor: NSLayoutYAxisAnchor!
     private var contentTopConstant: CGFloat = 0
+    private var contentSideInset: CGFloat = 0
 
     /// Forwarded to whichever content sheet holds focus, so the hosting panel
     /// can brighten its ring while the sheet is focused (the sheet is one big
@@ -145,9 +146,15 @@ final class PlayerInfoTabsView: UIView {
             ])
             contentTopAnchor = tabBar.bottomAnchor
             contentTopConstant = Metrics.tabBarSpacing
+            // Match the bar's own pill inset so a sheet's leading text edge
+            // lines up with the pill capsules above it, the same relationship
+            // the Insights panel gets from its matching `rowInset`. Without a
+            // bar there is nothing to align to, so the sheet stays flush.
+            contentSideInset = PillTabBarView.contentInset
         } else {
             contentTopAnchor = topAnchor
             contentTopConstant = 0
+            contentSideInset = 0
         }
 
         constrainToContentArea(infoView)
@@ -159,8 +166,8 @@ final class PlayerInfoTabsView: UIView {
     private func constrainToContentArea(_ view: UIView) {
         NSLayoutConstraint.activate([
             view.topAnchor.constraint(equalTo: contentTopAnchor, constant: contentTopConstant),
-            view.leadingAnchor.constraint(equalTo: leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: trailingAnchor),
+            view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: contentSideInset),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -contentSideInset),
             view.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }

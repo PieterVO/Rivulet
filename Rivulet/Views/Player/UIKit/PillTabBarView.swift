@@ -37,12 +37,18 @@ import UIKit
 
 final class PillTabBarView: UIView {
 
+    /// Horizontal inset of the pills inside the clipping scroll view, so a
+    /// focused pill's 1.05 scale doesn't clip at the bar's edges.
+    ///
+    /// Hosts must inset the content BELOW the bar by the same amount, or the
+    /// pill capsules sit proud of the content's leading edge. The Insights
+    /// panel does this with its own matching `rowInset` (`InsightsCastListView`,
+    /// `InsightsActorView`); the Info popup reads this constant directly.
+    static let contentInset: CGFloat = 8
+
     private enum Metrics {
         static let pillSpacing: CGFloat = 8
         static let barHeight: CGFloat = 56
-        /// Horizontal inset inside the clipping scroll view so a focused
-        /// pill's 1.05 scale doesn't clip at the bar's edges.
-        static let pillInset: CGFloat = 8
     }
 
     /// Fires with the index of the newly selected tab. Not called for a
@@ -90,8 +96,8 @@ final class PillTabBarView: UIView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: Metrics.pillInset),
-            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -Metrics.pillInset),
+            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: Self.contentInset),
+            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -Self.contentInset),
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
             stack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
         ])
