@@ -93,11 +93,6 @@ enum SettingsDescriptorStore {
             icon: "arrow.up.arrow.down",
             description: "Moves the Discover tab above your Media libraries in the sidebar for quicker access."
         ),
-        "hideTriviaSpoilers": SettingDescriptor(
-            icon: "sparkles",
-            description: "Hides spoiler-tagged trivia facts in the player's Insights panel so a later reveal never appears over what you're watching."
-        ),
-
         // MARK: Playback
         "autoSkipIntro": SettingDescriptor(
             icon: "play.circle",
@@ -192,14 +187,6 @@ enum SettingsDescriptorStore {
         "connectPlex": SettingDescriptor(
             icon: "link",
             description: "Connect to your Plex server to browse and stream your media library."
-        ),
-        "userProfiles": SettingDescriptor(
-            icon: "person.crop.circle",
-            description: "Switch between Plex Home user profiles. Each profile has its own watch history and preferences."
-        ),
-        "profileRow": SettingDescriptor(
-            icon: "person.crop.circle",
-            description: "Select this profile to switch to it. PIN-protected profiles will require verification. Press and hold for more options."
         ),
         "profilePickerOnLaunch": SettingDescriptor(
             icon: "person.2.circle",
@@ -362,7 +349,6 @@ enum SettingsDescriptorStore {
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)
         case .cache: return ("internaldrive", .systemGray)
-        case .userProfiles: return ("person.crop.circle", .systemCyan)
         case .displaySizePicker: return ("textformat.size", .systemOrange)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)

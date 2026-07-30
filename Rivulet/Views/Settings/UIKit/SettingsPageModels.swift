@@ -83,6 +83,16 @@ struct SettingsRowItem {
     /// unfocusable while that state is off. Evaluated live (not cached at build
     /// time) so flipping the row it depends on takes effect without a rebuild.
     var isEnabled: () -> Bool = { true }
+    /// True = this "row" is really a group caption (see `header(_:)`).
+    var isHeader = false
+
+    /// A group caption between row runs, Apple TV Settings style: small
+    /// uppercase gray text, no capsule, never focusable. Deliberately NOT a
+    /// `Kind` case — it reuses `.info`, which is already unfocusable and
+    /// chevron-less, so every existing `switch kind` keeps working untouched.
+    static func header(_ title: String) -> SettingsRowItem {
+        SettingsRowItem(id: "hdr_\(title)", title: title, kind: .info(value: { "" }), isHeader: true)
+    }
 
     var isFocusable: Bool {
         if case .info = kind { return false }
@@ -146,7 +156,6 @@ enum SettingsContent {
         case .plex:        return plex
         case .libraries:   return libraries
         case .cache:       return cache
-        case .userProfiles: return userProfiles
         case .iptv:        return iptv
         case .liveTVSourceDetail: return liveTVSourceDetail
         case .addLiveTVSource:  return addLiveTVSource
@@ -193,10 +202,13 @@ enum SettingsContent {
         [
             SettingsRowItem(id: "cat_appearance", title: "Appearance", kind: .navigation(.appearance)),
             SettingsRowItem(id: "cat_playback",   title: "Playback",   kind: .navigation(.playback)),
-            SettingsRowItem(id: "cat_music",      title: "Music",      kind: .navigation(.music)),
+            // Music settings withdrawn until the audio features behind them
+            // exist — all three rows were no-ops (see the `music` builder).
+            // Music BROWSING is unaffected: the sidebar still shows
+            // MusicHomeView for every visible Plex music library.
+//            SettingsRowItem(id: "cat_music",      title: "Music",      kind: .navigation(.music)),
             SettingsRowItem(id: "cat_liveTV",     title: "Live TV",    kind: .navigation(.liveTV)),
             SettingsRowItem(id: "cat_servers",    title: "Servers",    kind: .navigation(.servers)),
-            SettingsRowItem(id: "userProfiles",   title: "User Profiles", kind: .navigation(.userProfiles)),
             SettingsRowItem(id: "cache",          title: "Cache & Storage", kind: .navigation(.cache)),
             SettingsRowItem(id: "cat_about",      title: "About",      kind: .navigation(.about))
         ]
@@ -206,22 +218,50 @@ enum SettingsContent {
 
     private static var appearance: [SettingsRowItem] {
         var rows: [SettingsRowItem] = [
+            // Leading block is unheaded, like an Apple TV Settings page's first
+            // group: it sits directly under the page title.
             SettingsRowItem(id: "libraries", title: "Sidebar Libraries", kind: .navigation(.libraries)),
             SettingsRowItem(id: "displaySize", title: "Display Size",
                             kind: .navigationValue(.displaySizePicker, value: {
                                 DisplaySize(rawValue: SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue))?.description ?? ""
                             })),
-            toggle("homeHero", "Home Hero", key: "showHomeHero", default: true),
-            toggle("libraryHero", "Library Hero", key: "showLibraryHero", default: true),
+            // Profiles themselves are switched from the sidebar now, so this is
+            // all that is left of the retired User Profiles page.
+            SettingsRowItem(id: "profilePickerOnLaunch", title: "Profile Picker on Launch",
+                            kind: .toggle(
+                                get: { PlexUserProfileManager.shared.showProfilePickerOnLaunch },
+                                set: { PlexUserProfileManager.shared.showProfilePickerOnLaunch = $0 })),
+
+            // Titles drop whatever their caption already says ("Home Hero" under
+            // HOME reads as "Home Home Hero"), the way Apple TV Settings puts a
+            // bare "Siri" row under SIRI. A prefix naming something OTHER than
+            // the group stays, e.g. Discover Above Libraries under HOME.
+            .header("Home"),
+            toggle("homeHero", "Hero", key: "showHomeHero", default: true),
+            toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false),
+            toggle("showDiscoverTab", "Show Discover Tab", key: "showDiscoverTab", default: true),
+            // Nothing to place when there is no Discover tab, so this dims with
+            // it rather than vanishing (a toggle only re-dims the visible rows,
+            // it does not rebuild the list).
+            toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true,
+                   enabledWhen: { SettingsStore.bool("showDiscoverTab", default: true) })
+        ]
+        rows += [
+            .header("Library"),
+            toggle("libraryHero", "Hero", key: "showLibraryHero", default: true),
             toggle("discoveryRows", "Discovery Rows", key: "showLibraryRecommendations", default: true),
             toggle("recentRows", "Recent Rows", key: "showLibraryRecentRows", default: true),
-            toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false),
-            toggle("showDiscoverTab", "Show Discover Tab", key: "showDiscoverTab", default: true)
+
+            // The look of Live TV lives here; what it plays stays on the Live TV
+            // page. Same ids and keys as before the move, so the description
+            // panel entries carry over untouched.
+            .header("Live TV"),
+            toggle("liveTVAboveLibraries", "Above Libraries", key: "liveTVAboveLibraries", default: false),
+            SettingsRowItem(id: "defaultLayout", title: "Default Layout",
+                            kind: .cycle(value: { LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.guide.rawValue))?.description ?? "" },
+                                         next: { cycleLiveTVLayout() })),
+            toggle("classicTVMode", "Classic TV Mode", key: "classicTVMode", default: false)
         ]
-        if SettingsStore.bool("showDiscoverTab", default: true) {
-            rows.append(toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true))
-        }
-        rows.append(toggle("hideTriviaSpoilers", "Hide Trivia Spoilers", key: "hideTriviaSpoilers", default: true))
         return rows
     }
 
@@ -325,40 +365,54 @@ enum SettingsContent {
 
     // MARK: Live TV
 
+    /// Sidebar placement, Default Layout and Classic TV Mode moved to the
+    /// Appearance page's "Live TV" group; this page keeps sources and playback.
     private static var liveTV: [SettingsRowItem] {
         [
             SettingsRowItem(id: "liveTVSources", title: "Live TV Sources", kind: .navigation(.iptv)),
-            toggle("liveTVAboveLibraries", "Live TV Above Libraries", key: "liveTVAboveLibraries", default: false),
-            toggle("classicTVMode", "Classic TV Mode", key: "classicTVMode", default: false),
             toggle("combineSources", "Combine Sources", key: "combineLiveTVSources", default: true),
-            SettingsRowItem(id: "defaultLayout", title: "Default Layout",
-                            kind: .cycle(value: { LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.guide.rawValue))?.description ?? "" },
-                                         next: {
-                                             let all = LiveTVLayout.allCases
-                                             let cur = LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.guide.rawValue)) ?? all.first!
-                                             let i = all.firstIndex(of: cur) ?? 0
-                                             SettingsStore.setString("liveTVLayout", all[(i + 1) % all.count].rawValue)
-                                         })),
             toggle("confirmExitMultiview", "Confirm Exit Multiview", key: "confirmExitMultiview", default: true),
             toggle("allowFourStreams", "Allow 3 or 4 Streams", key: "allowFourStreams", default: false)
         ]
     }
 
+    private static func cycleLiveTVLayout() {
+        let all = LiveTVLayout.allCases
+        let cur = LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.guide.rawValue)) ?? all.first!
+        let i = all.firstIndex(of: cur) ?? 0
+        SettingsStore.setString("liveTVLayout", all[(i + 1) % all.count].rawValue)
+    }
+
     // MARK: Music
 
+    /// Withdrawn: every row here was a no-op, and not merely unread. Each key
+    /// had no reader at all, and the implementation each one was supposed to
+    /// gate has no caller either:
+    ///   - Crossfade wrote `musicCrossfadeDuration` as a `CrossfadeOption`
+    ///     string, while `MusicAudioProcessor.crossfadeDuration` reads
+    ///     `music_crossfade_duration` as a `CrossfadeDuration` Int — different
+    ///     key AND different type — and nothing calls that getter, so music
+    ///     playback has no crossfade to configure.
+    ///   - Loudness Normalization gated `MusicAudioProcessor.adjustedVolume(for:)`,
+    ///     which has no callers.
+    ///   - Audio Quality Badges gated `AudioQualityBadge`, a view that is never
+    ///     instantiated anywhere.
+    /// Restore the rows below once one of those is actually wired up, and fix
+    /// the crossfade key/type mismatch when you do.
     private static var music: [SettingsRowItem] {
-        [
-            toggle("musicLoudness", "Loudness Normalization", key: "musicLoudnessNormalization", default: false),
-            SettingsRowItem(id: "musicCrossfade", title: "Crossfade",
-                            kind: .cycle(value: { CrossfadeOption(rawValue: SettingsStore.string("musicCrossfadeDuration", default: CrossfadeOption.off.rawValue))?.description ?? "" },
-                                         next: {
-                                             let all = CrossfadeOption.allCases
-                                             let cur = CrossfadeOption(rawValue: SettingsStore.string("musicCrossfadeDuration", default: CrossfadeOption.off.rawValue)) ?? all.first!
-                                             let i = all.firstIndex(of: cur) ?? 0
-                                             SettingsStore.setString("musicCrossfadeDuration", all[(i + 1) % all.count].rawValue)
-                                         })),
-            toggle("musicQualityBadges", "Audio Quality Badges", key: "musicShowQualityBadges", default: true)
-        ]
+        []
+//        [
+//            toggle("musicLoudness", "Loudness Normalization", key: "musicLoudnessNormalization", default: false),
+//            SettingsRowItem(id: "musicCrossfade", title: "Crossfade",
+//                            kind: .cycle(value: { CrossfadeOption(rawValue: SettingsStore.string("musicCrossfadeDuration", default: CrossfadeOption.off.rawValue))?.description ?? "" },
+//                                         next: {
+//                                             let all = CrossfadeOption.allCases
+//                                             let cur = CrossfadeOption(rawValue: SettingsStore.string("musicCrossfadeDuration", default: CrossfadeOption.off.rawValue)) ?? all.first!
+//                                             let i = all.firstIndex(of: cur) ?? 0
+//                                             SettingsStore.setString("musicCrossfadeDuration", all[(i + 1) % all.count].rawValue)
+//                                         })),
+//            toggle("musicQualityBadges", "Audio Quality Badges", key: "musicShowQualityBadges", default: true)
+//        ]
     }
 
     // MARK: Servers
@@ -491,75 +545,6 @@ enum SettingsContent {
         vc.present(popup, animated: true)
     }
 
-    // MARK: User Profiles (Plex Home users)
-
-    private static var userProfiles: [SettingsRowItem] {
-        let mgr = PlexUserProfileManager.shared
-        if mgr.isLoadingUsers {
-            return [SettingsRowItem(id: "profilesLoading", title: "Loading profiles…",
-                                    kind: .info(value: { "" }))]
-        }
-        guard !mgr.homeUsers.isEmpty else {
-            return [SettingsRowItem(id: "noProfiles",
-                                    title: "Plex Home is not set up for this account",
-                                    kind: .info(value: { "" }))]
-        }
-        var rows: [SettingsRowItem] = mgr.homeUsers.map { user in
-            SettingsRowItem(id: "profile_\(user.id)", title: user.displayName, kind: .selectable(
-                isSelected: { PlexUserProfileManager.shared.selectedUser?.id == user.id },
-                value: {
-                    if user.admin { return "Owner" }
-                    if user.restricted { return "Managed" }
-                    return user.requiresPin ? "PIN" : nil
-                },
-                handler: { vc in selectProfile(user, on: vc) }))
-        }
-        rows.append(SettingsRowItem(id: "profilePickerOnLaunch", title: "Profile Picker on Launch",
-                                    kind: .toggle(
-            get: { PlexUserProfileManager.shared.showProfilePickerOnLaunch },
-            set: { PlexUserProfileManager.shared.showProfilePickerOnLaunch = $0 })))
-        return rows
-    }
-
-    /// Switch directly when no PIN is needed, use a remembered PIN when
-    /// present, else present the PIN pad modal.
-    private static func selectProfile(_ user: PlexHomeUser, on vc: UIViewController) {
-        let mgr = PlexUserProfileManager.shared
-        guard user.requiresPin else {
-            Task {
-                _ = await mgr.selectUser(user, pin: nil)
-                (vc as? SettingsPageViewController)?.reloadRows()
-            }
-            return
-        }
-        if mgr.hasRememberedPin(for: user) {
-            Task {
-                let (success, pinWasInvalid) = await mgr.selectUserWithRememberedPin(user)
-                if success {
-                    (vc as? SettingsPageViewController)?.reloadRows()
-                } else {
-                    presentPin(user, on: vc,
-                               error: pinWasInvalid ? "Saved PIN is no longer valid. Please enter your PIN." : nil)
-                }
-            }
-        } else {
-            presentPin(user, on: vc, error: nil)
-        }
-    }
-
-    private static func presentPin(_ user: PlexHomeUser, on vc: UIViewController, error: String?) {
-        var host: UIHostingController<ProfilePinFlow>?
-        let flow = ProfilePinFlow(user: user, initialError: error, onClose: { [weak vc] in
-            host?.dismiss(animated: true)
-            (vc as? SettingsPageViewController)?.reloadRows()
-        })
-        let hc = UIHostingController(rootView: flow)
-        hc.modalPresentationStyle = .overFullScreen
-        hc.view.backgroundColor = .clear
-        host = hc
-        vc.present(hc, animated: true)
-    }
-
     // MARK: Live TV Sources
 
     /// The source whose detail page is currently being shown. Set by a source
@@ -625,11 +610,6 @@ enum SettingsContent {
     /// (e.g. fetch Plex Home users). Calls `reload` when fresh data arrives.
     static func prepareAsync(for page: SettingsPage, reload: @escaping () -> Void) {
         switch page {
-        case .userProfiles:
-            let mgr = PlexUserProfileManager.shared
-            if mgr.homeUsers.isEmpty && !mgr.isLoadingUsers {
-                Task { await mgr.fetchHomeUsers(); reload() }
-            }
         case .addLiveTVSource:
             // The picker VC is created fresh on every entry, so this is the
             // flow's entry point: start blank. Draft state and any previous

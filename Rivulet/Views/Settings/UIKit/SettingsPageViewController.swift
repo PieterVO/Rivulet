@@ -60,10 +60,15 @@ final class SettingsPageViewController: UIViewController {
 
         rebuildRows()
 
+        // Row metrics measured off tvOS Settings at 4K: 80pt pitch, a 66.5pt
+        // capsule, 13.5pt between capsules. 72 + 8 spacing gives the same 80pt
+        // pitch, and SettingsCell's 3pt inset each side lands a 66pt capsule
+        // with a 14pt gap — within half a point of Apple on all three.
+        let rowHeight: CGFloat = 72
         let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1),
-                                                            heightDimension: .absolute(64)))
+                                                            heightDimension: .absolute(rowHeight)))
         let group = NSCollectionLayoutGroup.vertical(layoutSize: .init(widthDimension: .fractionalWidth(1),
-                                                                       heightDimension: .absolute(64)),
+                                                                       heightDimension: .absolute(rowHeight)),
                                                      subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
         section.interGroupSpacing = 8
@@ -76,6 +81,7 @@ final class SettingsPageViewController: UIViewController {
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.register(SettingsCell.self, forCellWithReuseIdentifier: Self.cellID)
+        collectionView.register(SettingsHeaderCell.self, forCellWithReuseIdentifier: SettingsHeaderCell.reuseID)
         collectionView.remembersLastFocusedIndexPath = true
         view.addSubview(collectionView)
 
@@ -232,8 +238,14 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
     }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellID, for: indexPath) as! SettingsCell
         let item = rows[indexPath.item]
+        if item.isHeader {
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: SettingsHeaderCell.reuseID,
+                                                          for: indexPath) as! SettingsHeaderCell
+            cell.configure(title: item.title)
+            return cell
+        }
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellID, for: indexPath) as! SettingsCell
         cell.configure(title: item.title, value: item.valueText, showsChevron: item.showsChevron,
                        destructive: item.isDestructive, showsCheckmark: item.showsCheckmark,
                        dimmed: !item.isEnabled())

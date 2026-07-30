@@ -47,7 +47,7 @@ enum CrossfadeOption: String, CaseIterable, Hashable, CustomStringConvertible {
 enum SettingsPage: Hashable, CaseIterable {
     case root
     case appearance, playback, music, liveTV, servers, about
-    case plex, iptv, libraries, cache, userProfiles
+    case plex, iptv, libraries, cache
     case liveTVSourceDetail
     case addLiveTVSource, addOwnServer, addPlaylistURL
     case displaySizePicker, autoplayCountdownPicker, skipIntervalPicker
@@ -70,7 +70,6 @@ enum SettingsPage: Hashable, CaseIterable {
         case .addPlaylistURL: return "Playlist URL"
         case .libraries: return "Sidebar Libraries"
         case .cache: return "Cache & Storage"
-        case .userProfiles: return "User Profiles"
         case .displaySizePicker: return "Display Size"
         case .autoplayCountdownPicker: return "Autoplay Countdown"
         case .skipIntervalPicker: return "Skip Length"
