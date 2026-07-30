@@ -112,6 +112,11 @@ final class AetherPlayer: PlayerProtocol {
 
     private var foregroundReloadTask: Task<Void, Never>?
 
+    /// True while a foreground reload is actually running, so repeated Play
+    /// presses queue behind the rebuild instead of cancelling and restarting
+    /// it. Cleared on every exit, including the deadline path.
+    private var foregroundReloadInFlight = false
+
     /// Non-nil when the app returned from background with the user PAUSED:
     /// the torn-down session stays parked (clock intact, so the paused UI
     /// shows the true position) and play() performs the reload. Holds the
@@ -421,9 +426,22 @@ final class AetherPlayer: PlayerProtocol {
         }
     }
 
+    /// Rebuild the torn-down session at the preserved playhead.
+    ///
+    /// The reload is bounded and its failure is recoverable, because this is the
+    /// only way back into a session the engine tore down. An unbounded
+    /// fire-and-forget rebuild leaves the player wedged: the reload of a
+    /// connection that went stale across a multi-hour sleep can hang the same
+    /// way a cold start can (#245), and with `pendingReloadSince` already
+    /// consumed, every later Play press just called `engine.play()` on a session
+    /// with no player item. Exiting the player and replaying from the library
+    /// was the only way out.
     private func startForegroundReload(since: Date) {
+        guard !foregroundReloadInFlight else { return }
         foregroundReloadTask?.cancel()
+        foregroundReloadInFlight = true
         foregroundReloadTask = Task { [weak self] in
+            defer { self?.foregroundReloadInFlight = false }
             // The engine's teardown holds a background task through a 3.5s
             // loopback socket drain after its synchronous stopInternal. It
             // exposes no handle to await, so on a quick app switch wait out
@@ -433,11 +451,45 @@ final class AetherPlayer: PlayerProtocol {
             if drain > 0 { try? await Task.sleep(for: .seconds(drain)) }
             guard let self, !Task.isCancelled else { return }
             print("[AetherPlayer] foreground reload: pos=\(self.engine.currentTime)")
-            // No-ops if nothing is loaded or the session was stopped while we
-            // waited (public stop() clears the engine's loadedURL). The load
-            // auto-plays, which is correct: this path only runs when the user
-            // intends playback.
-            try? await self.engine.reloadAtCurrentPosition()
+            do {
+                // No-ops if nothing is loaded or the session was stopped while
+                // we waited (public stop() clears the engine's loadedURL). The
+                // load auto-plays, which is correct: this path only runs when
+                // the user intends playback.
+                try await self.reloadWithDeadline()
+                self.pendingReloadSince = nil
+                print("[AetherPlayer] foreground reload done: state=\(self.engine.state) pos=\(self.engine.currentTime)")
+            } catch {
+                // Arm the deferred reload so the next Play press retries the
+                // rebuild. Covers the playing-user entry too: that one reloads
+                // eagerly with nothing armed, so without this a failure there
+                // wedges the session just as badly.
+                print("[AetherPlayer] foreground reload failed: \(error)")
+                self.pendingReloadSince = since
+            }
+        }
+    }
+
+    /// `reloadAtCurrentPosition` under the same deadline the startup load uses.
+    /// Same operation, same failure mode: a load that never returns has to
+    /// become a thrown error, or the retry can never be reached.
+    private func reloadWithDeadline() async throws {
+        let deadline = AetherLoadTimeoutPolicy.startupLoadDeadline
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor [engine] in
+                try await engine.reloadAtCurrentPosition()
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(deadline))
+                throw AetherLoadTimeoutPolicy.TimedOut(seconds: deadline)
+            }
+            do {
+                try await group.next()
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+            group.cancelAll()
         }
     }
 
@@ -699,8 +751,9 @@ final class AetherPlayer: PlayerProtocol {
         if let since = pendingReloadSince {
             // Parked since a paused background return: rebuild the torn-down
             // session (auto-plays at the preserved clock position) instead of
-            // playing into a session with no player item.
-            pendingReloadSince = nil
+            // playing into a session with no player item. The flag stays armed
+            // until the rebuild succeeds, so a Play press after a failed or
+            // timed-out one retries rather than no-opping forever.
             startForegroundReload(since: since)
             return
         }
