@@ -291,9 +291,12 @@ final class ExpandedDetailContainerView: UIView {
         seasonPillScroll.addSubview(seasonPillRow)
         let pillContent = seasonPillScroll.contentLayoutGuide
         // Hug the row when it fits; the header's width cap (below) clamps it to
-        // the screen when it doesn't.
+        // the screen when it doesn't. This MUST sit below the pill labels'
+        // compression resistance (750): at .defaultHigh it ties, and the solver
+        // squeezes the pills into the cap instead of overflowing — contentSize
+        // then equals bounds and the row has nothing to scroll (#261).
         let pillScrollHug = seasonPillScroll.widthAnchor.constraint(equalTo: pillContent.widthAnchor)
-        pillScrollHug.priority = .defaultHigh
+        pillScrollHug.priority = .defaultLow
         NSLayoutConstraint.activate([
             seasonPillScroll.topAnchor.constraint(equalTo: seasonsHeader.topAnchor),
             seasonPillScroll.bottomAnchor.constraint(equalTo: seasonsHeader.bottomAnchor),
@@ -835,7 +838,9 @@ final class ExpandedDetailContainerView: UIView {
         }
     }
 
-    private func setSeasonPills(_ labels: [String], seasonRefIDs refIDs: [String], selectedIndex: Int) {
+    /// Internal (not private) so the layout test can drive the row without a
+    /// provider round-trip — the overflow behaviour is pure Auto Layout.
+    func setSeasonPills(_ labels: [String], seasonRefIDs refIDs: [String], selectedIndex: Int) {
         seasonPillRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         seasonPills.removeAll()
         seasonRefIDs = refIDs
