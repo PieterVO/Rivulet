@@ -65,11 +65,52 @@ final class SeasonPillRowLayoutTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentSize.width, scroll.bounds.width)
     }
 
-    /// The scroller's window is capped at the screen (it used to run off it).
+    /// The scroller's window is capped at the screen (it used to run off it),
+    /// with the same gutter on both sides as every other row's content edge.
     func testScrollerWindowStaysOnScreen() throws {
         let view = makeView(seasons: 14)
         let scroll = try XCTUnwrap(pillScroller(in: view))
-        XCTAssertLessThanOrEqual(scroll.convert(scroll.bounds, to: view).maxX, screen.width)
+        let inset = PreviewCarouselGeometry.expandedChromeInset
+        let window = scroll.convert(scroll.bounds, to: view)
+        XCTAssertEqual(window.maxX, screen.width - inset, accuracy: 0.5)
+        let first = try XCTUnwrap(allPills(in: scroll).first)
+        XCTAssertEqual(first.convert(first.bounds, to: view).minX, inset, accuracy: 0.5)
+    }
+
+    /// Opening on a late season must scroll it in, along with BOTH neighbours —
+    /// the focus engine picks the next Left/Right target from what is on-window,
+    /// so an off-window neighbour is what lets a sideways press escape into the
+    /// episodes.
+    func testOpeningOnALateSeasonRevealsItAndItsNeighbours() throws {
+        let view = ExpandedDetailContainerView(frame: screen)
+        view.setSeasonPills(
+            (1...14).map { "Season \($0)" },
+            seasonRefIDs: (1...14).map(String.init),
+            selectedIndex: 12                      // Season 13, well past the window
+        )
+        view.layoutIfNeeded()
+        let scroll = try XCTUnwrap(pillScroller(in: view))
+        let pills = allPills(in: scroll)
+        XCTAssertEqual(pills.count, 14)
+        let window = CGRect(origin: scroll.contentOffset, size: scroll.bounds.size)
+        for i in 11...13 {
+            let frame = scroll.convert(pills[i].bounds, from: pills[i])
+            XCTAssertTrue(window.contains(frame), "pill \(i) is off-window: \(frame) vs \(window)")
+        }
+    }
+
+    /// In row order, so `allPills[i]` is season i+1.
+    private func allPills(in scroll: UIScrollView) -> [SeasonPillView] {
+        var stack = scroll.subviews
+        var found: [SeasonPillView] = []
+        while let v = stack.popLast() {
+            if let row = v as? UIStackView {
+                found = row.arrangedSubviews.compactMap { $0 as? SeasonPillView }
+                break
+            }
+            stack.append(contentsOf: v.subviews)
+        }
+        return found
     }
 
     /// The other direction: a short row still hugs its pills instead of

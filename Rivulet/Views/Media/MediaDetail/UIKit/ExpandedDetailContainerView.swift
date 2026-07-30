@@ -283,6 +283,12 @@ final class ExpandedDetailContainerView: UIView {
         // visible window as focus candidates and scrolls them in itself.
         seasonPillScroll.translatesAutoresizingMaskIntoConstraints = false
         seasonPillScroll.showsHorizontalScrollIndicator = false
+        // We own the focus scroll (same call as the below-fold collection): the
+        // engine's own focus-scroll animator only ever does a minimal
+        // scroll-to-visible, which leaves the NEXT pill off-window and hands the
+        // engine an episode as the best Left/Right candidate. `revealSeasonPill`
+        // keeps both neighbours on-window instead.
+        seasonPillScroll.isScrollEnabled = false
         seasonsHeader.addSubview(seasonPillScroll)
         seasonPillRow.translatesAutoresizingMaskIntoConstraints = false
         seasonPillRow.axis = .horizontal
@@ -863,6 +869,9 @@ final class ExpandedDetailContainerView: UIView {
                 // row (Left/Right), so focus holds on the pills and doesn't get
                 // pulled back into the episode collection.
                 self.detailsFocusTarget = .pills
+                // Every pill focus scrolls the row, season change or not — the
+                // next press needs its neighbour already on-window.
+                self.revealSeasonPill(i, animated: true)
                 // Only a CHANGE of season scrolls the rail. Returning UP to the
                 // pill of the season the episodes are ALREADY showing must not yank
                 // the rail back to that season's first episode — leave the user
@@ -899,14 +908,44 @@ final class ExpandedDetailContainerView: UIView {
         if !focusIsOnPills { revealSeasonPill(index, animated: true) }
     }
 
-    /// Scroll a pill into the scroller's window.
+    /// Scroll a pill into the scroller's window, WITH both neighbours.
+    ///
+    /// Revealing only the focused pill is not enough: the focus engine picks the
+    /// next Left/Right target from what is on-window, so a neighbour sitting
+    /// outside the scroller leaves an episode below as the best candidate and a
+    /// sideways press drops out of the row (#261). Keeping n±1 on-window means
+    /// the engine never has to look outside the pills.
     private func revealSeasonPill(_ index: Int, animated: Bool) {
         guard index >= 0, index < seasonPills.count else { return }
         layoutIfNeeded()
-        let pill = seasonPills[index]
-        let rect = seasonPillScroll.convert(pill.bounds, from: pill)
-            .insetBy(dx: -seasonPillRow.spacing, dy: 0)   // show the neighbour's gap
-        seasonPillScroll.scrollRectToVisible(rect, animated: animated)
+        let lo = max(0, index - 1)
+        let hi = min(seasonPills.count - 1, index + 1)
+        let rect = seasonPillScroll.convert(
+            seasonPills[lo].frame.union(seasonPills[hi].frame), from: seasonPillRow
+        )
+        let window = seasonPillScroll.bounds.width
+        var x = seasonPillScroll.contentOffset.x
+        if rect.minX < x {
+            x = rect.minX
+        } else if rect.maxX > x + window {
+            x = rect.maxX - window
+        }
+        let limit = max(0, seasonPillScroll.contentSize.width - window)
+        seasonPillScroll.setContentOffset(CGPoint(x: min(max(0, x), limit), y: 0), animated: animated)
+    }
+
+    /// A Left/Right press on the pills must never leave the row. The engine
+    /// resolves a sideways move against whatever is on-window, and at the ends of
+    /// the row that can be an episode below — the "focus jumps down even though I
+    /// pressed left" report on #261. `revealSeasonPill` keeps a real pill in
+    /// range; this refuses the fallback outright.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        if focusIsOnPills,
+           context.focusHeading == .left || context.focusHeading == .right,
+           !(context.nextFocusedView is SeasonPillView) {
+            return false
+        }
+        return super.shouldUpdateFocus(in: context)
     }
 
     /// Select the pill for a focused episode's parent season (episode-scroll
