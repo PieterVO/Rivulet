@@ -475,7 +475,24 @@ class PlayerContainerViewController: UIViewController {
         // fade masked nothing: the engine dropped the criteria during
         // `engine.stop()`, which the player only reaches from `.onDisappear`,
         // after the dismissal. Do not re-gate it.
-        DisplayCriteriaManager.shared.reset()
+        let handshakeIncoming = DisplayCriteriaManager.shared.reset()
+
+        // Nothing was released, so no HDMI renegotiation is coming and there is
+        // nothing to mask: Match Content is off (the engine's `apply()` guards on
+        // `isDisplayCriteriaMatchingEnabled` and writes no criteria at all), or
+        // this route never programmed the panel. Cut straight out instead, so that
+        // cohort does not pay 0.4s of black for a mask they get no benefit from.
+        //
+        // This supersedes the original "the fade is unconditional because the
+        // container cannot read whether criteria were set" call: it can, by
+        // reading `preferredDisplayCriteria` back, which is exactly what reset()
+        // now reports. Note the sim always takes this branch, because
+        // `getDisplayManager()` bails there — the fade genuinely does not render
+        // in the simulator any more, and that is correct, not a regression.
+        guard handshakeIncoming else {
+            performSuperDismiss(animated: flag, completion: completion)
+            return
+        }
 
         let cover = exitFadeView ?? makeExitFadeView()
         cover.alpha = 0

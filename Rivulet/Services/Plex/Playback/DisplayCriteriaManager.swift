@@ -231,22 +231,32 @@ final class DisplayCriteriaManager {
     ///
     /// Both callers are teardown paths, so there is no in-flight `apply()` on the
     /// engine side for this write to race.
-    func reset() {
+    ///
+    /// - Returns: whether criteria were actually dropped, i.e. whether an HDMI
+    ///   renegotiation is now incoming. False covers Match Content being off
+    ///   (the engine's `apply()` guards on `isDisplayCriteriaMatchingEnabled` and
+    ///   writes nothing at all, so there is nothing to release), a route that
+    ///   never programmed the panel, and the second of two resets in one exit.
+    ///   The player exit fade is gated on this so users who get no handshake do
+    ///   not pay for a mask they do not need.
+    @discardableResult
+    func reset() -> Bool {
         hasSetCriteria = false
         lastCriteriaWasHDR = false
         assetForCriteria = nil  // Release the asset
 
         guard let displayManager = getDisplayManager() else {
             playerDebugLog("🖥️ DisplayCriteria: No display manager available for reset")
-            return
+            return false
         }
         guard displayManager.preferredDisplayCriteria != nil else {
             playerDebugLog("🖥️ DisplayCriteria: reset — panel already at default, no handshake expected")
-            return
+            return false
         }
 
         displayManager.preferredDisplayCriteria = nil
         playerDebugLog("🖥️ DisplayCriteria: reset — criteria released, HDMI handshake starts now")
+        return true
     }
 
     // MARK: - Convenience Methods
