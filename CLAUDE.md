@@ -120,6 +120,14 @@ Live TV: MultiStreamViewModel / StreamSlotView instantiate AetherPlayer() per gr
 Key components:
 - **`UniversalPlayerView`** / **`UniversalPlayerViewModel`**: SwiftUI container + state. Handles markers, post-video, route changes, NowPlaying. The player chrome itself is UIKit (`Views/Player/UIKit/`).
 - **`AetherPlayer`**: `PlayerProtocol` adapter around AetherEngine. Exposes Combine publishers for state, audio/subtitle tracks, and `currentAVPlayer`. Handles HDR10+ / HLG / EAC3+JOC Atmos. `setMuted` persists across Aether's internal player swaps (used by the Live TV grid). Also owns background→foreground recovery: the engine tears its pipeline down on tvOS background and has NO tvOS foreground observer — the host must call `reloadAtCurrentPosition()` (playing user: on foreground; paused user: deferred to play(), because a reload zeroes the clock until playback starts). See `observeAppLifecycle` in AetherPlayer.
+  **AetherPlayer is the only file allowed to name an AetherEngine type.** Map
+  engine values to host types at the wrapper and publish those; do not widen the
+  `import AetherEngine` set to reach a new engine API. `seekEvents` is the worked
+  example — `AetherPlayer` maps `SeekEvent` to `SeekHoldEvent` so
+  `UniversalPlayerViewModel` stays uncoupled. Putting the `switch` in the view
+  model fails to compile ("enum case 'stalled' is not available due to missing
+  import of defining module 'AetherEngine'"), and adding the import is the wrong
+  fix.
 - **`ContentRouter`**: routing decisions → `PlaybackPlan`.
 - **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: subtitle rendering for the `hls` route. On the aether route, subtitles come from the engine's cue publishers rendered by `AetherSubtitleOverlayView` (fed via `SubtitleModel`).
 
@@ -202,7 +210,19 @@ Release notes live ONLY in the `changelogs` array in
 `Rivulet/Views/Components/WhatsNewView.swift` (root `CHANGELOG.md` is a stub).
 Entries are keyed by build-qualified version (`"1.0.3 (65)"`), newest first.
 Settings → About → Changelog renders the full history; the fresh-launch
-"What's New" shows only the current build's entry. Write bullets as simple,
+"What's New" shows only the current build's entry.
+
+**The build number in that key comes from the git tag, and nothing warns you
+when it is wrong.** CI derives `CFBundleVersion` from the tag suffix
+(`v1.0.4-74` → 74) and overwrites `CURRENT_PROJECT_VERSION`, so an entry keyed
+to a build that never ships is dead. The lookup is an exact match on
+`"<CFBundleShortVersionString> (<CFBundleVersion>)"`; Settings → Changelog
+falls back to `changelogs.first` on a miss, but the fresh-launch What's New
+gates on `features(for:) != nil` with **no fallback**, so a mismatched key
+silently means no panel at all. Before CI took the number from the tag it used
+`latest TestFlight build + 1`, and one build that never reached TestFlight put
+every build number in git permanently one ahead — five releases shipped with
+the wrong notes or none. Build 73 does not exist for that reason. Write bullets as simple,
 user-facing sentences (what users get, not internal details); no em dashes.
 Every AetherEngine bump gets a changelog line, and it states **only the
 version** (`"Updated AetherEngine to X.Y.Z"`). Do not list what the engine
