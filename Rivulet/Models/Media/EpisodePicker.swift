@@ -97,6 +97,12 @@ extension MediaUserState {
     /// and keeps a resume position in `viewOffset` independently, so an item can
     /// legitimately be both played and have an offset (a rewatch in progress).
     /// "In progress" means the user has somewhere to resume TO and hasn't
-    /// finished it.
-    var isInProgress: Bool { viewOffset > 0 && !isPlayed }
+    /// finished it, which is why this is the one place that adds `!isPlayed`:
+    /// On Deck has to move past an episode the user has already finished.
+    ///
+    /// No runtime is available on this type, so this takes the position-only
+    /// overload of `WatchProgressPolicy.hasResumePoint`.
+    var isInProgress: Bool {
+        WatchProgressPolicy.hasResumePoint(offsetSeconds: viewOffset) && !isPlayed
+    }
 }

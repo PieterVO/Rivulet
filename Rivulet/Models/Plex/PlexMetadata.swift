@@ -708,16 +708,17 @@ extension PlexMetadata {
         }
     }
 
-    /// Progress as percentage (0.0 - 1.0)
+    /// Progress as percentage (0.0 - 1.0). Both fields are milliseconds here;
+    /// the shared policy works in seconds, and the ratio is unit-agnostic.
     var watchProgress: Double? {
-        guard let offset = viewOffset, let total = duration, total > 0 else { return nil }
-        return Double(offset) / Double(total)
+        WatchProgressPolicy.progress(offsetSeconds: TimeInterval(viewOffset ?? 0),
+                                     runtimeSeconds: duration.map(TimeInterval.init))
     }
 
     /// Check if item has been partially watched (has active playback progress)
     var isInProgress: Bool {
-        guard let progress = watchProgress else { return false }
-        return progress > 0.02 && progress < 0.9
+        WatchProgressPolicy.hasResumePoint(offsetSeconds: TimeInterval(viewOffset ?? 0),
+                                          runtimeSeconds: duration.map(TimeInterval.init))
     }
 
     /// Format a viewOffset (ms) for the resume prompt: H:MM:SS when ≥ 1 hour,

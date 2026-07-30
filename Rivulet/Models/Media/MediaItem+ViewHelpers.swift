@@ -17,11 +17,8 @@ extension MediaItem {
 
     /// True when the item has been started but not finished.
     var isInProgress: Bool {
-        guard let runtime, runtime > 0 else { return false }
-        let offset = userState.viewOffset
-        guard offset > 0 else { return false }
-        let progress = offset / runtime
-        return progress < 0.98
+        WatchProgressPolicy.hasResumePoint(offsetSeconds: userState.viewOffset,
+                                          runtimeSeconds: runtime)
     }
 
     /// True when the item has been fully watched (isPlayed flag from provider).
@@ -29,10 +26,8 @@ extension MediaItem {
 
     /// Fractional watch progress [0, 1], or nil if not started.
     var watchProgress: Double? {
-        guard let runtime, runtime > 0 else { return nil }
-        let offset = userState.viewOffset
-        guard offset > 0 else { return nil }
-        return min(1.0, offset / runtime)
+        WatchProgressPolicy.progress(offsetSeconds: userState.viewOffset,
+                                     runtimeSeconds: runtime)
     }
 
     // MARK: - Formatting
