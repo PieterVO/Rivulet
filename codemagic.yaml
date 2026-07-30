@@ -71,15 +71,35 @@ workflows:
           EOF
           echo "Wrote Rivulet/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
 
-      - name: Set build number from Codemagic counter
+      - name: Set build number from the tag
         script: |
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "")
-          if [ -n "$LATEST" ]; then
-            NEXT=$(($LATEST + 1))
+          # The tag is the source of truth, not App Store Connect's counter.
+          # Deriving the build from `latest TestFlight build + 1` meant a run
+          # that built but never landed in TestFlight left the counter unmoved,
+          # so the next run reused that number and every build number in git
+          # (tag, CURRENT_PROJECT_VERSION, the WhatsNewView changelog key) was
+          # permanently one ahead from then on. That silently breaks the
+          # fresh-launch What's New, which looks up
+          # "<CFBundleShortVersionString> (<CFBundleVersion>)" with no fallback.
+          if [ -n "${CM_TAG:-}" ]; then
+            NEXT="${CM_TAG##*-}"
           else
             NEXT=$PROJECT_BUILD_NUMBER
           fi
-          echo "Setting CURRENT_PROJECT_VERSION=$NEXT"
+          case "$NEXT" in
+            ''|*[!0-9]*)
+              echo "Cannot read a build number from tag '${CM_TAG:-}' (expected vX.Y.Z-<build>)."
+              exit 1
+              ;;
+          esac
+          # Keep the ASC lookup as a guard only: a number TestFlight already has
+          # is rejected at delivery, so fail here instead of after a full build.
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "")
+          if [ -n "$LATEST" ] && [ "$NEXT" -le "$LATEST" ]; then
+            echo "Tag asks for build $NEXT but TestFlight is already at $LATEST. Tag a higher build."
+            exit 1
+          fi
+          echo "Setting CURRENT_PROJECT_VERSION=$NEXT (tag ${CM_TAG:-none}, TestFlight latest ${LATEST:-unknown})"
           agvtool new-version -all "$NEXT"
 
       - name: Build & archive (tvOS Release)
