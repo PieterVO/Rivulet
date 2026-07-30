@@ -913,9 +913,13 @@ final class ExpandedDetailContainerView: UIView {
         layoutIfNeeded()
         let lo = max(0, index - 1)
         let hi = min(seasonPills.count - 1, index + 1)
+        // Ask for the content margin alongside the pills, so a landing at either
+        // end of the row leaves the same `rowLeading` gutter the shelf rows rest
+        // on instead of putting the pill flush against the screen edge (where
+        // its 1.05 focus scale gets shaved).
         let rect = seasonPillScroll.convert(
             seasonPills[lo].frame.union(seasonPills[hi].frame), from: seasonPillRow
-        )
+        ).insetBy(dx: -PreviewCarouselGeometry.expandedChromeInset, dy: 0)
         let window = seasonPillScroll.bounds.width
         var x = seasonPillScroll.contentOffset.x
         if rect.minX < x {

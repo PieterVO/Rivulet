@@ -105,6 +105,25 @@ final class SeasonPillRowLayoutTests: XCTestCase {
         }
     }
 
+    /// Landing on the LAST season must leave the content margin, not park the
+    /// pill against the screen edge where its focus scale gets clipped.
+    func testLandingOnTheLastSeasonKeepsTheContentMargin() throws {
+        let view = ExpandedDetailContainerView(frame: screen)
+        view.setSeasonPills(
+            (1...14).map { "Season \($0)" },
+            seasonRefIDs: (1...14).map(String.init),
+            selectedIndex: 13
+        )
+        view.layoutIfNeeded()
+        let scroll = try XCTUnwrap(pillScroller(in: view))
+        let last = try XCTUnwrap(allPills(in: scroll).last)
+        let onScreen = last.convert(last.bounds, to: view)
+        let inset = PreviewCarouselGeometry.expandedChromeInset
+        XCTAssertEqual(onScreen.maxX, screen.width - inset, accuracy: 0.5)
+        // …and the 1.05 focus scale still clears the edge.
+        XCTAssertLessThan(onScreen.maxX + onScreen.width * 0.05, screen.width)
+    }
+
     /// In row order, so `allPills[i]` is season i+1.
     private func allPills(in scroll: UIScrollView) -> [SeasonPillView] {
         var stack = scroll.subviews
