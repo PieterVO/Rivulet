@@ -227,6 +227,17 @@ Every row title renders at one size and weight; there is no per-row-kind
 typography. The SwiftUI settings rows are gone (`SettingsComponents.swift` and
 `UserProfileSettingsView.swift` are deleted) — do not reintroduce them.
 
+**A row's `key:` is not wired to anything by adding the row.** Nothing reads it
+for you and nothing warns you, so a toggle can look and persist perfectly while
+having no effect — the state issue #260 shipped in for 16 builds, after the UIKit
+migration orphaned two keys whose only reader was the deleted SwiftUI library
+view. When you add or touch a row, grep its key across the repo: a single hit, in
+`SettingsPageModels.swift`, means dead. `musicLoudnessNormalization` and
+`musicShowQualityBadges` are dead right now. Also check the reader re-renders on
+`UserDefaults.didChangeNotification` if the surface computes from the key at
+snapshot/render time, and never apply a display preference where it would be
+written to a cache.
+
 **Never put a subtitle/description inside a settings row.** Rows are title-only
 so the list stays scannable and the focus target stays compact. Any descriptive
 copy lives in the **left-side description panel**, which is driven by
