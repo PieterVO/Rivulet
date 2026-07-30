@@ -140,6 +140,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.4 (74)", [
+            "Marking an item as watched now updates the Play button instead of saying Resume",
+            "Marking an item as watched now updates Home and Continue Watching right away",
+        ]),
         ("1.0.4 (72)", [
             "Updated AetherEngine to 6.1.3",
             "The progress bar no longer jumps back after a seek on a slow server",

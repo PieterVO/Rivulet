@@ -87,6 +87,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         self.item = item
         self.onPlay = onPlay
         self.isWatched = item.isWatched
+        self.resumeOffset = item.userState.viewOffset
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .overFullScreen
         transitioningDelegate = blurFade      // blur-fade present/dismiss
@@ -362,7 +363,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         title.translatesAutoresizingMaskIntoConstraints = false
         title.font = .systemFont(ofSize: 24, weight: .semibold)
         title.textColor = .white
-        title.text = (item.userState.viewOffset) > 0 ? "Resume" : "Play"
+        title.text = playPillTitle
         pill.addSubview(icon)
         pill.addSubview(title)
         NSLayoutConstraint.activate([
@@ -550,6 +551,11 @@ final class MediaItemDetailPageViewController: UIViewController {
     }
 
     private func applyDetail(_ detail: MediaItemDetail, fallbackGenres: [String]) {
+        // This page is seeded from a snapshot that can already be stale on open
+        // (marked watched from a tile menu, then opened before the hub refresh
+        // lands). `detail` is a fresh server read, so spend it on the watch bits
+        // too rather than issuing a second GET for them.
+        applyWatchState(from: detail.item)
         setGenres(detail.genres.isEmpty ? fallbackGenres : detail.genres)
         infoColumns.configure(detail: detail)
         // Capability badges: file quality (4K/DV/Atmos/…) + SDH/AD. Strip any
@@ -584,25 +590,59 @@ final class MediaItemDetailPageViewController: UIViewController {
             guard let detail = try? await provider.fullDetail(for: ref) else { return }
             await MainActor.run {
                 guard let self, self.watchRefreshToken == token, detail.item.ref == ref else { return }
-                self.item = detail.item
-                self.isWatched = detail.item.isWatched
-                self.setCircleIcon(self.watchedButton, self.isWatched ? "checkmark.circle.fill" : "checkmark")
-                self.playTitleLabel?.text = detail.item.userState.viewOffset > 0 ? "Resume" : "Play"
+                self.applyWatchState(from: detail.item)
             }
         }
+    }
+
+    /// Repaint the two bits that show watch state from a fresh copy of the same
+    /// item. Only these two: the item is otherwise a snapshot the rest of the
+    /// page is already laid out from.
+    private func applyWatchState(from refreshed: MediaItem) {
+        guard refreshed.ref == item.ref else { return }
+        item = refreshed
+        isWatched = refreshed.isWatched
+        resumeOffset = refreshed.userState.viewOffset
+        setCircleIcon(watchedButton, isWatched ? "checkmark.circle.fill" : "checkmark")
+        playTitleLabel?.text = playPillTitle
     }
 
     private var watchRefreshToken: UInt64 = 0
     private var refreshObservers = Set<AnyCancellable>()
 
+    /// Local mirror of the resume point, so the pill can repaint the moment the
+    /// user acts instead of waiting on the server round-trip (the same reason
+    /// `isWatched` is mirrored). Seeded from the item, re-seeded by every
+    /// refresh, zeroed by a Mark as Watched.
+    ///
+    /// Deliberately NOT `viewOffset > 0 && !isWatched`: a resume point outranks
+    /// the watched flag everywhere else in the app (`PlexMetadata.isWatched`
+    /// reports false while a rewatch is in progress, and both the poster and
+    /// episode cells show the progress bar instead of the watched glyph), so
+    /// keying off `isWatched` would label a resumable rewatch "Play".
+    private var resumeOffset: TimeInterval = 0
+
+    private var playPillTitle: String { resumeOffset > 0 ? "Resume" : "Play" }
+
     private func toggleWatched() {
         isWatched.toggle()
         setCircleIcon(watchedButton, isWatched ? "checkmark.circle.fill" : "checkmark")
+        // Plex drops the resume point on both scrobble and unscrobble (the same
+        // thing `PlexDataStore.updateItemWatchStatus` does locally), so the pill
+        // stops offering a resume that no longer exists. Issue #270: it used to
+        // keep saying "Resume" with nothing left to resume to.
+        resumeOffset = 0
+        playTitleLabel?.text = playPillTitle
         let target = isWatched
         Task { [weak self] in
             guard let self, let provider = self.provider else { return }
             if target { try? await provider.markPlayed(self.item.ref) }
             else { try? await provider.markUnplayed(self.item.ref) }
+            // Same repaint the player uses on dismissal: every surface showing
+            // this item's watch state re-reads it (this page included, so a
+            // failed mark falls back to server truth), and Home drops or
+            // restores the Continue Watching tile.
+            NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
         }
     }
 

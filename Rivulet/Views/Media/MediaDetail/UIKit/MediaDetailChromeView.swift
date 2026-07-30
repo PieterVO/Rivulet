@@ -830,6 +830,11 @@ final class MediaDetailChromeView: UIView {
         Task {
             guard let p = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
             if target { try? await p.markPlayed(item.ref) } else { try? await p.markUnplayed(item.ref) }
+            // Issue #270: the glyph was the only thing that moved. This is the
+            // same repaint the player posts on dismissal, so the hero's Next Up
+            // line, the episode rail, and Home's Continue Watching row all
+            // re-read the state this toggle just changed.
+            NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
         }
     }
 
