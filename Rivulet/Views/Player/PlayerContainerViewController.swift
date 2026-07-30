@@ -96,6 +96,13 @@ class PlayerContainerViewController: UIViewController {
         super.init(nibName: nil, bundle: nil)
 
         self.modalPresentationStyle = .fullScreen
+        // Dissolve in and out rather than taking UIKit's default vertical slide,
+        // which is what every other modal in the app already does (InfoPopup,
+        // ConfirmationPopup, PreviewCarousel, TextEntry). On the way out this is
+        // also the whole transition for anyone with Match Content off: they get no
+        // exit fade, because there is no display handshake to mask, and a direct
+        // video-to-home dissolve reads better there than a fade to black would.
+        self.modalTransitionStyle = .crossDissolve
 
         let hosting = UIHostingController(rootView: AnyView(rootView))
         hosting.view.backgroundColor = .black
