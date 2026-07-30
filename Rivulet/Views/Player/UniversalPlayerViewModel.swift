@@ -1064,7 +1064,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         if state == .ended {
-            Task { await handlePlaybackEnded() }
+            Task { await finishPlayback() }
         }
     }
 
@@ -3926,14 +3926,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Up Next semantics identical on both the aether and hls routes.
             activeMarker = nil
             showSkipButton = false
-            await handlePlaybackEnded()
-            // handlePlaybackEnded() bows out leaving postVideoState == .hidden
-            // for movies, for episodes with the Up Next panel disabled, and
-            // when there is no next episode. Nothing else exits the player in
-            // those cases, so dismiss it here.
-            if postVideoState == .hidden {
-                shouldDismiss = true
-            }
+            await finishPlayback()
 
         case .seek(let target):
             // Intro / recap / ad, or a credits marker that ends mid-stream:
@@ -4110,6 +4103,26 @@ final class UniversalPlayerViewModel: ObservableObject {
             Task { await handlePlaybackEnded() }
         } else {
             Task { await markCurrentAsWatched() }
+        }
+    }
+
+    /// Playback is over for good: the stream reached its end, or a credits skip
+    /// consumed everything left. Runs the end-of-playback funnel, then exits the
+    /// player when nothing followed it.
+    ///
+    /// `handlePlaybackEnded()` bows out leaving `postVideoState == .hidden` for
+    /// movies and extras, for episodes with the Up Next panel switched off, and
+    /// for the last episode of a show. Nothing else dismisses in any of those,
+    /// so the player sat on the final frame (#264).
+    ///
+    /// Do NOT fold this into `handlePlaybackEnded()`. Its other caller is
+    /// `triggerPostVideoTransition()`, which fires at the credits boundary (or
+    /// 45s from the end) with the rest of the media still to play, and must not
+    /// exit.
+    private func finishPlayback() async {
+        await handlePlaybackEnded()
+        if postVideoState == .hidden {
+            shouldDismiss = true
         }
     }
 

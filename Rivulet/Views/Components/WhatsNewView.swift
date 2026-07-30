@@ -140,6 +140,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.4 (73)", [  // confirm build number at release
+            "Reaching the end of a movie, a trailer, or the last episode of a show now closes the player instead of leaving it on the final frame",
+        ]),
         ("1.0.4 (72)", [
             "Updated AetherEngine to 6.0.2",
             "New Instant Resume setting in Playback, on by default. Turn it off and Continue Watching tiles open the preview like every other Home row instead of playing right away",
