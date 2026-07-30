@@ -65,16 +65,22 @@ final class SeasonPillRowLayoutTests: XCTestCase {
         XCTAssertGreaterThan(scroll.contentSize.width, scroll.bounds.width)
     }
 
-    /// The scroller's window is capped at the screen (it used to run off it),
-    /// with the same gutter on both sides as every other row's content edge.
-    func testScrollerWindowStaysOnScreen() throws {
+    /// The window is edge to edge (it used to run off the screen entirely), so
+    /// pills bleed off the real edges like the episode rows. The content edge is
+    /// a pad inside the scroller: the first pill rests on the shared content
+    /// line, which is where the episode thumb below it starts.
+    func testWindowIsFullBleedAndFirstPillRestsOnTheContentEdge() throws {
         let view = makeView(seasons: 14)
         let scroll = try XCTUnwrap(pillScroller(in: view))
-        let inset = PreviewCarouselGeometry.expandedChromeInset
         let window = scroll.convert(scroll.bounds, to: view)
-        XCTAssertEqual(window.maxX, screen.width - inset, accuracy: 0.5)
+        XCTAssertEqual(window.minX, 0, accuracy: 0.5)
+        XCTAssertEqual(window.maxX, screen.width, accuracy: 0.5)
         let first = try XCTUnwrap(allPills(in: scroll).first)
-        XCTAssertEqual(first.convert(first.bounds, to: view).minX, inset, accuracy: 0.5)
+        XCTAssertEqual(
+            first.convert(first.bounds, to: view).minX,
+            PreviewCarouselGeometry.expandedChromeInset,
+            accuracy: 0.5
+        )
     }
 
     /// Opening on a late season must scroll it in, along with BOTH neighbours —
@@ -113,12 +119,10 @@ final class SeasonPillRowLayoutTests: XCTestCase {
         return found
     }
 
-    /// The other direction: a short row still hugs its pills instead of
-    /// stretching the header to the full screen width.
-    func testFewSeasonsHugTheRow() throws {
+    /// The other direction: a short row fits, so it must not become scrollable.
+    func testFewSeasonsDoNotScroll() throws {
         let view = makeView(seasons: 3)
         let scroll = try XCTUnwrap(pillScroller(in: view))
-        XCTAssertEqual(scroll.contentSize.width, scroll.bounds.width, accuracy: 0.5)
-        XCTAssertLessThan(scroll.bounds.width, screen.width / 2)
+        XCTAssertLessThanOrEqual(scroll.contentSize.width, scroll.bounds.width)
     }
 }

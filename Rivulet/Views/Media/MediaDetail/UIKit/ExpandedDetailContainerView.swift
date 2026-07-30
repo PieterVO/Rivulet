@@ -296,27 +296,24 @@ final class ExpandedDetailContainerView: UIView {
         seasonPillRow.alignment = .center
         seasonPillScroll.addSubview(seasonPillRow)
         let pillContent = seasonPillScroll.contentLayoutGuide
-        // Hug the row when it fits; the header's width cap (below) clamps it to
-        // the screen when it doesn't. This MUST sit below the pill labels'
-        // compression resistance (750): at .defaultHigh it ties, and the solver
-        // squeezes the pills into the cap instead of overflowing — contentSize
-        // then equals bounds and the row has nothing to scroll (#261).
-        let pillScrollHug = seasonPillScroll.widthAnchor.constraint(equalTo: pillContent.widthAnchor)
-        pillScrollHug.priority = .defaultLow
         NSLayoutConstraint.activate([
             seasonPillScroll.topAnchor.constraint(equalTo: seasonsHeader.topAnchor),
             seasonPillScroll.bottomAnchor.constraint(equalTo: seasonsHeader.bottomAnchor),
             seasonPillScroll.leadingAnchor.constraint(equalTo: seasonsHeader.leadingAnchor),
             seasonPillScroll.trailingAnchor.constraint(equalTo: seasonsHeader.trailingAnchor),
-            pillScrollHug,
             seasonPillScroll.heightAnchor.constraint(equalTo: pillContent.heightAnchor),
-            // The pad keeps the pills' 1.05 focus scale off the scroller's clip
-            // edges. The header's top/leading constants back it out, so the
-            // pills sit exactly where they did before the scroller.
+            // Full-bleed window (the header spans the screen), so the pills
+            // scroll off the real edges like the episode rows do. The content
+            // edge is a pad INSIDE the content instead: the first pill rests on
+            // the shared content line and the last one ends on it. Keeping it as
+            // content — not `contentInset` — leaves the resting offset at 0
+            // rather than -inset.
+            seasonPillRow.leadingAnchor.constraint(equalTo: pillContent.leadingAnchor, constant: PreviewCarouselGeometry.expandedChromeInset),
+            seasonPillRow.trailingAnchor.constraint(equalTo: pillContent.trailingAnchor, constant: -PreviewCarouselGeometry.expandedChromeInset),
+            // Vertical pad keeps the pills' 1.05 focus scale off the clip edge;
+            // the header's top constant backs it out.
             seasonPillRow.topAnchor.constraint(equalTo: pillContent.topAnchor, constant: Self.seasonPillFocusPad),
             seasonPillRow.bottomAnchor.constraint(equalTo: pillContent.bottomAnchor, constant: -Self.seasonPillFocusPad),
-            seasonPillRow.leadingAnchor.constraint(equalTo: pillContent.leadingAnchor, constant: Self.seasonPillFocusPad),
-            seasonPillRow.trailingAnchor.constraint(equalTo: pillContent.trailingAnchor, constant: -Self.seasonPillFocusPad),
         ])
 
         episodesClip.translatesAutoresizingMaskIntoConstraints = false
@@ -389,16 +386,12 @@ final class ExpandedDetailContainerView: UIView {
             // The season-pill CAPSULE left edge sits on the shared content edge
             // (same X as the thumbnails / headers / hero metadata). The pill text
             // is naturally indented inside the capsule, matching the ATV+ ref.
-            seasonsHeader.leadingAnchor.constraint(
-                equalTo: leadingAnchor,
-                constant: PreviewCarouselGeometry.expandedChromeInset - Self.seasonPillFocusPad
-            ),
-            // Cap the header at the screen so the pill scroller has a bounded
-            // window to scroll inside. Without it the row just runs off-screen.
-            seasonsHeader.trailingAnchor.constraint(
-                lessThanOrEqualTo: trailingAnchor,
-                constant: -PreviewCarouselGeometry.expandedChromeInset
-            ),
+            // Edge to edge: the scroller needs a bounded window (without one the
+            // row just runs off-screen), and the pills bleed off the real screen
+            // edges like the episode rows. Their content edge comes from the
+            // row's own leading/trailing pad inside the scroller.
+            seasonsHeader.leadingAnchor.constraint(equalTo: leadingAnchor),
+            seasonsHeader.trailingAnchor.constraint(equalTo: trailingAnchor),
             // No fixed height/width — the pill row hugs the header (equality pins
             // below), so the chunky pills define both. They were crushed to 44pt.
         ])
