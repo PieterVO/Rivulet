@@ -140,7 +140,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.0.4 (73)", [
+        ("1.0.4 (72)", [
             "Updated AetherEngine to 6.1.3",
             "The progress bar no longer jumps back after a seek on a slow server",
             "Reaching the end of a movie or a show's last episode now closes the player",
@@ -148,9 +148,6 @@ struct WhatsNewView: View {
             "Leaving the player now fades to black while your TV switches display modes",
             "Season rows now scroll, so shows with more than eight seasons are reachable",
             "The Recent Rows and Discovery Rows settings hide those rows again",
-        ]),
-        ("1.0.4 (72)", [
-            "Updated AetherEngine to 6.0.2",
             "New Instant Resume setting in Playback, on by default. Turn it off and Continue Watching tiles open the preview like every other Home row instead of playing right away",
         ]),
         ("1.0.4 (71)", [
