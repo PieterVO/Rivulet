@@ -2,70 +2,75 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  InsightsTabBarView.swift
+//  PillTabBarView.swift
 //  Rivulet
 //
-//  Pill tab bar for the Insights panel (Docs/superpowers/specs/
-//  2026-07-08-insights-toptrivia-tabs-design.md). Replaces the single
-//  combined trivia+cast scrolling list with tab-scoped browsing: Top 10,
-//  Cast, then one pill per category that has visible facts. Visual/
-//  interaction pattern generalized from `SeasonPillView` (capsule shape,
-//  selected/focused dual-state styling, focus-previews/select-commits) —
-//  that type stays coupled to MediaDetail's season selector; this is a
-//  sibling for the player rail panel, not a shared subclass, since the two
-//  hosts drive focus differently (season pills are host-gated by
-//  `focusEnabled`; this bar is always focusable while in `.list` state).
+//  THE pill tab bar for the player's rail panels — the Insights/trivia panel
+//  (`InsightsPanelContainerView`) and the Now Playing Info popup
+//  (`PlayerInfoTabsView`). One type, because the two used to be near-verbatim
+//  copies of each other (`InsightsTabBarView` + `InfoTabBarView`, each with its
+//  own private copy of the pill) whose only real difference was that the Info
+//  one skipped the horizontal scroll on the grounds that its two pills always
+//  fit. That reasoning expired the moment a third tab arrived (#267): a bar
+//  that scrolls handles both cases, and one bar can't drift from the other.
+//
+//  Tabs are addressed by INDEX, not by a tab type. Every host already keeps an
+//  ordered array of its own tab enum, so an index is all the coupling this
+//  needs — no generic parameter, no shared protocol, no `AnyHashable`.
+//
+//  Behaviour worth knowing before touching it:
+//    • Scroll is SELF-DRIVEN (`isScrollEnabled = false`) and centers the
+//      focused pill. The focus engine's own scroll-to-visible fights a driven
+//      offset — same reason `InsightsFilmographyRowView` and `InfoScrollView`
+//      drive their own.
+//    • `shouldUpdateFocus` vetoes horizontal exits so Left/Right can't escape
+//      the bar. A `pressesBegan` guard cannot do this: the engine consumes a
+//      directional press the instant it finds any candidate, and an
+//      off-the-end Right finds the content below via its diagonal search cone.
+//      Down passes through, so pill → content stays a native focus move.
+//    • Pills are uniformly wide, measured at `.heavy` (the widest weight one
+//      ever renders) with the label at required compression resistance, so the
+//      active pill's bolder text can never truncate.
 //
 
 import UIKit
 
-/// One selectable tab in the Insights panel's pill bar.
-enum InsightsTab: Hashable {
-    case topTen
-    case cast
-    case category(TriviaCategory)
-}
-
-final class InsightsTabBarView: UIView {
+final class PillTabBarView: UIView {
 
     private enum Metrics {
         static let pillSpacing: CGFloat = 8
         static let barHeight: CGFloat = 56
         /// Horizontal inset inside the clipping scroll view so a focused
-        /// pill's 1.05 scale doesn't clip at the bar's edges — mirrors
-        /// InsightsCastListView's rowInset.
+        /// pill's 1.05 scale doesn't clip at the bar's edges.
         static let pillInset: CGFloat = 8
     }
 
-    var onSelect: ((InsightsTab) -> Void)?
+    /// Fires with the index of the newly selected tab. Not called for a
+    /// re-select of the current tab.
+    var onSelect: ((Int) -> Void)?
 
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
-    private var pills: [(tab: InsightsTab, view: InsightsTabPillView)] = []
-    private var selected: InsightsTab
+    private var pills: [PillTabItemView] = []
+    private var titles: [String]
+    private var selectedIndex: Int
 
-    init(tabs: [InsightsTab], selected: InsightsTab) {
-        self.selected = selected
+    init(titles: [String], selectedIndex: Int) {
+        self.titles = titles
+        self.selectedIndex = selectedIndex
         super.init(frame: .zero)
-        setUp(tabs: tabs)
+        setUp()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private func setUp(tabs: [InsightsTab]) {
+    private func setUp() {
         translatesAutoresizingMaskIntoConstraints = false
         scrollView.showsHorizontalScrollIndicator = false
-        // UIScrollView clips by default (that's what keeps CardInfoView's
-        // content inside the panel); keep it so pills beyond the panel's
-        // width stay hidden until the self-driven scroll reveals them.
+        // Clipping is what hides pills beyond the panel's width until the
+        // self-driven scroll reveals them.
         scrollView.clipsToBounds = true
-        // Same rationale as InsightsFilmographyRowView/InsightsCastListView:
-        // the focus engine's own scroll-to-visible fights a self-driven
-        // offset, and with more pills than fit the panel's fixed width
-        // (confirmed bug: pills ran off the popup edge with no way to
-        // reach them), this bar must drive its own horizontal scroll from
-        // didUpdateFocus rather than rely on the disabled default.
         scrollView.isScrollEnabled = false
         stack.axis = .horizontal
         stack.spacing = Metrics.pillSpacing
@@ -91,40 +96,39 @@ final class InsightsTabBarView: UIView {
             stack.heightAnchor.constraint(equalTo: scrollView.frameLayoutGuide.heightAnchor),
         ])
 
-        // Uniform pill width: size every pill to the widest title so the bar
-        // reads as a consistent row of tabs rather than ragged chips. Measure
-        // at the HEAVIEST weight a pill ever renders (.heavy, the active
-        // state) so the active pill's bolder text never overflows the width
-        // computed from a lighter weight (that truncated a lone "Cast" to
-        // "C…"). The width is a floor (>=), and the label keeps required
-        // compression resistance, so a pill can never be narrower than its
-        // own text regardless of the measurement.
-        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .heavy)
-        let widestTitle = tabs
-            .map { ceil((Self.title(for: $0) as NSString).size(withAttributes: [.font: measuringFont]).width) }
-            .max() ?? 0
-        let pillWidth = widestTitle + 40
-
-        for tab in tabs {
-            let pill = InsightsTabPillView()
-            pill.configure(title: Self.title(for: tab), isSelected: tab == selected)
-            pill.onSelected = { [weak self] in self?.handlePillSelected(tab) }
+        let pillWidth = Self.uniformPillWidth(for: titles)
+        for (index, title) in titles.enumerated() {
+            let pill = PillTabItemView()
+            pill.configure(title: title, isSelected: index == selectedIndex)
+            pill.onSelected = { [weak self] in self?.handlePillSelected(index) }
             pill.onFocused = { [weak self] coordinator in
                 self?.scrollPillToCenter(pill, coordinator: coordinator)
             }
             pill.widthAnchor.constraint(greaterThanOrEqualToConstant: pillWidth).isActive = true
             stack.addArrangedSubview(pill)
-            pills.append((tab, pill))
+            pills.append(pill)
         }
     }
 
-    /// Self-driven horizontal scroll (scrollView.isScrollEnabled = false
-    /// above), center-anchored: the focused pill is pulled toward the bar's
-    /// midpoint, clamped at the content edges. Near the start/end of the
-    /// row focus visibly walks pill-to-pill; in the middle the pills stream
-    /// under a stationary focus position — so a partially-visible neighbor
-    /// always signals that more tabs exist off-edge.
-    private func scrollPillToCenter(_ pill: InsightsTabPillView, coordinator: UIFocusAnimationCoordinator) {
+    /// One width for every pill, sized to the widest title so the bar reads as
+    /// a consistent row of tabs rather than ragged chips. Measured at `.heavy`
+    /// (the active/focused weight) so bolder text never overflows a width
+    /// computed from a lighter one. A floor, not a cap — see the header.
+    @MainActor
+    static func uniformPillWidth(for titles: [String]) -> CGFloat {
+        let measuringFont = UIFont.systemFont(ofSize: 20, weight: .heavy)
+        let widest = titles
+            .map { ceil(($0 as NSString).size(withAttributes: [.font: measuringFont]).width) }
+            .max() ?? 0
+        return widest + 40
+    }
+
+    /// Center-anchored self-driven scroll: the focused pill is pulled toward
+    /// the bar's midpoint, clamped at the content edges. Near the ends focus
+    /// visibly walks pill-to-pill; in the middle the pills stream under a
+    /// stationary focus position, so a partially-visible neighbor always
+    /// signals that more tabs exist off-edge.
+    private func scrollPillToCenter(_ pill: PillTabItemView, coordinator: UIFocusAnimationCoordinator) {
         let pillFrameInScroll = pill.convert(pill.bounds, to: scrollView)
         let targetX = pillFrameInScroll.midX - scrollView.bounds.width / 2
         let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
@@ -135,14 +139,7 @@ final class InsightsTabBarView: UIView {
         }, completion: nil)
     }
 
-    /// Keeps Left/Right focus INSIDE the bar. A `pressesBegan` guard can't
-    /// do this: the focus engine consumes a directional press the instant it
-    /// finds any candidate, so an off-the-end Right (whose diagonal search
-    /// cone finds a list row below) moves focus and never delivers the press
-    /// here. `shouldUpdateFocus` is the authoritative veto — the engine calls
-    /// it on the ancestors of the currently-focused item (this bar is one),
-    /// and any `false` cancels the move, so focus holds on the edge pill.
-    /// Only horizontal exits are vetoed; Down (pill → list) passes through.
+    /// See the header: the authoritative veto for Left/Right escapes.
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
         guard context.focusHeading == .left || context.focusHeading == .right else {
             return super.shouldUpdateFocus(in: context)
@@ -154,73 +151,28 @@ final class InsightsTabBarView: UIView {
     }
 
     private func containsPill(_ view: UIView) -> Bool {
-        pills.contains { view === $0.view || view.isDescendant(of: $0.view) }
+        pills.contains { view === $0 || view.isDescendant(of: $0) }
     }
 
-    private func handlePillSelected(_ tab: InsightsTab) {
-        guard tab != selected else { return }
-        setSelected(tab)
-        onSelect?(tab)
-    }
-
-    /// Updates which pill renders as selected without firing `onSelect` —
-    /// the host calls this to keep the bar in sync after driving a tab
-    /// change itself (e.g. falling back to `.cast` when the active
-    /// category's last fact is suppressed at runtime).
-    func setSelected(_ tab: InsightsTab) {
-        selected = tab
-        for (pillTab, pillView) in pills {
-            pillView.configure(title: Self.title(for: pillTab), isSelected: pillTab == tab)
+    private func handlePillSelected(_ index: Int) {
+        guard index != selectedIndex else { return }
+        selectedIndex = index
+        for (pillIndex, pill) in pills.enumerated() {
+            pill.configure(title: titles[pillIndex], isSelected: pillIndex == index)
         }
-    }
-
-    /// Which tabs should be offered given the panel's current cast/trivia
-    /// inputs — pure, no UIKit dependency, directly unit-testable. Order:
-    /// Top 10 (if >=1 qualifying fact), Cast (if non-empty), then one pill
-    /// per `TriviaCategory` (in `TriviaCategory.allCases` declaration order)
-    /// that has >=1 visible fact after spoiler/suppression filtering.
-    static func availableTabs(
-        cast: [MediaPerson],
-        trivia: TitleTrivia?,
-        suppressedTriviaIDs: Set<String>,
-        hideSpoilers: Bool
-    ) -> [InsightsTab] {
-        var tabs: [InsightsTab] = []
-        if let trivia, !trivia.topTenFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs).isEmpty {
-            tabs.append(.topTen)
-        }
-        if !cast.isEmpty {
-            tabs.append(.cast)
-        }
-        if let trivia {
-            let visible = trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs)
-            for category in TriviaCategory.allCases where visible.contains(where: { $0.category == category }) {
-                tabs.append(.category(category))
-            }
-        }
-        return tabs
-    }
-
-    static func title(for tab: InsightsTab) -> String {
-        switch tab {
-        case .topTen: return "Top 10"
-        case .cast: return "Cast"
-        case .category(let category): return category.tabDisplayName
-        }
+        onSelect?(index)
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if let selectedPill = pills.first(where: { $0.tab == selected })?.view {
-            return [selectedPill]
-        }
-        return pills.first.map { [$0.view] } ?? []
+        if pills.indices.contains(selectedIndex) { return [pills[selectedIndex]] }
+        return pills.first.map { [$0] } ?? []
     }
 
-    /// Whether focus currently sits on one of this bar's pills. Consulted
-    /// by `InsightsPanelContainerView.pressesBegan` to decide whether a
-    /// Down press should escape back into the list below (the reverse of
-    /// the Up escape — the focus engine's own directional search does not
-    /// reliably cross the scroll-view boundaries between the two).
+    /// Whether focus currently sits on one of this bar's pills. Consulted by
+    /// `InsightsPanelContainerView.pressesBegan` to decide whether a Down press
+    /// should escape back into the list below (the reverse of the Up escape —
+    /// the focus engine's own directional search does not reliably cross the
+    /// scroll-view boundaries between the two).
     var containsFocus: Bool {
         guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return false }
         return focused.isDescendant(of: self)
@@ -233,11 +185,11 @@ final class InsightsTabBarView: UIView {
 ///                    reads as present without competing with focus).
 ///   • focused     — a bright opaque white capsule, black label, 1.05 scale.
 /// Selection and focus are independent, so the selected tab keeps its glass
-/// chip while focus is on a different pill. Select (not mere focus) commits
-/// the change. Kept as its own type rather than reusing `SeasonPillView`
-/// (that type's `focusEnabled` gating and 31pt sizing don't fit this
+/// chip while focus is on a different pill. Select (not mere focus) commits the
+/// change. Kept as its own type rather than reusing `SeasonPillView` (that
+/// type's `focusEnabled` gating and 31pt sizing don't fit this
 /// always-focusable, compact bar).
-private final class InsightsTabPillView: UIControl {
+private final class PillTabItemView: UIControl {
 
     private let label = UILabel()
     /// Liquid-glass background shown only in the selected-not-focused state.
@@ -252,9 +204,8 @@ private final class InsightsTabPillView: UIControl {
     private var isFocusedPill = false
 
     var onSelected: (() -> Void)?
-    /// Invoked whenever this pill takes focus — lets the host `InsightsTabBarView`
-    /// scroll it into view, since this pill has no awareness of its own
-    /// scroll container.
+    /// Invoked whenever this pill takes focus — lets the hosting bar scroll it
+    /// into view, since a pill has no awareness of its own scroll container.
     var onFocused: ((UIFocusAnimationCoordinator) -> Void)?
 
     override var canBecomeFocused: Bool { true }

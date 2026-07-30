@@ -47,10 +47,15 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
     private let availableTabs: [InsightsTab]
     private var currentTab: InsightsTab
 
-    private lazy var tabBar: InsightsTabBarView? = {
+    private lazy var tabBar: PillTabBarView? = {
         guard !availableTabs.isEmpty else { return nil }
-        let bar = InsightsTabBarView(tabs: availableTabs, selected: currentTab)
-        bar.onSelect = { [weak self] tab in self?.handleTabSelected(tab) }
+        let bar = PillTabBarView(
+            titles: availableTabs.map(\.title),
+            selectedIndex: availableTabs.firstIndex(of: currentTab) ?? 0)
+        bar.onSelect = { [weak self] index in
+            guard let self, self.availableTabs.indices.contains(index) else { return }
+            self.handleTabSelected(self.availableTabs[index])
+        }
         return bar
     }()
 
@@ -88,7 +93,7 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
         self.suppressedTriviaIDs = suppressedTriviaIDs
         self.hideSpoilers = hideSpoilers
         self.provider = provider
-        let tabs = InsightsTabBarView.availableTabs(
+        let tabs = InsightsTab.availableTabs(
             cast: cast, trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs, hideSpoilers: hideSpoilers)
         self.availableTabs = tabs
         // Prefer Top 10 as the landing tab when available (it's the curated

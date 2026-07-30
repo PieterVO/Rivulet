@@ -42,6 +42,23 @@ private let infoTabLog = Logger(subsystem: "com.rivulet.app", category: "PlayerI
 
 final class PlayerInfoTabsView: UIView {
 
+    /// One selectable tab in the Info popup's pill bar. Rendered by the shared
+    /// `PillTabBarView` (same bar as the Insights panel), which addresses tabs
+    /// by index into `availableTabs`.
+    enum Tab {
+        case description
+        case info
+        case advanced
+
+        var title: String {
+            switch self {
+            case .description: return "Description"
+            case .info: return "Info"
+            case .advanced: return "Advanced"
+            }
+        }
+    }
+
     private enum Metrics {
         static let tabBarSpacing: CGFloat = 16
     }
@@ -50,8 +67,9 @@ final class PlayerInfoTabsView: UIView {
     private let infoView: CardInfoView
     private var statsView: CardStatsView?
     private let advancedProvider: (() -> AetherAdvancedStats?)?
-    private let tabBar: InfoTabBarView?
-    private var currentTab: InfoTabBarView.Tab
+    private let availableTabs: [Tab]
+    private let tabBar: PillTabBarView?
+    private var currentTab: Tab
 
     private var contentTopAnchor: NSLayoutYAxisAnchor!
     private var contentTopConstant: CGFloat = 0
@@ -69,8 +87,8 @@ final class PlayerInfoTabsView: UIView {
 
     /// The tabs available for one item, in display order — pure so it is
     /// unit-testable. Info always exists; the other two are conditional.
-    static func tabs(hasDescription: Bool, hasAdvanced: Bool) -> [InfoTabBarView.Tab] {
-        var tabs: [InfoTabBarView.Tab] = []
+    static func tabs(hasDescription: Bool, hasAdvanced: Bool) -> [Tab] {
+        var tabs: [Tab] = []
         if hasDescription { tabs.append(.description) }
         tabs.append(.info)
         if hasAdvanced { tabs.append(.advanced) }
@@ -93,7 +111,8 @@ final class PlayerInfoTabsView: UIView {
         self.infoView = CardInfoView(metadata: metadata, modes: modes)
         self.advancedProvider = advancedProvider
         self.currentTab = tabs[0]
-        self.tabBar = tabs.count > 1 ? InfoTabBarView(tabs: tabs, selected: tabs[0]) : nil
+        self.availableTabs = tabs
+        self.tabBar = tabs.count > 1 ? PillTabBarView(titles: tabs.map(\.title), selectedIndex: 0) : nil
         super.init(frame: .zero)
         setup()
     }
@@ -114,7 +133,10 @@ final class PlayerInfoTabsView: UIView {
 
         if let tabBar {
             tabBar.translatesAutoresizingMaskIntoConstraints = false
-            tabBar.onSelect = { [weak self] tab in self?.handleTabSelected(tab) }
+            tabBar.onSelect = { [weak self] index in
+                guard let self, self.availableTabs.indices.contains(index) else { return }
+                self.handleTabSelected(self.availableTabs[index])
+            }
             addSubview(tabBar)
             NSLayoutConstraint.activate([
                 tabBar.topAnchor.constraint(equalTo: topAnchor),
@@ -145,7 +167,7 @@ final class PlayerInfoTabsView: UIView {
 
     // MARK: - Tab switching
 
-    private func handleTabSelected(_ tab: InfoTabBarView.Tab) {
+    private func handleTabSelected(_ tab: Tab) {
         infoTabLog.notice("tab select requested: \(String(describing: tab)) (current: \(String(describing: self.currentTab)))")
         guard tab != currentTab else {
             infoTabLog.notice("tab select no-op: already on \(String(describing: tab))")
