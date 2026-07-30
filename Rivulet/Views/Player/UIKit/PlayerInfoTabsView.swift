@@ -205,7 +205,7 @@ final class PlayerInfoTabsView: UIView {
 
     // MARK: - Focus
 
-    private var currentContentView: UIView {
+    private var currentContentView: InfoTabSheet {
         switch currentTab {
         case .description: return descriptionView ?? infoView
         case .info: return infoView
@@ -213,15 +213,16 @@ final class PlayerInfoTabsView: UIView {
         }
     }
 
+    /// Set for the duration of one driven focus update — see `moveFocus(to:)`.
+    private var focusEscapeTarget: UIView?
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // Prefer the EXACT view that already holds focus, so a re-resolution
-        // (e.g. a directional press that finds no spatial target at the
-        // content's bottom edge) is a strict no-op instead of bouncing focus
-        // to the tab bar or to a different section. Only the INITIAL landing
+        if let focusEscapeTarget { return [focusEscapeTarget] }
+        // Otherwise prefer the EXACT view that already holds focus, so a
+        // re-resolution (e.g. a directional press that finds no spatial target
+        // at the content's bottom edge) is a strict no-op instead of bouncing
+        // focus to the tab bar or to a different row. Only the INITIAL landing
         // (focus not yet inside the content) falls through to the tab bar.
-        // The crossings themselves need no driving: the sections are ordinary
-        // focus targets, so Down from a pill and Up from the top section are
-        // native engine moves for both swipes and clicks.
         if let focused = focusedViewInContent {
             infoTabLog.debug("preferredFocusEnvironments: re-affirming focused view in content")
             return [focused]
@@ -232,6 +233,49 @@ final class PlayerInfoTabsView: UIView {
         }
         infoTabLog.debug("preferredFocusEnvironments: landing on content (no tab bar)")
         return [currentContentView]
+    }
+
+    /// Points `preferredFocusEnvironments` at `target` for exactly one update.
+    /// `setNeedsFocusUpdate` is ignored unless the requesting environment
+    /// CONTAINS focus, so the request has to come from here — the common
+    /// ancestor of the pills and the sheet rows — and not from either side.
+    /// Same mechanism as `InsightsPanelContainerView.moveFocus(to:)`.
+    private func moveFocus(to target: UIView) {
+        focusEscapeTarget = target
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        focusEscapeTarget = nil
+    }
+
+    /// Drives the two crossings between the pills and the visible sheet.
+    ///
+    /// Neither happens natively: the pills and the sheet rows live in separate
+    /// self-driven scroll views, and the focus engine's directional search does
+    /// not reliably cross that boundary — Down from a pill did nothing at all
+    /// on device. `InsightsPanelContainerView` reached the same conclusion for
+    /// the trivia panel and drives both crossings the same way.
+    ///
+    /// Presses are delivered to the FOCUSED view and bubble up, so this runs
+    /// for a press on a pill or on a row. Ordering matters for Up: the sheet's
+    /// own `InfoScrollView.pressesBegan` sits below this in the chain and gets
+    /// first refusal, so a press that still had somewhere to scroll never
+    /// reaches here.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if let tabBar {
+            for press in presses {
+                if press.type == .downArrow, tabBar.containsFocus {
+                    infoTabLog.notice("driving focus: pills → content")
+                    moveFocus(to: currentContentView)
+                    return
+                }
+                if press.type == .upArrow, currentContentView.canEscapeUpward {
+                    infoTabLog.notice("driving focus: content → pills")
+                    moveFocus(to: tabBar)
+                    return
+                }
+            }
+        }
+        super.pressesBegan(presses, with: event)
     }
 
     /// The currently focused view, if it sits inside the visible content

@@ -19,7 +19,7 @@
 
 import UIKit
 
-final class CardStatsView: UIView {
+final class CardStatsView: UIView, InfoTabSheet {
 
     private let provider: () -> AetherAdvancedStats?
     private let scrollView = InfoScrollView()
@@ -54,9 +54,21 @@ final class CardStatsView: UIView {
     /// and a genuinely-empty row set don't collide.
     private var renderedGathering = false
 
+    /// Last value rendered per row title. A tick only touches the rows whose
+    /// value actually CHANGED — most of this sheet is static or slow-moving,
+    /// and crossfading an unchanged value would pulse the whole sheet every
+    /// second.
+    private var renderedValues: [String: String] = [:]
+
+    /// Long enough to read as a fade rather than a flicker, short enough to
+    /// finish inside the 1 Hz tick.
+    private static let valueFadeDuration: TimeInterval = 0.25
+
     var onFocusChange: ((Bool) -> Void)? {
         didSet { scrollView.onFocusChange = onFocusChange }
     }
+
+    var canEscapeUpward: Bool { scrollView.canEscapeUpward }
 
     init(provider: @escaping () -> AetherAdvancedStats?) {
         self.provider = provider
@@ -248,8 +260,17 @@ final class CardStatsView: UIView {
             // Same shape as last tick: rewrite text only. No re-parenting, so
             // focus and scroll position are untouched.
             for title in renderedSignature {
-                if let value = Self.value(for: title, stats: stats), let label = rowLabels[title] {
-                    label.attributedText = PlayerInfoSheetStyle.infoRowText(title, value)
+                guard let value = Self.value(for: title, stats: stats),
+                      let label = rowLabels[title],
+                      renderedValues[title] != value else { continue }
+                renderedValues[title] = value
+                let text = PlayerInfoSheetStyle.infoRowText(title, value)
+                // Crossfade the changed value. `.allowUserInteraction` so the
+                // fade never eats a press, and the row is a focus target whose
+                // frame is unchanged, so focus is unaffected.
+                UIView.transition(with: label, duration: Self.valueFadeDuration,
+                                  options: [.transitionCrossDissolve, .allowUserInteraction]) {
+                    label.attributedText = text
                 }
             }
         }
@@ -278,6 +299,7 @@ final class CardStatsView: UIView {
             sectionUIs.forEach { $0.container.isHidden = true }
             renderedGathering = true
             renderedSignature = []
+            renderedValues = [:]
             return
         }
 
@@ -287,7 +309,10 @@ final class CardStatsView: UIView {
             let ui = sectionUIs[index]
             let visible: [UILabel] = section.rows.compactMap { row in
                 guard let value = row.value(stats), let label = rowLabels[row.title] else { return nil }
+                // No crossfade here: a redistribute is a structural change
+                // (rows appearing or disappearing), not a value ticking over.
                 label.attributedText = PlayerInfoSheetStyle.infoRowText(row.title, value)
+                renderedValues[row.title] = value
                 present.insert(row.title)
                 return label
             }

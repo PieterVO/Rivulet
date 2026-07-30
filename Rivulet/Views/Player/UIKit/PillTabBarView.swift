@@ -145,19 +145,45 @@ final class PillTabBarView: UIView {
         }, completion: nil)
     }
 
-    /// See the header: the authoritative veto for Left/Right escapes.
+    /// The authoritative veto for horizontal moves (see the header for why a
+    /// `pressesBegan` guard cannot do this job).
+    ///
+    /// From a pill, Left/Right may land on exactly ONE view: the immediately
+    /// adjacent pill. Anything else is cancelled, including the end of the row,
+    /// where the move is refused outright so focus holds on the edge pill.
+    ///
+    /// The looser "did it leave the pill row?" test this replaces was not
+    /// enough on device: Left on the leftmost pill jumped focus clear across
+    /// the bar to the last pill. Whatever produced that candidate — a focus
+    /// group resolution, a re-resolution after the cancel — naming the one
+    /// legal destination refuses it without needing to know.
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
         guard context.focusHeading == .left || context.focusHeading == .right else {
             return super.shouldUpdateFocus(in: context)
         }
-        let prevIsPill = context.previouslyFocusedView.map(containsPill) ?? false
-        let nextIsPill = context.nextFocusedView.map(containsPill) ?? false
-        if prevIsPill && !nextIsPill { return false }
+        guard let previous = context.previouslyFocusedView,
+              let fromIndex = pillIndex(containing: previous) else {
+            return super.shouldUpdateFocus(in: context)
+        }
+        let landing = context.nextFocusedView.flatMap(pillIndex(containing:))
+        guard Self.allowsHorizontalMove(from: fromIndex, to: landing,
+                                        movingLeft: context.focusHeading == .left,
+                                        pillCount: pills.count) else { return false }
         return super.shouldUpdateFocus(in: context)
     }
 
-    private func containsPill(_ view: UIView) -> Bool {
-        pills.contains { view === $0 || view.isDescendant(of: $0) }
+    /// Whether a horizontal move from pill `fromIndex` may land on pill
+    /// `landing` (nil = a view outside the bar). Only the immediately adjacent
+    /// pill is legal; at either end nothing is. Pure so it is unit-testable —
+    /// `UIFocusUpdateContext` has no public initializer.
+    nonisolated static func allowsHorizontalMove(from fromIndex: Int, to landing: Int?, movingLeft: Bool, pillCount: Int) -> Bool {
+        let wanted = fromIndex + (movingLeft ? -1 : 1)
+        guard wanted >= 0, wanted < pillCount else { return false }
+        return landing == wanted
+    }
+
+    private func pillIndex(containing view: UIView) -> Int? {
+        pills.firstIndex { view === $0 || view.isDescendant(of: $0) }
     }
 
     private func handlePillSelected(_ index: Int) {

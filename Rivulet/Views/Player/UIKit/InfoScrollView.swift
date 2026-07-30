@@ -112,6 +112,17 @@ final class InfoFocusRowView: UIView {
     }
 }
 
+/// One tab's content sheet in the Info popup (`CardDescriptionView`,
+/// `CardInfoView`, `CardStatsView`). `PlayerInfoTabsView` drives the
+/// pills ↔ sheet focus crossings itself, because the focus engine does not
+/// reliably cross the nested scroll views between them — the same conclusion
+/// `InsightsPanelContainerView` reached for the trivia panel. This is what it
+/// needs to ask of whichever sheet is visible.
+protocol InfoTabSheet: UIView {
+    /// Whether an Up press should now leave this sheet for the tab bar.
+    var canEscapeUpward: Bool { get }
+}
+
 final class InfoScrollView: UIScrollView {
 
     /// Fires when focus enters/leaves this sheet's sections, so the hosting
@@ -207,6 +218,36 @@ final class InfoScrollView: UIScrollView {
             self.contentOffset.y = target
         }
         return true
+    }
+
+    // MARK: - Upward escape
+
+    /// True when an Up press should leave this sheet for the tab bar: focus
+    /// sits on the FIRST row and the engine did not just move it there.
+    ///
+    /// That second half is not optional. tvOS fires `didUpdateFocus` a few ms
+    /// BEFORE the `pressesBegan` for the same press, so without the gate a
+    /// single Up press that moves focus row-2 → row-1 would also be read as an
+    /// escape, and focus would shoot past the row to the pills. Same race
+    /// `step(by:)` guards against, same window.
+    var canEscapeUpward: Bool {
+        guard CACurrentMediaTime() - lastFocusMoveTime > Self.samePressWindow else { return false }
+        guard let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView,
+              focused.isDescendant(of: self),
+              let first = Self.firstRow(in: self) else { return false }
+        return focused === first || focused.isDescendant(of: first)
+    }
+
+    /// First non-hidden `InfoFocusRowView` in subview (document) order. Hidden
+    /// branches are skipped whole: the Advanced sheet keeps a pool of rows and
+    /// hides the ones the current telemetry has no values for, so the first
+    /// row in the hierarchy is not necessarily the first row on screen.
+    private static func firstRow(in view: UIView) -> InfoFocusRowView? {
+        for subview in view.subviews where !subview.isHidden {
+            if let row = subview as? InfoFocusRowView { return row }
+            if let found = firstRow(in: subview) { return found }
+        }
+        return nil
     }
 
     private func reveal(rowContaining view: UIView) {

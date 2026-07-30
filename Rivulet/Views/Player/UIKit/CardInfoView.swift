@@ -26,7 +26,7 @@ struct StreamingModeInfo {
 /// out in two columns); no live rows and no timer. Live playback telemetry now
 /// lives on the sibling Advanced tab (`CardStatsView`). Rows are built through
 /// `PlayerInfoSheetStyle` so the two sheets stay visually identical.
-final class CardInfoView: UIView {
+final class CardInfoView: UIView, InfoTabSheet {
 
     private let metadata: PlexMetadata
     private let modes: StreamingModeInfo
@@ -38,6 +38,8 @@ final class CardInfoView: UIView {
     var onFocusChange: ((Bool) -> Void)? {
         didSet { scrollView.onFocusChange = onFocusChange }
     }
+
+    var canEscapeUpward: Bool { scrollView.canEscapeUpward }
 
     init(metadata: PlexMetadata, modes: StreamingModeInfo) {
         self.metadata = metadata
@@ -98,12 +100,9 @@ final class CardInfoView: UIView {
     }
 
     private func populate() {
-        // No "Media Info" header — the popup's tab bar already names the sheet.
-        // The title leads, then each section's rows lay out in two columns.
-        if let title = metadata.title {
-            stack.addArrangedSubview(PlayerInfoSheetStyle.bodyLabel(title, secondary: true))
-        }
-
+        // No "Media Info" header (the popup's tab bar already names the sheet)
+        // and no title: the Description tab carries the title now, and this
+        // sheet's sections overflow the panel as it is.
         var video: [UIView] = [PlayerInfoSheetStyle.infoRow("Mode", modes.video.rawValue)]
         if let videoStream = primaryVideoStream {
             if let displayTitle = videoStream.displayTitle ?? videoStream.extendedDisplayTitle {

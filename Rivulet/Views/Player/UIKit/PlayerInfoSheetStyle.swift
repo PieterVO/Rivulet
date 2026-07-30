@@ -63,6 +63,11 @@ enum PlayerInfoSheetStyle {
     /// The "Label: value" attributed string used by every info row. Exposed so
     /// live sheets (Advanced tab) can refresh a row's value in place each tick
     /// with identical styling instead of rebuilding the label.
+    ///
+    /// The value is set in MONOSPACED DIGITS. On the Advanced tab these values
+    /// are rewritten every second, and in the proportional system font each
+    /// digit has its own width, so a counter ticking 1 → 8 → 11 visibly
+    /// reflows the text after it. Same face, same weight, fixed digit advance.
     @MainActor
     static func infoRowText(_ label: String, _ value: String) -> NSAttributedString {
         let text = NSMutableAttributedString(
@@ -71,7 +76,7 @@ enum PlayerInfoSheetStyle {
         )
         text.append(NSAttributedString(
             string: value,
-            attributes: [.font: UIFont.systemFont(ofSize: 20, weight: .regular), .foregroundColor: UIColor.white]
+            attributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: 20, weight: .regular), .foregroundColor: UIColor.white]
         ))
         return text
     }
