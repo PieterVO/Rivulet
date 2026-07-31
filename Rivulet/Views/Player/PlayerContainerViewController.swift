@@ -31,6 +31,7 @@ class PlayerContainerViewController: UIViewController {
     private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
     private var ambientScrim: BottomScrimView?
+    private var captionOverlay: CaptionOverlayView?
     private var cancellables = Set<AnyCancellable>()
     /// The one floating panel shared by CC/audio/info (Task 5) and Up
     /// Next (Task 6). Only one can be up at a time — presenting a new
@@ -131,6 +132,25 @@ class PlayerContainerViewController: UIViewController {
                 hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
             ])
             hosting.didMove(toParent: self)
+        }
+
+        // Captions sit directly above the video and BELOW every chrome layer
+        // added afterwards, so the rail can never be drawn behind them. A plain
+        // subview rather than a hosting controller, which matters beyond tidiness:
+        // a hosting controller applies the tvOS ~60pt title-safe inset to its
+        // content, which would shrink the box every caption margin is measured
+        // against.
+        if let vm = viewModel {
+            let overlay = CaptionOverlayView(
+                model: vm.aetherSubtitleModel,
+                style: CaptionAppearance.current(),
+                videoSize: vm.videoSize,
+                heightUnits: vm.subtitleHeightUnits
+            )
+            overlay.frame = view.bounds
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(overlay)
+            captionOverlay = overlay
         }
 
         if let vm = viewModel {
@@ -1080,6 +1100,25 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
+        // Caption inputs. The overlay measures against the picture, so a new
+        // aspect ratio has to reach it; the height stepper is per-title and can
+        // change mid-playback.
+        vm.$videoSize
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] size in self?.captionOverlay?.videoSize = size }
+            .store(in: &cancellables)
+
+        vm.$subtitleHeightUnits
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] units in self?.captionOverlay?.heightUnits = units }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: CaptionAppearance.changedNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.captionOverlay?.style = CaptionAppearance.current() }
+            .store(in: &cancellables)
+
         // Ambient pause: the whole chrome yields to the clean backdrop.
         vm.$pausePresentation
             .receive(on: DispatchQueue.main)
@@ -1537,11 +1576,19 @@ class PlayerContainerViewController: UIViewController {
         let targetsChanged = targets.contains(where: { view, alpha in
             view.map { abs($0.alpha - alpha) > 0.01 } == true
         })
-        guard targetsChanged || railAmbientChanged || ownershipChanged || pillOffsetChanged else { return }
+        // Captions lift out of the rail's way on the SAME animation block, so
+        // the two travel on one curve. Marking the overlay dirty before the
+        // guard keeps its state correct even on the early-out path, where
+        // nothing visible is moving anyway.
+        let captionLiftChanged = captionOverlay.map { $0.controlsVisible != chromeVisible } ?? false
+        captionOverlay?.controlsVisible = chromeVisible
+        guard targetsChanged || railAmbientChanged || ownershipChanged
+                || pillOffsetChanged || captionLiftChanged else { return }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
             self.rail?.setAmbient(ambient, keepTitle: keepRailTitle)
             if pillOffsetChanged { self.view.layoutIfNeeded() }
+            if captionLiftChanged { self.captionOverlay?.layoutIfNeeded() }
         }
         // Model alpha is now 1 for a visible pill, so the engine will accept it
         // as a focus target. Re-resolve toward/away from the pill exactly once.

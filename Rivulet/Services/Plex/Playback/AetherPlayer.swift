@@ -216,7 +216,10 @@ final class AetherPlayer: PlayerProtocol {
                             AetherSubtitleCue.StyledRun(
                                 text: run.text,
                                 color: run.color.map {
-                                    Color(red: Double($0.r) / 255, green: Double($0.g) / 255, blue: Double($0.b) / 255)
+                                    UIColor(red: CGFloat($0.r) / 255,
+                                            green: CGFloat($0.g) / 255,
+                                            blue: CGFloat($0.b) / 255,
+                                            alpha: 1)
                                 },
                                 isBold: run.isBold,
                                 isItalic: run.isItalic,

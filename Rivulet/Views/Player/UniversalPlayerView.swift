@@ -931,37 +931,9 @@ struct UniversalPlayerView: View {
     @ViewBuilder
     private var playerContentLayer: some View {
         ZStack {
-            if viewModel.aetherPlayer != nil {
-                // Aether route: the engine decodes cues (text + PGS/DVB
-                // bitmap) and the host renders them from the shared model.
-                AetherSubtitleOverlayView(
-                    model: viewModel.aetherSubtitleModel,
-                    style: captionStyle,
-                    // Matches applyChromeVisibility's chromeVisible signal
-                    // (showControls || isScrubbing): the scrub ribbon keeps
-                    // the bottom band occupied even when the rail hides, so
-                    // captions stay lifted through a scrub.
-                    controlsVisible: viewModel.showControls || viewModel.isScrubbing,
-                    // Lets the overlay measure its bottom margin from the
-                    // picture rather than the screen, so a letterboxed film
-                    // is not captioned into its black bar.
-                    videoSize: viewModel.videoSize,
-                    // Height is sticky per title, like the delay stepper.
-                    heightUnits: viewModel.subtitleHeightUnits
-                )
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
-                .onReceive(NotificationCenter.default.publisher(for: CaptionAppearance.changedNotification)) { _ in
-                    captionStyle = CaptionAppearance.current()
-                }
-            } else if viewModel.player != nil {
-                SubtitleOverlayView(
-                    subtitleManager: viewModel.subtitleManager,
-                    controlsVisible: viewModel.showControls || viewModel.isScrubbing,
-                    heightUnits: viewModel.subtitleHeightUnits
-                )
-                .ignoresSafeArea()
-            }
+            // Captions are UIKit (`CaptionOverlayView`), mounted by
+            // PlayerContainerViewController above the video surface and below
+            // the chrome. Nothing subtitle-related belongs in this layer.
 
             // Loading State or Paused Poster (shows after 5s pause)
             if viewModel.playbackState == .loading || viewModel.playbackState == .idle || viewModel.pausePresentation != .frame {

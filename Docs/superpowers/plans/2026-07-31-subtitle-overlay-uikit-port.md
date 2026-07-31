@@ -1,6 +1,17 @@
 # Subtitle overlay: SwiftUI to UIKit port
 
-Status: planned, not started. Follows PR #274 (merged `66564b7`).
+Status: **implemented**. Follows PR #274 (merged `66564b7`). Builds clean,
+SwiftLint 0 violations, 851 tests pass. NOT yet verified on hardware — see
+Verification below, which is the remaining work.
+
+One correction the implementation forced, recorded because the plan was wrong:
+**`SubtitleParser.swift` is not dead and was not deleted.** `VTTParser` is live,
+parsing `text/mcf+vtt` for the content filter (`ContentFilterParsers.parse`).
+Only `SRTParser`, `ASSParser` and `SubtitleFormat` in that file lack a
+production caller, and their own unit test keeps them compiled. The original
+delete list said the whole file went, which the build caught immediately. Check
+for the TYPE, not the filename, before deleting anything in this area.
+`BitmapSubtitleCue` / `BitmapSubtitleRect` genuinely were orphaned and are gone.
 
 ## Goal
 
@@ -96,12 +107,27 @@ television before keeping the number.
 
 ## Phases
 
-1. UIKit overlay view plus an adapter from the engine cue model. Mount in
-   `PlayerContainerViewController` below the chrome.
-2. Mount in `LiveTVAetherPlayerViewController`, delete the hosting controller and
-   the rebuild plumbing.
-3. Delete the dead sidecar pipeline.
-4. Delete the SwiftUI overlays and the `UniversalPlayerView` mount points.
+All four done.
+
+1. `Views/Player/UIKit/CaptionOverlayView.swift`, mounted in
+   `PlayerContainerViewController` between the hosting controller and the chrome.
+   The lift rides `applyChromeVisibility`'s own `UIView.animate` block, so the
+   captions and the rail share one clock rather than two matched timers.
+2. Mounted in `LiveTVAetherPlayerViewController`. `subtitleHostingController`,
+   `makeOverlayRootView` and `rebuildSubtitleOverlay` are gone, replaced by
+   `syncSubtitleOverlay(animated:)` pushing properties. That file no longer
+   imports SwiftUI.
+3. `SubtitleManager`, `SubtitleClockSyncController`, `BitmapSubtitleCue`,
+   `BitmapSubtitleRect` deleted, along with the view model's `subtitleManager`
+   and `subtitleClockSync` members and the dead `hls` branch in
+   `activeSubtitleTextForFilter`.
+4. `AetherSubtitleOverlayView` and the SwiftUI `SubtitleOverlayView` deleted;
+   `UniversalPlayerView` no longer renders captions.
+
+`CaptionStyle` and `AetherSubtitleCue.StyledRun` now carry `UIColor`/`UIFont`
+instead of SwiftUI `Color`/`Font`. That was not optional: the SwiftLint rule
+`swiftui_import_on_uikit_surface` makes `import SwiftUI` an error anywhere under
+`Views/**/UIKit/**`, so the overlay could not have referenced a SwiftUI `Color`.
 
 ## Verification
 

@@ -21,7 +21,7 @@
 //  Menu hides it (or dismisses the player when it's already hidden).
 //
 //  Subtitles (including DVB/teletext decoded engine-side) render through
-//  AetherSubtitleOverlayView, the same overlay Aether VOD uses.
+//  CaptionOverlayView, the same overlay Aether VOD uses.
 //
 //  Playback routing (inside `AetherPlayer.loadLive`):
 //    - plain HLS (.m3u8 / format=hls) → nativeRemoteHLS: AVPlayer plays the
@@ -36,7 +36,6 @@
 import AVKit
 import AetherEngine
 import Combine
-import SwiftUI
 import UIKit
 
 final class LiveTVAetherPlayerViewController: UIViewController {
@@ -56,7 +55,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private let loadingSpinner = UIActivityIndicatorView(style: .large)
 
     private let subtitleModel = SubtitleModel()
-    private var subtitleHostingController: UIHostingController<AetherSubtitleOverlayView>?
+    private var subtitleOverlay: CaptionOverlayView?
     private var captionStyle: CaptionStyle = CaptionAppearance.current()
     private var cancellables = Set<AnyCancellable>()
 
@@ -352,12 +351,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         blockDismissResetWorkItem = nil
         activePanel?.dismissPanel()
         activePanel = nil
-        if let hosting = subtitleHostingController {
-            hosting.willMove(toParent: nil)
-            hosting.view.removeFromSuperview()
-            hosting.removeFromParent()
-            subtitleHostingController = nil
-        }
+        subtitleOverlay?.removeFromSuperview()
+        subtitleOverlay = nil
         NotificationCenter.default.removeObserver(
             self,
             name: CaptionAppearance.changedNotification,
@@ -511,7 +506,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             self.progressBar.alpha = 1
             self.progressBar.transform = .identity
         }
-        rebuildSubtitleOverlay(animated: true)
+        syncSubtitleOverlay(animated: true)
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
         restartAutoHide()
@@ -529,7 +524,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             self.progressBar.alpha = 0
             self.progressBar.transform = CGAffineTransform(translationX: 0, y: 24)
         }
-        rebuildSubtitleOverlay(animated: true)
+        syncSubtitleOverlay(animated: true)
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -916,7 +911,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         SubtitleAdjustments.setHeightUnits(subtitleHeightUnits + steps,
                                            forMediaKey: subtitleMediaKey)
         subtitleHeightUnits = SubtitleAdjustments.heightUnits(forMediaKey: subtitleMediaKey)
-        rebuildSubtitleOverlay()
+        syncSubtitleOverlay()
     }
 
     /// Steps this channel's subtitle delay, applies it live, and persists it.
@@ -960,13 +955,12 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         var runs: [AetherSubtitleCue.StyledRun] = []
         attr.enumerateAttributes(in: NSRange(location: 0, length: attr.length)) { attrs, range, _ in
             let text = ns.substring(with: range)
-            var color: Color?
+            var color: UIColor?
             if let argb = attrs[colorKey] as? [NSNumber], argb.count == 4 {
-                color = Color(.sRGB,
-                              red: argb[1].doubleValue,
-                              green: argb[2].doubleValue,
-                              blue: argb[3].doubleValue,
-                              opacity: argb[0].doubleValue)
+                color = UIColor(red: CGFloat(argb[1].doubleValue),
+                                green: CGFloat(argb[2].doubleValue),
+                                blue: CGFloat(argb[3].doubleValue),
+                                alpha: CGFloat(argb[0].doubleValue))
             }
             // Relative size is a PERCENTAGE of the default cue size; the
             // renderer wants ASS play-resolution points, so convert through
@@ -1297,65 +1291,45 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     // MARK: - Subtitle overlay (same overlay as Aether VOD)
 
     private func mountSubtitleOverlay() {
-        let hosting = UIHostingController(rootView: makeOverlayRootView())
-        hosting.view.backgroundColor = .clear
-        hosting.view.isUserInteractionEnabled = false
-        // The overlay measures every margin from the SCREEN (the rail is
-        // screen-anchored, and the picture is full-bleed). A hosting controller
-        // applies the safe area to its content by default, which on tvOS is the
-        // ~60pt title-safe margin, so the GeometryReader inside would report the
-        // inset box and every bottom margin would be that much too high — the
-        // rail gap measured about double its intended 5%. VOD's overlay avoids
-        // this with .ignoresSafeArea(); this is the hosting-controller
-        // equivalent, and keeps the rootView's type intact so the generic
-        // parameter above still matches.
-        hosting.safeAreaRegions = []
-
-        addChild(hosting)
-        // Added here, below the chrome — see the call site in viewDidLoad.
-        view.addSubview(hosting.view)
-        hosting.view.frame = view.bounds
-        hosting.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        hosting.didMove(toParent: self)
-
-        subtitleHostingController = hosting
-    }
-
-    private func makeOverlayRootView() -> AetherSubtitleOverlayView {
-        AetherSubtitleOverlayView(
+        // A plain subview, not a hosting controller. That removes the safe-area
+        // problem this used to need a workaround for: a hosting controller
+        // applies the tvOS ~60pt title-safe inset to its content, so the overlay
+        // measured against the inset box and every bottom margin came out that
+        // much too high (the rail gap measured about double its intended 5%).
+        let overlay = CaptionOverlayView(
             model: subtitleModel,
             style: captionStyle,
-            controlsVisible: railVisible,  // lift captions above the glass rail
+            controlsVisible: railVisible,
             // Broadcast is usually 16:9, but a 4:3 or 2.39:1 channel gets its
             // captions on the picture rather than in the pillar/letterbox.
             videoSize: aetherPlayer?.videoSize ?? .zero,
             // Height is sticky per channel, like the delay stepper.
             heightUnits: subtitleHeightUnits
         )
+        // Added here, below the chrome — see the call site in viewDidLoad.
+        view.addSubview(overlay)
+        overlay.frame = view.bounds
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+        subtitleOverlay = overlay
     }
 
-    /// Swaps the overlay's root view.
+    /// Pushes the controller's current caption inputs into the overlay.
     ///
-    /// `animated` is for the rail-driven lift ONLY. Replacing a hosting
-    /// controller's `rootView` is a UIKit-side assignment, not a SwiftUI
-    /// transaction, so the `.animation(value: controlsVisible)` inside the
-    /// overlay has nothing to attach to and the captions jump to their new
-    /// height instead of sliding. Wrapping the assignment supplies the
-    /// transaction. VOD needs none of this: there `controlsVisible` comes off
-    /// an @Published, so the change already happens inside SwiftUI.
-    ///
-    /// Content-driven rebuilds (a new video size, a caption-settings change)
-    /// stay instant — animating a caption's geometry because the user changed
-    /// their font size would be noise.
-    private func rebuildSubtitleOverlay(animated: Bool = false) {
-        guard let hosting = subtitleHostingController else { return }
-        guard animated else {
-            hosting.rootView = makeOverlayRootView()
-            return
-        }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            hosting.rootView = makeOverlayRootView()
-        }
+    /// `animated` is the rail-driven lift ONLY: the captions slide out of the
+    /// rail's way on the same 0.25s ease-in-out the rail fades on, so the two
+    /// travel together. Content-driven updates (a new video size, a
+    /// caption-settings change) stay instant — animating a caption's geometry
+    /// because the user changed their font size would be noise.
+    private func syncSubtitleOverlay(animated: Bool = false) {
+        guard let overlay = subtitleOverlay else { return }
+        overlay.style = captionStyle
+        // Broadcast is usually 16:9, but a 4:3 or 2.39:1 channel gets its
+        // captions on the picture rather than in the pillar/letterbox.
+        overlay.videoSize = aetherPlayer?.videoSize ?? .zero
+        // Height is sticky per channel, like the delay stepper.
+        overlay.heightUnits = subtitleHeightUnits
+        overlay.setControlsVisible(railVisible, animated: animated)
     }
 
     private func bindAetherSubtitles(_ aether: AetherPlayer) {
@@ -1378,7 +1352,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         aether.$videoSize
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuildSubtitleOverlay() }
+            .sink { [weak self] _ in self?.syncSubtitleOverlay() }
             .store(in: &cancellables)
 
         aether.$sourceTime
@@ -1400,6 +1374,6 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
     @objc private func captionAppearanceDidChange() {
         captionStyle = CaptionAppearance.current()
-        rebuildSubtitleOverlay()
+        syncSubtitleOverlay()
     }
 }

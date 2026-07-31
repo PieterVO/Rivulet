@@ -273,14 +273,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// `.zero` before the first frame and on the AVPlayer/hls route.
     @Published private(set) var videoSize: CGSize = .zero
 
-    /// Subtitle manager for custom subtitle rendering.
-    let subtitleManager = SubtitleManager()
-    private let subtitleClockSync = SubtitleClockSyncController()
-
-    /// Cue store for the Aether route's subtitle overlay. Fed from
-    /// AetherPlayer's cue/clock publishers in bindAetherPublishers();
-    /// rendered by AetherSubtitleOverlayView in UniversalPlayerView.
-    /// (The AVPlayer routes render through subtitleManager instead.)
+    /// Cue store for the subtitle overlay. Fed from AetherPlayer's cue/clock
+    /// publishers in bindAetherPublishers(); rendered by `CaptionOverlayView`,
+    /// which PlayerContainerViewController mounts above the video surface.
     let aetherSubtitleModel = SubtitleModel()
 
     /// Local content filter (VidAngel/ClearPlay-style). Mutes language from the
@@ -320,7 +315,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         let raw = aetherSubtitleModel.delaySeconds + Double(steps) * SubtitleAdjustments.delayStep
         let value = SubtitleAdjustments.roundedDelay(raw)
         aetherSubtitleModel.delaySeconds = value
-        subtitleManager.delaySeconds = value
         SubtitleAdjustments.setDelay(value, forKey: subtitleMediaKey)
     }
 
@@ -329,7 +323,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func loadStoredSubtitleDelay() {
         let value = SubtitleAdjustments.delay(forKey: subtitleMediaKey)
         aetherSubtitleModel.delaySeconds = value
-        subtitleManager.delaySeconds = value
         subtitleHeightUnits = SubtitleAdjustments.heightUnits(forMediaKey: subtitleMediaKey)
     }
 
@@ -541,9 +534,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// published `isFilterMuting`. Called from both time observers.
     private func applyContentFilter(at time: TimeInterval) {
         // Feed the currently on-screen dialogue so language cues mute in sync.
-        // Aether decodes into aetherSubtitleModel (which resolves the active set
-        // on the sourceTime axis, honoring subtitle delay); the HLS route uses
-        // subtitleManager's already-active cues.
+        // Cues resolve on the sourceTime axis, honoring the subtitle delay. The
+        // HLS route has no app-side cue source, so it contributes nothing here
+        // and language filtering is Aether-only.
         contentFilter.activeSubtitlesDidChange(texts: activeSubtitleTextForFilter())
 
         guard let skipTarget = contentFilter.timeDidUpdate(time, allowSkip: !isScrubbing) else { return }
@@ -558,16 +551,13 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// The subtitle lines currently on screen, as plain text, for the content
     /// filter's language matching.
     private func activeSubtitleTextForFilter() -> [String] {
-        if aetherPlayer != nil {
-            return aetherSubtitleModel.activeCues.compactMap { cue in
-                switch cue.body {
-                case .text(let string): return string
-                case .styledText(let runs): return runs.map(\.text).joined()
-                case .image: return nil
-                }
+        aetherSubtitleModel.activeCues.compactMap { cue in
+            switch cue.body {
+            case .text(let string): return string
+            case .styledText(let runs): return runs.map(\.text).joined()
+            case .image: return nil
             }
         }
-        return subtitleManager.currentCues.map(\.text)
     }
 
     /// Clear any prepared stream state so the next startup recomputes route + URLs.
@@ -1164,7 +1154,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Stop existing player before retrying
         stopPlayback()
         resetPreparedStreamContext()
-        subtitleClockSync.stop()
 
         await startPlayback()
     }
@@ -1795,7 +1784,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Subtitle overlay feed: Aether decodes cues (text and PGS/DVB
         // bitmap) and publishes them; the host renders via
-        // AetherSubtitleOverlayView driven by this model. sourceTime shares
+        // CaptionOverlayView driven by this model. sourceTime shares
         // the engine clock tick so cue lookup can't drift from playback.
         player.$subtitleCues
             .receive(on: DispatchQueue.main)
@@ -2625,7 +2614,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         cancelAetherStallWatchdog()
         titleLogoResolveTask?.cancel()
         titleLogoResolveTask = nil
-        subtitleClockSync.stop()
         clearReplayWindow()
         contentFilter.reset()
         releaseThumbnailCache()
@@ -2648,7 +2636,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         player = nil
         _playerForCleanup = nil
         hlsManifestEnricher = nil
-        subtitleManager.clear()
 
         // Stop the Plex transcode session so the server frees resources immediately.
         // Without this, switching between DV files can timeout waiting for the init segment
@@ -2800,7 +2787,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         } else {
             await player?.seek(to: CMTime(seconds: time, preferredTimescale: 600))
         }
-        subtitleClockSync.didSeek()
         if revealsControls { showControlsTemporarily() }
     }
 
@@ -2812,7 +2798,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         } else {
             await player?.seek(to: CMTime(seconds: targetTime, preferredTimescale: 600))
         }
-        subtitleClockSync.didSeek()
         showControlsTemporarily()
 
         // Show seek indicator for tap-to-skip
@@ -4945,9 +4930,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             player.removeTimeObserver(timeObserver)
         }
 
-        Task { @MainActor [subtitleClockSync] in
-            subtitleClockSync.stop()
-        }
         controlsTimer?.invalidate()
         scrubTimer?.invalidate()
         wheelScrubbingTimer?.invalidate()

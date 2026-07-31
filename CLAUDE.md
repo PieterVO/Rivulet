@@ -150,19 +150,25 @@ Key components:
   import of defining module 'AetherEngine'"), and adding the import is the wrong
   fix.
 - **`ContentRouter`**: routing decisions → `PlaybackPlan`.
-- **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: **all dead.** This was RPlayer's app-side sidecar
-  pipeline. `390ebec` deleted RPlayer's VOD branches, which took the last caller of
-  `SubtitleManager.load` with it. Nothing calls `load(url:headers:format:)`,
-  `load(content:format:)`, `addCue`, or `addBitmapCue` anywhere, so the track is
-  permanently empty, `SubtitleClockSyncController` ticks `update(time:)` against
-  nothing, and `SubtitleOverlayView` renders an empty list on every `hls` playback.
-  `SubtitleParser` is referenced only by its own unit test. Do not tune, sync, or
-  build on any of it; on the `hls` route subtitles come from the server (burn-in or
-  the WebVTT rendition the client profile requests), not from the app. Delete rather
-  than repair.
-- On the aether route, subtitles come from the engine's cue publishers rendered by `AetherSubtitleOverlayView` (fed via `SubtitleModel`). Live TV's remote-HLS
-  direct path feeds the same view from `AVPlayerItemLegibleOutput`. One renderer,
-  two live sources; keep it that way rather than adding a third view.
+- **Captions are UIKit: `CaptionOverlayView`** (`Views/Player/UIKit/`), mounted as a
+  plain subview above the video and below the chrome by both
+  `PlayerContainerViewController` and `LiveTVAetherPlayerViewController`. Cues come
+  from the engine's publishers via `SubtitleModel`; Live TV's remote-HLS direct path
+  feeds the SAME view from `AVPlayerItemLegibleOutput`. One renderer, two sources.
+  Do not add a third view, and do not mount it through a `UIHostingController`: that
+  applies the tvOS title-safe inset to the content, so every caption margin is
+  measured against the wrong box.
+- **The `hls` route has no app-side captions at all.** `SubtitleManager`,
+  `SubtitleClockSyncController` and the SwiftUI `SubtitleOverlayView` were RPlayer's
+  sidecar pipeline; `390ebec` removed RPlayer's VOD branches and took the last caller
+  of `SubtitleManager.load` with it, leaving a permanently empty track feeding a view
+  that rendered nothing. All deleted. On that route subtitles come from the server
+  (burn-in, or the WebVTT rendition the client profile requests).
+- `SubtitleParser.swift` survived that cull and is NOT dead: `VTTParser` is live,
+  parsing `text/mcf+vtt` for the content filter (`ContentFilterParsers`). `SRTParser`,
+  `ASSParser` and `SubtitleFormat` in the same file have no production caller and are
+  held up only by their own unit test. Check for the type, not the filename, before
+  deleting anything here.
 
 **Playback States** (PlayerProtocol): `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
 

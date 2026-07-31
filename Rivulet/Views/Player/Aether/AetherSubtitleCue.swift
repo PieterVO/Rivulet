@@ -18,7 +18,7 @@
 //
 
 import CoreGraphics
-import SwiftUI
+import UIKit
 
 /// A subtitle cue ready for the Aether host overlay to paint.
 struct AetherSubtitleCue: Identifiable {
@@ -58,7 +58,7 @@ struct AetherSubtitleCue: Identifiable {
     /// here through one path (AE 5.26.0).
     struct StyledRun: Hashable {
         var text: String
-        var color: Color?
+        var color: UIColor?
         var isBold: Bool = false
         var isItalic: Bool = false
         var isUnderlined: Bool = false
