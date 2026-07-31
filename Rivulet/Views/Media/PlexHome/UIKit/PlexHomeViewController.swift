@@ -2647,10 +2647,7 @@ final class PlexHomeViewController: UIViewController {
 
     private func configureShelfRow(_ cell: ShelfRowCell, sectionID: HomeSectionID) {
         guard let section = shelfSection(id: sectionID) else { return }
-        cell.cellProvider = { [weak self] innerCV, indexPath in
-            self?.shelfItemCell(in: innerCV, at: indexPath, sectionID: sectionID)
-                ?? innerCV.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath)
-        }
+        bindShelfCellProvider(cell, section: section)
         cell.onSelect = { [weak self] itemIndex in
             self?.handleShelfTap(sectionID: sectionID, itemIndex: itemIndex)
         }
@@ -2672,6 +2669,22 @@ final class PlexHomeViewController: UIViewController {
         )
     }
 
+    /// Bind a row's tile provider to a CAPTURED section value, so the count the
+    /// row is configured with and the array its tiles are read from are the same
+    /// snapshot. Looking the section up live in `sectionsSnapshot` on every
+    /// dequeue was a second source of truth: the inner collection's item count
+    /// comes from the row's own cached `realCount`, so once a section's items
+    /// shrank between a row's last configure and a tile being realized (a hub
+    /// refresh dropping a paginated-in extra), every index past the NEW count
+    /// vended the pagination skeleton — a stray empty placeholder mid-row, next
+    /// to tiles realized while the two counts still agreed.
+    private func bindShelfCellProvider(_ cell: ShelfRowCell, section: HomeSectionData) {
+        cell.cellProvider = { [weak self] innerCV, indexPath in
+            self?.shelfItemCell(in: innerCV, at: indexPath, section: section)
+                ?? innerCV.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath)
+        }
+    }
+
     /// Push fresh counts / content into already-visible shelf rows after a
     /// snapshot apply (their diffable identity never changes, so diffing
     /// won't reconfigure them).
@@ -2684,9 +2697,12 @@ final class PlexHomeViewController: UIViewController {
             guard isShelfKind(section.kind) else { continue }
             if let pending = pendingShelfRemoval, pending.sectionID == section.id {
                 // Animate the captured single-tile removal: delete that index
-                // so the survivors slide left to fill. The cellProvider
-                // closures from the prior configure stay valid (they capture
-                // the stable sectionID), so no reconfigure is needed.
+                // so the survivors slide left to fill. The row keeps its other
+                // callbacks (they capture the stable sectionID), but the tile
+                // provider holds a section VALUE and must be re-bound to the
+                // post-removal one or the indices it serves are off by one
+                // past the deleted slot.
+                bindShelfCellProvider(cell, section: section)
                 cell.animateRemoval(at: pending.index,
                                     newRealCount: shelfRealCount(section),
                                     newSkeleton: paginationStates[section.id]?.isLoadingMore == true,
@@ -2704,15 +2720,15 @@ final class PlexHomeViewController: UIViewController {
     /// Tile cell inside a shelf row. Mirrors the per-item cases the outer
     /// collection used before the rows became self-scrolling; the skeleton
     /// placeholder is the index just past the real items.
-    private func shelfItemCell(in innerCV: UICollectionView, at indexPath: IndexPath, sectionID: HomeSectionID) -> UICollectionViewCell? {
-        guard let section = shelfSection(id: sectionID) else { return nil }
-        let perfKey = "\(sectionID.raw):\(indexPath.item)"
+    private func shelfItemCell(in innerCV: UICollectionView, at indexPath: IndexPath, section: HomeSectionData) -> UICollectionViewCell? {
+        let perfKey = "\(section.id.raw):\(indexPath.item)"
 
-        if indexPath.item >= shelfRealCount(section) {
-            let cell = innerCV.dequeueReusableCell(withReuseIdentifier: PosterSkeletonCell.reuseID, for: indexPath) as! PosterSkeletonCell
-            cell.configure(layout: section.kind == .continueWatching ? .continueWatching : .poster)
-            return cell
-        }
+        // Real tiles only — ShelfRowCell places the pagination skeleton itself
+        // (it owns the count that decides where the trailing slot is). An index
+        // past this section's items means the row is running ahead of the
+        // snapshot we were bound to; hand back nil for a blank poster rather
+        // than trapping on the subscript.
+        guard indexPath.item < shelfRealCount(section) else { return nil }
 
         switch section.kind {
         case .continueWatching:

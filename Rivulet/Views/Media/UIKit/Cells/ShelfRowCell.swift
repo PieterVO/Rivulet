@@ -165,6 +165,33 @@ final class ShelfRowCell: UICollectionViewCell {
 
     private var displayCount: Int { realCount + (hasSkeleton ? 1 : 0) }
 
+    /// True while a `performBatchUpdates` animation is still running.
+    /// `reloadData()` inside that window strands the cells the batch just
+    /// inserted: they keep their old index in the collection's realized map
+    /// and are never re-vended. That is how the pagination skeleton froze
+    /// mid-row. A hub lands with one item, the row inserts the skeleton at the
+    /// tail, the page arrives a moment later, and the reload that should have
+    /// replaced the skeleton runs while its insert is still animating. The row
+    /// ends up reporting the right counts and the right items while still
+    /// showing a placeholder over one of them.
+    private var batchUpdateInFlight = false
+    /// A reload that arrived mid-batch, run once the batch completes.
+    private var deferredApply: (() -> Void)?
+
+    /// Every batch update goes through here, so a reload can tell one is live.
+    private func performRowBatch(_ updates: @escaping () -> Void,
+                                 then finish: (() -> Void)? = nil) {
+        batchUpdateInFlight = true
+        rowCollectionView.performBatchUpdates(updates) { [weak self] _ in
+            guard let self else { return }
+            self.batchUpdateInFlight = false
+            finish?()
+            let deferred = self.deferredApply
+            self.deferredApply = nil
+            deferred?()
+        }
+    }
+
     // MARK: Init
 
     override init(frame: CGRect) {
@@ -262,6 +289,9 @@ final class ShelfRowCell: UICollectionViewCell {
         // different row would restore focus to an unrelated tile index.
         lastFocusedItemIndex = nil
         hasBoundContent = false
+        // A deferred reload belongs to the row this cell WAS showing.
+        deferredApply = nil
+        batchUpdateInFlight = false
         offsetLink?.invalidate()
         offsetLink = nil
     }
@@ -300,7 +330,12 @@ final class ShelfRowCell: UICollectionViewCell {
                 self.rowCollectionView.layoutIfNeeded()
                 self.setOffset(clampedTo: initialOffset)
             }
-            if isVisibleRebind {
+            if batchUpdateInFlight {
+                // Reloading now would strand that batch's inserted cells; run
+                // the reload from its completion instead. The counts are
+                // already committed above, so the deferred pass is current.
+                deferredApply = applyContent
+            } else if isVisibleRebind {
                 UIView.transition(with: rowCollectionView,
                                   duration: 0.35,
                                   options: [.transitionCrossDissolve, .allowUserInteraction],
@@ -336,18 +371,18 @@ final class ShelfRowCell: UICollectionViewCell {
             return
         }
         let keepOffset = rowCollectionView.contentOffset.x
-        rowCollectionView.performBatchUpdates {
-            rowCollectionView.deleteItems(at: [IndexPath(item: index, section: 0)])
+        performRowBatch({ [rowCollectionView] in
+            rowCollectionView!.deleteItems(at: [IndexPath(item: index, section: 0)])
             // Reconcile the skeleton placeholder (just past the real items) in
             // the same batch, expressed in old-index space like the delete.
             if oldSkeleton, !newSkeleton {
-                rowCollectionView.deleteItems(at: [IndexPath(item: oldReal, section: 0)])
+                rowCollectionView!.deleteItems(at: [IndexPath(item: oldReal, section: 0)])
             } else if !oldSkeleton, newSkeleton {
-                rowCollectionView.insertItems(at: [IndexPath(item: newRealCount, section: 0)])
+                rowCollectionView!.insertItems(at: [IndexPath(item: newRealCount, section: 0)])
             }
-        } completion: { [weak self] _ in
+        }, then: { [weak self] in
             self?.setOffset(clampedTo: keepOffset)
-        }
+        })
     }
 
     /// Append-only growth (pagination) without nuking focus: inserts the new
@@ -372,14 +407,14 @@ final class ShelfRowCell: UICollectionViewCell {
 
         realCount = newReal
         hasSkeleton = newSkeleton
-        rowCollectionView.performBatchUpdates {
+        performRowBatch { [rowCollectionView] in
             if newReal > oldReal {
-                rowCollectionView.insertItems(at: (oldReal..<newReal).map { IndexPath(item: $0, section: 0) })
+                rowCollectionView!.insertItems(at: (oldReal..<newReal).map { IndexPath(item: $0, section: 0) })
             }
             if oldSkeleton, !newSkeleton {
-                rowCollectionView.deleteItems(at: [IndexPath(item: oldReal, section: 0)])
+                rowCollectionView!.deleteItems(at: [IndexPath(item: oldReal, section: 0)])
             } else if !oldSkeleton, newSkeleton {
-                rowCollectionView.insertItems(at: [IndexPath(item: newReal, section: 0)])
+                rowCollectionView!.insertItems(at: [IndexPath(item: newReal, section: 0)])
             }
         }
     }
@@ -560,8 +595,23 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
         displayCount
     }
 
+    /// The pagination skeleton is OURS to place, not the provider's. It is
+    /// defined as the one slot past `realCount` — the same `realCount` that
+    /// sizes the section — so it can only ever be the trailing tile. The owner
+    /// used to make this call from its own live section lookup, which is a
+    /// second count: when the two disagreed for even one layout pass, whatever
+    /// tile happened to be realized in that pass came back a skeleton and stuck
+    /// there mid-row (the row never reloads while its content token is
+    /// unchanged), beside items that were still perfectly tappable.
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        cellProvider?(collectionView, indexPath) ?? collectionView.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath)
+        if hasSkeleton, indexPath.item >= realCount {
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: PosterSkeletonCell.reuseID, for: indexPath) as! PosterSkeletonCell
+            cell.configure(layout: tileKind == .continueWatching ? .continueWatching : .poster)
+            return cell
+        }
+        return cellProvider?(collectionView, indexPath)
+            ?? collectionView.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath)
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
