@@ -116,7 +116,26 @@ final class PlayerInfoTabsView: UIView {
         self.tabBar = tabs.count > 1 ? PillTabBarView(titles: tabs.map(\.title), selectedIndex: 0) : nil
         super.init(frame: .zero)
         setup()
+
+        // Swipe twin of the Down crossing in pressesBegan (pills → sheet),
+        // gated on the same predicates so a declined swipe stays with the
+        // focus engine. The iPhone Remote emits no arrow presses.
+        entrySwipe = DirectionalInputBinding(
+            gatedSwipesOn: self,
+            directions: [.down],
+            shouldHandle: { [weak self] _ in
+                guard let self, let tabBar = self.tabBar else { return false }
+                return tabBar.containsFocus && self.currentContentView.infoScrollView.needsFocusableRows
+            },
+            onSwipe: { [weak self] _ in
+                guard let self else { return }
+                infoTabLog.notice("driving focus: pills → content (swipe)")
+                self.moveFocus(to: self.currentContentView)
+            }
+        )
     }
+
+    private var entrySwipe: DirectionalInputBinding?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

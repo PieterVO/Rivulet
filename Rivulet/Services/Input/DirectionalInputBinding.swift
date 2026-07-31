@@ -66,6 +66,10 @@ final class DirectionalInputBinding: NSObject {
     /// Arrow press held past `InputConfig.holdThreshold` (press path only —
     /// a touch surface expresses "hold" as repeated swipes instead).
     private let onHold: ((Direction) -> Void)?
+    /// Gate for the `gatedSwipesOn` variant, consulted in
+    /// `gestureRecognizerShouldBegin`. nil on the focusless variant, whose
+    /// swipes are claimed unconditionally.
+    private let shouldHandle: ((Direction) -> Bool)?
 
     private var directionByRecognizer: [ObjectIdentifier: Direction] = [:]
 
@@ -83,6 +87,7 @@ final class DirectionalInputBinding: NSObject {
     ) {
         self.onTap = onTap
         self.onHold = onHold
+        self.shouldHandle = nil
         super.init()
 
         for direction in directions {
@@ -109,6 +114,39 @@ final class DirectionalInputBinding: NSObject {
         }
     }
 
+    /// Swipe-only, GATED variant for a FOCUSABLE surface whose press half
+    /// already lives in a responder-chain `pressesBegan` override (the
+    /// correct press pattern there: the focus engine acts first and only
+    /// declined presses bubble). Recognizers for indirect touches route
+    /// through the focused view's chain, so these fire only while focus is
+    /// on or inside `view`. The gate runs in `gestureRecognizerShouldBegin`
+    /// — a declined swipe stays with the focus engine, so `shouldHandle`
+    /// must claim exactly the moves the engine cannot perform (the same
+    /// predicates the press override uses). This variant exists because the
+    /// iPhone Remote emits NO arrow presses at all: without a swipe path a
+    /// press-only hand-off is a hard wall for it.
+    init(
+        gatedSwipesOn view: UIView,
+        directions: [Direction],
+        shouldHandle: @escaping (Direction) -> Bool,
+        onSwipe: @escaping (Direction) -> Void
+    ) {
+        self.onTap = onSwipe
+        self.onHold = nil
+        self.shouldHandle = shouldHandle
+        super.init()
+
+        for direction in directions {
+            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipe(_:)))
+            swipe.direction = direction.swipeDirection
+            swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
+            swipe.allowedPressTypes = []
+            swipe.delegate = self
+            view.addGestureRecognizer(swipe)
+            directionByRecognizer[ObjectIdentifier(swipe)] = direction
+        }
+    }
+
     /// The direction a recognizer installed by this binding serves.
     func direction(of recognizer: UIGestureRecognizer) -> Direction? {
         directionByRecognizer[ObjectIdentifier(recognizer)]
@@ -127,5 +165,15 @@ final class DirectionalInputBinding: NSObject {
     @objc func handleLong(_ recognizer: UIGestureRecognizer) {
         guard recognizer.state == .began, let direction = direction(of: recognizer) else { return }
         onHold?(direction)
+    }
+}
+
+extension DirectionalInputBinding: UIGestureRecognizerDelegate {
+    /// Gated variant only (the focusless variant sets no delegate).
+    /// Declining here, before the recognizer begins, is what leaves the
+    /// swipe to the focus engine — bailing in the handler would be too late.
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard let shouldHandle, let direction = direction(of: gestureRecognizer) else { return true }
+        return shouldHandle(direction)
     }
 }

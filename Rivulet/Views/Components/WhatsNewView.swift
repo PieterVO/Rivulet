@@ -155,6 +155,7 @@ struct WhatsNewView: View {
             "Swiping the touch surface now skips back and forward in Live TV",
             "Info popups on the details page now scroll with a swipe",
             "New Input Diagnostics toggle in Settings helps track down remote issues",
+            "The player's INFO and cast panels now move between sections with a swipe",
         ]),
         ("1.0.4 (72)", [
             "Updated AetherEngine to 6.1.3",

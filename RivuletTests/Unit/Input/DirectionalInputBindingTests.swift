@@ -81,6 +81,49 @@ final class DirectionalInputBindingTests: XCTestCase {
         XCTAssertEqual(holds, [.right])
     }
 
+    // MARK: Gated swipes-only variant (focusable surfaces)
+
+    func test_gatedVariant_installsOnlySwipes_withBindingAsDelegate() {
+        let view = UIView()
+        let binding = DirectionalInputBinding(
+            gatedSwipesOn: view, directions: [.up, .down], shouldHandle: { _ in true }, onSwipe: { _ in }
+        )
+
+        XCTAssertTrue(recognizers(UITapGestureRecognizer.self, on: view).isEmpty)
+        XCTAssertTrue(recognizers(UILongPressGestureRecognizer.self, on: view).isEmpty)
+        let swipes = recognizers(UISwipeGestureRecognizer.self, on: view)
+        XCTAssertEqual(swipes.count, 2)
+        for swipe in swipes {
+            XCTAssertTrue(swipe.delegate === binding)
+            XCTAssertEqual(swipe.allowedTouchTypes, [NSNumber(value: UITouch.TouchType.indirect.rawValue)])
+            XCTAssertEqual(swipe.allowedPressTypes, [])
+        }
+    }
+
+    func test_gatedVariant_shouldBeginConsultsGateWithDirection() {
+        let view = UIView()
+        var asked: [DirectionalInputBinding.Direction] = []
+        var allow = false
+        let binding = DirectionalInputBinding(
+            gatedSwipesOn: view, directions: [.up, .down],
+            shouldHandle: { asked.append($0); return allow },
+            onSwipe: { _ in }
+        )
+
+        let upSwipe = recognizers(UISwipeGestureRecognizer.self, on: view).first { binding.direction(of: $0) == .up }!
+        XCTAssertFalse(binding.gestureRecognizerShouldBegin(upSwipe))
+        allow = true
+        XCTAssertTrue(binding.gestureRecognizerShouldBegin(upSwipe))
+        XCTAssertEqual(asked, [.up, .up])
+    }
+
+    func test_focuslessVariant_shouldBeginAlwaysTrue() {
+        let view = UIView()
+        let binding = DirectionalInputBinding(view: view, directions: [.left], onTap: { _ in })
+        let swipe = recognizers(UISwipeGestureRecognizer.self, on: view)[0]
+        XCTAssertTrue(binding.gestureRecognizerShouldBegin(swipe))
+    }
+
     func test_foreignRecognizer_hasNoDirectionAndFiresNothing() {
         let view = UIView()
         var fired = 0

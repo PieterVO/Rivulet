@@ -129,7 +129,30 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
         heightConstraint = heightAnchor.constraint(equalToConstant: 0)
         heightConstraint.priority = .defaultHigh
         heightConstraint.isActive = false
+
+        // Swipe twins of the pressesBegan crossings below, gated on the
+        // same predicates. The iPhone Remote emits no arrow presses, so
+        // without these the tab bar is unreachable from the list by swipe
+        // (and the list from the pills).
+        swipeCrossings = DirectionalInputBinding(
+            gatedSwipesOn: self,
+            directions: [.up, .down],
+            shouldHandle: { [weak self] direction in
+                guard let self, self.state == .list, let tabBar = self.tabBar else { return false }
+                return direction == .up ? self.listView.canEscapeUpward : tabBar.containsFocus
+            },
+            onSwipe: { [weak self] direction in
+                guard let self else { return }
+                if direction == .up, let tabBar = self.tabBar {
+                    self.moveFocus(to: tabBar)
+                } else {
+                    self.moveFocus(to: self.listView)
+                }
+            }
+        )
     }
+
+    private var swipeCrossings: DirectionalInputBinding?
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

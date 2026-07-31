@@ -91,6 +91,36 @@ final class InsightsActorView: UIView {
         super.init(frame: .zero)
         setUp()
         headerView.configure(name: person.name, biography: nil, portraitURL: person.imageURL, isLoading: true)
+
+        // Swipe twins of the pressesBegan bio steps below, gated on the
+        // same would-it-move math so a declined swipe stays with the focus
+        // engine (which then walks into the filmography once it unlocks).
+        // The iPhone Remote emits no arrow presses, so without these a bio
+        // taller than the panel is unreadable on it.
+        bioSwipes = DirectionalInputBinding(
+            gatedSwipesOn: self,
+            directions: [.up, .down],
+            shouldHandle: { [weak self] direction in
+                guard let self, self.headerView.isFocused else { return false }
+                return self.canStep(up: direction == .up)
+            },
+            onSwipe: { [weak self] direction in
+                _ = self?.step(up: direction == .up)
+            }
+        )
+    }
+
+    private var bioSwipes: DirectionalInputBinding?
+
+    /// Read-only mirror of `step(up:)`'s would-it-move guards, used by the
+    /// swipe gate. Keep the two in sync: `step` owns the side effects
+    /// (filmography unlock), this owns none.
+    private func canStep(up: Bool) -> Bool {
+        if up { return scrollView.contentOffset.y > 0.5 }
+        guard !headerFullyVisible(at: scrollView.contentOffset.y) else { return false }
+        let target = scrollView.contentOffset.y + Metrics.clickStep
+        let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
+        return abs(min(max(0, target), maxY) - scrollView.contentOffset.y) > 0.5
     }
 
     @available(*, unavailable)

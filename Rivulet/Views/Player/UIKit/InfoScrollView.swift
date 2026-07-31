@@ -181,6 +181,35 @@ final class InfoScrollView: UIScrollView {
         // didUpdateFocus below, plus the declined-press fallback in
         // pressesBegan for content no focus target can reach.
         isScrollEnabled = false
+
+        // Swipe twin of the declined-Up escape in pressesBegan. Claimable
+        // only when a step up would not move AND focus sits on the first
+        // row (canEscapeUpward) — there the engine has no upward candidate,
+        // so the swipe steals nothing; anywhere else the gate declines and
+        // the engine keeps its row hops. The iPhone Remote emits no arrow
+        // presses, so this is its only way back up to the pills.
+        escapeSwipe = DirectionalInputBinding(
+            gatedSwipesOn: self,
+            directions: [.up],
+            shouldHandle: { [weak self] _ in
+                guard let self else { return false }
+                return !self.canStepUp && self.canEscapeUpward
+            },
+            onSwipe: { [weak self] _ in self?.onDeclinedUpPress?() }
+        )
+    }
+
+    private var escapeSwipe: DirectionalInputBinding?
+
+    /// Read-only mirror of `step(by: -pressStep)`'s would-it-move math.
+    private var canStepUp: Bool {
+        let target = Self.steppedOffsetY(
+            current: contentOffset.y,
+            delta: -Self.pressStep,
+            viewportHeight: bounds.height,
+            contentHeight: contentSize.height
+        )
+        return abs(target - contentOffset.y) > 0.5
     }
 
     required init?(coder: NSCoder) {
