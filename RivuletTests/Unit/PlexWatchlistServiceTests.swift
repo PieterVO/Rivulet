@@ -99,6 +99,23 @@ final class PlexWatchlistServiceTests: XCTestCase {
         XCTAssertTrue(service.watchlistItems.isEmpty)
     }
 
+    /// A show's tmdb id is also a valid tmdb MOVIE id, so the write has to say
+    /// which one it means or Discover can match an unrelated film (issue #269).
+    func testWriteCarriesTheItemType() async {
+        let api = StubWatchlistAPI()
+        let service = PlexWatchlistService(api: api, cache: NullWatchlistCache())
+        let show = PlexWatchlistItem(
+            id: "s", title: "Married at First Sight", year: 2014,
+            type: .show, posterURL: nil, guids: ["tmdb://61888"]
+        )
+
+        await service.add(guid: "tmdb://61888", item: show)
+        XCTAssertEqual(api.lastAddType, .show)
+
+        await service.remove(guid: "tmdb://61888")
+        XCTAssertEqual(api.lastRemoveType, .show)
+    }
+
     private func makeItem(id: String, guid: String = "tmdb://1") -> PlexWatchlistItem {
         PlexWatchlistItem(
             id: id,
@@ -119,11 +136,18 @@ final class StubWatchlistAPI: PlexWatchlistAPIProtocol, @unchecked Sendable {
 
     func fetchAll(token: String) async throws -> [PlexWatchlistItem] { fetchResult }
 
-    func add(guids: [String], token: String) async throws {
+    /// Types the service passed through on the last write — the Discover match
+    /// is wrong without them (see PlexWatchlistAPI.resolveDiscoverRatingKey).
+    var lastAddType: PlexWatchlistItem.WatchlistType?
+    var lastRemoveType: PlexWatchlistItem.WatchlistType?
+
+    func add(guids: [String], type: PlexWatchlistItem.WatchlistType?, token: String) async throws {
+        lastAddType = type
         if shouldFailWrites { throw URLError(.notConnectedToInternet) }
     }
 
-    func remove(guid: String, token: String) async throws {
+    func remove(guid: String, type: PlexWatchlistItem.WatchlistType?, token: String) async throws {
+        lastRemoveType = type
         if shouldFailWrites { throw URLError(.notConnectedToInternet) }
     }
 }

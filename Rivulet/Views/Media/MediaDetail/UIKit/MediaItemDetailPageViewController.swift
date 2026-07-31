@@ -652,8 +652,15 @@ final class MediaItemDetailPageViewController: UIViewController {
         let target = onWatchlist
         Task { [weak self] in
             guard let self, let provider = self.provider else { return }
-            if target { try? await provider.addToWatchlist(self.item.ref) }
-            else { try? await provider.removeFromWatchlist(self.item.ref) }
+            do {
+                if target { try await provider.addToWatchlist(self.item.ref) }
+                else { try await provider.removeFromWatchlist(self.item.ref) }
+            } catch {
+                // Revert: the flip above promised a state the server refused,
+                // and leaving it would just come back wrong on reopen.
+                self.onWatchlist = !target
+                self.updateWatchlistIcon()
+            }
         }
     }
 

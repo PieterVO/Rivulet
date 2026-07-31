@@ -66,6 +66,7 @@ final class MediaDetailChromeView: UIView {
     /// grow or shrink per item.
     private static let actionButtonHeight: CGFloat = HeroPillButton.buttonHeight
     private static let actionPillWidth: CGFloat = HeroPillButton.pillWidth
+    private static let playProgressTrackWidth: CGFloat = 60
 
     // MARK: - Public surface
 
@@ -114,6 +115,12 @@ final class MediaDetailChromeView: UIView {
     private(set) var playButton: FocusableActionButton?
     /// Preferred focus target for the action row (Play), or nil before detail loads.
     var playFocusable: UIView? { playButton }
+
+    /// Fill width of the Play pill's watch-progress bar, held so the fraction can
+    /// be set after the pill is built — on a show/season the bar belongs to the
+    /// episode Play resolves to, which only arrives asynchronously. Rebuilt with
+    /// the pill.
+    private var playProgressFillWidth: NSLayoutConstraint?
 
     // MARK: - State
 
@@ -488,6 +495,7 @@ final class MediaDetailChromeView: UIView {
 
         heroWatched = refreshed.isWatched
         updateWatchedIcon()
+        setPlayProgress(refreshed.watchProgress)
 
         // Shows/seasons: the "Next Up: S1E3 · Title" line moves to the next
         // unwatched episode. Clear it first so a show that just finished isn't
@@ -618,9 +626,11 @@ final class MediaDetailChromeView: UIView {
             guard let self,
                   let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
                   let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider),
-                  let text = EpisodePicker.nextUpLabel(for: episode),
                   self.loadToken == token
             else { return }
+            // The pill's bar tracks the episode Play will start, not the show.
+            self.setPlayProgress(episode.watchProgress)
+            guard let text = EpisodePicker.nextUpLabel(for: episode) else { return }
             self.nextUpLabel.text = text
             self.nextUpLabel.isHidden = false
         }
@@ -690,6 +700,9 @@ final class MediaDetailChromeView: UIView {
         // detail content — we don't surface those in the carousel.
         let play = makePlayPill(item: item)
         play.onPrimaryAction = { [weak self] in self?.onPlay?() }
+        // Movie/episode: the item's own progress. Show/season: nothing yet — the
+        // Play target resolves async in `resolveNextUpLabel`, which sets it.
+        setPlayProgress(item.watchProgress)
 
         let watched = makeCircleButton(systemImage: "checkmark")
         watchedButton = watched
@@ -842,9 +855,20 @@ final class MediaDetailChromeView: UIView {
         heroOnWatchlist.toggle()
         updateWatchlistIcon()
         let target = heroOnWatchlist
-        Task {
+        Task { [weak self] in
             guard let p = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
-            if target { try? await p.addToWatchlist(item.ref) } else { try? await p.removeFromWatchlist(item.ref) }
+            do {
+                if target { try await p.addToWatchlist(item.ref) } else { try await p.removeFromWatchlist(item.ref) }
+            } catch {
+                // The optimistic flip above was a promise the server didn't keep
+                // (unmatched item, no Discover match). Put the icon back rather
+                // than leave it claiming a state that won't survive reopening.
+                await MainActor.run {
+                    guard let self else { return }
+                    self.heroOnWatchlist = !target
+                    self.updateWatchlistIcon()
+                }
+            }
         }
     }
 
@@ -954,6 +978,14 @@ final class MediaDetailChromeView: UIView {
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
         progressTrack.layer.cornerRadius = 1.5
+        progressTrack.clipsToBounds = true
+
+        let progressFill = UIView()
+        progressFill.translatesAutoresizingMaskIntoConstraints = false
+        progressFill.backgroundColor = .white
+        progressTrack.addSubview(progressFill)
+        let fillWidth = progressFill.widthAnchor.constraint(equalToConstant: 0)
+        playProgressFillWidth = fillWidth
 
         // Content is centered in the pill (not leading-anchored) so a
         // hardcoded pill width wider than the content doesn't leave it
@@ -981,12 +1013,32 @@ final class MediaDetailChromeView: UIView {
             playIcon.heightAnchor.constraint(equalToConstant: 20),
 
             progressTrack.heightAnchor.constraint(equalToConstant: 3),
-            progressTrack.widthAnchor.constraint(equalToConstant: 60)
+            progressTrack.widthAnchor.constraint(equalToConstant: Self.playProgressTrackWidth),
+
+            progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            progressFill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            progressFill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            fillWidth
         ])
 
         pill.invertOnFocus = [playIcon, timeLabel]
         pill.invertBackgroundOnFocus = [progressTrack]
+        pill.invertFillOnFocus = [progressFill]
         return pill
+    }
+
+    /// Point the Play pill's bar at a watch fraction. The track itself always
+    /// stays — unstarted, watched and finished all show the empty stub; only the
+    /// fill comes and goes. Same 0 < fraction < 1 render rule the episode cells
+    /// use (see `WatchProgressPolicy`: the DISPLAY question, not the resume
+    /// decision), so a finished item reads as empty rather than full.
+    private func setPlayProgress(_ fraction: Double?) {
+        guard let fillWidth = playProgressFillWidth else { return }
+        guard let fraction, fraction > 0, fraction < 1 else {
+            fillWidth.constant = 0
+            return
+        }
+        fillWidth.constant = Self.playProgressTrackWidth * CGFloat(fraction)
     }
 
     private func makeCircleButton(systemImage: String) -> FocusableActionButton {

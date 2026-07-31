@@ -32,6 +32,11 @@ final class FocusableActionButton: UIControl {
     /// SwiftUI's track color).
     var invertBackgroundOnFocus: [UIView] = []
 
+    /// Like `invertBackgroundOnFocus` but for the filled portion drawn on top of
+    /// a track — it has to stay darker than the track it sits in, or the bar
+    /// reads backwards on the white focused pill.
+    var invertFillOnFocus: [UIView] = []
+
     /// Invoked on Select (`.primaryActionTriggered`).
     var onPrimaryAction: (() -> Void)?
 
@@ -135,6 +140,11 @@ final class FocusableActionButton: UIControl {
                 v.backgroundColor = focused
                     ? UIColor.black.withAlphaComponent(0.2)
                     : UIColor.white.withAlphaComponent(0.25)
+            }
+            for v in self.invertFillOnFocus {
+                v.backgroundColor = focused
+                    ? UIColor.black.withAlphaComponent(0.7)
+                    : UIColor.white
             }
         }
     }

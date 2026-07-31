@@ -63,7 +63,9 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
 
-    private override init() {
+    // Not private: callers inject a manager (see PlexProvider.init), so tests
+    // subclass this to stub responses. App code still uses `.shared`.
+    override init() {
         super.init()
     }
 
@@ -495,7 +497,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             URLQueryItem(name: "includeChapters", value: "1"),
             URLQueryItem(name: "includeRelated", value: "0"),
             URLQueryItem(name: "includeMarkers", value: "1"),
-            URLQueryItem(name: "includeCollections", value: "1")
+            URLQueryItem(name: "includeCollections", value: "1"),
+            // Watchlist and Common Sense both key on the external tmdb:// guid,
+            // and the Guid array is the only place a Plex-agent item carries one.
+            URLQueryItem(name: "includeGuids", value: "1")
         ]
 
         guard let url = components.url else {

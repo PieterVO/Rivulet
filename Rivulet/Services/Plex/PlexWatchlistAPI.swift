@@ -39,8 +39,12 @@ struct PlexWatchlistHTTPError: Error, LocalizedError {
 
 protocol PlexWatchlistAPIProtocol: Sendable {
     func fetchAll(token: String) async throws -> [PlexWatchlistItem]
-    func add(guids: [String], token: String) async throws
-    func remove(guid: String, token: String) async throws
+    /// `type` disambiguates the Discover match. Pass it whenever it's known:
+    /// tmdb movie ids and tmdb TV ids are separate namespaces that collide on
+    /// the same number, so probing movie-first can match a completely
+    /// different title (see `resolveDiscoverRatingKey`).
+    func add(guids: [String], type: PlexWatchlistItem.WatchlistType?, token: String) async throws
+    func remove(guid: String, type: PlexWatchlistItem.WatchlistType?, token: String) async throws
 }
 
 protocol WatchlistCacheProtocol: Sendable {
@@ -140,20 +144,25 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
         }
     }
 
-    func add(guids: [String], token: String) async throws {
+    func add(guids: [String], type: PlexWatchlistItem.WatchlistType?, token: String) async throws {
         for guid in guids {
-            try await mutate(externalGuid: guid, action: "addToWatchlist", token: token)
+            try await mutate(externalGuid: guid, action: "addToWatchlist", type: type, token: token)
         }
     }
 
-    func remove(guid: String, token: String) async throws {
-        try await mutate(externalGuid: guid, action: "removeFromWatchlist", token: token)
+    func remove(guid: String, type: PlexWatchlistItem.WatchlistType?, token: String) async throws {
+        try await mutate(externalGuid: guid, action: "removeFromWatchlist", type: type, token: token)
     }
 
     /// Resolve an external GUID (tmdb://, imdb://, tvdb://) to the Plex Discover
     /// ratingKey, then issue the action.
-    private func mutate(externalGuid: String, action: String, token: String) async throws {
-        let plexRatingKey = try await resolveDiscoverRatingKey(forGuid: externalGuid, token: token)
+    private func mutate(
+        externalGuid: String, action: String,
+        type: PlexWatchlistItem.WatchlistType?, token: String
+    ) async throws {
+        let plexRatingKey = try await resolveDiscoverRatingKey(
+            forGuid: externalGuid, type: type, token: token
+        )
 
         let url = discoverHost.appendingPathComponent("actions/\(action)")
         var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
@@ -178,17 +187,25 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
 
     /// Hits Plex's metadata matches endpoint and returns the discover ratingKey
     /// (e.g. "5d7768daad5437001f75108e") for an external GUID.
-    private func resolveDiscoverRatingKey(forGuid externalGuid: String, token: String) async throws -> String {
-        // The matches endpoint expects a Plex media `type` integer:
-        //   1 = movie, 2 = show. We infer from the guid prefix when possible.
-        // For tmdb://, both could apply; the Plex matcher accepts the wrong
-        // type as a 0-result response, so we let the caller pre-classify if
-        // needed. Default to movie and fall back to show on empty result.
-        if let ratingKey = try await matches(type: 1, externalGuid: externalGuid, token: token) {
-            return ratingKey
+    private func resolveDiscoverRatingKey(
+        forGuid externalGuid: String,
+        type: PlexWatchlistItem.WatchlistType?,
+        token: String
+    ) async throws -> String {
+        // The matches endpoint expects a Plex media `type` integer: 1 = movie,
+        // 2 = show. Probing movie-first and taking the first hit is wrong for a
+        // tmdb guid — tmdb numbers movies and TV separately, so a show's id is
+        // very often also a valid movie id, and the probe silently watchlists
+        // an unrelated film (issue #269). Ask for the type we know.
+        let ordered: [Int] = switch type {
+        case .movie: [1]
+        case .show: [2]
+        case nil: [1, 2]      // imdb/tvdb only — those namespaces don't collide
         }
-        if let ratingKey = try await matches(type: 2, externalGuid: externalGuid, token: token) {
-            return ratingKey
+        for probe in ordered {
+            if let ratingKey = try await matches(type: probe, externalGuid: externalGuid, token: token) {
+                return ratingKey
+            }
         }
         watchlistAPILog.error("resolveDiscoverRatingKey: no match for \(externalGuid, privacy: .public)")
         throw PlexWatchlistHTTPError(

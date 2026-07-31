@@ -334,38 +334,91 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
 
     var supportsWatchlist: Bool { true }
 
-    func isOnWatchlist(_ ref: MediaItemRef) async -> Bool {
-        // The shared PlexWatchlistService maintains an observable cache of
-        // watchlist GUIDs. For TMDB-rooted refs (e.g. from Discover) we can
-        // answer directly. For Plex-rooted refs (library items) we'd need to
-        // resolve the item's tmdb GUID first — left for Phase 3 watchlist
-        // wiring once it has the MediaItem in hand.
-        await MainActor.run {
-            if ref.providerID == TMDBMediaMapper.providerID,
-               let (tmdbId, _) = TMDBMediaMapper.decodeItemID(ref.itemID) {
-                return PlexWatchlistService.shared.contains(tmdbId: tmdbId)
-            }
-            return false
+    /// The metadata the watchlist actually keys on. The agnostic `MediaItemRef`
+    /// carries no external guid, so it has to be fetched — the same gap
+    /// `contentAdvisory` above works around. Episodes and seasons resolve to
+    /// their show, because Plex watchlists movies and shows, never an episode.
+    private func watchlistTarget(_ ref: MediaItemRef) async -> PlexMetadata? {
+        guard let meta = try? await networkManager.getFullMetadata(
+            serverURL: serverURL, authToken: authToken, ratingKey: ref.itemID
+        ) else { return nil }
+        guard let showKey = (meta.type == "episode" ? meta.grandparentRatingKey
+                             : (meta.type == "season" ? meta.parentRatingKey : nil))
+        else { return meta }
+        return (try? await networkManager.getFullMetadata(
+            serverURL: serverURL, authToken: authToken, ratingKey: showKey
+        )) ?? meta
+    }
+
+    /// Every external guid Plex holds for the item, tmdb first (it's what the
+    /// watchlist cache is keyed on elsewhere). NOT tmdb-only: a show scraped by
+    /// the TheTVDB agent frequently carries no tmdb guid at all, and demanding
+    /// one meant adding it silently did nothing (issue #269). Plex Discover
+    /// matches imdb and tvdb guids just as well.
+    func watchlistGUIDs(_ ref: MediaItemRef) async -> [String] {
+        if ref.providerID == TMDBMediaMapper.providerID,
+           let (tmdbId, _) = TMDBMediaMapper.decodeItemID(ref.itemID) {
+            return ["tmdb://\(tmdbId)"]
         }
+        guard let meta = await watchlistTarget(ref) else { return [] }
+        return Self.externalGUIDs(meta)
+    }
+
+    static func externalGUIDs(_ meta: PlexMetadata) -> [String] {
+        let raw = [meta.guid].compactMap { $0 } + (meta.Guid ?? []).compactMap(\.id)
+        var out: [String] = []
+        if let id = raw.compactMap(PlexMetadata.extractTmdbId).first { out.append("tmdb://\(id)") }
+        if let id = raw.compactMap(PlexMetadata.extractImdbId).first { out.append("imdb://\(id)") }
+        if let id = raw.compactMap(PlexMetadata.extractTvdbId).first { out.append("tvdb://\(id)") }
+        return out
+    }
+
+    func isOnWatchlist(_ ref: MediaItemRef) async -> Bool {
+        let guids = await watchlistGUIDs(ref)
+        guard !guids.isEmpty else { return false }
+        return await MainActor.run { guids.contains(where: PlexWatchlistService.shared.contains) }
     }
 
     func addToWatchlist(_ ref: MediaItemRef) async throws {
-        // TODO(phase-3-watchlist): resolve the item's tmdb:// guid (via
-        // LibraryGUIDIndex for Plex refs, direct from ref for TMDB refs) and
-        // call PlexWatchlistService.shared.add(guid:item:). Phase 3's
-        // detail-view watchlist toggle and Discover-row context menu have
-        // the MediaItem (with title/year/posterURL) needed to build the
-        // PlexWatchlistItem stub.
-        throw MediaProviderError.backendSpecific(
-            underlying: "Use PlexWatchlistService.shared.add for now; provider passthrough wired in Phase 3"
+        guard let meta = await watchlistTarget(ref) else { throw MediaProviderError.notFound }
+        let guids = Self.externalGUIDs(meta)
+        guard let guid = guids.first else { throw MediaProviderError.notFound }
+        // Stub for the optimistic local insert; the next fetchWatchlist replaces
+        // it with the server's copy. It carries every guid so a later
+        // `contains` answers for whichever one the caller has.
+        let entry = PlexWatchlistItem(
+            id: guid,
+            title: meta.title ?? "",
+            year: meta.year,
+            type: meta.type == "movie" ? .movie : .show,
+            posterURL: PlexMediaMapper.artworkURL(
+                meta.thumb ?? meta.bestThumb, serverURL: serverURL, authToken: authToken
+            ),
+            guids: guids
         )
+        let service = PlexWatchlistService.shared
+        await service.add(guid: guid, item: entry)
+        // `add` swallows its own API errors and reverts the optimistic insert,
+        // so asking whether the guid survived is the only way to know the write
+        // landed. Without this the caller can't tell a success from a no-op —
+        // which is how #269 shipped a button that lied.
+        guard await MainActor.run(body: { service.contains(guid: guid) }) else {
+            throw MediaProviderError.backendSpecific(underlying: "Plex rejected the watchlist add")
+        }
     }
 
     func removeFromWatchlist(_ ref: MediaItemRef) async throws {
-        // TODO(phase-3-watchlist): mirror addToWatchlist's plumbing.
-        throw MediaProviderError.backendSpecific(
-            underlying: "Use PlexWatchlistService.shared.remove for now; provider passthrough wired in Phase 3"
-        )
+        let guids = await watchlistGUIDs(ref)
+        guard !guids.isEmpty else { throw MediaProviderError.notFound }
+        let service = PlexWatchlistService.shared
+        // Remove by the guid actually in the local set — that's the one the
+        // service matches its stored items against.
+        let target = await MainActor.run { guids.first(where: service.contains) }
+        guard let guid = target else { return }   // already off the list
+        await service.remove(guid: guid)
+        guard await MainActor.run(body: { !guids.contains(where: service.contains) }) else {
+            throw MediaProviderError.backendSpecific(underlying: "Plex rejected the watchlist remove")
+        }
     }
 
     // MARK: - Helpers

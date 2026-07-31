@@ -97,7 +97,7 @@ final class PlexWatchlistService: ObservableObject {
         watchlistGUIDs.formUnion(item.guids)
 
         do {
-            try await api.add(guids: [guid], token: token)
+            try await api.add(guids: [guid], type: item.type, token: token)
             cache.save(watchlistItems)
             watchlistLog.info("add succeeded: \(guid, privacy: .public)")
         } catch {
@@ -118,6 +118,10 @@ final class PlexWatchlistService: ObservableObject {
         let snapshotItems = watchlistItems
         let snapshotGUIDs = watchlistGUIDs
 
+        // The item we're dropping knows whether it's a movie or a show, which is
+        // what disambiguates the Discover match (see PlexWatchlistAPI).
+        let type = watchlistItems.first { $0.guids.contains(guid) }?.type
+
         // Optimistic update: remove matching items and ALL their associated GUIDs
         let removedItems = watchlistItems.filter { $0.guids.contains(guid) }
         let removedGuids = Set(removedItems.flatMap(\.guids))
@@ -125,7 +129,7 @@ final class PlexWatchlistService: ObservableObject {
         watchlistGUIDs.subtract(removedGuids)
 
         do {
-            try await api.remove(guid: guid, token: token)
+            try await api.remove(guid: guid, type: type, token: token)
             cache.save(watchlistItems)
             watchlistLog.info("remove succeeded: \(guid, privacy: .public)")
         } catch {
