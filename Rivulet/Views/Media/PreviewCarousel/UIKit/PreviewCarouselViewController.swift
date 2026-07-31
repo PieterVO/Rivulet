@@ -403,15 +403,17 @@ final class PreviewCarouselViewController: UIViewController {
         // directional CLICKS. Because the carousel is deliberately focusless
         // (`canFocusItemAt` is false in .carouselStable), a swipe also generated
         // no focus move, so it did nothing on any remote. These recognizers give
-        // the swipe a home. Nothing to conflict with: with no focusable cells the
-        // engine has no candidate to move to, so claiming the gesture steals
-        // nothing.
+        // the swipe a home. Only claimable while the carousel owns input
+        // (gated in `gestureRecognizerShouldBegin`): in the expanded/detail
+        // states the chrome action buttons ARE focusable, and a recognizer
+        // that begins cancels the focus move a swipe should make between them.
         for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
             let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleCarouselSwipe(_:)))
             swipe.direction = direction
             swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
             // On tvOS a swipe recognizer otherwise waits for a .select press.
             swipe.allowedPressTypes = []
+            swipe.delegate = self
             view.addGestureRecognizer(swipe)
         }
 
@@ -1708,18 +1710,23 @@ final class PreviewCarouselViewController: UIViewController {
 
 extension PreviewCarouselViewController: UIGestureRecognizerDelegate {
 
-    /// Gate the vertical swipes. On tvOS the focus engine reads the same
+    /// Gate the swipes. On tvOS the focus engine reads the same
     /// indirect-touch stream a recognizer does, and a recognizer that reaches
-    /// .began CANCELS the competing focus interaction. So a vertical swipe may
-    /// only be claimed where the engine has nothing useful to do with it — the
-    /// hand-off transitions in `verticalSwipeWouldNavigate`. Anywhere else
-    /// (moving between the below-fold rows) we must decline and let the engine
-    /// have the touches.
+    /// .began CANCELS the competing focus interaction. So a swipe may only be
+    /// claimed where the engine has nothing useful to do with it. Vertical:
+    /// the hand-off transitions in `verticalSwipeWouldNavigate` — anywhere
+    /// else (moving between the below-fold rows) decline and let the engine
+    /// have the touches. Horizontal: only while the carousel owns input — in
+    /// the expanded/detail states the chrome action buttons ARE focusable and
+    /// the engine needs the swipe to move focus between them. Declining must
+    /// happen here; bailing inside the handler is too late, the begun
+    /// recognizer has already stolen the gesture.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        guard let swipe = gestureRecognizer as? UISwipeGestureRecognizer,
-              verticalSwipeRecognizers.contains(where: { $0 === swipe })
-        else { return true }
-        return verticalSwipeWouldNavigate(swipe.direction)
+        guard let swipe = gestureRecognizer as? UISwipeGestureRecognizer else { return true }
+        if verticalSwipeRecognizers.contains(where: { $0 === swipe }) {
+            return verticalSwipeWouldNavigate(swipe.direction)
+        }
+        return state.isCarouselInputEnabled
     }
 }
 

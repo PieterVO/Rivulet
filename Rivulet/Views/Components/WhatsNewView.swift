@@ -150,6 +150,7 @@ struct WhatsNewView: View {
             "Marking an item as watched now updates Home and Continue Watching right away",
             "Pausing now registers on your Plex server instead of showing as still playing",
             "Music marks a song as a favorite only when you rate it above three stars",
+            "Swiping now moves between the buttons on a title's details page",
             "Swiping the touch surface now skips back and forward in Live TV",
             "Info popups on the details page now scroll with a swipe",
             "New Input Diagnostics toggle in Settings helps track down remote issues",
