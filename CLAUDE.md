@@ -112,6 +112,36 @@ The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Music
 }
 ```
 
+### Remote Input (every remote type)
+
+**tvOS delivers remote input on two disjoint transports, and a surface must
+handle both.** A touch-surface swipe (Siri Remote, iPhone Remote) arrives as
+`.indirect` `UITouch`es feeding the focus engine and NEVER as an arrow
+`UIPress`; d-pad and clickpad-edge clicks, IR and HDMI-CEC remotes, and
+keyboards send ONLY discrete arrow `UIPress`es. Focusable surfaces get both
+for free — the engine translates everything. A surface is broken exactly when
+it is focusless AND single-transport.
+
+- **New focusless directional surface → use `DirectionalInputBinding`**
+  (`Services/Input/`). One call installs arrow-press taps, optional holds at
+  `InputConfig.holdThreshold`, and `.indirect` swipe recognizers, funneled
+  into one callback, so one transport cannot be adopted without the other.
+  Adopters: `LiveTVPressCatcher`, `InfoPopupViewController`.
+- **A sometimes-focusable surface claiming swipes must gate in
+  `gestureRecognizerShouldBegin`, never by bailing inside the handler.** A
+  recognizer that begins has already cancelled the focus engine's move, so a
+  handler-side bail still eats the swipe. The carousel's horizontal paging
+  swipes shipped exactly this bug (claimed unconditionally, which made
+  swiping between the detail action buttons dead on every touch remote); the
+  gate is `state.isCarouselInputEnabled` in `PreviewCarouselViewController`.
+- **Do not migrate an already dual-transport surface onto the binding.** It
+  changes nothing at runtime and splits a tuned interaction across two
+  mechanisms. Settings reorder (grab-gated press taps + swipes) stays
+  hand-rolled on purpose. If a second gate-needing consumer ever appears, add
+  a `shouldBegin` gate closure to the binding and migrate both then.
+- The player's tap-vs-hold sites are duration-based and deliberately
+  untouched pending InputProbe field data on IR repeat codes (#212).
+
 ### Context Menus (long-press)
 
 **On tvOS 26, UIKit's context-menu machinery never engages** — not in this app, not in a clean-room control. A held Select press is delivered then cancelled at +0.4s and no configuration is ever requested. `UIContextMenuInteraction` / `contextMenuConfigurationForItemsAt` are dead ends; do not reach for them, and do not "fix" their absence.
