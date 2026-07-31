@@ -141,6 +141,11 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.4 (74)", [
+            "Subtitles now match the text size, background box and position Apple TV uses for its own captions",
+            "Subtitles keep the styling the content asked for, including bold, italic, underline, colour and size",
+            "Captions a broadcaster places away from the bottom of the picture now appear where they were put",
+            "Subtitles lift clear of the playback controls while they are showing and drop back when they hide",
+            "The subtitle height adjustment is now remembered per title and per channel, like the delay",
             "Marking an item as watched now updates the Play button instead of saying Resume",
             "Marking an item as watched now updates Home and Continue Watching right away",
             "Pausing now registers on your Plex server instead of showing as still playing",
