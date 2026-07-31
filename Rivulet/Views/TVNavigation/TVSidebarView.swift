@@ -495,6 +495,15 @@ struct TVSidebarView: View {
         .tabViewStyle(.sidebarAdaptable)
         .toolbarVisibility((nestedNavState.isNested || isMusicLibrarySelected || nestedNavState.isSettingsSubPage) ? .hidden : .automatic, for: .tabBar)
         .animation(.easeInOut(duration: 0.18), value: nestedNavState.isNested)
+        // Receiver for the pill experiment's focus signal. The signal chain
+        // is device-verified end to end; no actuator is wired because every
+        // pill-hiding mechanism tried so far is dead (toolbarVisibility does
+        // not reach the pill; the pill has no UIView backing to hide — see
+        // memory/git history). Kept so a future actuator plugs in here.
+        .onReceive(NotificationCenter.default.publisher(for: .contentFocusBelowTopChanged)) { note in
+            let below = note.object as? Bool ?? false
+            libraryIndexLog.log("pill experiment: received belowTop=\(below)")
+        }
         .onChange(of: nestedNavState.isNested) { _, isNested in
             guard isNested else { return }
             resetFocus(in: contentNamespace)

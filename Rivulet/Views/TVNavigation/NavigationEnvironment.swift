@@ -54,3 +54,12 @@ extension EnvironmentValues {
     }
 }
 
+extension Notification.Name {
+    /// Posted by `PlexHomeViewController` when focus crosses its top-row
+    /// boundary. Object is a `Bool`: true while focus sits below the top row
+    /// (the sidebar pill should hide for full-bleed browsing, matching the
+    /// TV app), false once focus returns to the top row or leaves the page.
+    /// Change-only: posted when the value flips, not on every focus move.
+    static let contentFocusBelowTopChanged = Notification.Name("contentFocusBelowTopChanged")
+}
+

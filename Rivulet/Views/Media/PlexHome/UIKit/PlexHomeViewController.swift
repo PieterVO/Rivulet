@@ -1310,6 +1310,18 @@ final class PlexHomeViewController: UIViewController {
     /// so focus lands on Play exactly as it does at launch.
     private var wantsTopFocus = false
 
+    /// Last value posted on `.contentFocusBelowTopChanged`, so the SwiftUI
+    /// shell only hears about crossings of the top-row boundary, not every
+    /// focus move.
+    private var focusBelowTop = false
+
+    private func postFocusBelowTop(_ below: Bool) {
+        guard below != focusBelowTop else { return }
+        focusBelowTop = below
+        homeUIKitLog.log("pill experiment: posting belowTop=\(below)")
+        NotificationCenter.default.post(name: .contentFocusBelowTopChanged, object: below)
+    }
+
     /// Ask the engine to re-resolve focus while initial-hero routing is
     /// active. Called from viewDidAppear AND after snapshot applies — on cold
     /// launch the hero cell doesn't exist yet when the view first appears.
@@ -4952,8 +4964,12 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // Resolve the section that owns the newly-focused view.
         guard let nextSectionIndex = focusedSectionIndex(in: context) else {
             updateLeftEdgeGuide(for: nil)
+            // Focus left the page (sidebar, modal). Chrome must be back
+            // before the sidebar can be interacted with.
+            postFocusBelowTop(false)
             return
         }
+        postFocusBelowTop(nextSectionIndex > topSectionIndex)
         let kind: HomeSectionKind? = sectionsSnapshot.indices.contains(nextSectionIndex)
             ? sectionsSnapshot[nextSectionIndex].kind
             : nil
