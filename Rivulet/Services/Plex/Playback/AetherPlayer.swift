@@ -676,6 +676,10 @@ final class AetherPlayer: PlayerProtocol {
             // Region-default to 801 for AU, otherwise auto-detect.
             teletextPage: Self.regionTeletextPage()
         )
+        // Same reason as the VOD path: a zap is new content, and broadcast
+        // mixes 4:3 SD with 16:9 HD channel to channel, so a reused slot must
+        // not measure the new channel against the old one's picture rect.
+        videoSize = .zero
         userIntendsToPlay = true
         pendingReloadSince = nil
         do {
@@ -809,6 +813,15 @@ final class AetherPlayer: PlayerProtocol {
             // way whichever surface plays it (VOD recordings/rips included).
             teletextPage: Self.regionTeletextPage()
         )
+        // New content, so the previous item's aspect ratio describes nothing.
+        // Reset HERE rather than when `currentItem` goes nil: the engine also
+        // swaps its player for SAME-content reasons (audio track switch,
+        // background reopen), and zeroing on those would flash the caption
+        // overlay out to full bounds for no reason. A next-episode swap reuses
+        // this instance, so without this the overlay measures the new episode
+        // against the old episode's picture rect until `presentationSize`
+        // arrives.
+        videoSize = .zero
         userIntendsToPlay = true
         pendingReloadSince = nil
         do {
