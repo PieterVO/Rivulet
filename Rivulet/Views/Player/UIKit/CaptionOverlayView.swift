@@ -139,6 +139,12 @@ final class CaptionOverlayView: UIView {
         /// thin halo at the largest. 4% tracks the type at every size.
         static let outlineStrokePercent: CGFloat = -4
 
+        /// Emboss offset for the raised and depressed edge styles, as a
+        /// fraction of the point size. Proportional for the same reason the
+        /// outline is: a fixed offset is a slab at 20pt type and invisible at
+        /// 57pt.
+        static let embossDepthRatio: CGFloat = 0.04
+
         /// Extra leading between the lines of one cue, on top of the font's own
         /// line height. Zero matches Apple, whose caption lines sit on natural
         /// leading inside a single background.
@@ -189,12 +195,6 @@ final class CaptionOverlayView: UIView {
     private let model: SubtitleModel
     private var cancellables = Set<AnyCancellable>()
 
-    /// Content keys of the cues currently built into subviews. Rebuilding is
-    /// keyed off this rather than the cue ids: the engine's cue id is a
-    /// per-decoder monotonic counter that restarts at 0 whenever a seek resets
-    /// the decoder, so ids collide with older cues still in the array.
-    private var renderedKeys: [AetherSubtitleCue.ContentKey] = []
-
     private var textCues: [(view: CaptionBoxView, placement: AetherSubtitleCue.TextPlacement?)] = []
     private var bitmapCues: [(view: UIImageView, position: CGRect)] = []
 
@@ -215,33 +215,19 @@ final class CaptionOverlayView: UIView {
         backgroundColor = .clear
         isUserInteractionEnabled = false
 
-        // Any published change on the model can alter the active set. The main
-        // hop is load-bearing, not cosmetic: `@Published` fires from `willSet`,
-        // so reading `model.activeCues` synchronously would see the property
-        // that just changed at its OLD value.
-        model.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] in self?.refreshActiveCues() }
+        // The model publishes the active SET, and only when it differs, so this
+        // rebuilds per visible change rather than per clock tick. The cues come
+        // through as the value: `@Published` fires from `willSet`, so reading
+        // `model.activeCues` here would see the previous set.
+        model.$activeCues
+            .sink { [weak self] cues in self?.build(cues) }
             .store(in: &cancellables)
-
-        refreshActiveCues()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     // MARK: Cue set
-
-    /// Rebuilds subviews only when the visible SET changes. The model
-    /// republishes on every source-time tick, and rebuilding per tick would
-    /// re-lay out and re-measure every caption several times a second.
-    private func refreshActiveCues() {
-        let cues = model.activeCues
-        let keys = cues.map(\.contentKey)
-        guard keys != renderedKeys else { return }
-        renderedKeys = keys
-        build(cues)
-    }
 
     /// Re-applies the current cue set, for a style change that alters how the
     /// same text draws.
@@ -625,16 +611,34 @@ private final class CaptionBoxView: UIView {
             break
         }
 
-        applyEdge(to: result)
+        applyEdge(to: result, pointSize: pointSize)
         return result
     }
 
-    /// The system text-edge treatment. Both cases are one draw: a negative
+    /// The system text-edge treatment. Every case is one draw: a negative
     /// `strokeWidth` strokes AND fills, and `NSShadow` is drawn by the text
     /// system rather than by a layer shadow (no offscreen pass, no shadowPath).
-    private func applyEdge(to text: NSMutableAttributedString) {
+    ///
+    /// All five `MACaptionAppearanceTextEdgeStyle` values are honoured. Raised
+    /// and depressed are the same hard-edged offset in opposite directions:
+    /// light from the top-left lifts the glyph off the picture, light from the
+    /// bottom-right carves it in. Zero blur is what separates them from
+    /// `dropShadow`, which is a soft shadow rather than an emboss.
+    private func applyEdge(to text: NSMutableAttributedString, pointSize: CGFloat) {
         let full = NSRange(location: 0, length: text.length)
         guard full.length > 0 else { return }
+
+        /// Emboss depth. Proportional so the effect survives a large caption
+        /// size, floored at a point so it does not vanish at the smallest.
+        let depth = max(1, pointSize * CaptionOverlayView.Metrics.embossDepthRatio)
+
+        func shadow(offset: CGSize, blur: CGFloat, alpha: CGFloat) -> NSShadow {
+            let s = NSShadow()
+            s.shadowColor = UIColor.black.withAlphaComponent(alpha)
+            s.shadowBlurRadius = blur
+            s.shadowOffset = offset
+            return s
+        }
 
         switch style.edge {
         case .uniform:
@@ -644,13 +648,27 @@ private final class CaptionBoxView: UIView {
             ], range: full)
 
         case .dropShadow:
-            let shadow = NSShadow()
-            shadow.shadowColor = UIColor.black.withAlphaComponent(0.85)
-            shadow.shadowBlurRadius = 3
-            shadow.shadowOffset = CGSize(width: 0, height: 1)
-            text.addAttribute(.shadow, value: shadow, range: full)
+            text.addAttribute(.shadow,
+                              value: shadow(offset: CGSize(width: 0, height: 1),
+                                            blur: 3,
+                                            alpha: 0.85),
+                              range: full)
 
-        case .none, .raised, .depressed:
+        case .raised:
+            text.addAttribute(.shadow,
+                              value: shadow(offset: CGSize(width: depth, height: depth),
+                                            blur: 0,
+                                            alpha: 0.9),
+                              range: full)
+
+        case .depressed:
+            text.addAttribute(.shadow,
+                              value: shadow(offset: CGSize(width: -depth, height: -depth),
+                                            blur: 0,
+                                            alpha: 0.9),
+                              range: full)
+
+        case .none:
             break
         }
     }

@@ -35,7 +35,7 @@ The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg 
 - **Language**: Swift 6
 - **UI Framework**: UIKit for the primary surfaces (see above); SwiftUI for the rest
 - **Video Player**: AetherPlayer for VOD and Live TV; AVPlayer only for the `hls` route (server transcode, primary-when-no-direct-URL or Aether fallback). See `Docs/RIVULET_PLAYER.md`.
-- **AetherEngine**: consumed as an **upstream** SwiftPM dependency (`superuser404notfound/AetherEngine`), pinned `exactVersion` (6.1.3). **There is no fork** — engine fixes need an upstream release or a host-side workaround; do not propose editing engine sources. Bumping it has a procedure: use the `aether-update` skill. Every bump gets a changelog line. FFmpeg + libdovi arrive **only transitively through Aether**; there is no app-level FFmpeg layer and no direct FFmpegBuild dependency. Since FFmpegBuild 2.0.0 the FFmpeg libs ship as **embedded dynamic frameworks** in `Rivulet.app/Frameworks/` — their `MinimumOSVersion` (26.0) must stay >= `TVOS_DEPLOYMENT_TARGET` (26.0), so do not raise the deployment target.
+- **AetherEngine**: consumed as an **upstream** SwiftPM dependency (`superuser404notfound/AetherEngine`), pinned `exactVersion` (6.4.0). **There is no fork** — engine fixes need an upstream release or a host-side workaround; do not propose editing engine sources. Bumping it has a procedure: use the `aether-update` skill. Every bump gets a changelog line. FFmpeg + libdovi arrive **only transitively through Aether**; there is no app-level FFmpeg layer and no direct FFmpegBuild dependency. Since FFmpegBuild 2.0.0 the FFmpeg libs ship as **embedded dynamic frameworks** in `Rivulet.app/Frameworks/` — their `MinimumOSVersion` (26.0) must stay >= `TVOS_DEPLOYMENT_TARGET` (26.0), so do not raise the deployment target.
 - **Design Guide**: See `Docs/DESIGN_GUIDE.md` for UI/UX patterns
 - **Repo is public**: keep commit messages short and plain; no internal detail.
 
@@ -51,7 +51,8 @@ Rivulet/
 │   │   ├── (PlexNetworkManager, PlexAuthManager, PlexDataStore, …)
 │   │   └── Playback/   # AetherPlayer + routing/remux (see Docs/RIVULET_PLAYER.md)
 │   │       ├── Pipeline/     # ContentRouter (routing decisions)
-│   │       └── Subtitles/    # SubtitleManager, SubtitleParser, SubtitleOverlayView, SubtitleClockSyncController
+│   │       └── Subtitles/    # CaptionAppearance (system caption settings), SubtitleCue,
+│   │                          #   VTTParser (content-filter only; captions are not app-parsed)
 │   ├── LiveTV/         # PlexLiveTVProvider, IPTVProvider, LiveTVDataStore
 │   ├── IPTV/           # M3UParser, XMLTVParser, DispatcharrService
 │   ├── Insights/       # InsightsTriviaClient, InsightsShowIDResolver (in-player cast/trivia panel)
@@ -60,9 +61,10 @@ Rivulet/
 ├── Views/
 │   ├── Player/         # UniversalPlayerView, UniversalPlayerViewModel, PlayerContainerViewController,
 │   │                   #   AVPlayerLayerView, TrackSelectionSheet, PlayerPresenter
-│   │   ├── Aether/     # AetherVideoSurfaceView, AetherSubtitleOverlayView, AetherSubtitleCue
-│   │   ├── Subtitles/  # SubtitleModel (bridge); the pipeline lives in Services/…/Subtitles
-│   │   ├── UIKit/      # PlayerRailView, PlayerRailPanelView, PlayerProgressBarView,
+│   │   ├── Aether/     # AetherVideoSurfaceView, AetherSubtitleCue
+│   │   ├── Subtitles/  # SubtitleModel (cue store; publishes the active set)
+│   │   ├── UIKit/      # CaptionOverlayView (the only caption renderer),
+│   │   │               #   PlayerRailView, PlayerRailPanelView, PlayerProgressBarView,
 │   │   │               #   PlayerUpNextPanelView, UpNextRowState, pills (canonical player chrome),
 │   │   │               #   Insights* panels (in-player cast/trivia; backed by Services/Insights + TMDB)
 │   │   └── PostVideo/  # Post-playback summary overlays
@@ -441,8 +443,8 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 | Live TV slot render surface | `Views/LiveTV/AetherSlotPlayerView.swift` |
 | Routing decisions | `Services/Plex/Playback/Pipeline/ContentRouter.swift` |
 | Aether render surface | `Views/Player/Aether/AetherVideoSurfaceView.swift` |
-| Aether subtitle overlay | `Views/Player/Aether/AetherSubtitleOverlayView.swift` |
-| Subtitle pipeline | `Services/Plex/Playback/Subtitles/SubtitleManager.swift` |
+
+| Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | Focus memory | `Services/Focus/FocusMemory.swift` |
 | Watch progress rule | `Models/Media/WatchProgressPolicy.swift` |
 | Plex star rating / favorite | `Models/Plex/PlexUserRating.swift` |

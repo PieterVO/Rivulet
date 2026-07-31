@@ -24,11 +24,24 @@ final class SubtitleModel: ObservableObject {
     @Published var cues: [AetherSubtitleCue] = []
 
     /// Current source-timeline position in seconds, mirroring AetherPlayer.sourceTime.
-    @Published var sourceTime: Double = 0
+    @Published var sourceTime: Double = 0 { didSet { recomputeActiveCues() } }
 
     /// Subtitle display delay in seconds. Positive values shift subtitles earlier
     /// (reduce effective time), negative values shift later.
-    @Published var delaySeconds: Double = 0
+    @Published var delaySeconds: Double = 0 { didSet { recomputeActiveCues() } }
+
+    /// Cues on screen right now.
+    ///
+    /// Published rather than computed at the call site because the clock ticks
+    /// several times a second while the visible set changes every few SECONDS.
+    /// Recomputing is cheap, but re-rendering is not, so the set is only
+    /// reassigned when it actually differs and subscribers can rebuild on every
+    /// value they receive.
+    @Published private(set) var activeCues: [AetherSubtitleCue] = []
+
+    /// Content keys of `activeCues`, kept alongside it so the change test is a
+    /// key comparison rather than a full cue comparison.
+    private var activeKeys: [AetherSubtitleCue.ContentKey] = []
 
     // MARK: - Derived
 
@@ -49,7 +62,19 @@ final class SubtitleModel: ObservableObject {
     /// If they aren't, the binary search in activeCues will produce wrong results.
     func update(cues: [AetherSubtitleCue]) {
         self.cues = cues
+        // Order matters: the active-set walk is bounded by `maxCueDuration`, so
+        // it has to be current before the set is recomputed.
         recomputeMaxDuration()
+        recomputeActiveCues()
+    }
+
+    /// Recomputes the active set, publishing only when it actually changed.
+    private func recomputeActiveCues() {
+        let next = computeActiveCues()
+        let keys = next.map(\.contentKey)
+        guard keys != activeKeys else { return }
+        activeKeys = keys
+        activeCues = next
     }
 
     private func recomputeMaxDuration() {
@@ -96,7 +121,7 @@ final class SubtitleModel: ObservableObject {
     ///
     /// This is O(log n + k) where k is the number of active cues (typically
     /// 1-3); the dedupe is a hash-set pass over that same k, not over `cues`.
-    var activeCues: [AetherSubtitleCue] {
+    private func computeActiveCues() -> [AetherSubtitleCue] {
         let t = sourceTime - delaySeconds
         guard !cues.isEmpty else { return [] }
 
