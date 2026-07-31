@@ -120,9 +120,11 @@ The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Music
 handle both.** A touch-surface swipe (Siri Remote, iPhone Remote) arrives as
 `.indirect` `UITouch`es feeding the focus engine and NEVER as an arrow
 `UIPress`; d-pad and clickpad-edge clicks, IR and HDMI-CEC remotes, and
-keyboards send ONLY discrete arrow `UIPress`es. Focusable surfaces get both
-for free — the engine translates everything. A surface is broken exactly when
-it is focusless AND single-transport.
+keyboards send ONLY discrete arrow `UIPress`es. The iPhone Remote emits NO
+arrow presses at all, so any press-only interaction is a hard wall for it,
+not a degraded one. Focusable surfaces get both transports for free — the
+engine translates everything. A surface is broken exactly when it is
+focusless AND single-transport, or when a needed hand-off is press-only.
 
 - **New focusless directional surface → use `DirectionalInputBinding`**
   (`Services/Input/`). One call installs arrow-press taps, optional holds at
@@ -136,11 +138,18 @@ it is focusless AND single-transport.
   swipes shipped exactly this bug (claimed unconditionally, which made
   swiping between the detail action buttons dead on every touch remote); the
   gate is `state.isCarouselInputEnabled` in `PreviewCarouselViewController`.
+- **Focusable surface whose press half is a declined-press `pressesBegan`
+  override → `DirectionalInputBinding(gatedSwipesOn:)`.** The press override
+  is correct there (engine acts first, declined presses bubble); the gated
+  swipes are its touch-remote twin. The gate must claim exactly the moves
+  the engine cannot perform — reuse the press override's own predicates
+  (`canEscapeUpward`, `containsFocus`, would-a-step-move). Adopters:
+  `InsightsPanelContainerView`, `PlayerInfoTabsView`, `InfoScrollView`
+  (escape to pills), `InsightsActorView` (bio steps).
 - **Do not migrate an already dual-transport surface onto the binding.** It
   changes nothing at runtime and splits a tuned interaction across two
   mechanisms. Settings reorder (grab-gated press taps + swipes) stays
-  hand-rolled on purpose. If a second gate-needing consumer ever appears, add
-  a `shouldBegin` gate closure to the binding and migrate both then.
+  hand-rolled on purpose.
 - The player's tap-vs-hold sites are duration-based and deliberately
   untouched pending InputProbe field data on IR repeat codes (#212).
 
