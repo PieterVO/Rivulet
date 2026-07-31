@@ -4,6 +4,27 @@ Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Li
 
 **UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it.
 
+**The rule covers enhancements, not just new surfaces.** A substantial addition to
+an existing SwiftUI file on a UIKit surface is a signal to port that file, not to
+extend it. The player's render layers count as a UIKit surface even though the
+overlays themselves are still SwiftUI: they are non-interactive, so they never
+fought the focus engine, which is the only reason they survived this long.
+The subtitle overlays are the worked example, and staying in SwiftUI cost three
+hacks UIKit does not need:
+- SwiftUI `Text` has no stroke, so the caption outline draws the whole string 8
+  times at offsets. `NSAttributedString` with a negative `.strokeWidth` is one pass.
+- A text box cannot be measured without a layout pass, so cue placement estimates
+  half the box height and is wrong for multi-line cues. `boundingRect` is exact.
+- `LiveTVAetherPlayerViewController` wraps the overlay in a `UIHostingController`
+  and rebuilds its root view from five call sites, because nothing observes the
+  player from SwiftUI. A plain subview needs none of that.
+
+**A clean SwiftLint run does not mean you complied.** The
+`swiftui_import_on_uikit_surface` rule only scans paths matching
+`Views/**/UIKit/**`. Everything under `Views/Player/`, `Views/Player/Aether/`, and
+`Services/**` is invisible to it. Judge by the surface the code renders on, not by
+whether the linter fired.
+
 **Detail is UIKit, with no SwiftUI fallback.** Every route lands on the same two surfaces: `MediaItemDetailPageViewController` for episodes, `PreviewCarouselViewController(standaloneDetail:)` for everything else. That holds for in-app taps, tile-menu "More Info" / "Go to …", hero Info, and `rivulet://detail` deep links from Top Shelf / Siri (`TVSidebarView.presentDetailForDeepLink`). The old SwiftUI `MediaDetailView` + `MediaItemContextMenu` + `SummarySheet` are **deleted** (`c0b0bf7`); if you find a comment referencing them, it is stale.
 
 The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg demux + HLS-fMP4 remux + AVPlayer, with HDR10+ / HLG / EAC3+JOC Atmos, plus a software sample-buffer backend for AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). It is the only player: VOD **and** Live TV. Video MUST render through the engine surface (`AetherVideoSurfaceView` → `engine.bind(view:)`), never an AVPlayerLayer on `currentAVPlayer`. The only other path is `hls`: AVPlayer on a Plex server transcode, used when no direct-play URL exists or as the fallback after an Aether startup failure. `ContentRouter.plan(...)` picks aether vs hls per item. (RPlayer and the localRemux/avPlayerDirect routes have been removed — see git history.)
@@ -129,7 +150,19 @@ Key components:
   import of defining module 'AetherEngine'"), and adding the import is the wrong
   fix.
 - **`ContentRouter`**: routing decisions → `PlaybackPlan`.
-- **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: subtitle rendering for the `hls` route. On the aether route, subtitles come from the engine's cue publishers rendered by `AetherSubtitleOverlayView` (fed via `SubtitleModel`).
+- **`SubtitleManager` + `SubtitleParser` + `SubtitleOverlayView` + `SubtitleClockSyncController`**: **all dead.** This was RPlayer's app-side sidecar
+  pipeline. `390ebec` deleted RPlayer's VOD branches, which took the last caller of
+  `SubtitleManager.load` with it. Nothing calls `load(url:headers:format:)`,
+  `load(content:format:)`, `addCue`, or `addBitmapCue` anywhere, so the track is
+  permanently empty, `SubtitleClockSyncController` ticks `update(time:)` against
+  nothing, and `SubtitleOverlayView` renders an empty list on every `hls` playback.
+  `SubtitleParser` is referenced only by its own unit test. Do not tune, sync, or
+  build on any of it; on the `hls` route subtitles come from the server (burn-in or
+  the WebVTT rendition the client profile requests), not from the app. Delete rather
+  than repair.
+- On the aether route, subtitles come from the engine's cue publishers rendered by `AetherSubtitleOverlayView` (fed via `SubtitleModel`). Live TV's remote-HLS
+  direct path feeds the same view from `AVPlayerItemLegibleOutput`. One renderer,
+  two live sources; keep it that way rather than adding a third view.
 
 **Playback States** (PlayerProtocol): `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
 
