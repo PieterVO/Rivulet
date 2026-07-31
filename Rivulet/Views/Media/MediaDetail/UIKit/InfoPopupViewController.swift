@@ -131,7 +131,7 @@ final class InfoPopupViewController: UIViewController {
             // Up/Down). The card hugs short content and caps tall content.
             scroll.translatesAutoresizingMaskIntoConstraints = false
             scroll.showsVerticalScrollIndicator = false
-            scroll.isScrollEnabled = false   // driven manually in pressesBegan
+            scroll.isScrollEnabled = false   // driven manually via DirectionalInputBinding
             scroll.clipsToBounds = true
             // Breathing room so content scrolling in/out fades within the card,
             // not flush against its edges.
@@ -172,27 +172,29 @@ final class InfoPopupViewController: UIViewController {
             tap.allowedPressTypes = [NSNumber(value: pressType.rawValue)]
             view.addGestureRecognizer(tap)
         }
+
+        // Up/Down scroll the tall content, whether the input arrives as an
+        // arrow press or a touch-surface swipe (the card is the modal's only
+        // focus target, so the swipes steal nothing from the focus engine).
+        // Menu/Select still dismiss via the gesture recognizers above.
+        if scrollable {
+            directionalInput = DirectionalInputBinding(
+                view: view,
+                directions: [.up, .down],
+                onTap: { [weak self] direction in
+                    self?.scrollContent(by: direction == .up ? -440 : 440)
+                }
+            )
+        }
     }
+
+    private var directionalInput: DirectionalInputBinding?
 
     /// Called after the popup finishes dismissing (Menu/Select). Optional.
     var onDismiss: (() -> Void)?
 
     @objc private func dismissSelf() {
         dismiss(animated: true) { [weak self] in self?.onDismiss?() }
-    }
-
-    // Up/Down scroll the tall content (scrollable popups only; Menu/Select still
-    // dismiss via the gesture recognizers).
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        guard scrollable else { super.pressesBegan(presses, with: event); return }
-        for press in presses {
-            switch press.type {
-            case .upArrow: scrollContent(by: -440); return
-            case .downArrow: scrollContent(by: 440); return
-            default: break
-            }
-        }
-        super.pressesBegan(presses, with: event)
     }
     private func scrollContent(by dy: CGFloat) {
         view.layoutIfNeeded()
