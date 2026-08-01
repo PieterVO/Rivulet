@@ -218,10 +218,14 @@ final class SettingsCell: UICollectionViewCell {
         let gained = context.nextFocusedView === self
         let lost = context.previouslyFocusedView === self
         if gained { onFocusGained?() }
-        if gained || lost {
+        if gained {
             coordinator.addCoordinatedAnimations({ [weak self] in
-                self?.applyAppearance(focused: gained)
+                self?.applyAppearance(focused: true)
             }, completion: nil)
+        } else if lost {
+            // Instant, colors AND outset: any animated unfocus reads as the
+            // old row ghosting or lagging behind the focus move.
+            applyAppearance(focused: false)
         }
     }
 

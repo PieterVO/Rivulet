@@ -141,6 +141,7 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.4 (74)", [
+            "Testing remote control fixes. If this breaks for you, please install an older build and submit a bug. Thanks.",
             "Updated AetherEngine to 6.4.0",
             "Subtitles now match the text size, background box and position Apple TV uses for its own captions",
             "Subtitles keep the styling the content asked for, including bold, italic, underline, colour and size",
