@@ -322,7 +322,19 @@ class PlayerContainerViewController: UIViewController {
                 skipGuide.leadingAnchor.constraint(equalTo: railView.leadingAnchor),
                 skipGuide.trailingAnchor.constraint(equalTo: railView.trailingAnchor),
                 skipGuide.bottomAnchor.constraint(equalTo: railView.topAnchor),
-                skipGuide.topAnchor.constraint(equalTo: pill.bottomAnchor),
+                // Anchored to the RAIL at the raised offset, not to `pill.bottom`.
+                // The pill's own bottom constraint is retargeted between the
+                // raised (-20) and lowered (+200) offsets, and the guide's height
+                // is the negation of whichever is active — so pinning the guide's
+                // top to the pill made it exactly -200pt tall whenever the chrome
+                // hid, which is unsatisfiable. Auto Layout logged the conflict and
+                // broke this constraint on every play (the chrome starts hidden).
+                // The guide is only ENABLED while `railVisible`, i.e. only while
+                // the pill is raised, so the band above the rail is the only
+                // geometry it ever needs. Same constant drives both, so they
+                // cannot drift apart.
+                skipGuide.topAnchor.constraint(
+                    equalTo: railView.topAnchor, constant: Self.skipPillRaisedOffset),
             ])
             skipPillFocusGuide = skipGuide
 

@@ -90,6 +90,10 @@ struct ContentView: View {
             }
         }
         .task {
+            // StartupTimer (not splashLog) so this lands on the same +Nms
+            // timeline as the rest of the launch trace — the splash logs had no
+            // elapsed prefix, which is why this stretch read as a blank 2.2s.
+            StartupTimer.mark("ContentView .task entry (registries next)")
             // Bootstrap the agnostic media layer registries. Touching the
             // metadata registry initializes it (and registers TMDB). The
             // provider registry needs the active Plex auth state — populate
@@ -99,6 +103,7 @@ struct ContentView: View {
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
             MusicQueue.shared.configure(registry: MusicProviderRegistry.shared)
+            StartupTimer.mark("registries bootstrapped")
 
             splashLog.info("Splash task started — hasCredentials=\(self.authManager.hasCredentials)")
             if !authManager.hasCredentials {

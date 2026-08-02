@@ -136,13 +136,31 @@ actor CacheManager {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         let readMs = Int((ProcessInfo.processInfo.systemUptime - readStart) * 1000)
         memoryCache.setObject(data as NSData, forKey: fileName as NSString)
+        // Wall AND cpu, because wall alone is not attributable. A device launch
+        // reported `decode=1033ms` for a 16KB `[PlexMetadata]` payload that a
+        // simulator decodes in 0.4ms warm / 1.0ms cold (see
+        // PlexMetadataDecodeCostTests) — a 1000x gap no CPU difference explains.
+        // Wall time counts the launch storm descheduling this cooperative thread
+        // and page-faulting the decode path in; cpu time counts only real work.
+        // If cpu << wall the payload is innocent and the contention is the story,
+        // so do not go optimizing the model layer off the wall number alone.
         let decodeStart = ProcessInfo.processInfo.systemUptime
+        let cpuStart = Self.threadCPUSeconds()
         let decoded = try? JSONDecoder().decode(T.self, from: data)
         let decodeMs = Int((ProcessInfo.processInfo.systemUptime - decodeStart) * 1000)
+        let cpuMs = Int((Self.threadCPUSeconds() - cpuStart) * 1000)
         if readMs > 200 || decodeMs > 200 {
-            StartupTimer.mark("  decodedCache(\(fileName)) read=\(readMs)ms decode=\(decodeMs)ms bytes=\(data.count)")
+            StartupTimer.mark("  decodedCache(\(fileName)) read=\(readMs)ms decode=\(decodeMs)ms cpu=\(cpuMs)ms bytes=\(data.count)")
         }
         return decoded
+    }
+
+    /// CPU time consumed by the CALLING thread, in seconds. Pairs with a wall
+    /// clock to separate "this work is expensive" from "this thread was waiting".
+    private static func threadCPUSeconds() -> Double {
+        var ts = timespec()
+        guard clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0 else { return 0 }
+        return Double(ts.tv_sec) + Double(ts.tv_nsec) / 1_000_000_000
     }
 
     // MARK: - Library Cache

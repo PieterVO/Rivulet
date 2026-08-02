@@ -96,12 +96,16 @@ final class TopShelfCache: Sendable {
         sharedDefaults?.removeObject(forKey: userDefaultsKey)
     }
 
-    // MARK: - Composite image files (AppGroup/TopShelf/*.jpg)
+    // MARK: - Composite image files (AppGroup/Library/Caches/TopShelf/*.jpg)
 
+    // Read-side twin of the app's `TopShelfCache.compositeDirectoryURL()`. The
+    // container root is not writable on tvOS, so the app writes composites under
+    // `Library/Caches`; this path MUST match it or the extension finds nothing.
     private var compositeDirName: String { "TopShelf" }
 
     func compositeFileURL(fileName: String) -> URL? {
         containerURL?
+            .appendingPathComponent("Library/Caches", isDirectory: true)
             .appendingPathComponent(compositeDirName, isDirectory: true)
             .appendingPathComponent(fileName)
     }

@@ -90,16 +90,29 @@ final class TopShelfCache: Sendable {
         sharedDefaults?.removeObject(forKey: userDefaultsKey)
     }
 
-    // MARK: - Composite image files (AppGroup/TopShelf/*.jpg)
+    // MARK: - Composite image files (AppGroup/Library/Caches/TopShelf/*.jpg)
 
+    // The container ROOT is not writable on tvOS — only `Library/Caches` under it
+    // is. Creating the composites dir at the root silently failed (the mkdir error
+    // was swallowed by `try?`), so every `writeComposite` then failed ENOENT and
+    // Top Shelf never had a single composite to show. Keep this path in sync with
+    // the extension's copy of this file, which builds the same URL independently.
     private var compositeDirName: String { "TopShelf" }
 
     /// The TopShelf composites directory, created if needed. nil if no container.
     func compositeDirectoryURL() -> URL? {
         guard let base = containerURL else { return nil }
-        let dir = base.appendingPathComponent(compositeDirName, isDirectory: true)
-        if !FileManager.default.fileExists(atPath: dir.path) {
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = base
+            .appendingPathComponent("Library/Caches", isDirectory: true)
+            .appendingPathComponent(compositeDirName, isDirectory: true)
+        do {
+            // `withIntermediateDirectories: true` is a no-op when it already
+            // exists, so the fileExists pre-check bought nothing. Do NOT swallow
+            // the error here: a silent mkdir failure is what hid this bug.
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            print("TopShelfCache: failed to create composites dir at \(dir.path): \(error)")
+            return nil
         }
         return dir
     }
