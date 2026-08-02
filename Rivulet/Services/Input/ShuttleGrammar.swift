@@ -7,8 +7,9 @@
 //
 //  Pure FF/RW shuttle grammar: click-and-hold enters shuttle at level 1,
 //  clicks in the same direction bump up to the level 3 cap, clicks in the
-//  opposite direction step down and cancel below level 1. Badges show the
-//  human ladder (2x/4x/6x); actual cruise rates are 15x/60x/240x realtime.
+//  opposite direction step down THROUGH zero into the opposite direction.
+//  Badges show the human ladder (2x/4x/6x); actual cruise rates are
+//  15x/60x/240x realtime.
 //
 
 import Foundation
@@ -34,8 +35,14 @@ nonisolated enum ShuttleGrammar {
         if (current > 0) == clickForward {
             return min(abs(current) + 1, maxLevel) * clickSign
         }
-        // Opposite direction: step toward zero.
-        return (abs(current) - 1) * (current > 0 ? 1 : -1)
+        // Opposite direction: step toward zero, then CROSS into the opposite
+        // direction rather than stopping on it. Landing on zero routed to
+        // `cancelScrub()`, which restores the pre-shuttle position — so
+        // stepping 6x -> 4x -> 2x and clicking once more threw away everything
+        // the user had just shuttled past and resumed where they started.
+        // Select still commits and Down still cancels; those are the exits.
+        let stepped = (abs(current) - 1) * (current > 0 ? 1 : -1)
+        return stepped == 0 ? clickSign : stepped
     }
 
     static func rate(forLevel level: Int) -> TimeInterval {

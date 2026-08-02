@@ -42,7 +42,12 @@ protocol RailPanelMenuHandling {
 
 final class PlayerRailPanelView: UIView {
 
-    private enum Metrics {
+    /// Height available to panel CONTENT at the panel's full size. Content that
+    /// wants a constant panel (rather than one that grows and shrinks with what
+    /// it happens to be showing) constrains itself to this.
+    static var fullContentHeight: CGFloat { Metrics.maxHeight - Metrics.padding * 2 }
+
+    fileprivate enum Metrics {
         static let cornerRadius: CGFloat = 20
         static let railGap: CGFloat = 12
         static let padding: CGFloat = 20

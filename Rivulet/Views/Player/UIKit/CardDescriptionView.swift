@@ -88,7 +88,17 @@ final class CardDescriptionView: UIView, InfoTabSheet {
         // Beat the panel's own height cap so a short sheet hugs its content
         // instead of collapsing to zero height — same idiom as CardInfoView.
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: content.heightAnchor)
-        scrollHeight.priority = .defaultHigh
+        // ONE BELOW `.defaultHigh`, not AT it. At `.defaultHigh` this ties with
+        // the content's own vertical compression resistance, and the solver
+        // resolves the tie by SQUASHING the content to the viewport instead of
+        // breaking this constraint. `contentSize` then reports the squashed
+        // height, so the sheet believes it fits while part of it is unreachable:
+        // measured on device at stackH=448 naturalH=468, contentSize==bounds==448.
+        // That makes `InfoScrollView.needsFocusableRows` false, every row
+        // unfocusable, and the Down crossing from the pills into the sheet dead.
+        // One below, the cap wins, the content keeps its real height, and the
+        // sheet is scrollable. Short content still hugs (hugging is only 250).
+        scrollHeight.priority = .defaultHigh - 1
 
         let centerSummary = summaryStack.centerYAnchor.constraint(equalTo: summarySpace.centerYAnchor)
         centerSummary.priority = .defaultHigh

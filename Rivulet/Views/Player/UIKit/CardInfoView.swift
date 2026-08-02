@@ -68,7 +68,17 @@ final class CardInfoView: UIView, InfoTabSheet {
         // cap, so a short info sheet hugs its rows instead of collapsing
         // to zero height — same idiom as CardTrackListView.
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
-        scrollHeight.priority = .defaultHigh
+        // ONE BELOW `.defaultHigh`, not AT it. At `.defaultHigh` this ties with
+        // the content's own vertical compression resistance, and the solver
+        // resolves the tie by SQUASHING the content to the viewport instead of
+        // breaking this constraint. `contentSize` then reports the squashed
+        // height, so the sheet believes it fits while part of it is unreachable:
+        // measured on device at stackH=448 naturalH=468, contentSize==bounds==448.
+        // That makes `InfoScrollView.needsFocusableRows` false, every row
+        // unfocusable, and the Down crossing from the pills into the sheet dead.
+        // One below, the cap wins, the content keeps its real height, and the
+        // sheet is scrollable. Short content still hugs (hugging is only 250).
+        scrollHeight.priority = .defaultHigh - 1
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: topAnchor),
@@ -200,20 +210,20 @@ final class CardInfoView: UIView, InfoTabSheet {
         }
     }
 
-    /// Adds a section: a label plus rows in two equal columns, where each
-    /// two-up row is an `InfoFocusRowView` — the invisible focus target that
-    /// swipes and edge clicks hop between, driving the sheet's reveal scroll.
+    /// Adds a section: a label plus rows in two equal columns, wrapped in ONE
+    /// `InfoFocusRowView` so focus steps section-to-section. Per-line focus gave
+    /// a dozen indistinguishable stops with no sense of position; the section is
+    /// the unit a reader actually moves between.
     private func addSection(_ title: String, rows: [UIView]) {
         guard !rows.isEmpty else { return }
-        // Plain (NON-focusable) container: the focus targets are the individual
-        // pair rows inside the grid, so a focusable section wrapper here would
-        // nest two focus targets and let the engine settle on the outer one.
         let section = UIStackView()
         section.axis = .vertical
         section.spacing = 12
         section.alignment = .fill
         section.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(title))
         section.addArrangedSubview(PlayerInfoSheetStyle.twoColumnGrid(rows))
-        stack.addArrangedSubview(section)
+        let focusRow = InfoFocusRowView()
+        focusRow.setFullWidth(section)
+        stack.addArrangedSubview(focusRow)
     }
 }

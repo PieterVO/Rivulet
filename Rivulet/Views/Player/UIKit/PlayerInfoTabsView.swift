@@ -178,6 +178,17 @@ final class PlayerInfoTabsView: UIView {
             contentSideInset = 0
         }
 
+        // FIXED height, not self-sized. Each sheet still carries a breakable
+        // self-sizing constraint for the surfaces that want a panel that hugs
+        // its content, but the Info popup is not one of them: its three sheets
+        // are different lengths and the Advanced sheet GROWS as telemetry
+        // arrives, so a self-sized panel resized under the user while they were
+        // reading it and changed height when they switched tabs. Pinning it
+        // here breaks each sheet's self-sizing constraint (required beats
+        // `.defaultHigh`), so every sheet gets the same viewport and simply
+        // scrolls when it has more to show.
+        heightAnchor.constraint(equalToConstant: PlayerRailPanelView.fullContentHeight).isActive = true
+
         constrainToContentArea(infoView)
         if let descriptionView { constrainToContentArea(descriptionView) }
     }
@@ -196,9 +207,9 @@ final class PlayerInfoTabsView: UIView {
     // MARK: - Tab switching
 
     private func handleTabSelected(_ tab: Tab) {
-        infoTabLog.notice("tab select requested: \(String(describing: tab)) (current: \(String(describing: self.currentTab)))")
+        infoTabLog.notice("tab select requested: \(String(describing: tab), privacy: .public) (current: \(String(describing: self.currentTab), privacy: .public))")
         guard tab != currentTab else {
-            infoTabLog.notice("tab select no-op: already on \(String(describing: tab))")
+            infoTabLog.notice("tab select no-op: already on \(String(describing: tab), privacy: .public)")
             return
         }
         currentTab = tab
@@ -246,14 +257,14 @@ final class PlayerInfoTabsView: UIView {
         // focus to the tab bar or to a different row. Only the INITIAL landing
         // (focus not yet inside the content) falls through to the tab bar.
         if let focused = focusedViewInContent {
-            infoTabLog.debug("preferredFocusEnvironments: re-affirming focused view in content")
+            infoTabLog.notice("preferredFocusEnvironments: re-affirming focused view in content")
             return [focused]
         }
         if let tabBar {
-            infoTabLog.debug("preferredFocusEnvironments: landing on tab bar")
+            infoTabLog.notice("preferredFocusEnvironments: landing on tab bar")
             return [tabBar]
         }
-        infoTabLog.debug("preferredFocusEnvironments: landing on content (no tab bar)")
+        infoTabLog.notice("preferredFocusEnvironments: landing on content (no tab bar)")
         return [currentContentView]
     }
 

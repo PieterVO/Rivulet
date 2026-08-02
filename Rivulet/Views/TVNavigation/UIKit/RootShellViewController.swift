@@ -14,6 +14,7 @@
 //
 
 import UIKit
+import os
 
 /// Invisible focus target at the left edge; focus landing here means the
 /// user pushed left out of content, which opens the sidebar.
@@ -217,6 +218,26 @@ extension RootShellViewController: MenuBackHandling {
     /// runs, the home page has already consumed below-top Menu presses.
     func handleMenuBack() -> Bool {
         guard view.window?.isKeyWindow == true else { return false }
+        // Focus must be inside the shell's OWN hierarchy. `isKeyWindow` stays
+        // true while a modal covers the shell — the preview carousel's expanded
+        // detail, the player — because a modal is presented into the SAME
+        // window. Without this the shell claimed Menu on behalf of a sidebar
+        // the user cannot see, expanded it invisibly, and returned true. The
+        // press was then withheld from the system AND never reached the modal's
+        // own Menu recognizer, so Menu in the carousel's below-fold did nothing
+        // at all. Worse, the invisible expand flipped `sidebar.isExpanded`, so
+        // the NEXT press took the collapse branch, returned false, and worked:
+        // every other Menu press died.
+        //
+        // A presented controller's view is added to the window, never to the
+        // presenter's view, so descendancy is an exact test. `sidebar.view` IS
+        // a subview here, so the expanded-sidebar branch still qualifies. This
+        // is the same containment check `PlexHomeViewController.handleMenuBack`
+        // already makes, which is why home correctly declined and only the
+        // shell absorbed the press.
+        guard let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView,
+              focused.isDescendant(of: view)
+        else { return false }
         if sidebar.isExpanded {
             // Menu in the open sidebar returns to Home (issue #192 policy);
             // on Home it falls through so the system can exit the app.

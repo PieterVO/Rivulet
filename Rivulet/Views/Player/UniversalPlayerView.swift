@@ -636,7 +636,15 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             } else {
                 Task { await vm.seekRelative(by: seconds) }
             }
-            vm.showControlsTemporarily()
+            // REFRESH the auto-hide timer when the chrome is already up; do not
+            // SUMMON it. A single click with the rail closed is a skip, not a
+            // request for chrome. This ran unconditionally, so every skip from a
+            // hidden-chrome state raised the rail, and raising it flips
+            // `controlsFocusActive`, which disarms the container's own Left/Right
+            // recognizers — so the click after a skip did nothing. That is the
+            // "sometimes it skips, sometimes it opens the rail, sometimes
+            // nothing happens" sequence, and it is one bug, not three.
+            if vm.showControls { vm.showControlsTemporarily() }
 
         case .seekAbsolute(let time):
             guard vm.postVideoState == .hidden else { return }
@@ -880,7 +888,14 @@ struct UniversalPlayerView: View {
                 viewModel?.playbackState == .paused
             }
             remoteInput.isControlsFocusCheck = { [weak viewModel] in
-                viewModel?.controlsFocusActive ?? false
+                guard let viewModel else { return false }
+                // A presented rail panel (Info, Up Next, Insights) owns Left/Right
+                // for its own content, and focus inside it is NOT inside the rail,
+                // so `controlsFocusActive` is false there. Without this term the
+                // GameController path kept seeking behind an open popup — the
+                // container's own recognizers already stand down for a live panel
+                // (`containerOwnsDirectionalInput`), and this is its twin.
+                return viewModel.controlsFocusActive || viewModel.isRailPanelOpen
             }
             remoteInput.isSkipPillFocusCheck = { [weak viewModel] in
                 viewModel?.skipPillOwnsFocus ?? false

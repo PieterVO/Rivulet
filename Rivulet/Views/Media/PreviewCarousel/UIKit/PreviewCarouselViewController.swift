@@ -1760,13 +1760,22 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
     // — we drive scroll ourselves via animatePage so we can use the
     // exact cubic timing curve.
     func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {
-        // Carousel-stable is focusless (we drive paging ourselves, so the focus
-        // engine must not auto-scroll). Only the EXPANDED HERO makes the centered
-        // cell focusable so its action row (Play etc.) can take focus. In
-        // detailsStable the cell must be UNFOCUSABLE: otherwise Up from the
-        // episodes lets the focus engine jump back to this full-screen hero card
-        // (it sits behind the below-fold) instead of reaching the season pills.
-        return indexPath.item == selectedIndex && state.phase == .expandedHero
+        // NEVER. A focusable cell is a LEAF focus item: the engine focuses the
+        // cell and reaches its action row only through the cell's own
+        // `preferredFocusEnvironments` redirect, which a DIRECTIONAL search does
+        // not consult. So making the expanded cell focusable landed focus on
+        // Play and then killed Left/Right between the buttons on every remote —
+        // presses and swipes alike, because both are the same focus move.
+        // A NON-focusable cell is a pass-through container and the engine finds
+        // the buttons directly; the redirect still works for the driven landing.
+        // House pattern: ShelfRowCell and HeroOverlayCell both host focusable
+        // content and both return false.
+        //
+        // Focuslessness elsewhere is unaffected: the chrome is
+        // `isUserInteractionEnabled = false` in .carouselStable, and
+        // `enterBelowFold` turns the action row off so Up from the episodes
+        // can't climb back into the hero.
+        return false
     }
 }
 

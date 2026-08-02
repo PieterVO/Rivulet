@@ -37,6 +37,10 @@ class PlayerContainerViewController: UIViewController {
     /// Next (Task 6). Only one can be up at a time — presenting a new
     /// one dismisses whatever's showing first.
     private var activeRailPanel: PlayerRailPanelView?
+
+    /// Previous `railVisible`, so `applyChromeVisibility()` can spot the rail
+    /// APPEARING and start every appearance on the scrubber.
+    private var railWasVisible = false
     /// Snapshot of the last `$upNextEpisodes` emission — Task 6's panel
     /// reads this when it comes online; Task 3 only derives the rail
     /// button's availability from it.
@@ -896,26 +900,42 @@ class PlayerContainerViewController: UIViewController {
 
     }
 
-    @objc private func handleDPadLeftTap() {
-        guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
-              scrubberProxy?.isFocused != true else { return }
+    /// Whether the container's own Left/Right recognizers may act on a press.
+    ///
+    /// A presented rail panel (Info, Up Next, Insights) owns Left/Right for its
+    /// own content, and these recognizers live on an ANCESTOR of it. A live
+    /// recognizer on an ancestor intercepts the press before the panel's focused
+    /// view ever sees it, so leaving them armed both seeks behind the user's back
+    /// and eats the panel's own navigation. `controlsFocusActive` does NOT cover
+    /// this case: a panel can be open while it reads false, which is why a click
+    /// with the Info popup up was still skipping.
+    ///
+    /// Liveness is `window != nil`, not nil-ness: `activeRailPanel` outlives the
+    /// 0.15s dismiss fade, and the same test is used in
+    /// `preferredFocusEnvironments`.
+    private var containerOwnsDirectionalInput: Bool {
+        guard let vm = viewModel else { return false }
+        if activeRailPanel?.window != nil { return false }
+        guard vm.postVideoState == .hidden else { return false }
+        // Rail up: the scrubber proxy owns skip while it holds focus, and every
+        // other rail button needs Left/Right to MOVE FOCUS rather than seek.
+        if vm.controlsFocusActive { return false }
+        return scrubberProxy?.isFocused != true
+    }
 
+    @objc private func handleDPadLeftTap() {
+        guard containerOwnsDirectionalInput else { return }
         inputCoordinator.handle(action: .stepSeek(forward: false), source: .irPress)
     }
 
     @objc private func handleDPadRightTap() {
-        guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
-              scrubberProxy?.isFocused != true else { return }
-
+        guard containerOwnsDirectionalInput else { return }
         inputCoordinator.handle(action: .stepSeek(forward: true), source: .irPress)
     }
 
     @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
-              scrubberProxy?.isFocused != true else { return }
+        guard containerOwnsDirectionalInput else { return }
 
         switch gesture.state {
         case .began:
@@ -935,8 +955,7 @@ class PlayerContainerViewController: UIViewController {
 
     @objc private func handleDPadRightLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard let vm = viewModel else { return }
-        guard vm.postVideoState == .hidden, !vm.controlsFocusActive,
-              scrubberProxy?.isFocused != true else { return }
+        guard containerOwnsDirectionalInput else { return }
 
         switch gesture.state {
         case .began:
@@ -1058,6 +1077,14 @@ class PlayerContainerViewController: UIViewController {
             // matching Apple's system player and the touch-remote flow.
             if vm.isScrubbing {
                 self?.inputCoordinator.handle(action: .scrubCommit, source: .irPress)
+            } else if !vm.showControls {
+                // The proxy KEEPS focus after the rail auto-hides (see the
+                // `proxyHasFocus` term on its focus gate), so a Select with the
+                // chrome down arrives here rather than at the content layer's
+                // tap handler. That press means "bring the rail back", not
+                // "toggle playback" — reopen at whatever the current play state
+                // is and leave the transport alone.
+                vm.showControlsTemporarily()
             } else {
                 self?.inputCoordinator.handle(action: .playPause, source: .irPress)
             }
@@ -1408,6 +1435,11 @@ class PlayerContainerViewController: UIViewController {
             // describe a newer panel — must not clobber that state.
             if self.activeRailPanel === panel {
                 self.activeRailPanel = nil
+                // Re-arm the container's Left/Right recognizers. An ENABLED
+                // recognizer on an ancestor intercepts a press even when its
+                // handler no-ops, so `isEnabled` has to track panel presence,
+                // not just `controlsFocusActive`.
+                self.applyChromeVisibility()
                 self.isShowingUpNextPanel = false
                 // Only clear the ambient-suppression flag if nothing
                 // superseded this panel (the identity guard above already
@@ -1418,6 +1450,8 @@ class PlayerContainerViewController: UIViewController {
             self.setNeedsFocusUpdate(); self.updateFocusIfNeeded()
         }
         activeRailPanel = panel
+        // Disarm them for the panel that just came up (see above).
+        applyChromeVisibility()
         // A rail panel is a full-screen-adjacent overlay the ambient-pause
         // backdrop must not show through/around — see
         // UniversalPlayerViewModel.isRailPanelOpen.
@@ -1494,6 +1528,16 @@ class PlayerContainerViewController: UIViewController {
         let showsActivityCue = isLoading || vm.playbackState == .buffering
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
         let railVisible = chromeVisible && !vm.isScrubbing
+
+        // Every APPEARANCE of the rail starts on the scrubber: it is the primary
+        // affordance, and "where you left off" is scoped to one visit. The rail's
+        // `lastFocusedButton` still wins WITHIN a visit — that is what returns
+        // focus to the button that opened a rail panel after Menu — but it must
+        // not survive the rail going away and coming back. Resetting only when
+        // controls-focus ends is not enough now that an open panel deliberately
+        // counts as still-in-the-rail (see `railOwnsFocus`).
+        if railVisible && !railWasVisible { rail?.resetFocusMemory() }
+        railWasVisible = railVisible
         let paused = vm.playbackState == .paused && !ambient && hasPlayedSinceLoad
         // Ambient pause keeps the scrubber (and its bottom scrim) up as a
         // read-only position indicator even though the rail fades. Not shown
@@ -1537,7 +1581,7 @@ class PlayerContainerViewController: UIViewController {
         // intermittently drops the skip instead of firing it twice. Disabling
         // them outright while controls-focus is active removes the race
         // instead of relying on the no-op to paper over it.
-        let irArrowGesturesEnabled = !vm.controlsFocusActive
+        let irArrowGesturesEnabled = containerOwnsDirectionalInput
         [dPadLeftTapGesture, dPadRightTapGesture, dPadLeftLongPressGesture, dPadRightLongPressGesture].forEach {
             $0?.isEnabled = irArrowGesturesEnabled
         }
@@ -1647,10 +1691,58 @@ class PlayerContainerViewController: UIViewController {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
+
+        // `controlsFocusActive` means "the rail owns focus", and it is the SOLE
+        // suppressor of seek input (the GameController path's `emit` gate and
+        // `containerOwnsDirectionalInput` both key on it). But it was only ever
+        // SET from `surfaceControlsAndFocusScrubber()`, reachable only from the
+        // content layer's Up/Down. The rail is focusable whenever chrome is up
+        // (`scrubberProxy.isFocusEnabled = railVisible …`), so raising it any
+        // other way — Select → .playPause → showControlsTemporarily() — left
+        // focus sitting in the rail with the flag false, and every Left/Right
+        // then BOTH moved focus and seeked 30s. Drive the flag from where focus
+        // actually is; entry path stops mattering.
+        //
+        // Decide from the DESTINATION, and only when focus actually landed
+        // somewhere. Two traps make that phrasing load-bearing:
+        //   - Dismissing a rail panel passes through a transient `next == nil`
+        //     before focus re-lands. Treating that as "left the rail" runs
+        //     exitControlsFocus(), whose sink calls `rail.resetFocusMemory()`,
+        //     so the rail forgets the button that opened the panel.
+        //   - The SwiftUI content layer focuses as a `UIKitFocusableViewResponderItem`,
+        //     NOT a UIView, so `nextFocusedView` is nil there too. Gate on
+        //     `nextFocusedItem` (which is non-nil) and test containment on the
+        //     view (which correctly reports "not the rail").
+        if let vm = viewModel, context.nextFocusedItem != nil {
+            if railOwnsFocus(context.nextFocusedView) {
+                vm.enterControlsFocus()
+            } else {
+                vm.exitControlsFocus()
+            }
+        }
+
         // Focus moved to/from the pill: retoggle the Up→pill bridge so it never
         // traps the pill's own Down press. Read the new focus from the context —
         // `isFocused` isn't reliably updated yet mid-transition.
         refreshSkipGuideEnabled(pillFocusedOverride: context.nextFocusedView === skipPill)
+    }
+
+    /// The scrubber proxy is a SIBLING of the rail, not a descendant (see the
+    /// setup comment at `railView.scrubberFocusProxy = proxy`), so "focus is in
+    /// the rail" needs both roots.
+    private func railOwnsFocus(_ view: UIView?) -> Bool {
+        guard let view else { return false }
+        if let proxy = scrubberProxy, view === proxy { return true }
+        if let rail, view.isDescendant(of: rail) { return true }
+        // A presented rail panel is an EXTENSION of the rail, not an exit from
+        // it. Its view is added to the window, so `isDescendant(of: rail)` is
+        // false — but treating that as "focus left the rail" runs
+        // exitControlsFocus(), whose sink calls `rail.resetFocusMemory()`.
+        // Dismissing the panel then landed focus on the rail's default first
+        // stop (the INVISIBLE scrubber proxy) instead of the button that opened
+        // it, which reads as focus disappearing.
+        if let panel = activeRailPanel, panel.window != nil, view.isDescendant(of: panel) { return true }
+        return false
     }
 }
 

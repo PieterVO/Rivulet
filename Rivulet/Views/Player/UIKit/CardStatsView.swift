@@ -31,8 +31,12 @@ final class CardStatsView: UIView, InfoTabSheet {
     /// target down mid-tick would yank focus out of the sheet, which is exactly
     /// why the pool exists rather than rebuilding rows per tick.
     private struct SectionUI {
-        let container: UIStackView          // non-focusable: label + grid
-        let pairRows: [InfoFocusRowView]    // persistent focus targets
+        /// THE focus target: one stop per section, not per line. Eleven stops in
+        /// a stats sheet gave the user no sense of where focus was and made
+        /// walking back to the tabs a ten-press job.
+        let focusRow: InfoFocusRowView
+        let container: UIStackView          // label + grid, inside `focusRow`
+        let pairRows: [InfoFocusRowView]    // plain two-up lines, NOT focusable
     }
     private var sectionUIs: [SectionUI] = []
 
@@ -147,7 +151,9 @@ final class CardStatsView: UIView, InfoTabSheet {
             container.axis = .vertical
             container.spacing = 12
             container.alignment = .fill
-            container.isHidden = true
+            // Visibility is owned by the `focusRow` wrapper below, NOT here.
+            // Leaving this hidden while `redistribute` toggled only the wrapper
+            // rendered an empty sheet and collapsed the content height.
             container.addArrangedSubview(PlayerInfoSheetStyle.sectionLabel(spec.name))
 
             // One pair row per two DECLARED rows, so the pool is always big
@@ -156,13 +162,20 @@ final class CardStatsView: UIView, InfoTabSheet {
             var pairRows: [InfoFocusRowView] = []
             for _ in stride(from: 0, to: spec.rows.count, by: 2) {
                 let row = InfoFocusRowView()
+                row.isFocusEnabled = false   // the SECTION is the focus target
                 row.isHidden = true
                 grid.addArrangedSubview(row)
                 pairRows.append(row)
             }
             container.addArrangedSubview(grid)
-            stack.addArrangedSubview(container)
-            sectionUIs.append(SectionUI(container: container, pairRows: pairRows))
+            // The section's label and grid ride inside one focus target, so a
+            // Down press steps section-to-section and the highlight covers the
+            // whole block.
+            let focusRow = InfoFocusRowView()
+            focusRow.setFullWidth(container)
+            focusRow.isHidden = true
+            stack.addArrangedSubview(focusRow)
+            sectionUIs.append(SectionUI(focusRow: focusRow, container: container, pairRows: pairRows))
 
             for rowSpec in spec.rows {
                 rowLabels[rowSpec.title] = PlayerInfoSheetStyle.infoRow(rowSpec.title, "")
@@ -170,7 +183,17 @@ final class CardStatsView: UIView, InfoTabSheet {
         }
 
         let scrollHeight = scrollView.heightAnchor.constraint(equalTo: stack.heightAnchor)
-        scrollHeight.priority = .defaultHigh
+        // ONE BELOW `.defaultHigh`, not AT it. At `.defaultHigh` this ties with
+        // the content's own vertical compression resistance, and the solver
+        // resolves the tie by SQUASHING the content to the viewport instead of
+        // breaking this constraint. `contentSize` then reports the squashed
+        // height, so the sheet believes it fits while part of it is unreachable:
+        // measured on device at stackH=448 naturalH=468, contentSize==bounds==448.
+        // That makes `InfoScrollView.needsFocusableRows` false, every row
+        // unfocusable, and the Down crossing from the pills into the sheet dead.
+        // One below, the cap wins, the content keeps its real height, and the
+        // sheet is scrollable. Short content still hugs (hugging is only 250).
+        scrollHeight.priority = .defaultHigh - 1
 
         NSLayoutConstraint.activate([
             scrollView.topAnchor.constraint(equalTo: topAnchor),
@@ -296,7 +319,7 @@ final class CardStatsView: UIView, InfoTabSheet {
     private func redistribute(with stats: AetherAdvancedStats) {
         if stats.isEmpty {
             gatheringLabel.isHidden = false
-            sectionUIs.forEach { $0.container.isHidden = true }
+            sectionUIs.forEach { $0.focusRow.isHidden = true }
             renderedGathering = true
             renderedSignature = []
             renderedValues = [:]
@@ -316,7 +339,7 @@ final class CardStatsView: UIView, InfoTabSheet {
                 present.insert(row.title)
                 return label
             }
-            ui.container.isHidden = visible.isEmpty
+            ui.focusRow.isHidden = visible.isEmpty
             for (rowIndex, pairRow) in ui.pairRows.enumerated() {
                 let left = rowIndex * 2
                 guard left < visible.count else {

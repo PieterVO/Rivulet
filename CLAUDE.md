@@ -150,6 +150,22 @@ focusless AND single-transport, or when a needed hand-off is press-only.
   changes nothing at runtime and splits a tuned interaction across two
   mechanisms. Settings reorder (grab-gated press taps + swipes) stays
   hand-rolled on purpose.
+- **A handler that claims a press at the WINDOW level must gate on focus
+  containment, never on `isKeyWindow`.** `MenuPressInterceptor` swizzles
+  `UIWindow.sendEvent`, which is earlier than every responder and every
+  gesture recognizer, so a `MenuBackHandling` handler that wrongly returns
+  true kills Menu inside whatever modal is on screen. A modal presents into
+  the SAME window, so `view.window?.isKeyWindow` is TRUE while it covers
+  you: it is not a frontmost test. Require the focused item to be a
+  descendant of your own view (a presented VC's view is added to the window,
+  never to the presenter's view, so this is exact). `RootShellViewController`
+  shipped without that check in `cfb44f1` and, from the carousel's below-fold
+  detail, expanded a sidebar buried under the modal and returned true —
+  withholding the press from the system AND from the carousel's own `.menu`
+  recognizer. Because the invisible expand flipped `sidebar.isExpanded`, the
+  next press took the collapse branch and worked: **every other Menu press
+  did nothing at all.** `PlexHomeViewController.handleMenuBack` had the check
+  from the start, which is why only the shell absorbed the press.
 - The player's tap-vs-hold sites are duration-based and deliberately
   untouched pending InputProbe field data on IR repeat codes (#212).
 

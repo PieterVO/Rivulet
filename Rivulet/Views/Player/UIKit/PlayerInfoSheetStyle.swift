@@ -140,6 +140,10 @@ enum PlayerInfoSheetStyle {
         var index = 0
         while index < rows.count {
             let row = InfoFocusRowView()
+            // Plain two-up line. The SECTION carries focus (see addSection);
+            // a focusable line inside a focusable section would nest two
+            // targets and the inner one would be unreachable.
+            row.isFocusEnabled = false
             row.setPair(rows[index], index + 1 < rows.count ? rows[index + 1] : nil)
             grid.addArrangedSubview(row)
             index += 2

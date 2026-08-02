@@ -6,7 +6,8 @@
 //  RivuletTests
 //
 //  Unit tests for the FF/RW shuttle grammar: hold enters at 2x, same-direction
-//  clicks bump 2x -> 4x -> 6x cap, opposite-direction clicks step down then cancel.
+//  clicks bump 2x -> 4x -> 6x cap, opposite-direction clicks step down through
+//  zero into the opposite direction.
 //
 
 import XCTest
@@ -31,16 +32,33 @@ final class ShuttleGrammarTests: XCTestCase {
         XCTAssertEqual(ShuttleGrammar.step(current: -3, clickForward: false), -3)
     }
 
-    func testOppositeDirectionClicksStepDownThenCancel() {
-        // From level 3 forward, opposite (backward) clicks step down: 3 -> 2 -> 1 -> 0.
+    func testOppositeDirectionClicksStepDownThroughZero() {
+        // From level 3 forward, opposite (backward) clicks step down: 3 -> 2 -> 1,
+        // then CROSS to -1 rather than landing on 0. Zero routed to cancelScrub(),
+        // which restored the pre-shuttle position and discarded the whole shuttle.
         XCTAssertEqual(ShuttleGrammar.step(current: 3, clickForward: false), 2)
         XCTAssertEqual(ShuttleGrammar.step(current: 2, clickForward: false), 1)
-        XCTAssertEqual(ShuttleGrammar.step(current: 1, clickForward: false), 0)
+        XCTAssertEqual(ShuttleGrammar.step(current: 1, clickForward: false), -1)
 
-        // From level -3 backward, opposite (forward) clicks step down: -3 -> -2 -> -1 -> 0.
+        // From level -3 backward, opposite (forward) clicks step down: -3 -> -2 -> -1 -> 1.
         XCTAssertEqual(ShuttleGrammar.step(current: -3, clickForward: true), -2)
         XCTAssertEqual(ShuttleGrammar.step(current: -2, clickForward: true), -1)
-        XCTAssertEqual(ShuttleGrammar.step(current: -1, clickForward: true), 0)
+        XCTAssertEqual(ShuttleGrammar.step(current: -1, clickForward: true), 1)
+    }
+
+    /// The grammar can no longer return 0 from any input, so the
+    /// `newSpeed == 0 -> cancelScrub()` branch in `scrubInDirection` is
+    /// unreachable. If this ever fails, that branch is live again and a
+    /// shuttle can silently throw away the user's position.
+    func testStepNeverReturnsZero() {
+        for current in -ShuttleGrammar.maxLevel...ShuttleGrammar.maxLevel {
+            for forward in [true, false] {
+                XCTAssertNotEqual(
+                    ShuttleGrammar.step(current: current, clickForward: forward), 0,
+                    "step(current: \(current), clickForward: \(forward)) returned 0"
+                )
+            }
+        }
     }
 
     func testRateAndBadge() {

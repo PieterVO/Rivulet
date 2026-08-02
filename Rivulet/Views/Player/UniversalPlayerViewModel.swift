@@ -2798,7 +2798,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         } else {
             await player?.seek(to: CMTime(seconds: targetTime, preferredTimescale: 600))
         }
-        showControlsTemporarily()
+        // REFRESH the auto-hide timer when the chrome is already up; never
+        // SUMMON it. A skip is a skip, not a request for chrome. The seek
+        // indicator below is the feedback for a hidden-chrome skip.
+        //
+        // This is the SECOND caller on this path — `UniversalPlayerView`'s
+        // `.seekRelative` case has the same call — and gating only that one left
+        // the behaviour unchanged, because this one still ran. Sibling
+        // `seek(to:revealsControls:)` above already takes the decision as a
+        // parameter for the same reason.
+        if showControls { showControlsTemporarily() }
 
         // Show seek indicator for tap-to-skip
         let intSeconds = Int(abs(seconds))
@@ -3503,14 +3512,21 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     private func startControlsHideTimer() {
-        // Never auto-hide out from under focused transport controls.
-        guard !controlsFocusActive else { return }
+        // Never auto-hide out from under focused transport controls, or out from
+        // under an open rail panel — focus inside a panel is NOT inside the rail,
+        // so `controlsFocusActive` is false there and the rail used to slide away
+        // behind the Info popup while the user was reading it.
+        guard !controlsFocusActive, !isRailPanelOpen else { return }
         controlsTimer?.invalidate()
         controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
             guard let self else { return }
             let isPlaying = self.playbackState == .playing
             Task { @MainActor [weak self] in
                 guard let self, isPlaying else { return }
+                // Re-check at FIRE time: a panel can open, or focus can enter the
+                // rail, after the timer was already armed. The arm-time guard
+                // alone leaves that timer running.
+                guard !self.controlsFocusActive, !self.isRailPanelOpen else { return }
                 withAnimation(.easeOut(duration: 0.3)) {
                     self.showControls = false
                 }

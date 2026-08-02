@@ -7,6 +7,7 @@
 //
 
 import UIKit
+import os
 
 // MARK: - Handler
 
@@ -23,25 +24,58 @@ protocol MenuBackHandling: AnyObject {
 /// system never sees half a press. Pure logic, kept out of the swizzle so it
 /// can be tested directly.
 struct MenuPressSwallowState {
+    /// The press whose `.began` was withheld, held until its own terminal
+    /// phase. Identity rather than a bool, because a bool cannot tell a repeat
+    /// `.began` for the SAME press (must not re-ask) from a `.began` for a NEW
+    /// one (must be asked).
+    ///
+    /// That distinction is the whole reason this is not a bool. A consumed
+    /// press whose `.ended` never reaches this window — the handler's own
+    /// navigation can present or dismiss a controller and route the terminal
+    /// phase elsewhere — used to latch the flag on forever. The next real press
+    /// was then withheld whole, without any handler being asked and without the
+    /// system seeing it, and its `.ended` cleared the latch so the press after
+    /// that worked. Every other Menu press did nothing at all, with no way to
+    /// recover. Identity makes the stale pending press self-correcting.
     private(set) var isSwallowing = false
 
+    /// Held WEAKLY, and compared by identity rather than by address. An
+    /// `ObjectIdentifier` of a freed press can alias a brand new press
+    /// allocated at the same address, which would classify it as a repeat and
+    /// swallow it — the very bug this tracking exists to prevent. A weak
+    /// reference to a freed press reads nil instead, so the new press is
+    /// correctly seen as new.
+    private weak var pendingPress: AnyObject?
+
     /// - Parameters:
+    ///   - press: identity of the Menu press this event carries, if known. A
+    ///     nil identity is always treated as a new press: a missed swallow is
+    ///     recoverable, a dead Menu button is not.
     ///   - began: the event carries a Menu press in the `.began` phase.
     ///   - finished: the event carries a Menu press in `.ended` or `.cancelled`.
     ///   - handle: asked once per press, on `.began`. True means consumed.
     /// - Returns: true when this event must be withheld from the system.
-    mutating func shouldWithhold(began: Bool, finished: Bool, handle: () -> Bool) -> Bool {
-        // A second `.began` arriving before the first press ends must not
-        // re-ask the handler or overwrite the pending press — the press being
-        // swallowed owns the state until its own terminal phase.
-        if began, !isSwallowing {
+    mutating func shouldWithhold(press: AnyObject?,
+                                 began: Bool,
+                                 finished: Bool,
+                                 handle: () -> Bool) -> Bool {
+        // The ONLY `.began` that must not re-ask is a repeat of the press
+        // already being swallowed. A `.began` for anything else is a new press
+        // and gets a fresh decision, which is what stops a pending press that
+        // never terminated from eating it.
+        let repeatsPendingPress = isSwallowing && press != nil && press === pendingPress
+        if began, !repeatsPendingPress {
             let consumed = handle()
             // A single event carrying both phases needs no follow-up swallow.
             isSwallowing = consumed && !finished
+            pendingPress = isSwallowing ? press : nil
             return consumed
         }
         guard isSwallowing else { return false }
-        if finished { isSwallowing = false }
+        if finished {
+            isSwallowing = false
+            pendingPress = nil
+        }
         return true
     }
 }
@@ -103,7 +137,8 @@ enum MenuPressInterceptor {
     /// sitting under a presented player or detail page declines.
     private static func offerToHandlers() -> Bool {
         for entry in handlers.reversed() {
-            if entry.value?.handleMenuBack() == true { return true }
+            guard let handler = entry.value else { continue }
+            if handler.handleMenuBack() { return true }
         }
         return false
     }
@@ -139,11 +174,18 @@ enum MenuPressInterceptor {
                 // a partial UIPressesEvent.
                 let menuPresses = pressesEvent.allPresses.filter { $0.type == .menu }
                 guard !menuPresses.isEmpty else { return false }
-                return swallowState.shouldWithhold(
-                    began: menuPresses.contains { $0.phase == .began },
-                    finished: menuPresses.contains { $0.phase == .ended || $0.phase == .cancelled },
-                    handle: offerToHandlers
+                let began = menuPresses.contains { $0.phase == .began }
+                let finished = menuPresses.contains { $0.phase == .ended || $0.phase == .cancelled }
+                let press = menuPresses.first
+                let wasPending = swallowState.isSwallowing
+                var asked = false
+                let withhold = swallowState.shouldWithhold(
+                    press: press,
+                    began: began,
+                    finished: finished,
+                    handle: { asked = true; return offerToHandlers() }
                 )
+                return withhold
             }
             guard !withhold else { return }
             originalFunc(obj, selector, event)

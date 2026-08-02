@@ -70,7 +70,15 @@ final class InfoFocusRowView: UIView {
     /// the user a way back: they walk into a row and then have to find the way
     /// out to the pills again. When everything is visible, focus stays on the
     /// pills and Down does nothing at all.
+    /// False for a row that is laid out as an ordinary two-up line INSIDE a
+    /// larger focus target. A sheet picks its granularity by choosing which
+    /// level carries focus: nesting two focusable levels would make the inner
+    /// ones unreachable, since a focusable view is a leaf to a directional
+    /// search.
+    var isFocusEnabled = true
+
     override var canBecomeFocused: Bool {
+        guard isFocusEnabled else { return false }
         var candidate: UIView? = superview
         while let current = candidate {
             if let scroll = current as? InfoScrollView { return scroll.needsFocusableRows }
@@ -79,9 +87,38 @@ final class InfoFocusRowView: UIView {
         return true
     }
 
+    /// Focus treatment. The row is otherwise an invisible target, which left the
+    /// user with no way to tell where focus was after walking several rows — the
+    /// panel ring only says focus is SOMEWHERE in the sheet, and that was
+    /// sufficient only while the sheet was one single focus target.
+    ///
+    /// Drawn as a uniform OUTSET behind the content, never a scale: these rows
+    /// are wide and short, so a scale grows them many times more sideways than
+    /// vertically and reads as a stretch (same reason the settings rows outset).
+    /// Outsetting a backing view also leaves the row's own frame alone, so the
+    /// sheet's content height is unchanged.
+    private let highlight = UIView()
+
+    private enum Focus {
+        static let outsetX: CGFloat = 10
+        static let outsetY: CGFloat = 4
+        static let cornerRadius: CGFloat = 8
+        /// The house focused fill (see the Glass UI style in CLAUDE.md).
+        static let fill = UIColor.white.withAlphaComponent(0.18)
+    }
+
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
+
+        highlight.translatesAutoresizingMaskIntoConstraints = false
+        highlight.backgroundColor = Focus.fill
+        highlight.layer.cornerRadius = Focus.cornerRadius
+        highlight.layer.cornerCurve = .continuous
+        highlight.isUserInteractionEnabled = false
+        highlight.alpha = 0
+        addSubview(highlight)
+
         // Two equal columns, top-aligned — the geometry the sheets' two-column
         // grid used to build inline, now owned here so every row is identical.
         stack.axis = .horizontal
@@ -90,6 +127,12 @@ final class InfoFocusRowView: UIView {
         stack.alignment = .top
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        NSLayoutConstraint.activate([
+            highlight.topAnchor.constraint(equalTo: topAnchor, constant: -Focus.outsetY),
+            highlight.bottomAnchor.constraint(equalTo: bottomAnchor, constant: Focus.outsetY),
+            highlight.leadingAnchor.constraint(equalTo: leadingAnchor, constant: -Focus.outsetX),
+            highlight.trailingAnchor.constraint(equalTo: trailingAnchor, constant: Focus.outsetX),
+        ])
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -100,6 +143,17 @@ final class InfoFocusRowView: UIView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// Ride the focus animation coordinator rather than a free-running
+    /// animation, so the fade is on the same clock as the engine's own focus
+    /// transition.
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let isFocusedNow = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations({
+            self.highlight.alpha = isFocusedNow ? 1 : 0
+        }, completion: nil)
+    }
 
     /// Puts `left` (and `right`, or an empty spacer so a lone final row stays a
     /// half-width left column) into this row. Re-parents the passed views; the
@@ -221,11 +275,23 @@ final class InfoScrollView: UIScrollView {
         let wasInside = context.previouslyFocusedView.map { $0.isDescendant(of: self) } ?? false
         let isInside = context.nextFocusedView.map { $0.isDescendant(of: self) } ?? false
         if isInside != wasInside {
-            infoTabLog.notice("InfoScrollView focus \(isInside ? "ENTERED" : "LEFT"): next=\(String(describing: context.nextFocusedView))")
+            infoTabLog.notice("InfoScrollView focus \(isInside ? "ENTERED" : "LEFT", privacy: .public)")
             if isInside { flashScrollIndicators() }
             onFocusChange?(isInside)
         }
-        guard isInside, let next = context.nextFocusedView else { return }
+        // A SELF-move is not a move. `next !== previous` is load-bearing: at the
+        // top row an Up press has no candidate above, so the host's
+        // `preferredFocusEnvironments` re-affirms the focused row and the engine
+        // reports an update from that row TO ITSELF. Stamping the clock for that
+        // re-armed the same-press gate, which is the sole gate on
+        // `canEscapeUpward` once `canStepUp` is false — so every Up press blocked
+        // the next one and focus could never leave the sheet. Measured as
+        // `justMoved=true canEscape=false` on every press, with
+        // `focused === first`.
+        guard isInside,
+              let next = context.nextFocusedView,
+              next !== context.previouslyFocusedView
+        else { return }
         lastFocusMoveTime = CACurrentMediaTime()
         reveal(rowContaining: next)
     }
