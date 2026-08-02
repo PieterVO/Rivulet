@@ -121,6 +121,9 @@ final class MediaDetailChromeView: UIView {
     /// episode Play resolves to, which only arrives asynchronously. Rebuilt with
     /// the pill.
     private var playProgressFillWidth: NSLayoutConstraint?
+    /// The Play pill's time readout. Held so `setPlayTarget` can rewrite it —
+    /// the pill is built once and only its watch-derived bits change.
+    private weak var playTimeLabel: UILabel?
 
     // MARK: - State
 
@@ -495,7 +498,7 @@ final class MediaDetailChromeView: UIView {
 
         heroWatched = refreshed.isWatched
         updateWatchedIcon()
-        setPlayProgress(refreshed.watchProgress)
+        setPlayTarget(refreshed)
 
         // Shows/seasons: the "Next Up: S1E3 · Title" line moves to the next
         // unwatched episode. Clear it first so a show that just finished isn't
@@ -628,8 +631,10 @@ final class MediaDetailChromeView: UIView {
                   let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider),
                   self.loadToken == token
             else { return }
-            // The pill's bar tracks the episode Play will start, not the show.
-            self.setPlayProgress(episode.watchProgress)
+            // The pill tracks the episode Play will start, not the show — a show
+            // has no runtime of its own, so this is also where its pill stops
+            // saying "Play" and starts saying how long that episode runs.
+            self.setPlayTarget(episode)
             guard let text = EpisodePicker.nextUpLabel(for: episode) else { return }
             self.nextUpLabel.text = text
             self.nextUpLabel.isHidden = false
@@ -700,9 +705,10 @@ final class MediaDetailChromeView: UIView {
         // detail content — we don't surface those in the carousel.
         let play = makePlayPill(item: item)
         play.onPrimaryAction = { [weak self] in self?.onPlay?() }
-        // Movie/episode: the item's own progress. Show/season: nothing yet — the
-        // Play target resolves async in `resolveNextUpLabel`, which sets it.
-        setPlayProgress(item.watchProgress)
+        // Movie/episode: the item's own progress and runtime. Show/season: reads
+        // "Play" with an empty bar until the Play target resolves async in
+        // `resolveNextUpLabel`, which sets it from that episode.
+        setPlayTarget(item)
 
         let watched = makeCircleButton(systemImage: "checkmark")
         watchedButton = watched
@@ -968,11 +974,10 @@ final class MediaDetailChromeView: UIView {
         timeLabel.translatesAutoresizingMaskIntoConstraints = false
         timeLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         timeLabel.textColor = .white
-        if let runtime = item.runtime, runtime > 0 {
-            timeLabel.text = Self.formatRuntime(runtime)
-        } else {
-            timeLabel.text = "Play"
-        }
+        // Text is set by `setPlayTarget`, called right after this returns (and
+        // again on every refresh) — building it here too would just be a second
+        // rule to keep in sync.
+        playTimeLabel = timeLabel
 
         let progressTrack = UIView()
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
@@ -1027,18 +1032,46 @@ final class MediaDetailChromeView: UIView {
         return pill
     }
 
-    /// Point the Play pill's bar at a watch fraction. The track itself always
-    /// stays — unstarted, watched and finished all show the empty stub; only the
-    /// fill comes and goes. Same 0 < fraction < 1 render rule the episode cells
-    /// use (see `WatchProgressPolicy`: the DISPLAY question, not the resume
-    /// decision), so a finished item reads as empty rather than full.
-    private func setPlayProgress(_ fraction: Double?) {
-        guard let fillWidth = playProgressFillWidth else { return }
-        guard let fraction, fraction > 0, fraction < 1 else {
-            fillWidth.constant = 0
-            return
+    /// Point the Play pill at what pressing it would actually play: `item` is the
+    /// hero item for a movie/episode, and the resolved Next Up / Resume episode
+    /// for a show.
+    ///
+    /// The bar: the track always stays — unstarted, watched and finished all show
+    /// the empty stub; only the fill comes and goes. Same 0 < fraction < 1 render
+    /// rule the episode cells use (see `WatchProgressPolicy`: the DISPLAY
+    /// question, not the resume decision), so a finished item reads as empty
+    /// rather than full.
+    ///
+    /// The label: REMAINING time on a part-watched item, total runtime otherwise.
+    /// It used to be total runtime unconditionally, so a movie 8 minutes in read
+    /// "1h 38m" on the detail while its Continue Watching tile read "1h 30m"
+    /// beside it (issue #279). The tile's rule is the one to match — it is the
+    /// same question asked of the same item.
+    private func setPlayTarget(_ item: MediaItem) {
+        let fraction = item.watchProgress
+        let partial = (fraction.map { $0 > 0 && $0 < 1 }) ?? false
+
+        if let fillWidth = playProgressFillWidth {
+            fillWidth.constant = partial
+                ? Self.playProgressTrackWidth * CGFloat(fraction ?? 0)
+                : 0
         }
-        fillWidth.constant = Self.playProgressTrackWidth * CGFloat(fraction)
+
+        playTimeLabel?.text = Self.playPillTime(
+            runtime: item.runtime,
+            viewOffset: item.userState.viewOffset,
+            partiallyWatched: partial)
+    }
+
+    /// The Play pill's readout. Pure, so the rule is unit-testable without
+    /// building a view.
+    static func playPillTime(runtime: TimeInterval?, viewOffset: TimeInterval, partiallyWatched: Bool) -> String {
+        guard let runtime, runtime > 0 else { return "Play" }
+        guard partiallyWatched else { return formatRuntime(runtime) }
+        let remaining = max(0, runtime - viewOffset)
+        // A sub-minute remainder formats as "0m", which reads as broken; the
+        // total is the honest fallback there.
+        return formatRuntime(remaining >= 60 ? remaining : runtime)
     }
 
     private func makeCircleButton(systemImage: String) -> FocusableActionButton {
@@ -1085,7 +1118,7 @@ final class MediaDetailChromeView: UIView {
         return f
     }()
 
-    private static func formatRuntime(_ runtime: TimeInterval) -> String {
+    static func formatRuntime(_ runtime: TimeInterval) -> String {
         let minutes = Int(runtime / 60)
         let hours = minutes / 60
         let remaining = minutes % 60

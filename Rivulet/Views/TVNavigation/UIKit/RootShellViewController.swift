@@ -44,11 +44,28 @@ final class RootShellViewController: UIViewController {
     private let sidebar = ShellSidebarViewController()
     private let edgeCatcher = EdgeCatcherView()
     private var belowTop = false
-    /// The edge catcher stays out of the focus system until content has
-    /// genuinely held focus once; otherwise the launch focus search lands on
-    /// it (content not yet focusable) and phantom-expands the sidebar.
+    /// The edge catcher stays out of the focus system until the CURRENTLY
+    /// MOUNTED content has genuinely held focus; otherwise a focus search run
+    /// while content is not yet focusable lands on it.
+    ///
+    /// Scoped per mount, not per launch (issue #280). A freshly mounted tab is
+    /// exactly as unfocusable as content is at launch — the hosted SwiftUI
+    /// takes a few runloop turns to build its focus items — so the launch
+    /// guard has to re-arm on every switch. It did not, and Search and
+    /// Discover were dead on arrival: focus parked on the invisible 2pt strip
+    /// and, because nothing re-resolves once it settles, no direction did
+    /// anything at all until the user left the tab.
     private var contentHasHadFocus = false
     private var pendingSections: [ShellSidebarSection]?
+    /// Bounded retry that pushes focus into freshly mounted content — see
+    /// `driveFocusIntoContent()`.
+    private var contentFocusRetries = 0
+    /// Set when the retry budget ran out and content never took focus, which
+    /// means the surface has NOTHING focusable (a state view with no action
+    /// button, say). The catcher is re-armed then purely as an escape hatch:
+    /// with focus nowhere, `handleMenuBack` declines and Menu quits the app,
+    /// so the user needs something to press Left/Menu against.
+    private var contentFocusGaveUp = false
 
     // MARK: Lifecycle
 
@@ -100,11 +117,9 @@ final class RootShellViewController: UIViewController {
         sidebar.setSelectedTabExternal(tab)
         guard tab != currentTab else { return }
         currentTab = tab
+        // `mountContent` owns the focus hand-off into the new tab (it is the
+        // only place that knows the content is fresh and not yet focusable).
         mountContent(for: tab)
-        if !sidebar.isExpanded {
-            setNeedsFocusUpdate()
-            updateFocusIfNeeded()
-        }
     }
 
     /// Live sidebar content, pushed from SwiftUI on every relevant change.
@@ -146,6 +161,47 @@ final class RootShellViewController: UIViewController {
         next.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.insertSubview(next.view, at: 0)
         next.endAppearanceTransition()
+
+        // This content has not held focus yet, so the edge catcher goes back
+        // out of the focus system until it has (see `contentHasHadFocus`), and
+        // focus has to be pushed in once the hosted SwiftUI is focusable.
+        contentHasHadFocus = false
+        contentFocusGaveUp = false
+        updateChromeVisibility()
+        driveFocusIntoContent()
+    }
+
+    /// Ask the engine to resolve focus into the mounted content, retrying until
+    /// it actually lands.
+    ///
+    /// One synchronous request is not enough. The tab's SwiftUI content is not
+    /// focusable in the same runloop turn it is mounted in, so a single
+    /// `updateFocusIfNeeded()` finds nothing and focus stays wherever it is —
+    /// and once focus settles nothing asks again. Retry on the runloop until
+    /// content takes it (`contentHasHadFocus`, set from `didUpdateFocus`) or
+    /// the budget runs out, so an unfocusable surface degrades to "focus
+    /// nowhere" rather than to a hang.
+    private func driveFocusIntoContent() {
+        contentFocusRetries = 20        // ~1s at 50ms
+        retryFocusIntoContent()
+    }
+
+    private func retryFocusIntoContent() {
+        guard !contentHasHadFocus, !sidebar.isExpanded else { return }
+        guard contentFocusRetries > 0 else {
+            contentFocusGaveUp = true
+            updateChromeVisibility()
+            setNeedsFocusUpdate()
+            updateFocusIfNeeded()
+            return
+        }
+        contentFocusRetries -= 1
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        guard !contentHasHadFocus else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.retryFocusIntoContent()
+        }
     }
 
     // MARK: Sidebar chrome
@@ -170,8 +226,9 @@ final class RootShellViewController: UIViewController {
         sidebar.setPillHidden(belowTop || pillSuppressed || interactionBlocked)
         // While expanded, the sidebar's focus containment already guards the
         // catcher; it only needs to vanish when interaction is blocked or
-        // before content ever held focus.
-        edgeCatcher.isHidden = interactionBlocked || !contentHasHadFocus
+        // before the mounted content has held focus (see `contentHasHadFocus`
+        // and `contentFocusGaveUp`).
+        edgeCatcher.isHidden = interactionBlocked || !(contentHasHadFocus || contentFocusGaveUp)
     }
 
     @objc private func handleBelowTopChanged(_ note: Notification) {
