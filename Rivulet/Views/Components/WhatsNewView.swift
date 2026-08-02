@@ -142,6 +142,13 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.4 (75)", [
             "Top Shelf artwork on the Apple TV Home screen now includes the title logo",
+            "Moving between the playback controls no longer skips the video",
+            "The controls stay open while an info popup is showing",
+            "Pressing Select opens the controls without pausing or resuming",
+            "Closing an info popup returns you to the button you opened it from",
+            "Fast forward and rewind now step down into the other direction",
+            "Menu now works every time inside popups and full screen pages",
+            "The player info panel no longer resizes while you are reading it",
         ]),
         ("1.0.4 (74)", [
             "Testing remote control fixes. If this breaks for you, please install an older build and submit a bug. Thanks.",
