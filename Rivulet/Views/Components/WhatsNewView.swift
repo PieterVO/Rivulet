@@ -140,6 +140,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.4 (75)", [
+            "Top Shelf artwork on the Apple TV Home screen now includes the title logo",
+        ]),
         ("1.0.4 (74)", [
             "Testing remote control fixes. If this breaks for you, please install an older build and submit a bug. Thanks.",
             "Updated AetherEngine to 6.4.0",
