@@ -165,6 +165,24 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Sendable {
     let scannedAt: Int?
     let Location: [PlexLibraryLocation]?
 
+    /// The user's pin state for this library, straight from `/library/sections`.
+    /// This is Plex's own per-user setting, the one the Plex app's "Pin to
+    /// home" / "Hide" controls write:
+    ///
+    ///   0 (or absent) — pinned: contributes a row to Home
+    ///   1             — hidden from Home, still listed in the sidebar
+    ///   2             — hidden from Home AND from the sidebar
+    ///
+    /// Verified against a live PMS 1.43.3: `hidden == 0` correlates exactly with
+    /// having a hub promoted to Home. All six pinned libraries had one, all
+    /// seven unpinned had none.
+    /// Defaulted so the memberwise init stays source-compatible with the
+    /// fixtures that predate this field.
+    var hidden: Int?
+
+    /// Whether the user pinned this library to their Plex home screen.
+    var isPinnedToHome: Bool { (hidden ?? 0) == 0 }
+
     /// Check if this is a video library
     var isVideoLibrary: Bool {
         type == "movie" || type == "show"

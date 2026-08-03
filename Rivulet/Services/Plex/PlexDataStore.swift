@@ -206,6 +206,15 @@ class PlexDataStore: ObservableObject {
         visibleMediaLibraries.filter { librarySettings.isLibraryShownOnHome($0.key) }
     }
 
+    /// Libraries the user pinned to Home in Plex, in the server's order. This is
+    /// the ONLY thing that decides which libraries contribute a Home row; see
+    /// `projectHomeItems`. Deliberately not filtered by Rivulet's own
+    /// shown-on-Home / visibility settings, so Home matches the Plex app rather
+    /// than being a second, silently diverging configuration.
+    var librariesPinnedToHome: [PlexLibrary] {
+        libraries.filter { ($0.isVideoLibrary || $0.isMusicLibrary) && $0.isPinnedToHome }
+    }
+
     // Track if initial load has been attempted
     private var hubsLoadTask: Task<Void, Never>?
     private var librariesLoadTask: Task<Void, Never>?
@@ -831,7 +840,13 @@ class PlexDataStore: ObservableObject {
             if !forceRefresh { return }
         }
 
-        let librariesToLoad = librariesForHomeScreen
+        // Home reads `promoted` off these hubs (see `projectHomeItems`), so every
+        // library PINNED IN PLEX has to be fetched or its row is silently
+        // missing. Union with Rivulet's own shown-on-Home set so the library
+        // pages that rely on this prefetch keep theirs too.
+        var librariesToLoad = librariesPinnedToHome
+        let pinnedKeys = Set(librariesToLoad.map { $0.key })
+        librariesToLoad += librariesForHomeScreen.filter { !pinnedKeys.contains($0.key) }
 
         // Skip if no libraries configured for Home
         guard !librariesToLoad.isEmpty else {
@@ -1022,90 +1037,86 @@ class PlexDataStore: ObservableObject {
     // initial server projection) — `totalSize` is therefore left nil until a
     // later stage threads pagination through; the initial render set matches.
     func projectHomeItems() {
-        // Home IS the Plex server's promoted hub set, in the server's order.
+        // Home is the user's Plex home, reproduced from the server's own state.
         //
-        // `/hubs` returns exactly the hubs the user promoted to their home
-        // screen (Plex Web → a library → Manage Recommendations → the "Home"
-        // column), already titled and localized by PMS. Verified against a live
-        // PMS 1.43.3: every row it returns carries `promoted=true`, unpromoted
-        // hubs are absent entirely, and the per-library `.../manage` endpoint
-        // exposes the same state as `promotedToOwnHome`.
+        // TWO server-side fields decide it, and both arrive on endpoints this
+        // store already fetches. Verified against a live PMS 1.43.3:
         //
-        // Rivulet used to compose Home itself: Continue Watching, then one
-        // "Recently Added" row per library it decided to include. That row set
-        // could not be changed from anywhere and ignored the user's Plex
-        // configuration, so a server with Recently Added switched off for seven
-        // libraries still showed seven rows here, and a library promoting a
-        // second hub only ever showed its first. Deferring to the server means
-        // Home matches every other Plex client the user owns, with no picker to
-        // build and no second source of truth to keep in sync.
+        //   1. WHICH LIBRARIES contribute — `PlexLibrary.hidden` from
+        //      `/library/sections`. 0 = pinned to Home, 1 = hidden from Home,
+        //      2 = hidden from Home and the sidebar. This is what the Plex app's
+        //      "Pin to home" control writes. On the reference server the six
+        //      `hidden == 0` libraries were exactly the six with a Home-promoted
+        //      hub, and the seven hidden ones had none.
         //
-        // The old composition is kept below, commented, until this has had a
-        // real look on device.
+        //   2. WHICH HUB inside a pinned library — `PlexHub.promoted` from
+        //      `/hubs/sections/{key}`. Exactly one hub per library carries it
+        //      (`movie.recentlyadded.1`, `tv.recentlyadded.2`, …); every other
+        //      hub in the same response has it absent. It is the section
+        //      endpoint's spelling of `promotedToOwnHome` from `.../manage`, NOT
+        //      of `promotedToRecommended` (which is true for nearly everything).
+        //
+        // The obvious-looking source, the global `/hubs` payload, is the WRONG
+        // one and is what this projection used to read. `/hubs` is a legacy
+        // aggregate: it collapses every movie library into one cross-library
+        // "Recently Added Movies" row, and it carries a `home.playlists` row
+        // that the Plex app never shows. The Plex app calls
+        // `/hubs/promoted?contentDirectoryID={key}&pinnedContentDirectoryID={csv}`
+        // once per pinned library and concatenates; scoping by
+        // `contentDirectoryID` is precisely what drops `home.playlists`.
+        // Reading `promoted` off the per-library hubs Rivulet already has gives
+        // the same row set without the extra N requests.
+        //
+        // Continue Watching stays first and comes from `/hubs/continueWatching`,
+        // which is the MERGED hub: on the reference server it held 18 of the 19
+        // items in the union of `home.continue` (in-progress) and `home.ondeck`
+        // (next up), so the two collapse into one row rather than duplicating
+        // most of a shelf. Plex has no flag for that; it has this endpoint.
+        //
+        // The old app-composed row set is kept below, commented, until this has
+        // had a real look on device.
         var rail: CachedHomeRail = []
-        var didEmitContinueWatching = false
 
-        for hub in hubs {
-            // `/hubs` is already the promoted set, so this only guards against a
-            // server that starts returning the full list with a flag.
-            guard hub.promoted != false else { continue }
-
-            // `/hubs` promotes Continue Watching and On Deck as two rows, and
-            // they are largely the same episodes: measured on a live PMS 1.43.3,
-            // `home.continue` (12 items, all with a resume offset) and
-            // `home.ondeck` (17, including not-yet-started next episodes) shared
-            // 10. Rendering both duplicates most of a shelf.
-            //
-            // Plex has no flag to merge them. It has something better: the
-            // `/hubs/continueWatching` endpoint IS the merged hub, holding both
-            // the in-progress items and the next-up ones (18 of the 19 union
-            // items on the same server). Rivulet already polls it, on a much
-            // faster cycle than `/hubs`, because resume positions go stale.
-            //
-            // So: the FIRST row of that family becomes the one Continue Watching
-            // row, takes its items from the dedicated fetch, and renders with
-            // the backdrop-and-logo tiles. Any later family member is dropped.
-            // Taking the first (rather than always `home.continue`) means a
-            // server that promotes only On Deck still gets the row instead of a
-            // hole.
-            let isCWFamily = Self.isContinueWatchingFamily(hubIdentifier: hub.hubIdentifier)
-            if isCWFamily && didEmitContinueWatching { continue }
-            let isCW = isCWFamily
-
-            var metas = hub.Metadata ?? []
-            if isCW, let fresh = continueWatchingHub?.Metadata, !fresh.isEmpty {
-                metas = fresh
-            }
-            // Continue Watching is account-level and spans every library on the
-            // server, including ones hidden in Settings → Libraries. That filter
-            // is about which ITEMS a user wants to see, not which rows exist, so
-            // it survives the switch to server-driven rows.
-            if isCW {
-                metas = PlexLibraryVisibilityFilter.filter(
-                    metas, toLibraryKeys: librariesForHomeScreen.map { $0.key })
-            }
-            // A promoted hub with nothing in it draws an empty shelf. Real
-            // servers have these: Recently Added Photos and Recently Added
-            // Videos both come back promoted with zero items on a library set
-            // that has no photo or personal-video content.
-            guard !metas.isEmpty else { continue }
-
+        // Continue Watching. Not gated on promotion: it is a global row that
+        // every scoped `/hubs/promoted` call returns, and PMS already scopes its
+        // items to pinned libraries (measured: every item came from a
+        // `hidden == 0` library).
+        if let cw = continueWatchingHub, let metas = cw.Metadata, !metas.isEmpty {
             rail.append(makeCachedHub(
-                id: "hub:\(hub.id)",
-                title: hub.title ?? "",
-                isContinueWatching: isCW,
-                hubKey: paginableHubKey(hub),
-                hubIdentifier: hub.hubIdentifier,
+                id: "hub:\(cw.id)",
+                title: cw.title ?? "",
+                isContinueWatching: true,
+                hubKey: cw.key ?? cw.hubKey,
+                hubIdentifier: cw.hubIdentifier,
                 metas: metas
             ))
-            if isCW { didEmitContinueWatching = true }
         }
 
-        // An empty projection is only allowed to replace a populated Home once
-        // a fetch has actually completed. Before that, `hubs` is empty because
-        // nothing has landed yet, and blanking the rail here is permanent:
-        // `setHomeItems` re-persists it, so one early call would bake an empty
-        // Home into every subsequent warm launch (the same trap #236 hit).
+        // One row per promoted hub, per pinned library, in the server's order.
+        for library in librariesPinnedToHome {
+            for hub in libraryHubs[library.key] ?? [] {
+                guard hub.promoted == true else { continue }
+                // A library's own in-progress hub would duplicate the global
+                // Continue Watching row above.
+                guard !Self.isContinueWatchingFamily(hubIdentifier: hub.hubIdentifier) else { continue }
+                guard let metas = hub.Metadata, !metas.isEmpty else { continue }
+
+                rail.append(makeCachedHub(
+                    id: "hub:\(hub.id)",
+                    title: hub.title ?? "",
+                    isContinueWatching: false,
+                    hubKey: hub.key ?? hub.hubKey,
+                    hubIdentifier: hub.hubIdentifier,
+                    metas: metas
+                ))
+            }
+        }
+
+        // An empty projection is only allowed to replace a populated Home once a
+        // fetch has actually completed. Before that the sources are empty
+        // because nothing has landed yet, and blanking the rail here is
+        // permanent: `setHomeItems` re-persists it, so one early call would bake
+        // an empty Home into every subsequent warm launch (the trap #236 hit).
         guard !rail.isEmpty || didCompleteInitialHubFetch else { return }
 
         setHomeItems(rail)

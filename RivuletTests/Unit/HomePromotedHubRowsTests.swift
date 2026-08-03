@@ -89,6 +89,42 @@ final class HomePromotedHubRowsTests: XCTestCase {
         XCTAssertNil(PlexDataStore.paginableHubKey(hubKey: nil, key: nil))
     }
 
+    // MARK: - Which libraries contribute a Home row
+
+    /// `hidden` is Plex's own per-user pin state and the ONLY thing that decides
+    /// which libraries contribute a Home row. Measured on a live PMS 1.43.3:
+    /// the six `hidden == 0` libraries were exactly the six with a Home-promoted
+    /// hub; the seven hidden ones had none.
+    func test_pinState_readsHiddenFromTheServer() {
+        func library(_ key: String, hidden: Int?) -> PlexLibrary {
+            PlexLibrary(key: key, type: "movie", title: key, agent: "a", scanner: "s",
+                        language: "en", uuid: key, updatedAt: nil, createdAt: nil,
+                        scannedAt: nil, Location: nil, hidden: hidden)
+        }
+        XCTAssertTrue(library("1", hidden: 0).isPinnedToHome)
+        XCTAssertFalse(library("5", hidden: 1).isPinnedToHome, "1 = hidden from Home, kept in the sidebar")
+        XCTAssertFalse(library("16", hidden: 2).isPinnedToHome, "2 = hidden from Home and the sidebar")
+    }
+
+    /// A server that omits the field entirely must not blank Home.
+    func test_absentHidden_countsAsPinned() {
+        let library = PlexLibrary(key: "1", type: "show", title: "TV", agent: "a", scanner: "s",
+                                  language: "en", uuid: "u", updatedAt: nil, createdAt: nil,
+                                  scannedAt: nil, Location: nil)
+        XCTAssertNil(library.hidden)
+        XCTAssertTrue(library.isPinnedToHome)
+    }
+
+    func test_hiddenDecodesFromLibrarySections() throws {
+        let json = """
+        {"key":"4","type":"artist","title":"Audio Books","agent":"a","scanner":"s",
+         "language":"en","uuid":"u","hidden":1}
+        """.data(using: .utf8)!
+        let library = try JSONDecoder().decode(PlexLibrary.self, from: json)
+        XCTAssertEqual(library.hidden, 1)
+        XCTAssertFalse(library.isPinnedToHome)
+    }
+
     // MARK: - Decoding
 
     /// `promoted` has to survive decoding or every row is filtered on nil.
