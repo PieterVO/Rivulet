@@ -69,7 +69,7 @@ Rivulet/
 │   │   │               #   Insights* panels (in-player cast/trivia; backed by Services/Insights + TMDB)
 │   │   └── PostVideo/  # Post-playback summary overlays
 │   ├── Media/          # PreviewContext, HeroBackdropSupport, SharedMediaComponents,
-│   │                   #   CastMemberCard (CastCrewRow), FocusScrollMotion
+│   │                   #   FocusScrollMotion
 │   │   ├── UIKit/, PlexHome/UIKit/, MediaDetail/UIKit/, Person/UIKit/, Library/UIKit/, PreviewCarousel/UIKit/
 │   │   │              #   — the canonical UIKit home/detail/library/person/carousel surfaces
 │   │   └── Hero/       # HeroPlaySession + hero support (SwiftUI HeroBackdropLayer/OverlayContent removed)
