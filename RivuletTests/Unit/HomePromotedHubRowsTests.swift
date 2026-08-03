@@ -22,40 +22,41 @@ final class HomePromotedHubRowsTests: XCTestCase {
 
     // MARK: - Continue Watching identity
 
-    /// The server names the row: whatever `/hubs/continueWatching` identifies
-    /// itself as is the Continue Watching row in `/hubs`.
-    func test_continueWatching_matchesTheDedicatedHubsIdentifier() {
-        XCTAssertTrue(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: "home.continue", continueWatchingIdentifier: "home.continue"))
+    /// The row `/hubs` promotes. It must be recognised from its OWN identifier:
+    /// the two endpoints disagree (`/hubs` says `home.continue`,
+    /// `/hubs/continueWatching` says `continueWatching`), and testing one
+    /// against the other matched nothing, which shipped the row as a plain
+    /// poster shelf instead of the backdrop-and-logo resume tiles.
+    func test_homeContinue_isContinueWatching() {
+        XCTAssertTrue(PlexDataStore.isContinueWatchingFamily(hubIdentifier: "home.continue"))
     }
 
-    /// On Deck is a SEPARATE promoted row on the same home payload. Folding it
-    /// into Continue Watching would give it resume-style tiles and let the
-    /// fast-refresh fetch overwrite its items with the wrong list.
-    func test_onDeck_isNotContinueWatching() {
-        XCTAssertFalse(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: "home.ondeck", continueWatchingIdentifier: "home.continue"))
+    /// The dedicated endpoint's own identifier, which is a different string.
+    func test_dedicatedEndpointIdentifier_isContinueWatching() {
+        XCTAssertTrue(PlexDataStore.isContinueWatchingFamily(hubIdentifier: "continueWatching"))
     }
 
-    func test_ordinaryRow_isNotContinueWatching() {
-        XCTAssertFalse(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: "home.movies.recent", continueWatchingIdentifier: "home.continue"))
+    /// On Deck is in the family on purpose. Plex merged the concepts, the rows
+    /// share most of their items, and the projection collapses them into one.
+    func test_onDeck_isInTheFamily() {
+        XCTAssertTrue(PlexDataStore.isContinueWatchingFamily(hubIdentifier: "home.ondeck"))
     }
 
-    /// Before the dedicated fetch lands there is nothing to match against, so
-    /// the literal is the fallback. It must still not claim On Deck.
-    func test_fallsBackToTheLiteral_whenTheDedicatedHubHasNotLoaded() {
-        XCTAssertTrue(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: "home.continue", continueWatchingIdentifier: nil))
-        XCTAssertFalse(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: "home.ondeck", continueWatchingIdentifier: nil))
+    /// A library's own in-progress hub, for the library-page path.
+    func test_libraryInProgressHub_isInTheFamily() {
+        XCTAssertTrue(PlexDataStore.isContinueWatchingFamily(hubIdentifier: "movie.inprogress.1"))
     }
 
-    func test_missingIdentifier_isNeverContinueWatching() {
-        XCTAssertFalse(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: nil, continueWatchingIdentifier: nil))
-        XCTAssertFalse(PlexDataStore.isContinueWatchingRow(
-            hubIdentifier: "", continueWatchingIdentifier: "home.continue"))
+    func test_ordinaryRows_areNotInTheFamily() {
+        for id in ["home.movies.recent", "home.television.recent", "home.playlists",
+                   "movie.topunwatched.1", "home.music.recent"] {
+            XCTAssertFalse(PlexDataStore.isContinueWatchingFamily(hubIdentifier: id), id)
+        }
+    }
+
+    func test_missingIdentifier_isNotInTheFamily() {
+        XCTAssertFalse(PlexDataStore.isContinueWatchingFamily(hubIdentifier: nil))
+        XCTAssertFalse(PlexDataStore.isContinueWatchingFamily(hubIdentifier: ""))
     }
 
     // MARK: - Pagination key

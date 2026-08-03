@@ -1043,18 +1043,35 @@ class PlexDataStore: ObservableObject {
         // The old composition is kept below, commented, until this has had a
         // real look on device.
         var rail: CachedHomeRail = []
+        var didEmitContinueWatching = false
 
         for hub in hubs {
             // `/hubs` is already the promoted set, so this only guards against a
             // server that starts returning the full list with a flag.
             guard hub.promoted != false else { continue }
 
-            // Continue Watching has its own fast-refresh endpoint
-            // (`/hubs/continueWatching`, polled far more often than the 3 minute
-            // `/hubs` cycle). `/hubs` decides whether the row exists and where
-            // it sits; the dedicated fetch supplies the items, so resume
-            // positions stay live.
-            let isCW = isContinueWatchingRow(hub)
+            // `/hubs` promotes Continue Watching and On Deck as two rows, and
+            // they are largely the same episodes: measured on a live PMS 1.43.3,
+            // `home.continue` (12 items, all with a resume offset) and
+            // `home.ondeck` (17, including not-yet-started next episodes) shared
+            // 10. Rendering both duplicates most of a shelf.
+            //
+            // Plex has no flag to merge them. It has something better: the
+            // `/hubs/continueWatching` endpoint IS the merged hub, holding both
+            // the in-progress items and the next-up ones (18 of the 19 union
+            // items on the same server). Rivulet already polls it, on a much
+            // faster cycle than `/hubs`, because resume positions go stale.
+            //
+            // So: the FIRST row of that family becomes the one Continue Watching
+            // row, takes its items from the dedicated fetch, and renders with
+            // the backdrop-and-logo tiles. Any later family member is dropped.
+            // Taking the first (rather than always `home.continue`) means a
+            // server that promotes only On Deck still gets the row instead of a
+            // hole.
+            let isCWFamily = Self.isContinueWatchingFamily(hubIdentifier: hub.hubIdentifier)
+            if isCWFamily && didEmitContinueWatching { continue }
+            let isCW = isCWFamily
+
             var metas = hub.Metadata ?? []
             if isCW, let fresh = continueWatchingHub?.Metadata, !fresh.isEmpty {
                 metas = fresh
@@ -1081,6 +1098,7 @@ class PlexDataStore: ObservableObject {
                 hubIdentifier: hub.hubIdentifier,
                 metas: metas
             ))
+            if isCW { didEmitContinueWatching = true }
         }
 
         // An empty projection is only allowed to replace a populated Home once
@@ -1093,28 +1111,26 @@ class PlexDataStore: ObservableObject {
         setHomeItems(rail)
     }
 
-    /// Which promoted hub is the Continue Watching row, so it can take its items
-    /// from the dedicated fast-refresh fetch and render with the wide
-    /// resume-style tiles.
+    /// Whether a promoted hub belongs to the Continue Watching family, meaning
+    /// it gets the backdrop-and-logo resume tiles and its items come from the
+    /// dedicated fast-refresh fetch.
     ///
-    /// Matched against `continueWatchingHub`'s own identifier when that has
-    /// landed, so the server names the row rather than this predicate guessing.
-    /// The literal fallback is deliberately exact: `home.ondeck` is a SEPARATE
-    /// promoted row and must not be folded into Continue Watching.
-    private func isContinueWatchingRow(_ hub: PlexHub) -> Bool {
-        Self.isContinueWatchingRow(
-            hubIdentifier: hub.hubIdentifier,
-            continueWatchingIdentifier: continueWatchingHub?.hubIdentifier)
-    }
-
-    nonisolated static func isContinueWatchingRow(hubIdentifier: String?,
-                                                  continueWatchingIdentifier: String?) -> Bool {
+    /// Matched on the identifier alone. The obvious-looking alternative, testing
+    /// the `/hubs` row against `continueWatchingHub`'s identifier so the server
+    /// names its own row, is WRONG: the two endpoints do not agree. `/hubs`
+    /// calls it `home.continue` and `/hubs/continueWatching` calls itself
+    /// `continueWatching`, so comparing them matched nothing, `isContinueWatching`
+    /// came out false, and the row rendered as an ordinary poster shelf.
+    ///
+    /// On Deck is deliberately IN the family. Plex has folded the two concepts
+    /// together (the server's own `OnDeckWindow` / `OnDeckLimit` prefs are
+    /// labelled "Continue Watching"), the rows share most of their items, and
+    /// `/hubs/continueWatching` returns the merge. The projection emits the
+    /// first family member and drops the rest, so they collapse into one row.
+    nonisolated static func isContinueWatchingFamily(hubIdentifier: String?) -> Bool {
         let id = (hubIdentifier ?? "").lowercased()
         guard !id.isEmpty else { return false }
-        if let cwID = continueWatchingIdentifier?.lowercased(), !cwID.isEmpty {
-            return id == cwID
-        }
-        return id == "home.continue"
+        return id.contains("continue") || id.contains("inprogress") || id.contains("ondeck")
     }
 
     /// A hub key the pagination path can actually call, or nil.
