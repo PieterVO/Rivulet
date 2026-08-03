@@ -1006,7 +1006,7 @@ class PlexDataStore: ObservableObject {
     //     taking that library's first hub matching `isRecentlyAdded`, when it
     //     has Metadata.
     //         id = HomeSectionID.hub("<library.key>:recent").raw
-    //         title = "Recently Added <library.title>"
+    //         title = recent.title (the server's own, localized)
     //         isContinueWatching = false
     //         hubKey = recent.key ?? recent.hubKey ; hubIdentifier = recent.hubIdentifier
     //   • Watchlist / Recommendations — EXCLUDED. Both come from services
@@ -1073,7 +1073,20 @@ class PlexDataStore: ObservableObject {
                let items = recent.Metadata, !items.isEmpty {
                 rail.append(makeCachedHub(
                     id: rowID,
-                    title: "Recently Added \(library.title)",
+                    // The SERVER's title, not one composed here. PMS localizes
+                    // hub titles from the request's `Accept-Language`, which
+                    // URLSession already sends from the device locale, so this
+                    // row arrives correctly worded and in the viewer's language
+                    // for free. Composing `"Recently Added " + library.title`
+                    // threw that away and pasted an English prefix onto the
+                    // user's own library name, so a French viewer read
+                    // "Recently Added Films" while Continue Watching beside it
+                    // read "Continuer à regarder" (issue #276). Verified
+                    // against a live PMS 1.43.3: `Accept-Language: fr-FR` on
+                    // `/hubs/sections/{key}` returns "Récemment ajouté dans
+                    // Movies", and the library name stays untranslated because
+                    // it is the user's own.
+                    title: recent.title ?? "Recently Added \(library.title)",
                     isContinueWatching: false,
                     hubKey: recent.key ?? recent.hubKey,
                     hubIdentifier: recent.hubIdentifier,

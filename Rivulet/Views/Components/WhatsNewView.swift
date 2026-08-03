@@ -145,6 +145,7 @@ struct WhatsNewView: View {
             "The playback controls now hide on their own again after a few seconds",
             "A title's Play button now shows the time left, matching its Continue Watching tile",
             "The player's Description tab no longer floats the summary in the middle of the panel",
+            "Home row titles now come from your Plex server and appear in your language",
             "Updated AetherEngine to 6.5.5",
         ]),
         ("1.0.4 (75)", [
