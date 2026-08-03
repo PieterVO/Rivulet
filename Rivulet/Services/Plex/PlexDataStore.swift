@@ -1022,95 +1022,217 @@ class PlexDataStore: ObservableObject {
     // initial server projection) — `totalSize` is therefore left nil until a
     // later stage threads pagination through; the initial render set matches.
     func projectHomeItems() {
+        // Home IS the Plex server's promoted hub set, in the server's order.
+        //
+        // `/hubs` returns exactly the hubs the user promoted to their home
+        // screen (Plex Web → a library → Manage Recommendations → the "Home"
+        // column), already titled and localized by PMS. Verified against a live
+        // PMS 1.43.3: every row it returns carries `promoted=true`, unpromoted
+        // hubs are absent entirely, and the per-library `.../manage` endpoint
+        // exposes the same state as `promotedToOwnHome`.
+        //
+        // Rivulet used to compose Home itself: Continue Watching, then one
+        // "Recently Added" row per library it decided to include. That row set
+        // could not be changed from anywhere and ignored the user's Plex
+        // configuration, so a server with Recently Added switched off for seven
+        // libraries still showed seven rows here, and a library promoting a
+        // second hub only ever showed its first. Deferring to the server means
+        // Home matches every other Plex client the user owns, with no picker to
+        // build and no second source of truth to keep in sync.
+        //
+        // The old composition is kept below, commented, until this has had a
+        // real look on device.
         var rail: CachedHomeRail = []
 
-        // Continue Watching
-        //
-        // `/hubs/continueWatching` is an ACCOUNT-level endpoint: one flat list
-        // spanning every library on the server, with no way to scope the
-        // request. Rivulet's shown-on-Home set is client-side UserDefaults that
-        // Plex never sees, so a library the user removed from Home still
-        // contributes rows here. Filter before `makeCachedHub`, because mapping
-        // to `MediaItem` discards the section attribution the predicate needs.
-        // Fails open on an unloaded library list / unattributed item — see
-        // `PlexLibraryVisibilityFilter`.
-        let homeLibraryKeys = librariesForHomeScreen.map { $0.key }
-        if let cw = continueWatchingHub,
-           let items = cw.Metadata, !items.isEmpty,
-           case let visible = PlexLibraryVisibilityFilter.filter(items, toLibraryKeys: homeLibraryKeys),
-           !visible.isEmpty {
+        for hub in hubs {
+            // `/hubs` is already the promoted set, so this only guards against a
+            // server that starts returning the full list with a flag.
+            guard hub.promoted != false else { continue }
+
+            // Continue Watching has its own fast-refresh endpoint
+            // (`/hubs/continueWatching`, polled far more often than the 3 minute
+            // `/hubs` cycle). `/hubs` decides whether the row exists and where
+            // it sits; the dedicated fetch supplies the items, so resume
+            // positions stay live.
+            let isCW = isContinueWatchingRow(hub)
+            var metas = hub.Metadata ?? []
+            if isCW, let fresh = continueWatchingHub?.Metadata, !fresh.isEmpty {
+                metas = fresh
+            }
+            // Continue Watching is account-level and spans every library on the
+            // server, including ones hidden in Settings → Libraries. That filter
+            // is about which ITEMS a user wants to see, not which rows exist, so
+            // it survives the switch to server-driven rows.
+            if isCW {
+                metas = PlexLibraryVisibilityFilter.filter(
+                    metas, toLibraryKeys: librariesForHomeScreen.map { $0.key })
+            }
+            // A promoted hub with nothing in it draws an empty shelf. Real
+            // servers have these: Recently Added Photos and Recently Added
+            // Videos both come back promoted with zero items on a library set
+            // that has no photo or personal-video content.
+            guard !metas.isEmpty else { continue }
+
             rail.append(makeCachedHub(
-                id: "hub:\(cw.id)",
-                title: cw.title ?? "Continue Watching",
-                isContinueWatching: true,
-                hubKey: cw.key ?? cw.hubKey,
-                hubIdentifier: cw.hubIdentifier,
-                metas: visible
+                id: "hub:\(hub.id)",
+                title: hub.title ?? "",
+                isContinueWatching: isCW,
+                hubKey: paginableHubKey(hub),
+                hubIdentifier: hub.hubIdentifier,
+                metas: metas
             ))
-        } else if !hasFetchedContinueWatching,
-                  let existingCW = homeItems.first(where: { $0.isContinueWatching }) {
-            // Stage-3 ordering guard: `continueWatchingHub` is fetched on a
-            // separate path and is nil for a beat after a warm launch. A
-            // projection triggered before it lands (e.g. the deferred
-            // library-hubs cache projection) must NOT drop the Continue
-            // Watching row the launch cache-paint already showed — carry the
-            // existing projected CW row over until the network refresh
-            // replaces it with fresh metadata.
-            //
-            // Gated on `hasFetchedContinueWatching`: once a fresh fetch HAS
-            // completed for the current user, nil/empty means this user has no
-            // Continue Watching — carrying the row past that point made a
-            // stale CW row (from a previous account/profile) self-perpetuating,
-            // because setHomeItems() re-persists whatever the rail contains.
-            rail.append(existingCW)
         }
 
-        // Recently Added per home library (same order as librariesForHomeScreen)
-        for library in librariesForHomeScreen {
-            let rowID = Self.recentlyAddedRowID(forLibraryKey: library.key)
-            if let hubs = libraryHubs[library.key],
-               let recent = hubs.first(where: { isRecentlyAddedHub($0) }),
-               let items = recent.Metadata, !items.isEmpty {
-                rail.append(makeCachedHub(
-                    id: rowID,
-                    // The SERVER's title, not one composed here. PMS localizes
-                    // hub titles from the request's `Accept-Language`, which
-                    // URLSession already sends from the device locale, so this
-                    // row arrives correctly worded and in the viewer's language
-                    // for free. Composing `"Recently Added " + library.title`
-                    // threw that away and pasted an English prefix onto the
-                    // user's own library name, so a French viewer read
-                    // "Recently Added Films" while Continue Watching beside it
-                    // read "Continuer à regarder" (issue #276). Verified
-                    // against a live PMS 1.43.3: `Accept-Language: fr-FR` on
-                    // `/hubs/sections/{key}` returns "Récemment ajouté dans
-                    // Movies", and the library name stays untranslated because
-                    // it is the user's own.
-                    title: recent.title ?? "Recently Added \(library.title)",
-                    isContinueWatching: false,
-                    hubKey: recent.key ?? recent.hubKey,
-                    hubIdentifier: recent.hubIdentifier,
-                    metas: items
-                ))
-            } else if Self.shouldCarryOverRecentlyAddedRow(
-                hubs: libraryHubs[library.key],
-                fetchFailed: libraryHubFetchFailures.contains(library.key)
-            ), let existing = homeItems.first(where: { $0.id == rowID }) {
-                // Same guard as Continue Watching above, per library: a
-                // library whose hub fetch threw or has not landed yet must NOT
-                // lose the Recently Added row the cache-paint already showed.
-                // Dropping it here is permanent, not transient — setHomeItems()
-                // re-persists the rail, so one timed-out fetch would bake the
-                // missing shelf into every subsequent warm launch (GitHub #236).
-                //
-                // Only a library that ANSWERED — hubs present, no recentlyAdded
-                // hub or an empty one — correctly projects no row.
-                rail.append(existing)
-            }
-        }
+        // An empty projection is only allowed to replace a populated Home once
+        // a fetch has actually completed. Before that, `hubs` is empty because
+        // nothing has landed yet, and blanking the rail here is permanent:
+        // `setHomeItems` re-persists it, so one early call would bake an empty
+        // Home into every subsequent warm launch (the same trap #236 hit).
+        guard !rail.isEmpty || didCompleteInitialHubFetch else { return }
 
         setHomeItems(rail)
     }
+
+    /// Which promoted hub is the Continue Watching row, so it can take its items
+    /// from the dedicated fast-refresh fetch and render with the wide
+    /// resume-style tiles.
+    ///
+    /// Matched against `continueWatchingHub`'s own identifier when that has
+    /// landed, so the server names the row rather than this predicate guessing.
+    /// The literal fallback is deliberately exact: `home.ondeck` is a SEPARATE
+    /// promoted row and must not be folded into Continue Watching.
+    private func isContinueWatchingRow(_ hub: PlexHub) -> Bool {
+        Self.isContinueWatchingRow(
+            hubIdentifier: hub.hubIdentifier,
+            continueWatchingIdentifier: continueWatchingHub?.hubIdentifier)
+    }
+
+    nonisolated static func isContinueWatchingRow(hubIdentifier: String?,
+                                                  continueWatchingIdentifier: String?) -> Bool {
+        let id = (hubIdentifier ?? "").lowercased()
+        guard !id.isEmpty else { return false }
+        if let cwID = continueWatchingIdentifier?.lowercased(), !cwID.isEmpty {
+            return id == cwID
+        }
+        return id == "home.continue"
+    }
+
+    /// A hub key the pagination path can actually call, or nil.
+    ///
+    /// Most `/hubs` rows carry no `hubKey` and a `key` that is a literal id list
+    /// (`/library/metadata/209601,209469,…`), which is a metadata fetch, not a
+    /// hub endpoint. Handing that to `loadMoreIfNeeded` would page against the
+    /// wrong URL and re-append the items already on screen. Returning nil turns
+    /// pagination off for the row instead, which is correct rather than merely
+    /// safe: the row is the fixed set the server promoted.
+    private func paginableHubKey(_ hub: PlexHub) -> String? {
+        Self.paginableHubKey(hubKey: hub.hubKey, key: hub.key)
+    }
+
+    nonisolated static func paginableHubKey(hubKey: String?, key: String?) -> String? {
+        for candidate in [hubKey, key] {
+            guard let candidate, candidate.hasPrefix("/hubs") else { continue }
+            return candidate
+        }
+        return nil
+    }
+
+    // MARK: - Superseded: app-composed Home rows
+    //
+    // Rivulet's own Home composition, replaced by the promoted-hub projection
+    // above. Kept commented rather than deleted while the server-driven set is
+    // evaluated on device; delete once it has stuck.
+    //
+    // private func projectHomeItemsAppComposed() {
+    //     var rail: CachedHomeRail = []
+    //
+    // Continue Watching
+    //
+    //     // `/hubs/continueWatching` is an ACCOUNT-level endpoint: one flat list
+    //     // spanning every library on the server, with no way to scope the
+    //     // request. Rivulet's shown-on-Home set is client-side UserDefaults that
+    //     // Plex never sees, so a library the user removed from Home still
+    //     // contributes rows here. Filter before `makeCachedHub`, because mapping
+    //     // to `MediaItem` discards the section attribution the predicate needs.
+    //     // Fails open on an unloaded library list / unattributed item — see
+    //     // `PlexLibraryVisibilityFilter`.
+    //     let homeLibraryKeys = librariesForHomeScreen.map { $0.key }
+    //     if let cw = continueWatchingHub,
+    //        let items = cw.Metadata, !items.isEmpty,
+    //        case let visible = PlexLibraryVisibilityFilter.filter(items, toLibraryKeys: homeLibraryKeys),
+    //        !visible.isEmpty {
+    //         rail.append(makeCachedHub(
+    //             id: "hub:\(cw.id)",
+    //             title: cw.title ?? "Continue Watching",
+    //             isContinueWatching: true,
+    //             hubKey: cw.key ?? cw.hubKey,
+    //             hubIdentifier: cw.hubIdentifier,
+    //             metas: visible
+    //         ))
+    //     } else if !hasFetchedContinueWatching,
+    //               let existingCW = homeItems.first(where: { $0.isContinueWatching }) {
+    //         // Stage-3 ordering guard: `continueWatchingHub` is fetched on a
+    //         // separate path and is nil for a beat after a warm launch. A
+    //         // projection triggered before it lands (e.g. the deferred
+    //         // library-hubs cache projection) must NOT drop the Continue
+    //         // Watching row the launch cache-paint already showed — carry the
+    //         // existing projected CW row over until the network refresh
+    //         // replaces it with fresh metadata.
+    //         //
+    //         // Gated on `hasFetchedContinueWatching`: once a fresh fetch HAS
+    //         // completed for the current user, nil/empty means this user has no
+    //         // Continue Watching — carrying the row past that point made a
+    //         // stale CW row (from a previous account/profile) self-perpetuating,
+    //         // because setHomeItems() re-persists whatever the rail contains.
+    //         rail.append(existingCW)
+    //     }
+    //
+    //     // Recently Added per home library (same order as librariesForHomeScreen)
+    //     for library in librariesForHomeScreen {
+    //         let rowID = Self.recentlyAddedRowID(forLibraryKey: library.key)
+    //         if let hubs = libraryHubs[library.key],
+    //            let recent = hubs.first(where: { isRecentlyAddedHub($0) }),
+    //            let items = recent.Metadata, !items.isEmpty {
+    //             rail.append(makeCachedHub(
+    //                 id: rowID,
+    //                 // The SERVER's title, not one composed here. PMS localizes
+    //                 // hub titles from the request's `Accept-Language`, which
+    //                 // URLSession already sends from the device locale, so this
+    //                 // row arrives correctly worded and in the viewer's language
+    //                 // for free. Composing `"Recently Added " + library.title`
+    //                 // threw that away and pasted an English prefix onto the
+    //                 // user's own library name, so a French viewer read
+    //                 // "Recently Added Films" while Continue Watching beside it
+    //                 // read "Continuer à regarder" (issue #276). Verified
+    //                 // against a live PMS 1.43.3: `Accept-Language: fr-FR` on
+    //                 // `/hubs/sections/{key}` returns "Récemment ajouté dans
+    //                 // Movies", and the library name stays untranslated because
+    //                 // it is the user's own.
+    //                 title: recent.title ?? "Recently Added \(library.title)",
+    //                 isContinueWatching: false,
+    //                 hubKey: recent.key ?? recent.hubKey,
+    //                 hubIdentifier: recent.hubIdentifier,
+    //                 metas: items
+    //             ))
+    //         } else if Self.shouldCarryOverRecentlyAddedRow(
+    //             hubs: libraryHubs[library.key],
+    //             fetchFailed: libraryHubFetchFailures.contains(library.key)
+    //         ), let existing = homeItems.first(where: { $0.id == rowID }) {
+    //             // Same guard as Continue Watching above, per library: a
+    //             // library whose hub fetch threw or has not landed yet must NOT
+    //             // lose the Recently Added row the cache-paint already showed.
+    //             // Dropping it here is permanent, not transient — setHomeItems()
+    //             // re-persists the rail, so one timed-out fetch would bake the
+    //             // missing shelf into every subsequent warm launch (GitHub #236).
+    //             //
+    //             // Only a library that ANSWERED — hubs present, no recentlyAdded
+    //             // hub or an empty one — correctly projects no row.
+    //             rail.append(existing)
+    //         }
+    //     }
+    //
+    //     setHomeItems(rail)
+    // }
 
     /// `projectHomeItems` for a single library page — mirrors
     /// `PlexHomeViewController.computeLibrarySections()` (one row per library

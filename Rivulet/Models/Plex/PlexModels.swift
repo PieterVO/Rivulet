@@ -217,6 +217,13 @@ nonisolated struct PlexHub: Codable, Identifiable, Sendable {
     var key: String?
     var more: Bool?
     var size: Int?
+    /// Set by `/hubs`: the user promoted this hub to their Plex home screen
+    /// (Plex Web → library → Manage Recommendations → Home). Home renders the
+    /// promoted set verbatim, so this is the switch that decides whether a row
+    /// exists at all. Absent on `/hubs/sections/{key}` (library pages show
+    /// every hub regardless of promotion), hence optional; treat nil as "not
+    /// applicable" rather than as false.
+    var promoted: Bool?
     var Metadata: [PlexMetadata]?
 
     init(
@@ -227,6 +234,7 @@ nonisolated struct PlexHub: Codable, Identifiable, Sendable {
         key: String? = nil,
         more: Bool? = nil,
         size: Int? = nil,
+        promoted: Bool? = nil,
         Metadata: [PlexMetadata]? = nil
     ) {
         self.hubIdentifier = hubIdentifier
@@ -236,6 +244,7 @@ nonisolated struct PlexHub: Codable, Identifiable, Sendable {
         self.key = key
         self.more = more
         self.size = size
+        self.promoted = promoted
         self.Metadata = Metadata
     }
 
