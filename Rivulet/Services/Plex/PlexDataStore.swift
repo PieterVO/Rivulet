@@ -278,6 +278,15 @@ class PlexDataStore: ObservableObject {
 
     private init() {
         setupPollingObservers()
+
+        // Hiding a Home row is a projection change, not a data change: the hubs
+        // are already in memory. Re-project immediately so Home repaints on the
+        // way back out of Settings instead of at the next 3 minute poll.
+        NotificationCenter.default.addObserver(
+            forName: HomeRowSettings.changedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.projectHomeItems() }
+        }
     }
 
     private func setupPollingObservers() {
@@ -1081,7 +1090,8 @@ class PlexDataStore: ObservableObject {
         // every scoped `/hubs/promoted` call returns, and PMS already scopes its
         // items to pinned libraries (measured: every item came from a
         // `hidden == 0` library).
-        if let cw = continueWatchingHub, let metas = cw.Metadata, !metas.isEmpty {
+        if let cw = continueWatchingHub, let metas = cw.Metadata, !metas.isEmpty,
+           !HomeRowSettings.isHidden(cw.hubIdentifier) {
             rail.append(makeCachedHub(
                 id: "hub:\(cw.id)",
                 title: cw.title ?? "",
@@ -1099,6 +1109,8 @@ class PlexDataStore: ObservableObject {
                 // A library's own in-progress hub would duplicate the global
                 // Continue Watching row above.
                 guard !Self.isContinueWatchingFamily(hubIdentifier: hub.hubIdentifier) else { continue }
+                // Local subtractive filter — see `HomeRowSettings`.
+                guard !HomeRowSettings.isHidden(hub.hubIdentifier) else { continue }
                 guard let metas = hub.Metadata, !metas.isEmpty else { continue }
 
                 rail.append(makeCachedHub(

@@ -155,6 +155,7 @@ enum SettingsContent {
         case .servers:     return servers
         case .plex:        return plex
         case .libraries:   return libraries
+        case .homeRows:    return homeRows
         case .cache:       return cache
         case .iptv:        return iptv
         case .liveTVSourceDetail: return liveTVSourceDetail
@@ -237,6 +238,7 @@ enum SettingsContent {
             // bare "Siri" row under SIRI. A prefix naming something OTHER than
             // the group stays, e.g. Discover Above Libraries under HOME.
             .header("Home"),
+            SettingsRowItem(id: "homeRows", title: "Rows", kind: .navigation(.homeRows)),
             toggle("homeHero", "Hero", key: "showHomeHero", default: true),
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false),
             toggle("showDiscoverTab", "Show Discover Tab", key: "showDiscoverTab", default: true),
@@ -454,6 +456,70 @@ enum SettingsContent {
         }
     }
 
+    // MARK: Home Rows (local subtractive filter over the server's row set)
+
+    /// One toggle per row Plex currently offers Home, in the order Home draws
+    /// them.
+    ///
+    /// Built from `PlexDataStore.homeItems`, the SAME projection Home renders,
+    /// rather than from a list assembled here. That is what keeps the page
+    /// honest: the titles are the server's own (so they are localized, and they
+    /// say "Recently Added in Movies-demo" exactly as the shelf does), and a row
+    /// can never be listed here that Home would not draw.
+    ///
+    /// Hidden rows still appear in this list — they are what you come here to
+    /// switch back on — so the list is the projection plus whatever is currently
+    /// filtered out of it.
+    private static var homeRows: [SettingsRowItem] {
+        let store = PlexDataStore.shared
+        let visible = store.homeItems
+        // Hidden rows are absent from the projection by definition, so recover
+        // them from the hubs the projection was built from.
+        let hiddenRows: [(id: String, title: String)] = store.librariesPinnedToHome
+            .flatMap { store.libraryHubs[$0.key] ?? [] }
+            .filter { $0.promoted == true && HomeRowSettings.isHidden($0.hubIdentifier) }
+            .compactMap { hub in
+                guard let id = hub.hubIdentifier else { return nil }
+                return (id, hub.title ?? id)
+            }
+        let continueWatching: [(id: String, title: String)] = {
+            guard let cw = store.continueWatchingHub, let id = cw.hubIdentifier,
+                  HomeRowSettings.isHidden(id) else { return [] }
+            return [(id, cw.title ?? id)]
+        }()
+
+        let entries: [(id: String, title: String)] =
+            continueWatching
+            + visible.compactMap { row in
+                guard let id = row.hubIdentifier else { return nil }
+                return (id, row.title)
+            }
+            + hiddenRows
+
+        guard !entries.isEmpty else {
+            return [SettingsRowItem(id: "noHomeRows",
+                                    title: "Connect to a Plex server to manage Home rows",
+                                    kind: .info(value: { "" }))]
+        }
+
+        var rows: [SettingsRowItem] = [
+            SettingsRowItem(id: "showAllHomeRows", title: "Show All",
+                            kind: .action(destructive: false, handler: { vc in
+                HomeRowSettings.showAll()
+                (vc as? SettingsPageViewController)?.reloadRows()
+            }))
+        ]
+        // De-dupe defensively: Continue Watching can be reported by both the
+        // dedicated hub and the projection.
+        var seen = Set<String>()
+        for entry in entries where seen.insert(entry.id).inserted {
+            rows.append(SettingsRowItem(id: "homeRow_\(entry.id)", title: entry.title, kind: .toggle(
+                get: { !HomeRowSettings.isHidden(entry.id) },
+                set: { shown in HomeRowSettings.setHidden(!shown, for: entry.id) })))
+        }
+        return rows
+    }
+
     // MARK: Libraries (sidebar visibility)
 
     private static var libraries: [SettingsRowItem] {
@@ -468,6 +534,9 @@ enum SettingsContent {
         // Add All / Remove All live at the TOP of the list, above the per-library
         // toggles, so the bulk actions are the first thing the user lands on.
         var rows: [SettingsRowItem] = [
+            SettingsRowItem(id: "matchPlexSidebar", title: "Match Plex", kind: .toggle(
+                get: { LibrarySettingsManager.matchesPlexSidebar },
+                set: { LibrarySettingsManager.shared.setMatchesPlexSidebar($0) })),
             SettingsRowItem(id: "addAllLibraries", title: "Add All",
                             kind: .action(destructive: false, handler: { vc in
                 LibrarySettingsManager.shared.showAllLibraries(keys)

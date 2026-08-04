@@ -169,8 +169,40 @@ class LibrarySettingsManager: ObservableObject {
     // MARK: - Public Methods
 
     /// Check if a library is visible
+    /// UserDefaults key for "follow the Plex account's sidebar pins". On by
+    /// default: a fresh install matches the Plex app rather than inventing its
+    /// own answer. Turn it off and this device keeps its own list instead.
+    static let matchPlexSidebarKey = "matchPlexSidebarLibraries"
+
+    static var matchesPlexSidebar: Bool {
+        UserDefaults.standard.object(forKey: matchPlexSidebarKey) as? Bool ?? true
+    }
+
+    /// Flip the Match Plex switch. Re-publishing `hiddenLibraryKeys` (unchanged)
+    /// is what tells every `@Published` observer the visible set moved — the
+    /// switch itself lives in UserDefaults, which nothing observes.
+    func setMatchesPlexSidebar(_ matching: Bool) {
+        UserDefaults.standard.set(matching, forKey: Self.matchPlexSidebarKey)
+        hiddenLibraryKeys = hiddenLibraryKeys
+    }
+
     func isLibraryVisible(_ libraryKey: String) -> Bool {
         !hiddenLibraryKeys.contains(libraryKey)
+    }
+
+    /// Sidebar visibility for one library, honouring the Match Plex switch.
+    ///
+    /// While matching, the answer is the SERVER's: `hidden` 0 or 1 is in the
+    /// sidebar, 2 is not (see `PlexLibrary.hidden`). This device's own hidden
+    /// set is left untouched rather than overwritten, so switching back off
+    /// restores whatever the user had curated here.
+    ///
+    /// Ordering is deliberately NOT taken from the server. Match Plex answers
+    /// "which libraries", and the reorder on this page keeps answering "in what
+    /// order", which is a real preference the user would otherwise lose.
+    func isLibraryVisible(_ library: PlexLibrary) -> Bool {
+        if Self.matchesPlexSidebar { return (library.hidden ?? 0) != 2 }
+        return isLibraryVisible(library.key)
     }
 
     /// Toggle library visibility in sidebar
@@ -307,7 +339,7 @@ class LibrarySettingsManager: ObservableObject {
     /// - Parameter libraries: The full list of libraries
     /// - Returns: Only libraries that are not hidden
     func filterVisibleLibraries(_ libraries: [PlexLibrary]) -> [PlexLibrary] {
-        libraries.filter { isLibraryVisible($0.key) }
+        libraries.filter { isLibraryVisible($0) }
     }
 
     /// Filter and sort libraries according to user preferences
