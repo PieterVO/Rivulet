@@ -57,10 +57,6 @@ enum SettingsDescriptorStore {
             icon: "sidebar.squares.left",
             description: "Choose which libraries appear in the sidebar and set their display order."
         ),
-        "matchPlexSidebar": SettingDescriptor(
-            icon: "arrow.triangle.2.circlepath",
-            description: "Shows the same libraries your Plex account shows, so this Apple TV matches the Plex app. Turn it off to choose the libraries for this device yourself; your Plex account is never changed either way."
-        ),
         "libraryRow": SettingDescriptor(
             icon: "sidebar.squares.left",
             description: "Click to toggle sidebar visibility. Press and hold to reorder or configure Home screen visibility."

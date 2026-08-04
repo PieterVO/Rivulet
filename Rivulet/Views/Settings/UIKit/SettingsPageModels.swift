@@ -534,9 +534,6 @@ enum SettingsContent {
         // Add All / Remove All live at the TOP of the list, above the per-library
         // toggles, so the bulk actions are the first thing the user lands on.
         var rows: [SettingsRowItem] = [
-            SettingsRowItem(id: "matchPlexSidebar", title: "Match Plex", kind: .toggle(
-                get: { LibrarySettingsManager.matchesPlexSidebar },
-                set: { LibrarySettingsManager.shared.setMatchesPlexSidebar($0) })),
             SettingsRowItem(id: "addAllLibraries", title: "Add All",
                             kind: .action(destructive: false, handler: { vc in
                 LibrarySettingsManager.shared.showAllLibraries(keys)
