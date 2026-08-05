@@ -368,6 +368,7 @@ enum XMLTVParseError: LocalizedError {
 
 // MARK: - Convenience Extensions
 
+#if os(tvOS)
 extension XMLTVParser.ParsedProgram {
     /// Convert to UnifiedProgram
     func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
@@ -391,3 +392,4 @@ extension XMLTVParser.ParsedProgram {
         )
     }
 }
+#endif
