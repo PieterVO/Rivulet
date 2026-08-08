@@ -16,6 +16,14 @@ import Combine
 class PlexUserProfileManager: ObservableObject {
     static let shared = PlexUserProfileManager()
 
+    /// Set by the host. `onProfileChanged` fires when the user switches to a
+    /// DIFFERENT profile and per-profile content must be dropped;
+    /// `onInitialProfileSelected` fires once on launch to sync user-specific
+    /// settings. They are separate because the launch case must not invalidate
+    /// caches that were just populated.
+    static var onProfileChanged: (@MainActor () async -> Void)?
+    static var onInitialProfileSelected: (@MainActor () -> Void)?
+
     // MARK: - Published State
 
     /// All available users in the Plex Home
@@ -179,12 +187,14 @@ class PlexUserProfileManager: ObservableObject {
             selectedUser = user
             saveSelectedUser(user)
 
-            // Notify data store to reload if user actually changed
+            // Notify whatever holds per-profile content and settings. Same
+            // handoff as PlexAuthManager: this manager owns the profile, the
+            // caches it invalidates are per platform.
             if let previousUser, previousUser.id != user.id {
-                await PlexDataStore.shared.onProfileSwitched()
+                await Self.onProfileChanged?()
             } else if previousUser == nil {
                 // Initial selection on app launch — sync user-specific settings
-                LibrarySettingsManager.shared.onProfileSwitched()
+                Self.onInitialProfileSelected?()
             }
 
             return true

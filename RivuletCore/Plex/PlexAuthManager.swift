@@ -45,6 +45,19 @@ enum PlexAuthState: Equatable {
 class PlexAuthManager: ObservableObject {
     static let shared = PlexAuthManager()
 
+    /// Handoffs to whatever holds cached library / hub / metadata content.
+    ///
+    /// This manager owns identity, not content, and the content store is per
+    /// platform: tvOS has `PlexDataStore`, iOS has `IOSPlexSession`. Calling
+    /// `PlexDataStore.shared` directly from here is what kept the whole auth
+    /// stack pinned to the tvOS target. The host sets these at launch.
+    ///
+    /// `onAuthenticated` is awaited on purpose. It prefetches libraries as part
+    /// of sign-in so the sidebar renders with library tabs on its first build;
+    /// fire-and-forget would reintroduce the empty-latch it was added to fix.
+    static var onAuthenticated: (@MainActor () async -> Void)?
+    static var onSignedOut: (@MainActor () -> Void)?
+
     // MARK: - Published State
 
     @Published var state: PlexAuthState = .idle
@@ -229,7 +242,7 @@ class PlexAuthManager: ObservableObject {
                 // library tabs on first build. Without this, the sidebar's
                 // conditional TabSection can latch to "empty" and not recover when
                 // libraries load asynchronously later.
-                await PlexDataStore.shared.loadLibrariesIfNeeded()
+                await Self.onAuthenticated?()
 
                 return true
             } else {
@@ -687,7 +700,7 @@ class PlexAuthManager: ObservableObject {
         // them — visually confusing on a multi-server account because the
         // UI labels the connection with the new server while showing the
         // previous server's content.
-        PlexDataStore.shared.reset()
+        Self.onSignedOut?()
 
         state = .idle
     }

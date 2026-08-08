@@ -62,6 +62,17 @@ struct RivuletApp: App {
         // which returns false for an unset key, so register the default here
         // before any read. An explicit user choice still wins.
         UserDefaults.standard.register(defaults: ["showHomeHero": true])
+
+        // PlexAuthManager owns identity and lives in RivuletCore; the content
+        // store it hands off to is per platform. Set BEFORE any sign-in can
+        // run: without the first hook the sidebar's conditional TabSection
+        // latches to "empty" on a fresh sign-in, and without the second, a
+        // sign-out leaves the previous server's hubs on screen.
+        PlexAuthManager.onAuthenticated = { await PlexDataStore.shared.loadLibrariesIfNeeded() }
+        PlexAuthManager.onSignedOut = { PlexDataStore.shared.reset() }
+        PlexUserProfileManager.onProfileChanged = { await PlexDataStore.shared.onProfileSwitched() }
+        PlexUserProfileManager.onInitialProfileSelected = { LibrarySettingsManager.shared.onProfileSwitched() }
+
         #if !DEBUG
         // Sentry start is DEFERRED off the launch window. Starting it in init()
         // fired envelope/session uploads to sentry.io before the network nexus

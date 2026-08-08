@@ -254,9 +254,10 @@ enum LiveTVProviderError: LocalizedError {
 
 // MARK: - Parser Conversions
 
-// These live here rather than beside the parsers because they build the tvOS
-// unified model. The parsers themselves are shared with the iOS target and must
-// stay free of platform conditionals (see CLAUDE.md, Platform Boundary).
+// These live here rather than beside the parsers because they build the unified
+// model declared in this file, not because of any platform split: everything
+// involved is shared. Keeping them out of the parsers is what let those files
+// drop their `#if os(tvOS)` (see CLAUDE.md, Platform Boundary).
 
 extension M3UParser.ParsedChannel {
     /// Convert to UnifiedChannel
