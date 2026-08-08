@@ -192,28 +192,3 @@ enum M3UParseError: LocalizedError {
         }
     }
 }
-
-// MARK: - Convenience Extensions
-
-extension M3UParser.ParsedChannel {
-    /// Convert to UnifiedChannel
-    func toUnifiedChannel(sourceType: LiveTVSourceType, sourceId: String) -> UnifiedChannel {
-        // Create a unique ID for this channel
-        let channelId = tvgId ?? tvgName ?? name
-        let id = UnifiedChannel.makeId(sourceType: sourceType, sourceId: sourceId, channelId: channelId)
-
-        return UnifiedChannel(
-            id: id,
-            sourceType: sourceType,
-            sourceId: sourceId,
-            channelNumber: channelNumber,
-            name: tvgName ?? name,
-            callSign: nil,
-            logoURL: tvgLogo.flatMap { URL(string: $0) },
-            streamURL: streamURL,
-            tvgId: tvgId,
-            groupTitle: groupTitle,
-            isHD: isHD
-        )
-    }
-}

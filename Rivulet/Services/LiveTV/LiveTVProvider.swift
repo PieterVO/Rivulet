@@ -251,3 +251,56 @@ enum LiveTVProviderError: LocalizedError {
         }
     }
 }
+
+// MARK: - Parser Conversions
+
+// These live here rather than beside the parsers because they build the tvOS
+// unified model. The parsers themselves are shared with the iOS target and must
+// stay free of platform conditionals (see CLAUDE.md, Platform Boundary).
+
+extension M3UParser.ParsedChannel {
+    /// Convert to UnifiedChannel
+    func toUnifiedChannel(sourceType: LiveTVSourceType, sourceId: String) -> UnifiedChannel {
+        // Create a unique ID for this channel
+        let channelId = tvgId ?? tvgName ?? name
+        let id = UnifiedChannel.makeId(sourceType: sourceType, sourceId: sourceId, channelId: channelId)
+
+        return UnifiedChannel(
+            id: id,
+            sourceType: sourceType,
+            sourceId: sourceId,
+            channelNumber: channelNumber,
+            name: tvgName ?? name,
+            callSign: nil,
+            logoURL: tvgLogo.flatMap { URL(string: $0) },
+            streamURL: streamURL,
+            tvgId: tvgId,
+            groupTitle: groupTitle,
+            isHD: isHD
+        )
+    }
+}
+
+extension XMLTVParser.ParsedProgram {
+    /// Convert to UnifiedProgram
+    func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
+        // Create unique ID from channel and start time
+        let id = "\(unifiedChannelId):\(Int(start.timeIntervalSince1970))"
+
+        return UnifiedProgram(
+            id: id,
+            channelId: unifiedChannelId,
+            title: title,
+            subtitle: subtitle,
+            description: description,
+            startTime: start,
+            endTime: stop,
+            category: category,
+            iconURL: icon.flatMap { URL(string: $0) },
+            posterURL: posterIcon.flatMap { URL(string: $0) },
+            landscapeURL: landscapeIcon.flatMap { URL(string: $0) },
+            episodeNumber: episodeNum,
+            isNew: isNew
+        )
+    }
+}

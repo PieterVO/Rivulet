@@ -90,6 +90,76 @@ Rivulet/
     └── DESIGN_GUIDE.md     # UI/UX documentation
 ```
 
+## Platform Boundary (tvOS / iOS)
+
+Three buildable folders, three memberships. `Rivulet/` is the tvOS app.
+`RivuletiOS/` is the iOS/iPadOS app. `RivuletCore/` is compiled into both. All
+three are `PBXFileSystemSynchronizedRootGroup`s, so a file joins its targets by
+where it sits on disk and never needs a project edit. Do not add shared code by
+hand-listing `PBXBuildFile` entries in the iOS target: that list has to be
+maintained inside `project.pbxproj`, which is the worst merge surface in the repo.
+
+**Shared code contains no `#if os(...)`.** That single rule is the boundary, and
+it is the only thing keeping the iOS app from taxing tvOS work. When a shared
+file needs a platform branch, the file is in the wrong place: lift the
+platform-specific part out into `Rivulet/` or `RivuletiOS/`. Do not add the
+ifdef. PR 284 arrived with both failure modes and they are the worked examples:
+an `#if os(tvOS)` around `M3UParser.toUnifiedChannel` (the fix is to move that
+extension next to `UnifiedChannel`, after which the parser needs no conditional
+at all), and an `#if os(iOS)/#else` wrapping two unrelated `AetherPlayer`
+classes in one 1799-line file (the fix is two files).
+
+### What qualifies as shared
+
+The test is **"must a bug found on one platform be fixed on both?"**, not "does
+it compile everywhere."
+
+Yes, so it belongs in `RivuletCore/`: anything encoding how Plex or IPTV
+actually behaves. `PlexNetworkManager` (`includeGuids=1`, the three Discover
+hosts, account-vs-server token, `includeHttps=1&includeRelay=1`, the transcode
+profile params), `Models/Plex/`, `PlexLiveTVProvider` + `PlexLiveTVModels` + the
+timeline keepalive, `WatchProgressPolicy`, `ContentRouter`, `TrackIntent`,
+`MediaTrack`, `StreamBodyClassifier`, the IPTV parsers, `Services/Security/`,
+`Services/MediaProvider/`, `CacheManager`, `LibraryGUIDIndex`, `PlexAuthManager`,
+`LiveTVDataStore`.
+
+No, so it stays in `Rivulet/`: all of `Views/` (focus engine, morphs, Siri
+Remote), `Services/Input/`, `Services/Focus/`, the Top Shelf composer and
+extension, `Services/Siri/`, `DisplayCriteriaManager` (`AVDisplayManager` is
+tvOS-only), and `PlexDataStore` — it carries tvOS-home-shaped state (the
+`mergedItems` cache, the Continue Watching merge), so iOS goes through
+`Services/MediaProvider/` instead.
+
+**An import of UIKit or SwiftUI does not make a file tvOS-only.** Both exist on
+iOS, and `ObservableObject` / `@Published` are the only reason most of the
+service layer imports them. Of ~33k lines across `Services/` and `Models/`,
+exactly four files touch genuinely tvOS-only API: the three in `Services/Input/`
+plus `DisplayCriteriaManager`. Judge by tvOS-only frameworks (`TVServices`,
+`TVUIKit`, `AVDisplayManager`) and focus/press API, nothing else.
+
+Move files into `RivuletCore/` when a slice actually needs them, not
+speculatively. The list above is the destination, not a migration order.
+
+### The player split
+
+`AetherPlayer` is three pieces in two homes. The engine mapping (state and track
+translation, cue conversion, background→foreground reload, mute persistence
+across Aether's internal player swaps) is platform-neutral and belongs in
+`RivuletCore`. The `PlayerProtocol` conformance stays tvOS. iOS gets its own thin
+`ObservableObject` on top. This is not bookkeeping: keeping both classes in one
+file also forced `@preconcurrency import AVFoundation` above the conditional,
+which silently loosened Swift 6 Sendable checking on the *shipping tvOS player*
+for the iOS half's benefit.
+
+### Folders, not a SwiftPM package
+
+A local `RivuletCore` package would enforce the boundary at compile time, but
+every shared symbol would need `public` — a mechanical diff across 170+ files
+touching every access modifier. The folder buys the same boundary for a day's
+work. Revisit only if the no-`#if` rule starts getting broken in practice; the
+package is the enforcement mechanism for a rule that discipline is failing to
+hold, not an upgrade to reach for on its own.
+
 ## Key Architectural Patterns
 
 ### Focus Management (tvOS)
