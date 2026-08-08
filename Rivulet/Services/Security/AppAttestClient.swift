@@ -117,7 +117,14 @@ actor AppAttestClient {
 
     /// The Worker told us it doesn't know this key. Discard it and re-enroll on
     /// the next request.
-    func invalidateKey() {
+    ///
+    /// `ifCurrent` is the key the failed request actually signed with. When a
+    /// burst of requests fails together, every one of them would otherwise
+    /// discard whatever key an earlier failure had already re-enrolled, and each
+    /// re-enrollment costs a round trip to Apple's attestation service. Naming
+    /// the key makes all but the first discard a no-op.
+    func invalidateKey(ifCurrent used: String? = nil) {
+        if let used, used != keyId { return }
         keyId = nil
         Keychain.delete(Self.keychainAccount)
     }

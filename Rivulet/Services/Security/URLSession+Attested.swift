@@ -25,6 +25,11 @@ extension URLSession {
     /// our key (fresh deploy, restored backup, reinstalled app). Re-enrolling
     /// once turns what would be a permanently dead client into a self-healing
     /// one. Any other status is returned untouched.
+    ///
+    /// Only `unknown_key` justifies discarding the key. Every other rejection is
+    /// about the signature, not the enrollment, and re-enrolling for one costs a
+    /// round trip to Apple that a fresh assertion would have avoided — with a
+    /// burst of concurrent requests that compounds into seconds of stalled UI.
     func attestedData(for request: URLRequest) async throws -> (Data, URLResponse) {
         let signed = await AppAttestClient.shared.attest(request)
         let (data, response) = try await self.data(for: signed)
@@ -33,7 +38,11 @@ extension URLSession {
             return (data, response)
         }
 
-        await AppAttestClient.shared.invalidateKey()
+        if String(data: data, encoding: .utf8)?.contains("unknown_key") == true {
+            await AppAttestClient.shared.invalidateKey(
+                ifCurrent: signed.value(forHTTPHeaderField: "X-Rivulet-Key-Id")
+            )
+        }
         let retried = await AppAttestClient.shared.attest(request)
         return try await self.data(for: retried)
     }
