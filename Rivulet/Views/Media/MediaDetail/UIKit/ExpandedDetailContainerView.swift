@@ -212,6 +212,9 @@ final class ExpandedDetailContainerView: UIView {
         get { belowFoldCollection.onSelectPerson }
         set { belowFoldCollection.onSelectPerson = newValue }
     }
+    /// Season pill Select → open that season's own page. Unwired, the pill falls
+    /// back to re-affirming the season in the rail.
+    var onOpenSeason: ((MediaItem) -> Void)?
 
     /// True briefly after focus first lands on the episodes row (same-press guard
     /// for the episodes→pills jump).
@@ -969,10 +972,17 @@ final class ExpandedDetailContainerView: UIView {
                     self.belowFoldCollection.scrollEpisodesToSeason(seasonRefID: self.seasonRefIDs[i])
                 }
             }
-            // SELECT (press) re-affirms the focused season (rail already moved on
-            // focus). Kept harmless; entering the episodes is done with Down.
+            // SELECT (press) opens that season's own page: full summary, only its
+            // episodes, its extras. Focus already switched the rail's season, so
+            // the press was spare. Unwired, it falls back to re-affirming the
+            // season in the rail. Entering the episodes is still done with Down.
             pill.onSelected = { [weak self] in
-                guard let self, i < self.seasonRefIDs.count else { return }
+                guard let self else { return }
+                if let onOpenSeason = self.onOpenSeason, i < self.seasonItems.count {
+                    onOpenSeason(self.seasonItems[i])
+                    return
+                }
+                guard i < self.seasonRefIDs.count else { return }
                 self.belowFoldCollection.scrollEpisodesToSeason(seasonRefID: self.seasonRefIDs[i])
             }
             seasonPillRow.addArrangedSubview(pill)
