@@ -365,31 +365,3 @@ enum XMLTVParseError: LocalizedError {
         }
     }
 }
-
-// MARK: - Convenience Extensions
-
-#if os(tvOS)
-extension XMLTVParser.ParsedProgram {
-    /// Convert to UnifiedProgram
-    func toUnifiedProgram(unifiedChannelId: String) -> UnifiedProgram {
-        // Create unique ID from channel and start time
-        let id = "\(unifiedChannelId):\(Int(start.timeIntervalSince1970))"
-
-        return UnifiedProgram(
-            id: id,
-            channelId: unifiedChannelId,
-            title: title,
-            subtitle: subtitle,
-            description: description,
-            startTime: start,
-            endTime: stop,
-            category: category,
-            iconURL: icon.flatMap { URL(string: $0) },
-            posterURL: posterIcon.flatMap { URL(string: $0) },
-            landscapeURL: landscapeIcon.flatMap { URL(string: $0) },
-            episodeNumber: episodeNum,
-            isNew: isNew
-        )
-    }
-}
-#endif

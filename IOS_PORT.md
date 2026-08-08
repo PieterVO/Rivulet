@@ -7,13 +7,20 @@ tablet experience is migrated feature by feature.
 ## Direction
 
 - Share platform-neutral models, networking, persistence, authentication, and
-  playback policy.
+  playback policy through `RivuletCore/`, a buildable folder compiled into both
+  app targets. Move a file there when a slice actually needs it.
 - Keep platform navigation and interaction separate. tvOS remains focus-first;
   iOS is touch-first and uses a tab/navigation-stack shell.
-- Move shared code into an explicit shared-core target or package as each
-  feature is brought across. Avoid copying service implementations into the
-  iOS folder.
+- **Shared code carries no `#if os(...)`.** A shared file that needs a platform
+  branch belongs in `Rivulet/` or `RivuletiOS/` instead. CLAUDE.md's Platform
+  Boundary section is the full rule and lists what qualifies.
 - Port in vertical slices so the iOS target stays buildable after every step.
+
+The Plex layer under `RivuletiOS/Plex/` is a deliberate short-term duplicate of
+`PlexNetworkManager` and `Models/Plex/`, not a permanent one. It keeps the POC
+unblocked at the cost of drift: a Plex fix on tvOS does not reach iOS, and the
+failure is silent rather than a build error. Folding it onto the shared client
+is the next slice worth doing.
 
 ## Initial slices
 

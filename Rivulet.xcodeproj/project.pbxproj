@@ -12,13 +12,7 @@
 		A740D1192F59C56300B9820B /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A740D1182F59C56300B9820B /* AVKit.framework */; };
 		A7F159552F04124A001B2177 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
 		B2000001AAAA000000000001 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000001 /* AetherEngine */; };
-		B30000110000000000000011 /* Rivulet/Services/IPTV/M3UParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000130000000000000013 /* Rivulet/Services/IPTV/M3UParser.swift */; };
-		B30000120000000000000012 /* Rivulet/Services/IPTV/XMLTVParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000140000000000000014 /* Rivulet/Services/IPTV/XMLTVParser.swift */; };
-		B30000170000000000000017 /* Rivulet/Services/Plex/Playback/AetherPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000180000000000000018 /* Rivulet/Services/Plex/Playback/AetherPlayer.swift */; };
 		B30000190000000000000019 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000001 /* AetherEngine */; };
-		B300001A000000000000001A /* Rivulet/Services/LiveTV/LiveTVClientIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300001B000000000000001B /* Rivulet/Services/LiveTV/LiveTVClientIdentity.swift */; };
-		B300001C000000000000001C /* Rivulet/Services/Plex/Playback/Subtitles/CaptionAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300001D000000000000001D /* Rivulet/Services/Plex/Playback/Subtitles/CaptionAppearance.swift */; };
-		B300001E000000000000001E /* Rivulet/Services/Security/KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B300001F000000000000001F /* Rivulet/Services/Security/KeychainHelper.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,12 +53,6 @@
 		A740D1182F59C56300B9820B /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = Platforms/AppleTVOS.platform/Developer/SDKs/AppleTVOS26.2.sdk/System/Library/Frameworks/AVKit.framework; sourceTree = DEVELOPER_DIR; };
 		A784830A2F062C2000F9E6D0 /* RivuletTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RivuletTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B30000010000000000000001 /* Rivulet iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Rivulet iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		B30000130000000000000013 /* Rivulet/Services/IPTV/M3UParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rivulet/Services/IPTV/M3UParser.swift; sourceTree = SOURCE_ROOT; };
-		B30000140000000000000014 /* Rivulet/Services/IPTV/XMLTVParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rivulet/Services/IPTV/XMLTVParser.swift; sourceTree = SOURCE_ROOT; };
-		B30000180000000000000018 /* Rivulet/Services/Plex/Playback/AetherPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rivulet/Services/Plex/Playback/AetherPlayer.swift; sourceTree = SOURCE_ROOT; };
-		B300001B000000000000001B /* Rivulet/Services/LiveTV/LiveTVClientIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rivulet/Services/LiveTV/LiveTVClientIdentity.swift; sourceTree = SOURCE_ROOT; };
-		B300001D000000000000001D /* Rivulet/Services/Plex/Playback/Subtitles/CaptionAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rivulet/Services/Plex/Playback/Subtitles/CaptionAppearance.swift; sourceTree = SOURCE_ROOT; };
-		B300001F000000000000001F /* Rivulet/Services/Security/KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Rivulet/Services/Security/KeychainHelper.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -111,6 +99,11 @@
 		A784830B2F062C2000F9E6D0 /* RivuletTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = RivuletTests;
+			sourceTree = "<group>";
+		};
+		B30000200000000000000020 /* RivuletCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RivuletCore;
 			sourceTree = "<group>";
 		};
 		B30000020000000000000002 /* RivuletiOS */ = {
@@ -165,9 +158,9 @@
 			children = (
 				A72E03DC2EDA297D003A73DA /* Rivulet */,
 				B30000020000000000000002 /* RivuletiOS */,
+				B30000200000000000000020 /* RivuletCore */,
 				A70B443C2F05AF3200DEF5ED /* TopShelfExtension */,
 				A784830B2F062C2000F9E6D0 /* RivuletTests */,
-				B30000150000000000000015 /* Shared iOS Sources */,
 				A7F159532F04124A001B2177 /* Frameworks */,
 				A72E03DB2EDA297D003A73DA /* Products */,
 			);
@@ -191,19 +184,6 @@
 				A70B443A2F05AF3200DEF5ED /* TVServices.framework */,
 			);
 			name = Frameworks;
-			sourceTree = "<group>";
-		};
-		B30000150000000000000015 /* Shared iOS Sources */ = {
-			isa = PBXGroup;
-			children = (
-				B300001B000000000000001B /* Rivulet/Services/LiveTV/LiveTVClientIdentity.swift */,
-				B300001D000000000000001D /* Rivulet/Services/Plex/Playback/Subtitles/CaptionAppearance.swift */,
-				B300001F000000000000001F /* Rivulet/Services/Security/KeychainHelper.swift */,
-				B30000130000000000000013 /* Rivulet/Services/IPTV/M3UParser.swift */,
-				B30000140000000000000014 /* Rivulet/Services/IPTV/XMLTVParser.swift */,
-				B30000180000000000000018 /* Rivulet/Services/Plex/Playback/AetherPlayer.swift */,
-			);
-			name = "Shared iOS Sources";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -248,6 +228,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				A72E03DC2EDA297D003A73DA /* Rivulet */,
+				B30000200000000000000020 /* RivuletCore */,
 			);
 			name = Rivulet;
 			packageProductDependencies = (
@@ -295,6 +276,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				B30000020000000000000002 /* RivuletiOS */,
+				B30000200000000000000020 /* RivuletCore */,
 			);
 			name = "Rivulet iOS";
 			packageProductDependencies = (
@@ -430,12 +412,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B300001A000000000000001A /* Rivulet/Services/LiveTV/LiveTVClientIdentity.swift in Sources */,
-				B300001C000000000000001C /* Rivulet/Services/Plex/Playback/Subtitles/CaptionAppearance.swift in Sources */,
-				B300001E000000000000001E /* Rivulet/Services/Security/KeychainHelper.swift in Sources */,
-				B30000110000000000000011 /* Rivulet/Services/IPTV/M3UParser.swift in Sources */,
-				B30000120000000000000012 /* Rivulet/Services/IPTV/XMLTVParser.swift in Sources */,
-				B30000170000000000000017 /* Rivulet/Services/Plex/Playback/AetherPlayer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
