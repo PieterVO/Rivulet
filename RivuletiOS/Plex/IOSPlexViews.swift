@@ -548,7 +548,7 @@ struct IOSPlexDetailView: View {
         let height = isPortrait ? size.width * 1.5 : size.width * 9 / 16
         let artworkURL = plex.artworkURL(
             for: displayedItem,
-            backdrop: !isPortrait,
+            kind: isPortrait ? .poster : .backdrop,
             width: isPortrait ? 900 : 1600,
             height: isPortrait ? 1350 : 900
         )
@@ -1097,7 +1097,7 @@ private struct IOSPlexHero: View {
                 NavigationLink(value: item) {
                     let artworkURL = plex.artworkURL(
                         for: item,
-                        backdrop: true,
+                        kind: .backdrop,
                         width: 1600,
                         height: 900
                     )
@@ -1267,7 +1267,7 @@ private struct IOSPlexAmbientBackdrop: View {
                         // same asset. Hub payloads can omit the portrait thumb;
                         // retaining it here made the old background appear
                         // frozen while the hero itself changed.
-                        backdrop: true,
+                        kind: .backdrop,
                         width: 1600,
                         height: 900
                     ),
@@ -1394,10 +1394,10 @@ private struct IOSPlexShelfView: View {
                             if shelf.isContinueWatching {
                                 IOSPlexContinueCard(item: item)
                             } else {
-                                IOSPlexPosterCard(item: item)
+                                IOSPlexPosterCard(item: item, width: IOSPlexPosterCard.tileWidth)
                             }
                         }
-                        .frame(width: shelf.isContinueWatching ? 220 : 144)
+                        .frame(width: shelf.isContinueWatching ? 220 : IOSPlexPosterCard.tileWidth)
                         .buttonStyle(.plain)
                     }
                 }
@@ -1408,17 +1408,53 @@ private struct IOSPlexShelfView: View {
     }
 }
 
+/// Sizes a tile from a known width, or falls back to the flexible aspect-ratio
+/// behaviour when the parent decides the width (grid columns, search rows).
+private struct TileSize: ViewModifier {
+    let width: CGFloat?
+    let ratio: CGFloat
+
+    func body(content: Content) -> some View {
+        if let width {
+            content.frame(width: width, height: width / ratio)
+        } else {
+            content.aspectRatio(ratio, contentMode: .fit)
+        }
+    }
+}
+
 private struct IOSPlexPosterCard: View {
     let item: IOSPlexItem
+    /// Fixed tile width, or nil to fill whatever the parent offers (grid
+    /// columns, the compact search row).
+    var width: CGFloat? = nil
     @EnvironmentObject private var plex: IOSPlexSession
+
+    /// Music keeps the poster WIDTH and only the height changes, mirroring tvOS
+    /// `MediaRowMetrics`, so a mixed shelf still lines up.
+    static let tileWidth: CGFloat = 144
+    private var ratio: CGFloat { item.isMusic ? 1 : 2 / 3 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            AsyncImage(url: plex.artworkURL(for: item, width: 420, height: 630)) { phase in
+            AsyncImage(
+                url: plex.artworkURL(
+                    for: item,
+                    kind: item.isMusic ? .thumb : .poster,
+                    width: 420,
+                    height: item.isMusic ? 420 : 630
+                )
+            ) { phase in
                 if let image = phase.image { image.resizable().scaledToFill() }
-                else { Rectangle().fill(.quaternary).overlay { Image(systemName: "play.rectangle") } }
+                else { Rectangle().fill(.quaternary).overlay { Image(systemName: item.isMusic ? "music.note" : "play.rectangle") } }
             }
-            .aspectRatio(2 / 3, contentMode: .fit)
+            // A known width is sized outright rather than left to
+            // `aspectRatio(_:contentMode: .fit)`. In a rail the height offered
+            // to the card is whatever the title and subtitle leave behind, and
+            // `.fit` honours it: a 2:3 poster stays width-limited and looks
+            // right, but a 1:1 square goes height-limited and pulls in from the
+            // edges of its slot, which is why only music showed it.
+            .modifier(TileSize(width: width, ratio: ratio))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(alignment: .bottom) {
                 if item.durationSeconds > 0, item.resumeSeconds > 0 {
@@ -1445,7 +1481,7 @@ private struct IOSPlexContinueCard: View {
             IOSPlexRetainedArtwork(
                 url: plex.artworkURL(
                     for: item,
-                    backdrop: true,
+                    kind: .backdrop,
                     width: 720,
                     height: 405
                 )

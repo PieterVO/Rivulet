@@ -129,6 +129,8 @@ nonisolated struct IOSPlexItem: Codable, Identifiable, Hashable, Sendable {
     let rating: Double?
     let thumb: String?
     let art: String?
+    let parentThumb: String?
+    let grandparentThumb: String?
     let grandparentArt: String?
     let duration: Int?
     let viewOffset: Int?
@@ -149,6 +151,17 @@ nonisolated struct IOSPlexItem: Codable, Identifiable, Hashable, Sendable {
     var displayTitle: String { title ?? "Untitled" }
     var isPlayable: Bool { type == "movie" || type == "episode" || type == "clip" }
     var isContainer: Bool { type == "show" || type == "season" }
+
+    /// Artwork for a poster tile, matching tvOS `PosterCell`
+    /// (`grandparentArtwork?.poster ?? artwork.poster`).
+    ///
+    /// The grandparent wins because an episode's own `thumb` is a 16:9 still,
+    /// not a poster, and Recently Added for a TV library returns episodes. A
+    /// season has no grandparent, so it keeps its own poster.
+    var posterPath: String? { grandparentThumb ?? thumb ?? parentThumb }
+
+    /// Music tiles are 1:1, not 2:3 — album and artist art is square.
+    var isMusic: Bool { ["artist", "album", "track"].contains(type ?? "") }
     var durationSeconds: TimeInterval { TimeInterval(duration ?? 0) / 1000 }
     var resumeSeconds: TimeInterval { TimeInterval(viewOffset ?? 0) / 1000 }
     var partKey: String? { Media?.first?.Part?.first?.key }

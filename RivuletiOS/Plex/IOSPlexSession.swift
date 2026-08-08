@@ -152,17 +152,35 @@ final class IOSPlexSession: ObservableObject {
         return try await api.search(server: configuration.url, token: configuration.token, query: query)
     }
 
-    func artworkURL(for item: IOSPlexItem, backdrop: Bool = false, width: Int = 900, height: Int = 1350) -> URL? {
+    /// Which artwork a call site wants. Three distinct shapes, so this is an
+    /// enum rather than flags: `.thumb` on an episode is a 16:9 still, while
+    /// `.poster` on the same episode is its show's 2:3 poster. Picking the
+    /// wrong one letterboxes or crops every tile in the rail.
+    enum ArtworkKind {
+        /// 2:3 tile art. Episodes resolve to the show poster (tvOS `PosterCell`).
+        case poster
+        /// The item's own image. 16:9 for episodes, square for music.
+        case thumb
+        /// Wide background art.
+        case backdrop
+    }
+
+    func artworkURL(for item: IOSPlexItem, kind: ArtworkKind = .thumb, width: Int = 900, height: Int = 1350) -> URL? {
         guard let serverURL, let serverToken else { return nil }
-        let backdropPath: String? = if item.type == "episode" {
-            item.grandparentArt ?? item.art ?? item.thumb
-        } else {
-            item.art ?? item.thumb
+        let path: String? = switch kind {
+        case .poster:
+            item.posterPath
+        case .thumb:
+            item.thumb
+        case .backdrop:
+            item.type == "episode"
+                ? (item.grandparentArt ?? item.art ?? item.thumb)
+                : (item.art ?? item.thumb)
         }
         return api.artworkURL(
             server: serverURL,
             token: serverToken,
-            path: backdrop ? backdropPath : item.thumb,
+            path: path,
             width: width,
             height: height
         )
