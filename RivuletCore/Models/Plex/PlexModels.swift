@@ -151,7 +151,7 @@ nonisolated struct PlexLibraryMediaContainer: Codable, Sendable {
     let Directory: [PlexLibrary]?
 }
 
-nonisolated struct PlexLibrary: Codable, Identifiable, Sendable {
+nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
     var id: String { key }
     let key: String
     let type: String          // "movie", "show", "artist", etc.
@@ -194,7 +194,7 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Sendable {
     }
 }
 
-nonisolated struct PlexLibraryLocation: Codable, Sendable {
+nonisolated struct PlexLibraryLocation: Codable, Hashable, Sendable {
     let id: Int
     let path: String
 }
@@ -226,7 +226,7 @@ nonisolated struct PlexExtrasContainerWrapper: Codable, Sendable {
 
 // MARK: - Hub (for home screen sections)
 
-nonisolated struct PlexHub: Codable, Identifiable, Sendable {
+nonisolated struct PlexHub: Codable, Identifiable, Hashable, Sendable {
     var id: String { hubIdentifier ?? title ?? UUID().uuidString }
     var hubIdentifier: String?
     var title: String?
