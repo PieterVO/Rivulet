@@ -14,7 +14,7 @@ final class IOSNavigationSettings: ObservableObject {
         let title: String
         let icon: String
         let kind: Kind
-        let library: IOSPlexLibrary?
+        let library: PlexLibrary?
     }
 
     @Published var selectedTabIDs: [String] = [] { didSet { persist() } }
@@ -25,7 +25,7 @@ final class IOSNavigationSettings: ObservableObject {
         selectedTabIDs = UserDefaults.standard.stringArray(forKey: selectionKey) ?? []
     }
 
-    func availableItems(for libraries: [IOSPlexLibrary]) -> [Item] {
+    func availableItems(for libraries: [PlexLibrary]) -> [Item] {
         var result = [Item(id: "home", title: "Home", icon: "house.fill", kind: .home, library: nil)]
         result.append(contentsOf: orderedLibraries(libraries).map {
             Item(id: "library:\($0.key)", title: $0.title, icon: $0.icon, kind: .library, library: $0)
@@ -37,7 +37,7 @@ final class IOSNavigationSettings: ObservableObject {
         return result
     }
 
-    func visibleItems(for libraries: [IOSPlexLibrary]) -> [Item] {
+    func visibleItems(for libraries: [PlexLibrary]) -> [Item] {
         let available = availableItems(for: libraries)
         let byID = Dictionary(uniqueKeysWithValues: available.map { ($0.id, $0) })
         let saved = selectedTabIDs.compactMap { byID[$0] }
@@ -45,15 +45,15 @@ final class IOSNavigationSettings: ObservableObject {
         return defaultItems(from: available, libraries: libraries)
     }
 
-    func isSelected(_ item: Item, libraries: [IOSPlexLibrary]) -> Bool {
+    func isSelected(_ item: Item, libraries: [PlexLibrary]) -> Bool {
         visibleItems(for: libraries).contains(where: { $0.id == item.id })
     }
 
-    func canSelectMore(libraries: [IOSPlexLibrary]) -> Bool {
+    func canSelectMore(libraries: [PlexLibrary]) -> Bool {
         visibleItems(for: libraries).count < 5
     }
 
-    func setSelected(_ item: Item, selected: Bool, libraries: [IOSPlexLibrary]) {
+    func setSelected(_ item: Item, selected: Bool, libraries: [PlexLibrary]) {
         var ids = visibleItems(for: libraries).map(\.id)
         if selected {
             guard !ids.contains(item.id), ids.count < 5 else { return }
@@ -65,13 +65,13 @@ final class IOSNavigationSettings: ObservableObject {
         selectedTabIDs = ids
     }
 
-    func moveSelected(from offsets: IndexSet, to destination: Int, libraries: [IOSPlexLibrary]) {
+    func moveSelected(from offsets: IndexSet, to destination: Int, libraries: [PlexLibrary]) {
         var ids = visibleItems(for: libraries).map(\.id)
         ids.move(fromOffsets: offsets, toOffset: destination)
         selectedTabIDs = ids
     }
 
-    private func orderedLibraries(_ libraries: [IOSPlexLibrary]) -> [IOSPlexLibrary] {
+    private func orderedLibraries(_ libraries: [PlexLibrary]) -> [PlexLibrary] {
         libraries.sorted { lhs, rhs in
             let left = lhs.type == "movie" ? 0 : (lhs.type == "show" ? 1 : 2)
             let right = rhs.type == "movie" ? 0 : (rhs.type == "show" ? 1 : 2)
@@ -81,7 +81,7 @@ final class IOSNavigationSettings: ObservableObject {
         }
     }
 
-    private func defaultItems(from available: [Item], libraries: [IOSPlexLibrary]) -> [Item] {
+    private func defaultItems(from available: [Item], libraries: [PlexLibrary]) -> [Item] {
         let movie = available.first { $0.library?.type == "movie" }
         let show = available.first { $0.library?.type == "show" }
         let preferredIDs = ["home", movie?.id, show?.id, "live-tv", "search"].compactMap { $0 }

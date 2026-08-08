@@ -89,7 +89,7 @@ struct IOSPlexHomeView: View {
                 .ignoresSafeArea(edges: [.top, .horizontal])
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: IOSPlexItem.self) { item in
+            .navigationDestination(for: PlexMetadata.self) { item in
                 IOSPlexDetailView(item: item)
             }
         }
@@ -117,7 +117,7 @@ struct IOSPlexLibrariesView: View {
                             Label(library.title, systemImage: library.icon)
                         }
                     }
-                    .navigationDestination(for: IOSPlexLibrary.self) { library in
+                    .navigationDestination(for: PlexLibrary.self) { library in
                         IOSPlexLibraryView(library: library)
                     }
                     .refreshable { await plex.refresh() }
@@ -129,16 +129,16 @@ struct IOSPlexLibrariesView: View {
 }
 
 struct IOSPlexLibraryView: View {
-    let library: IOSPlexLibrary
+    let library: PlexLibrary
     let showSettings: () -> Void
     @EnvironmentObject private var plex: IOSPlexSession
-    @State private var items: [IOSPlexItem] = []
-    @State private var libraryShelves: [IOSPlexShelf] = []
+    @State private var items: [PlexMetadata] = []
+    @State private var libraryShelves: [PlexHub] = []
     @State private var error: String?
     @State private var heroSelection = 0
     @State private var isLoading = true
 
-    init(library: IOSPlexLibrary, showSettings: @escaping () -> Void = {}) {
+    init(library: PlexLibrary, showSettings: @escaping () -> Void = {}) {
         self.library = library
         self.showSettings = showSettings
     }
@@ -219,7 +219,7 @@ struct IOSPlexLibraryView: View {
             .ignoresSafeArea(edges: [.top, .horizontal])
         }
         .toolbar(.hidden, for: .navigationBar)
-        .navigationDestination(for: IOSPlexItem.self) { item in
+        .navigationDestination(for: PlexMetadata.self) { item in
             IOSPlexDetailView(item: item)
         }
         .task { await load() }
@@ -228,7 +228,7 @@ struct IOSPlexLibraryView: View {
     /// Feature the first distinct non-Continue-Watching items from Plex's own
     /// ordered section hubs. Fall back to the full library when a server does
     /// not expose library hubs.
-    private var libraryHeroItems: [IOSPlexItem] {
+    private var libraryHeroItems: [PlexMetadata] {
         var seen = Set<String>()
         let hubItems = libraryShelves
             .filter { !$0.isContinueWatching }
@@ -258,7 +258,7 @@ struct IOSPlexSearchView: View {
     @EnvironmentObject private var plex: IOSPlexSession
     let showSettings: () -> Void
     @State private var query = ""
-    @State private var results: [IOSPlexItem] = []
+    @State private var results: [PlexMetadata] = []
     @State private var isSearching = false
     @State private var error: String?
 
@@ -289,7 +289,7 @@ struct IOSPlexSearchView: View {
             }
             .navigationTitle("Search")
             .searchable(text: $query, prompt: "Movies, shows, episodes")
-            .navigationDestination(for: IOSPlexItem.self) { item in
+            .navigationDestination(for: PlexMetadata.self) { item in
                 IOSPlexDetailView(item: item)
             }
             .toolbar {
@@ -429,14 +429,14 @@ struct IOSPlexSettingsView: View {
 }
 
 struct IOSPlexDetailView: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     @EnvironmentObject private var plex: IOSPlexSession
     @Environment(\.dismiss) private var dismiss
-    @State private var fullItem: IOSPlexItem?
-    @State private var seasons: [IOSPlexItem] = []
+    @State private var fullItem: PlexMetadata?
+    @State private var seasons: [PlexMetadata] = []
     @State private var selectedSeasonID: String?
-    @State private var episodes: [IOSPlexItem] = []
-    @State private var episodeCache: [String: [IOSPlexItem]] = [:]
+    @State private var episodes: [PlexMetadata] = []
+    @State private var episodeCache: [String: [PlexMetadata]] = [:]
     @State private var highlightedEpisodeID: String?
     @State private var playback: IOSPlexPlaybackRequest?
     @State private var isLoading = true
@@ -529,7 +529,7 @@ struct IOSPlexDetailView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
-        .navigationDestination(for: IOSPlexItem.self) { child in
+        .navigationDestination(for: PlexMetadata.self) { child in
             IOSPlexDetailView(item: child)
         }
         .task { await load() }
@@ -540,7 +540,7 @@ struct IOSPlexDetailView: View {
         .preferredColorScheme(.dark)
     }
 
-    private var displayedItem: IOSPlexItem { fullItem ?? item }
+    private var displayedItem: PlexMetadata { fullItem ?? item }
 
     private func heroHeader(
         in size: CGSize,
@@ -749,7 +749,7 @@ struct IOSPlexDetailView: View {
         .scrollIndicators(.hidden)
     }
 
-    private var playbackTarget: IOSPlexItem? {
+    private var playbackTarget: PlexMetadata? {
         if displayedItem.isPlayable { return displayedItem }
         return episodes.first(where: { $0.id == highlightedEpisodeID })
             ?? episodes.first(where: { $0.resumeSeconds > 0 })
@@ -779,7 +779,7 @@ struct IOSPlexDetailView: View {
             : "Play"
     }
 
-    private func seasonLabel(_ season: IOSPlexItem) -> String {
+    private func seasonLabel(_ season: PlexMetadata) -> String {
         guard let index = season.index else { return season.displayTitle }
         return index == 0 ? "Specials" : "Season \(index)"
     }
@@ -845,9 +845,9 @@ struct IOSPlexDetailView: View {
     /// to centre as soon as the rail appears.
     private func preloadEpisodesAndSelectNextUp() async {
         let seasonList = seasons
-        let loaded: [String: [IOSPlexItem]] = await withTaskGroup(
-            of: (String, [IOSPlexItem]).self,
-            returning: [String: [IOSPlexItem]].self
+        let loaded: [String: [PlexMetadata]] = await withTaskGroup(
+            of: (String, [PlexMetadata]).self,
+            returning: [String: [PlexMetadata]].self
         ) { group in
             for season in seasonList {
                 group.addTask {
@@ -859,7 +859,7 @@ struct IOSPlexDetailView: View {
                 }
             }
 
-            var result: [String: [IOSPlexItem]] = [:]
+            var result: [String: [PlexMetadata]] = [:]
             for await (seasonID, children) in group {
                 result[seasonID] = children
             }
@@ -891,7 +891,7 @@ struct IOSPlexDetailView: View {
         }
     }
 
-    private func nextEpisode(in candidates: [IOSPlexItem]) -> IOSPlexItem? {
+    private func nextEpisode(in candidates: [PlexMetadata]) -> PlexMetadata? {
         candidates.first(where: { $0.resumeSeconds > 0 })
             ?? candidates.first(where: { ($0.viewCount ?? 0) == 0 })
             ?? candidates.first
@@ -1081,7 +1081,7 @@ struct IOSPlexConnectionSheet: View {
 }
 
 private struct IOSPlexHero: View {
-    let items: [IOSPlexItem]
+    let items: [PlexMetadata]
     @Binding var selection: Int
     let height: CGFloat
     let artworkTopInset: CGFloat
@@ -1250,7 +1250,7 @@ private struct IOSPlexHero: View {
 /// full-screen colour wash, the native material destroys its detail, and the
 /// crisp hero above fades into that wash instead of ending at a card edge.
 private struct IOSPlexAmbientBackdrop: View {
-    let item: IOSPlexItem?
+    let item: PlexMetadata?
     let isPortrait: Bool
     @EnvironmentObject private var plex: IOSPlexSession
 
@@ -1380,17 +1380,17 @@ private struct IOSPlexRetainedArtwork: View {
 }
 
 private struct IOSPlexShelfView: View {
-    let shelf: IOSPlexShelf
+    let shelf: PlexHub
     let excludedItemIDs: Set<String>
 
-    init(shelf: IOSPlexShelf, excludedItemIDs: Set<String> = []) {
+    init(shelf: PlexHub, excludedItemIDs: Set<String> = []) {
         self.shelf = shelf
         self.excludedItemIDs = excludedItemIDs
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(shelf.title).font(.title2.bold()).padding(.horizontal)
+            Text(shelf.displayTitle).font(.title2.bold()).padding(.horizontal)
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(shelf.items.filter { !excludedItemIDs.contains($0.id) }) { item in
@@ -1428,7 +1428,7 @@ private struct TileSize: ViewModifier {
 }
 
 private struct IOSPlexPosterCard: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     /// Fixed tile width, or nil to fill whatever the parent offers (grid
     /// columns, the compact search row).
     var width: CGFloat? = nil
@@ -1476,7 +1476,7 @@ private struct IOSPlexPosterCard: View {
 }
 
 private struct IOSPlexContinueCard: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     @EnvironmentObject private var plex: IOSPlexSession
 
     var body: some View {
@@ -1529,7 +1529,7 @@ private struct IOSPlexContinueCard: View {
 /// preserves transparent artwork, sizes it to fit the current surface, and
 /// retains a readable text title while Plex metadata or the image is loading.
 private struct IOSPlexResolvedLogo: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     let fallbackTitle: String
     let maxWidth: CGFloat
     let maxHeight: CGFloat
@@ -1580,7 +1580,7 @@ private struct IOSPlexResolvedLogo: View {
 }
 
 private struct IOSPlexSearchRow: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     var body: some View {
         HStack(spacing: 12) {
             IOSPlexPosterCard(item: item).frame(width: 64)
@@ -1594,7 +1594,7 @@ private struct IOSPlexSearchRow: View {
 }
 
 private struct IOSPlexChildRow: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     @EnvironmentObject private var plex: IOSPlexSession
     var body: some View {
         HStack(spacing: 14) {
@@ -1616,7 +1616,7 @@ private struct IOSPlexChildRow: View {
 }
 
 private struct IOSPlexEpisodeCard: View {
-    let item: IOSPlexItem
+    let item: PlexMetadata
     let isCurrent: Bool
     @EnvironmentObject private var plex: IOSPlexSession
 

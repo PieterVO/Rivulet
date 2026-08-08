@@ -17,8 +17,15 @@ import Foundation
 enum PlexAPI: Sendable {
     static let baseUrl = "https://plex.tv"
     static let productName = "Rivulet"
-    static let deviceName = "Apple TV"
-    static let platform = "tvOS"
+
+    /// Host-injected, defaulting to the tvOS app's values. The iOS app
+    /// overrides both at launch (RivuletiOSApp.init), before any request is
+    /// built. Injection rather than `#if os(...)` because shared code carries
+    /// no platform conditionals (CLAUDE.md, Platform Boundary), and rather
+    /// than `UIDevice.systemName` because that reports "iPadOS" on some iPad
+    /// versions and "iOS" on others — Plex would see one app as two platforms.
+    static var deviceName = "Apple TV"
+    static var platform = "tvOS"
 
     /// Per-install UUID generated on first launch and persisted in UserDefaults.
     /// Plex uses this to distinguish devices in its Dashboard, attribute transcode

@@ -140,6 +140,38 @@ plus `DisplayCriteriaManager`. Judge by tvOS-only frameworks (`TVServices`,
 Move files into `RivuletCore/` when a slice actually needs them, not
 speculatively. The list above is the destination, not a migration order.
 
+The Plex stack is already across: `PlexNetworkManager`, `PlexAuthManager`,
+`PlexUserProfileManager`, `Models/Plex/`, the TMDB client, `IntroDBClient`,
+`WatchProgressPolicy`, the attested `URLSession`, and the Sentry startup.
+**There is exactly one Plex client.** `RivuletiOS/Plex/` holds only
+`IOSPlexSession` (the iOS content store, counterpart of `PlexDataStore`) and
+`IOSPlexAdapters` (display accessors). Never add a second decoder for a Plex
+endpoint to the iOS folder; a bug fixed in the shared client must be the fix
+for both apps.
+
+### Host injection instead of platform conditionals
+
+Where shared code genuinely differs per platform, the app injects the
+difference at launch — the shared file stays free of `#if os(...)` and of
+references to per-platform types:
+
+- `PlexAPI.platform` / `PlexAPI.deviceName` are `static var`s defaulting to
+  the tvOS values; `RivuletiOSApp.init` overrides them before any request is
+  built. Not `UIDevice.systemName`, which splits iPads across "iOS"/"iPadOS".
+- `PlexAuthManager.onAuthenticated` / `.onSignedOut` and
+  `PlexUserProfileManager.onProfileChanged` / `.onInitialProfileSelected` are
+  closures the host sets at launch (tvOS → `PlexDataStore`, iOS →
+  `IOSPlexSession`). The managers own identity; content stores are per
+  platform. `onAuthenticated` is awaited on purpose — it prefetches the
+  libraries the tvOS sidebar needs on its first build.
+- `SentryStartup.start(platform:)` takes the platform from the caller for the
+  same reason.
+
+RivuletCore is compiled into each app target, not built as a module, so
+`internal` visibility spans the whole target and no `public` is needed. That
+also means an extension on a shared type inside `RivuletiOS/` is not a
+retroactive conformance.
+
 ### The player split
 
 `AetherPlayer` is three pieces in two homes. The engine mapping (state and track

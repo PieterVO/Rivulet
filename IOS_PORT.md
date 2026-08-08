@@ -16,11 +16,16 @@ tablet experience is migrated feature by feature.
   Boundary section is the full rule and lists what qualifies.
 - Port in vertical slices so the iOS target stays buildable after every step.
 
-The Plex layer under `RivuletiOS/Plex/` is a deliberate short-term duplicate of
-`PlexNetworkManager` and `Models/Plex/`, not a permanent one. It keeps the POC
-unblocked at the cost of drift: a Plex fix on tvOS does not reach iOS, and the
-failure is silent rather than a build error. Folding it onto the shared client
-is the next slice worth doing.
+There is exactly one Plex client. `PlexNetworkManager`, `PlexAuthManager` and
+`Models/Plex/` live in `RivuletCore/` and both apps compile them;
+`RivuletiOS/Plex/` holds only presentation glue — `IOSPlexSession` (the iOS
+content store and view-facing facade, the counterpart of tvOS
+`PlexDataStore`) and `IOSPlexAdapters` (display accessors on the shared
+models). The POC's duplicate client (`IOSPlexAPI` / `IOSPlexModels`) is
+deleted; do not reintroduce a second decoder for a Plex endpoint. Platform
+identity (`PlexAPI.platform` / `deviceName`) and the auth manager's content
+handoffs (`onAuthenticated` / `onSignedOut`) are host-injected at launch, not
+platform-conditional.
 
 ## Initial slices
 

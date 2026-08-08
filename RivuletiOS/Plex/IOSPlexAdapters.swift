@@ -65,7 +65,10 @@ extension PlexHub {
     /// rather than at each call site.
     var displayTitle: String { title ?? "" }
 
-    var items: [PlexMetadata] { Metadata ?? [] }
+    /// Capped at 14, the rail length the old iOS client used — /hubs returns
+    /// up to `count` (24) per hub and a phone rail has no business being that
+    /// long. Library grids never read this; they page the section directly.
+    var items: [PlexMetadata] { Array((Metadata ?? []).prefix(14)) }
 
     var isContinueWatching: Bool {
         (title ?? "").localizedCaseInsensitiveContains("continue watching")
@@ -73,5 +76,35 @@ extension PlexHub {
 
     var isOnDeck: Bool {
         (title ?? "").localizedCaseInsensitiveContains("on deck")
+    }
+}
+
+
+/// Same module, so this is not a retroactive conformance: RivuletCore folders
+/// compile INTO each app target rather than forming a separate module.
+extension PlexDevice: Identifiable {
+    var id: String { clientIdentifier }
+}
+
+extension PlexMarker {
+    /// The player chrome's names for the shared second-based accessors.
+    var start: TimeInterval { startTimeSeconds }
+    var end: TimeInterval { endTimeSeconds }
+
+    /// IntroDB backfill markers carry synthetic negative ids (IntroDBClient).
+    var isCommunity: Bool { (id ?? 0) < 0 }
+
+    /// Stable identity for skip-button state across metadata refreshes, where
+    /// Plex's numeric marker ids are not guaranteed to repeat.
+    var stableID: String { "\(type ?? "marker")-\(id ?? startTimeOffset ?? 0)" }
+
+    var displayName: String {
+        switch type {
+        case "intro": "Intro"
+        case "recap": "Recap"
+        case "credits": "Credits"
+        case "commercial": "Commercial"
+        default: "Segment"
+        }
     }
 }

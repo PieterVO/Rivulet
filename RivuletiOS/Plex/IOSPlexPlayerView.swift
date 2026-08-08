@@ -180,7 +180,7 @@ struct IOSPlexPlayerView: View {
         }
     }
 
-    private func markerButton(_ marker: IOSPlexMarker) -> some View {
+    private func markerButton(_ marker: PlexMarker) -> some View {
         VStack {
             Spacer()
             HStack {
@@ -272,7 +272,7 @@ struct IOSPlexPlayerView: View {
         .padding(20).frame(maxWidth: 360).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18)).padding()
     }
 
-    private var activeMarker: IOSPlexMarker? {
+    private var activeMarker: PlexMarker? {
         request.markers.first {
             !skippedMarkerIDs.contains($0.stableID) && player.sourceTime >= $0.start && player.sourceTime < $0.end
         }
@@ -317,7 +317,7 @@ struct IOSPlexPlayerView: View {
         if enabled { skip(marker) }
     }
 
-    private func skip(_ marker: IOSPlexMarker) {
+    private func skip(_ marker: PlexMarker) {
         skippedMarkerIDs.insert(marker.stableID)
         Task { await player.seek(to: marker.end) }
     }

@@ -1,6 +1,23 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
+//
+//  IOSPlexSession.swift
+//  Rivulet iOS
+//
+//  The iOS content store and view-facing facade over the SHARED Plex stack:
+//  PlexAuthManager owns identity (PIN flow, server selection, tokens) and
+//  PlexNetworkManager owns every request. This file holds no endpoint
+//  knowledge — it shapes shared results for the iOS views and caches what is
+//  expensive to re-resolve (clear logos). The one exception is the direct
+//  playback URL and its headers, which iOS composes here because tvOS routes
+//  playback through ContentRouter, a surface iOS does not have yet.
+//
+//  It exists for the same reason PlexDataStore does on tvOS: the auth manager
+//  hands off to "whatever holds content" through PlexAuthManager.onAuthenticated
+//  / .onSignedOut, and this is that object on iOS.
+//
+
 import Combine
 import Foundation
 
@@ -19,101 +36,118 @@ final class IOSPlexSession: ObservableObject {
     @Published private(set) var state: State = .signedOut
     @Published private(set) var pinCode: String?
     @Published private(set) var authenticationURL: URL?
-    @Published private(set) var availableServers: [IOSPlexServer] = []
-    @Published private(set) var libraries: [IOSPlexLibrary] = []
-    @Published private(set) var shelves: [IOSPlexShelf] = []
+    @Published private(set) var availableServers: [PlexDevice] = []
+    @Published private(set) var libraries: [PlexLibrary] = []
+    @Published private(set) var shelves: [PlexHub] = []
     @Published private(set) var isLoadingContent = false
     @Published private(set) var selectedServerName: String?
     @Published private(set) var profileImageURL: URL?
     @Published private(set) var profileDisplayName: String?
 
-    private let api = IOSPlexAPI.shared
-    private var authToken: String?
-    private var serverToken: String?
-    private var serverURL: URL?
-    private var pollingTask: Task<Void, Never>?
+    private let auth = PlexAuthManager.shared
+    private let network = PlexNetworkManager.shared
+    private var cancellables = Set<AnyCancellable>()
     private var logoURLCache: [String: URL] = [:]
     private var missingLogoKeys = Set<String>()
     private var logoResolutionTasks: [String: Task<URL?, Never>] = [:]
 
-    private let authTokenKey = "iosPlexAuthToken"
-    private let serverTokenKey = "iosPlexServerToken"
-    private let serverURLKey = "iosPlexServerURL"
-    private let serverNameKey = "iosPlexServerName"
-
     init() {
-        authToken = KeychainHelper.get(authTokenKey)
-        serverToken = KeychainHelper.get(serverTokenKey)
-        if let stored = UserDefaults.standard.string(forKey: serverURLKey) {
-            serverURL = URL(string: stored)
-        }
-        selectedServerName = UserDefaults.standard.string(forKey: serverNameKey)
+        // The auth manager owns identity and hands content off to the host's
+        // store — on iOS, this object. Mirrors RivuletApp.init on tvOS.
+        PlexAuthManager.onAuthenticated = { [weak self] in await self?.refresh() }
+        PlexAuthManager.onSignedOut = { [weak self] in self?.clearContent() }
+
+        auth.$state
+            .sink { [weak self] in self?.apply(authState: $0) }
+            .store(in: &cancellables)
+        auth.$username
+            .sink { [weak self] in self?.profileDisplayName = $0 }
+            .store(in: &cancellables)
+        auth.$userThumbURL
+            .sink { [weak self] in self?.profileImageURL = $0 }
+            .store(in: &cancellables)
 
         if isConfigured {
             state = .connected
             Task { await refresh() }
-            Task { await loadUserProfile() }
+        } else if auth.isAuthenticated {
+            // Token but no server: a sign-in that never finished picking one.
+            Task { await auth.resumeServerSelection() }
         }
     }
 
-    var isConfigured: Bool { serverURL != nil && serverToken != nil }
-    var isSignedIn: Bool { authToken != nil }
+    var isConfigured: Bool {
+        auth.selectedServerURL != nil && auth.selectedServerToken != nil
+    }
 
-    func beginSignIn() async {
-        pollingTask?.cancel()
-        state = .requestingPIN
-        pinCode = nil
-        authenticationURL = nil
-        do {
-            let pin = try await api.requestPIN()
-            pinCode = pin.code
-            authenticationURL = api.authenticationURL(code: pin.code)
+    var isSignedIn: Bool { auth.authToken != nil }
+
+    // MARK: - Auth (delegated)
+
+    func beginSignIn() async { await auth.startPINAuthentication() }
+
+    func cancelSignIn() { auth.cancelAuthentication() }
+
+    func selectServer(_ server: PlexDevice) async { await auth.selectServer(server) }
+
+    func signOut() {
+        // clearContent() runs via the onSignedOut handoff.
+        auth.signOut()
+    }
+
+    /// Maps the shared auth state machine onto the iOS view states.
+    ///
+    /// `@Published` emits on willSet, so `auth.state` still holds the OLD
+    /// value inside this sink — everything needed must come from the emitted
+    /// value or from properties the manager assigns BEFORE flipping state
+    /// (selectedServerURL/token are, by the atomic-flip rule in selectServer).
+    private func apply(authState: PlexAuthState) {
+        switch authState {
+        case .idle:
+            pinCode = nil
+            authenticationURL = nil
+            state = isConfigured ? .connected : .signedOut
+        case .requestingPin:
+            state = .requestingPIN
+        case .waitingForPIN(let code, _):
+            pinCode = code
+            authenticationURL = Self.authenticationURL(code: code)
             state = .waitingForPIN
-            pollingTask = Task { [weak self] in
-                await self?.poll(pinID: pin.id)
-            }
-        } catch {
-            state = .failed(error.localizedDescription)
+        case .authenticated:
+            pinCode = nil
+            authenticationURL = nil
+            selectedServerName = auth.selectedServer?.name ?? auth.savedServerName
+            // Content loads through the onAuthenticated handoff; between the
+            // token arriving and a server being picked there is nothing to show.
+            state = isConfigured ? .connected : .findingServers
+        case .selectingServer(let servers):
+            availableServers = servers
+            state = .selectingServer
+        case .error(let message):
+            state = .failed(message)
         }
     }
 
-    func cancelSignIn() {
-        pollingTask?.cancel()
-        pollingTask = nil
-        pinCode = nil
-        authenticationURL = nil
-        state = isConfigured ? .connected : .signedOut
+    /// Same link the shared manager's `authURL` builds, computed from the
+    /// emitted PIN code because inside a willSet sink the manager's own
+    /// `state` (which `authURL` reads) has not been assigned yet.
+    private static func authenticationURL(code: String) -> URL? {
+        var components = URLComponents(string: "https://app.plex.tv/auth")
+        components?.fragment = "?clientID=\(PlexAPI.clientIdentifier)&code=\(code)&context[device][product]=\(PlexAPI.productName)"
+        return components?.url
     }
 
-    func selectServer(_ server: IOSPlexServer) async {
-        guard let authToken else { return }
-        state = .findingServers
-        clearLogoCache()
-        let token = server.accessToken ?? authToken
-        guard let url = await api.workingConnection(for: server, token: token) else {
-            state = .failed(IOSPlexError.noReachableServer.localizedDescription)
-            return
-        }
-
-        serverURL = url
-        serverToken = token
-        selectedServerName = server.name
-        KeychainHelper.set(token, forKey: serverTokenKey)
-        UserDefaults.standard.set(url.absoluteString, forKey: serverURLKey)
-        UserDefaults.standard.set(server.name, forKey: serverNameKey)
-        state = .connected
-        availableServers = []
-        await refresh()
-    }
+    // MARK: - Content
 
     func refresh() async {
-        guard let serverURL, let serverToken else { return }
+        guard let (serverURL, token) = try? configuration() else { return }
         isLoadingContent = true
         do {
-            async let libraries = api.libraries(server: serverURL, token: serverToken)
-            async let shelves = api.hubs(server: serverURL, token: serverToken)
+            async let libraries = network.getLibraries(serverURL: serverURL, authToken: token)
+            async let hubs = network.getHubs(serverURL: serverURL, authToken: token, count: 24)
             self.libraries = try await libraries.filter { ["movie", "show", "artist"].contains($0.type) }
-            self.shelves = try await shelves
+            self.shelves = Self.shaped(try await hubs)
+            selectedServerName = auth.selectedServer?.name ?? auth.savedServerName
             state = .connected
         } catch {
             state = .failed(error.localizedDescription)
@@ -121,36 +155,62 @@ final class IOSPlexSession: ObservableObject {
         isLoadingContent = false
     }
 
-    func items(in library: IOSPlexLibrary) async throws -> [IOSPlexItem] {
-        let configuration = try configuration()
-        return try await api.libraryItems(server: configuration.url, token: configuration.token, library: library)
+    /// Drop hubs that would render as an empty or unlabeled rail. The per-rail
+    /// item cap lives in `PlexHub.items` (IOSPlexAdapters).
+    private static func shaped(_ hubs: [PlexHub]) -> [PlexHub] {
+        hubs.filter {
+            !$0.items.isEmpty
+                && !$0.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
-    func hubs(in library: IOSPlexLibrary) async throws -> [IOSPlexShelf] {
-        let configuration = try configuration()
-        return try await api.hubs(
-            server: configuration.url,
-            token: configuration.token,
-            library: library
-        )
+    func items(in library: PlexLibrary) async throws -> [PlexMetadata] {
+        let (serverURL, token) = try configuration()
+        return try await network.getLibraryItemsWithTotal(
+            serverURL: serverURL,
+            authToken: token,
+            sectionId: library.key,
+            size: 200,
+            sort: "titleSort",
+            includeGuids: true
+        ).items
     }
 
-    func metadata(for item: IOSPlexItem) async throws -> IOSPlexItem {
+    func hubs(in library: PlexLibrary) async throws -> [PlexHub] {
+        let (serverURL, token) = try configuration()
+        return Self.shaped(try await network.getLibraryHubs(
+            serverURL: serverURL,
+            authToken: token,
+            sectionId: library.key
+        ))
+    }
+
+    /// Full metadata: markers, chapters, extras, external guids.
+    func metadata(for item: PlexMetadata) async throws -> PlexMetadata {
         guard let key = item.ratingKey else { return item }
-        let configuration = try configuration()
-        return try await api.metadata(server: configuration.url, token: configuration.token, ratingKey: key)
+        let (serverURL, token) = try configuration()
+        return try await network.getFullMetadata(serverURL: serverURL, authToken: token, ratingKey: key)
     }
 
-    func children(of item: IOSPlexItem) async throws -> [IOSPlexItem] {
+    func children(of item: PlexMetadata) async throws -> [PlexMetadata] {
         guard let key = item.ratingKey else { return [] }
-        let configuration = try configuration()
-        return try await api.children(server: configuration.url, token: configuration.token, ratingKey: key)
+        let (serverURL, token) = try configuration()
+        return try await network.getChildren(serverURL: serverURL, authToken: token, ratingKey: key)
     }
 
-    func search(_ query: String) async throws -> [IOSPlexItem] {
-        let configuration = try configuration()
-        return try await api.search(server: configuration.url, token: configuration.token, query: query)
+    func search(_ query: String) async throws -> [PlexMetadata] {
+        let (serverURL, token) = try configuration()
+        let results = try await network.search(serverURL: serverURL, authToken: token, query: query, size: 80)
+        // Video results only, one row per item — /search returns every
+        // matching type and can repeat an item across result groups.
+        var seen = Set<String>()
+        return results.filter {
+            ["movie", "show", "season", "episode"].contains($0.type ?? "")
+                && seen.insert($0.id).inserted
+        }
     }
+
+    // MARK: - Artwork
 
     /// Which artwork a call site wants. Three distinct shapes, so this is an
     /// enum rather than flags: `.thumb` on an episode is a 16:9 still, while
@@ -165,8 +225,8 @@ final class IOSPlexSession: ObservableObject {
         case backdrop
     }
 
-    func artworkURL(for item: IOSPlexItem, kind: ArtworkKind = .thumb, width: Int = 900, height: Int = 1350) -> URL? {
-        guard let serverURL, let serverToken else { return nil }
+    func artworkURL(for item: PlexMetadata, kind: ArtworkKind = .thumb, width: Int = 900, height: Int = 1350) -> URL? {
+        guard let (serverURL, token) = try? configuration() else { return nil }
         let path: String? = switch kind {
         case .poster:
             item.posterPath
@@ -177,10 +237,11 @@ final class IOSPlexSession: ObservableObject {
                 ? (item.grandparentArt ?? item.art ?? item.thumb)
                 : (item.art ?? item.thumb)
         }
-        return api.artworkURL(
-            server: serverURL,
-            token: serverToken,
-            path: path,
+        guard let path else { return nil }
+        return network.buildThumbnailURL(
+            serverURL: serverURL,
+            authToken: token,
+            thumbPath: path,
             width: width,
             height: height
         )
@@ -189,8 +250,8 @@ final class IOSPlexSession: ObservableObject {
     /// Resolves the same logo source as tvOS: episodes use their show's full
     /// metadata, while movies and shows use their own. Hub responses omit the
     /// Image array, so results (including misses) are cached per source key.
-    func logoURL(for item: IOSPlexItem) async -> URL? {
-        guard let serverURL, let serverToken else { return nil }
+    func logoURL(for item: PlexMetadata) async -> URL? {
+        guard let (serverURL, token) = try? configuration() else { return nil }
         let sourceKey: String?
         switch item.type {
         case "episode":
@@ -206,11 +267,7 @@ final class IOSPlexSession: ObservableObject {
         if missingLogoKeys.contains(sourceKey) { return nil }
 
         if item.type != "episode", item.type != "season",
-           let direct = api.resourceURL(
-               server: serverURL,
-               token: serverToken,
-               path: item.clearLogoPath
-           ) {
+           let direct = Self.directResourceURL(serverURL: serverURL, token: token, path: item.clearLogoPath) {
             logoURLCache[sourceKey] = direct
             return direct
         }
@@ -219,17 +276,13 @@ final class IOSPlexSession: ObservableObject {
             return await existing.value
         }
 
-        let task = Task<URL?, Never> { [api] in
-            guard let metadata = try? await api.metadata(
-                server: serverURL,
-                token: serverToken,
+        let task = Task<URL?, Never> { [network] in
+            guard let metadata = try? await network.getMetadata(
+                serverURL: serverURL,
+                authToken: token,
                 ratingKey: sourceKey
             ) else { return nil }
-            return api.resourceURL(
-                server: serverURL,
-                token: serverToken,
-                path: metadata.clearLogoPath
-            )
+            return Self.directResourceURL(serverURL: serverURL, token: token, path: metadata.clearLogoPath)
         }
         logoResolutionTasks[sourceKey] = task
         let resolved = await task.value
@@ -242,156 +295,144 @@ final class IOSPlexSession: ObservableObject {
         return resolved
     }
 
-    func playback(for item: IOSPlexItem) async throws -> IOSPlexPlaybackRequest {
-        let full = try await metadata(for: item)
-        let configuration = try configuration()
-        guard let url = api.playbackURL(server: configuration.url, token: configuration.token, item: full) else {
-            throw IOSPlexError.invalidURL
+    /// Direct, authenticated URL for transparent assets such as clear logos.
+    /// The photo transcoder can flatten their alpha channel, so these skip it.
+    private static func directResourceURL(serverURL: String, token: String, path: String?) -> URL? {
+        guard let path, !path.isEmpty,
+              let base = URL(string: serverURL),
+              let absolute = URL(string: path, relativeTo: base)?.absoluteURL,
+              var components = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else {
+            return nil
         }
+        var queryItems = components.queryItems ?? []
+        if !queryItems.contains(where: { $0.name == "X-Plex-Token" }) {
+            queryItems.append(URLQueryItem(name: "X-Plex-Token", value: token))
+        }
+        components.queryItems = queryItems
+        return components.url
+    }
+
+    // MARK: - Playback
+
+    func playback(for item: PlexMetadata) async throws -> IOSPlexPlaybackRequest {
+        let full = try await metadata(for: item)
+        let (serverURL, token) = try configuration()
+        guard let part = full.streamKey,
+              let url = Self.directPlayURL(serverURL: serverURL, token: token, partKey: part) else {
+            throw IOSPlexSessionError.noPlayableURL
+        }
+
         var markers = full.Marker ?? []
         if UserDefaults.standard.bool(forKey: "useIntroDB"),
            full.type == "episode",
            let showKey = full.grandparentRatingKey,
            let season = full.parentIndex,
-           let episode = full.index,
-           let show = try? await api.metadata(
-               server: configuration.url,
-               token: configuration.token,
-               ratingKey: showKey
-           ),
-           let imdbID = show.imdbID {
-            let community = await api.communityMarkers(
-                imdbID: imdbID,
-                season: season,
-                episode: episode
+           let episode = full.index {
+            // The show's IMDb id lives on the SHOW's guids; an episode's own
+            // Guid array carries episode-level ids that IntroDB rejects.
+            let show = try? await network.getMetadata(
+                serverURL: serverURL,
+                authToken: token,
+                ratingKey: showKey,
+                includeGuids: true
             )
-            let existingKinds = Set(markers.compactMap(\.type))
-            markers.append(contentsOf: community.filter { marker in
-                guard let type = marker.type else { return false }
-                return !existingKinds.contains(type)
-            })
+            let guidStrings = (show?.Guid ?? []).compactMap(\.id) + [show?.guid].compactMap { $0 }
+            if let imdbID = guidStrings.compactMap(PlexMetadata.extractImdbId(from:)).first {
+                let community = await IntroDBClient().markers(imdbID: imdbID, season: season, episode: episode)
+                let existingKinds = Set(markers.compactMap(\.type))
+                markers.append(contentsOf: community.filter { marker in
+                    guard let type = marker.type else { return false }
+                    return !existingKinds.contains(type)
+                })
+            }
         }
+
         return IOSPlexPlaybackRequest(
             item: full,
             url: url,
-            headers: api.playbackHeaders(token: configuration.token),
-            markers: markers.sorted { $0.start < $1.start },
-            serverURL: configuration.url,
-            token: configuration.token
+            headers: Self.playbackHeaders(token: token),
+            markers: markers.sorted { ($0.startTimeOffset ?? 0) < ($1.startTimeOffset ?? 0) },
+            serverURL: serverURL,
+            token: token
         )
     }
 
     func reportProgress(for request: IOSPlexPlaybackRequest, time: TimeInterval, state: String) async {
-        await api.reportProgress(
-            server: request.serverURL,
-            token: request.token,
-            item: request.item,
-            time: time,
-            state: state
+        guard let key = request.item.ratingKey else { return }
+        try? await network.reportProgress(
+            serverURL: request.serverURL,
+            authToken: request.token,
+            ratingKey: key,
+            timeMs: Int(time * 1000),
+            state: state,
+            duration: request.item.duration
         )
     }
 
-    func signOut() {
-        pollingTask?.cancel()
-        pollingTask = nil
-        authToken = nil
-        serverToken = nil
-        serverURL = nil
-        selectedServerName = nil
-        pinCode = nil
-        authenticationURL = nil
+    private static func directPlayURL(serverURL: String, token: String, partKey: String) -> URL? {
+        guard let base = URL(string: serverURL),
+              var components = URLComponents(url: base.appending(path: partKey), resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        var query = components.queryItems ?? []
+        query.append(URLQueryItem(name: "X-Plex-Token", value: token))
+        query.append(URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier))
+        query.append(URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform))
+        query.append(URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName))
+        components.queryItems = query
+        return components.url
+    }
+
+    private static func playbackHeaders(token: String) -> [String: String] {
+        [
+            "X-Plex-Token": token,
+            "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,
+            "X-Plex-Platform": PlexAPI.platform,
+            "X-Plex-Product": PlexAPI.productName,
+            "User-Agent": "\(PlexAPI.productName)/\(PlexAPI.platform)",
+            "X-Playback-Session-Id": UUID().uuidString
+        ]
+    }
+
+    // MARK: - Private
+
+    private func clearContent() {
         libraries = []
         shelves = []
         availableServers = []
-        profileImageURL = nil
-        profileDisplayName = nil
-        clearLogoCache()
-        KeychainHelper.delete(authTokenKey)
-        KeychainHelper.delete(serverTokenKey)
-        UserDefaults.standard.removeObject(forKey: serverURLKey)
-        UserDefaults.standard.removeObject(forKey: serverNameKey)
-        state = .signedOut
-    }
-
-    private func clearLogoCache() {
+        selectedServerName = nil
         logoURLCache = [:]
         missingLogoKeys = []
         logoResolutionTasks.values.forEach { $0.cancel() }
         logoResolutionTasks = [:]
     }
 
-    private func poll(pinID: Int) async {
-        for _ in 0..<150 {
-            guard !Task.isCancelled else { return }
-            do {
-                if let token = try await api.checkPIN(id: pinID) {
-                    authToken = token
-                    KeychainHelper.set(token, forKey: authTokenKey)
-                    pinCode = nil
-                    authenticationURL = nil
-                    Task { [weak self] in
-                        await self?.loadUserProfile()
-                    }
-                    await discoverServers(token: token)
-                    return
-                }
-            } catch {
-                // Plex may transiently reject a PIN check while the browser is
-                // completing authentication. Keep polling until timeout.
-            }
-            try? await Task.sleep(for: .seconds(2))
+    private func configuration() throws -> (serverURL: String, token: String) {
+        guard let serverURL = auth.selectedServerURL, let token = auth.selectedServerToken else {
+            throw IOSPlexSessionError.notConfigured
         }
-        guard !Task.isCancelled else { return }
-        state = .failed("The Plex sign-in code expired. Please try again.")
-    }
-
-    private func loadUserProfile() async {
-        guard let token = authToken,
-              let profile = try? await api.userProfile(token: token),
-              authToken == token else { return }
-
-        profileDisplayName = profile.displayName
-        if let thumb = profile.thumb, !thumb.isEmpty {
-            profileImageURL = URL(
-                string: thumb,
-                relativeTo: URL(string: "https://plex.tv")!
-            )?.absoluteURL
-        } else {
-            profileImageURL = nil
-        }
-    }
-
-    private func discoverServers(token: String) async {
-        state = .findingServers
-        do {
-            let servers = try await api.servers(token: token).filter { $0.presence != false }
-            guard !servers.isEmpty else {
-                state = .failed("Your Plex account did not return any available media servers.")
-                return
-            }
-            if servers.count == 1, let only = servers.first {
-                await selectServer(only)
-            } else {
-                availableServers = servers
-                state = .selectingServer
-            }
-        } catch {
-            state = .failed(error.localizedDescription)
-        }
-    }
-
-    private func configuration() throws -> (url: URL, token: String) {
-        guard let serverURL, let serverToken else { throw IOSPlexError.noReachableServer }
-        return (serverURL, serverToken)
+        return (serverURL, token)
     }
 }
 
 nonisolated struct IOSPlexPlaybackRequest: Identifiable, Sendable {
     var id: String { item.id }
-    let item: IOSPlexItem
+    let item: PlexMetadata
     let url: URL
     let headers: [String: String]
-    let markers: [IOSPlexMarker]
-    let serverURL: URL
+    let markers: [PlexMarker]
+    let serverURL: String
     let token: String
+}
+
+nonisolated enum IOSPlexSessionError: LocalizedError {
+    case notConfigured
+    case noPlayableURL
+
+    var errorDescription: String? {
+        switch self {
+        case .notConfigured: "No Plex server is connected."
+        case .noPlayableURL: "This item has no playable file."
+        }
+    }
 }
