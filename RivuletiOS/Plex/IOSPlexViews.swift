@@ -416,6 +416,10 @@ struct IOSPlexSettingsView: View {
                 } footer: {
                     Text("Choose up to five. Settings remains available from the account button at the top even when its tab is turned off.")
                 }
+
+                Section {
+                    NavigationLink("Licenses & Legal") { IOSLicensesView() }
+                }
             }
             .navigationTitle("Settings")
             .toolbar { EditButton() }

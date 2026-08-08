@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  AetherPlayer.swift
 //  Rivulet iOS
-//
-//  SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 //  Touch-first host for AetherEngine, used for both Live TV and Plex VOD on
 //  iOS. It shares no code with the tvOS player of the same name: that one
