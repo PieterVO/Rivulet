@@ -94,7 +94,13 @@ workflows:
           esac
           # Keep the ASC lookup as a guard only: a number TestFlight already has
           # is rejected at delivery, so fail here instead of after a full build.
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "")
+          #
+          # --platform is REQUIRED now that iOS and tvOS share one app record.
+          # Unqualified, this can compare a tvOS tag against an iOS build and
+          # fail a perfectly good tvOS release the moment iOS runs ahead.
+          # Build numbers are tracked per platform, so the platforms are free
+          # to reuse each other's numbers.
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" --platform TV_OS 2>/dev/null || echo "")
           if [ -n "$LATEST" ] && [ "$NEXT" -le "$LATEST" ]; then
             echo "Tag asks for build $NEXT but TestFlight is already at $LATEST. Tag a higher build."
             exit 1
