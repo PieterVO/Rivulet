@@ -18,7 +18,7 @@ struct RivuletiOSApp: App {
         Task.detached(priority: .utility) {
             guard !Secrets.sentryDSN.isEmpty else { return }
             try? await Task.sleep(for: .seconds(3))
-            await SentryStartup.start()
+            await SentryStartup.start(platform: .iOS)
         }
         #endif
     }

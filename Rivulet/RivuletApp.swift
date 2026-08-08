@@ -101,7 +101,7 @@ struct RivuletApp: App {
     /// start call is hoisted — the 3s deferral that keeps launch logs clean stays.
     @MainActor
     private static func startSentry() {
-        SentryStartup.start()
+        SentryStartup.start(platform: .tvOS)
 
         // Seed the App Hang triage scope so the very first hang event after
         // launch already carries a screen tag. Updated thereafter via

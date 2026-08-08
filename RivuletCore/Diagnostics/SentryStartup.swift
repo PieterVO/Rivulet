@@ -20,15 +20,41 @@
 import Sentry
 
 public enum SentryStartup {
+    /// Which app sent the event. Both platforms report into one Sentry project,
+    /// so without this the two streams interleave and nothing on an issue says
+    /// which app produced it.
+    ///
+    /// Passed in by the caller rather than derived here. `#if os(...)` is not
+    /// allowed in RivuletCore (see CLAUDE.md, Platform Boundary), and
+    /// `UIDevice.systemName` is not a reliable substitute: it reports "iPadOS"
+    /// on some iPad versions and "iOS" on others, which would split one app's
+    /// events across two tag values. The app knows what it is; it says so.
+    public enum Platform: String {
+        case tvOS
+        case iOS
+    }
+
     /// MUST be main-actor isolated: `SentrySDK.start` builds the SDK's
     /// dependency container, which reads `UIApplication.applicationState` and
     /// installs swizzling plus session / app-hang tracking. Called off the main
     /// actor it trips the Main Thread Checker on every launch.
     @MainActor
-    public static func start() {
+    public static func start(platform: Platform) {
         SentrySDK.start { options in
             options.dsn = Secrets.sentryDSN
             options.debug = false
+            // Set as the initial scope rather than via configureScope after
+            // start, so events captured during startup carry the tag too.
+            //
+            // This tags events; it does not split grouping. A crash in shared
+            // RivuletCore code still lands as ONE issue that both platforms
+            // contribute to, which is the useful behaviour for shared code —
+            // the tag is what makes it filterable (`platform:iOS`) and lets
+            // alerts and dashboards separate the two.
+            options.initialScope = { scope in
+                scope.setTag(value: platform.rawValue, key: "platform")
+                return scope
+            }
             // Transactions we deliberately measure stay at full fidelity;
             // everything else is sampled hard.
             //
