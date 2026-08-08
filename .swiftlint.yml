@@ -13,8 +13,8 @@
 # not to suppress the rule.
 
 excluded:
-  - Rivulet/OpenSourceLicenses.swift   # generated
-  - Rivulet/Config/Secrets.swift       # generated in CI
+  - RivuletCore/OpenSourceLicenses.swift   # license text, not code
+  - RivuletCore/Config/Secrets.swift       # generated in CI
   - RivuletTests/Fixtures
 
 only_rules:
@@ -39,6 +39,19 @@ custom_rules:
     regex: "UIHostingController"
     match_kinds: [identifier, typeidentifier]
     message: "Per-cell hosting is the measured hitch cost the UIKit migration removed."
+    severity: error
+
+  platform_conditional_in_shared_code:
+    name: "#if os() in shared code"
+    # RivuletCore compiles into BOTH app targets; the no-conditionals rule is
+    # the whole platform boundary. Anchored to line start because a real
+    # directive begins its line, while comments in shared files legitimately
+    # DISCUSS `#if os(...)` mid-sentence when documenting why a value is
+    # host-injected instead. (match_kinds is avoided on purpose: wrong kind
+    # names silently disable a custom rule, verified with probe files.)
+    included: ".*RivuletCore/.*"
+    regex: "^\\s*#(if|elseif)[^\\n]*\\bos\\s*\\("
+    message: "Shared code carries no platform conditionals. Lift the platform-specific part into Rivulet/ or RivuletiOS/, or inject it from the host at launch (CLAUDE.md, Platform Boundary)."
     severity: error
 
   tvos_context_menu_is_dead:

@@ -41,10 +41,23 @@ The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg 
 
 ## Project Structure
 
+Four code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
+targets (not a module — `internal` spans each target); `Rivulet/` is the tvOS
+app, `RivuletiOS/` the iOS app. See "Platform Boundary" above for what goes
+where.
+
 ```
-Rivulet/
+RivuletCore/            # Shared tvOS + iOS. The ONE Plex client (PlexNetworkManager,
+│                       #   PlexAuthManager, PlexUserProfileManager), Models/Plex,
+│                       #   TMDB, IntroDBClient, WatchProgressPolicy, IPTV parsers,
+│                       #   Security (attest, keychain), Sentry startup, Secrets,
+│                       #   OpenSourceLicenses. NO #if os(...) — lint-enforced.
+RivuletiOS/             # iOS/iPadOS app (SwiftUI). Plex/ holds ONLY IOSPlexSession
+│                       #   (content store, counterpart of PlexDataStore) and
+│                       #   IOSPlexAdapters (display accessors) — no endpoint code.
+Rivulet/                # The tvOS app — everything below.
 ├── Models/
-│   ├── Plex/           # Plex API models (PlexMetadata, PlexStream, etc.)
+│   ├── Plex/           # (moved to RivuletCore/Models/Plex)
 │   └── SwiftData/      # Persistent models (Channel, EPGProgram, PlexServer)
 ├── Services/
 │   ├── Plex/
@@ -100,7 +113,9 @@ hand-listing `PBXBuildFile` entries in the iOS target: that list has to be
 maintained inside `project.pbxproj`, which is the worst merge surface in the repo.
 
 **Shared code contains no `#if os(...)`.** That single rule is the boundary, and
-it is the only thing keeping the iOS app from taxing tvOS work. When a shared
+it is the only thing keeping the iOS app from taxing tvOS work. It is
+lint-enforced: `platform_conditional_in_shared_code` in `.swiftlint.yml` errors
+on any platform directive under `RivuletCore/`. When a shared
 file needs a platform branch, the file is in the wrong place: lift the
 platform-specific part out into `Rivulet/` or `RivuletiOS/`. Do not add the
 ifdef. PR 284 arrived with both failure modes and they are the worked examples:
@@ -188,9 +203,11 @@ for the iOS half's benefit.
 A local `RivuletCore` package would enforce the boundary at compile time, but
 every shared symbol would need `public` — a mechanical diff across 170+ files
 touching every access modifier. The folder buys the same boundary for a day's
-work. Revisit only if the no-`#if` rule starts getting broken in practice; the
-package is the enforcement mechanism for a rule that discipline is failing to
-hold, not an upgrade to reach for on its own.
+work, and the lint rule above makes the no-`#if` half mechanical. What lint
+cannot catch is a shared file quietly referencing a per-platform type; if that
+starts happening, the package is the escalation — it is the enforcement
+mechanism for a rule that discipline is failing to hold, not an upgrade to
+reach for on its own.
 
 ## Key Architectural Patterns
 
@@ -516,9 +533,12 @@ Two shared schemes: `Rivulet` (tvOS) and `Rivulet iOS`. No SwiftFormat is config
 
 SwiftLint is configured, but **every stock rule is off** (`only_rules: [custom_rules]`
 in `.swiftlint.yml`). It is not a style checker here and has no opinion about force
-casts, line length, or naming. It runs three project-specific rules: no SwiftUI on a
-UIKit surface, no `UIHostingController` in a cell, and no UIKit context menus (dead on
-tvOS 26). A PR gate runs them on Linux; there is no local hook.
+casts, line length, or naming. It runs four project-specific rules: no SwiftUI on a
+UIKit surface, no `UIHostingController` in a cell, no UIKit context menus (dead on
+tvOS 26, iOS exempt), and no `#if os(...)` in `RivuletCore/` (the platform boundary;
+the regex is line-anchored so comments may discuss the directive, and it deliberately
+avoids `match_kinds` — a wrong kind name silently disables a custom rule). A PR gate
+runs them on Linux; there is no local hook.
 
 ```bash
 swiftlint lint --strict     # or: docker run --rm -v "$PWD":/work -w /work \
