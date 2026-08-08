@@ -112,7 +112,7 @@ struct TVSidebarView: View {
             interactionBlocked: nestedNavState.isNested || nestedNavState.isSettingsSubPage,
             pillSuppressed: isMusicLibrarySelected,
             sections: shellSections,
-            content: { tab in AnyView(tabContent(for: tab)) })
+            content: { tab in contentViewController(for: tab) })
         .ignoresSafeArea()
         .onChange(of: selectedTab) { _, newTab in
             nestedNavState.isNested = false
@@ -404,6 +404,41 @@ struct TVSidebarView: View {
 
     // MARK: - Tab Content
 
+    /// Builds one tab's content view controller for the UIKit shell.
+    ///
+    /// A surface that is ALREADY UIKit mounts directly, with no
+    /// `UIHostingController` in between. That sandwich is not free: a hosting
+    /// controller is not focusable in the runloop turn it mounts in, which is
+    /// the whole reason `RootShellViewController.driveFocusIntoContent` has to
+    /// retry at all (issue #280), and every hosted tab's root is rebuilt on
+    /// every SwiftUI update of this view.
+    ///
+    /// Still hosted, and correctly so: Music and Live TV are genuinely
+    /// SwiftUI, and Home carries the welcome / profile-gate overlays.
+    private func contentViewController(for tab: SidebarTab) -> UIViewController {
+        switch tab {
+        case .discover:
+            return PlexHomeViewController(mode: .discover)
+        case .search:
+            let search = SearchContainerViewController()
+            search.onNestedChange = { [nestedNavState] isNested in
+                nestedNavState.isNested = isNested
+            }
+            return search
+        case .library(let key):
+            // The shell caches per `SidebarTab`, so each library key already
+            // gets its own controller — this is what the SwiftUI `.id(key)`
+            // was buying. Music libraries render MusicHomeView, so they fall
+            // through to hosting.
+            if let lib = dataStore.libraries.first(where: { $0.key == key }), !lib.isMusicLibrary {
+                return PlexHomeViewController(mode: .library(key: lib.key, title: lib.title))
+            }
+        default:
+            break
+        }
+        return RootShellHostingController(rootView: AnyView(tabContent(for: tab)))
+    }
+
     /// Settings tab content. The Settings surface is pure UIKit
     /// (`UIKitSettingsContainer` → `SettingsContainerViewController`); the old
     /// SwiftUI `SettingsView` has been retired.
@@ -426,10 +461,10 @@ struct TVSidebarView: View {
             case .account:
                 Color.clear
             case .search:
-                // UIKit Search: the home VC in .search mode under the system
-                // `.searchable` keyboard. (The retired SwiftUI PlexSearchView
-                // was removed — see git history.)
-                UIKitSearchContainer()
+                // Unreachable: `contentViewController(for:)` mounts
+                // SearchContainerViewController directly. Kept so this switch
+                // stays exhaustive over SidebarTab.
+                Color.clear
             case .home:
                 // PlexHomeRoot is ALWAYS rendered (never an if/else branch) so
                 // its SwiftUI identity — and the singleton UIKit home VC it

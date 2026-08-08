@@ -43,6 +43,9 @@ import Combine
 import os.log
 
 private let homeUIKitLog = Logger(subsystem: "com.rivulet.app", category: "PlexHomeUIKit")
+/// Temporary probe for the Search "cannot move Down" issue; paired with the
+/// press/focus probes in RootShellViewController. Remove together.
+private let searchFocusLog = Logger(subsystem: "com.rivulet.app", category: "SearchFocus")
 
 // MARK: - Section model
 
@@ -78,7 +81,7 @@ enum HomeMode {
     /// The Search surface: no hero — a prompt/recents state when the query is
     /// empty, inline searching/error/no-results states, and grouped poster
     /// GRIDS of results (Movies & TV / Episodes & Seasons / Music). The query
-    /// arrives from the SwiftUI `.searchable` shell via `updateSearchQuery`.
+    /// arrives from `SearchContainerViewController` via `updateSearchQuery`.
     case search
 }
 
@@ -378,8 +381,49 @@ final class PlexHomeViewController: UIViewController {
 
     // Callbacks back into the SwiftUI shell.
     var onSelectMusic: ((PlexMetadata) -> Void)?
+    /// Temporary probe: the first visible cell, for UIFocusDebugger.
+    var debugFirstVisibleCell: UICollectionViewCell? {
+        collectionView.visibleCells.min { a, b in
+            (collectionView.indexPath(for: a)?.section ?? 0) < (collectionView.indexPath(for: b)?.section ?? 0)
+        }
+    }
+
+    /// Temporary probe: the focus system the results actually belong to.
+    var debugFocusSystem: UIFocusSystem? { UIFocusSystem.focusSystem(for: collectionView) }
+
+    /// Temporary probe: what is actually on screen and focusable in search
+    /// mode, sampled at press time rather than at snapshot time so it cannot
+    /// be missed. Paired with the SearchFocus probes; remove together.
+    func searchFocusDebugState() -> String {
+        let cvBox = collectionView.convert(collectionView.bounds, to: nil)
+        var parts = [
+            "cv[\(Int(cvBox.minX)),\(Int(cvBox.minY)) \(Int(cvBox.width))x\(Int(cvBox.height))]",
+            "cvHidden=\(collectionView.isHidden)",
+            "stateHidden=\(stateView.isHidden)",
+            "recents=\(recentSearches.count)",
+            "remembers=\(collectionView.remembersLastFocusedIndexPath)",
+            "visible=\(collectionView.visibleCells.count)"
+        ]
+        for cell in collectionView.visibleCells {
+            let box = cell.convert(cell.bounds, to: nil)
+            var desc = "\(type(of: cell))[\(Int(box.minY)) h\(Int(box.height))]"
+            // The link I asserted and never checked: does the delegate actually
+            // report this cell focusable, and does the cell agree?
+            if let path = collectionView.indexPath(for: cell) {
+                desc += " canFocus=\(self.collectionView(collectionView, canFocusItemAt: path))"
+                desc += " cbf=\(cell.canBecomeFocused)"
+                desc += " pref=\(cell.preferredFocusEnvironments.count)"
+            }
+            if let prompt = cell as? SearchPromptCell {
+                desc += " pills=\(prompt.debugFocusablePillCount)"
+            }
+            parts.append(desc)
+        }
+        return parts.joined(separator: " ")
+    }
+
     /// Search mode: the controller changed the query itself (a recents pill
-    /// was tapped) — the shell mirrors it into the `.searchable` field.
+    /// was tapped) — the container mirrors it into the search bar.
     var onSearchQueryChangedByController: ((String) -> Void)?
 
     /// Surface selector — .home (default) or .library(key:title:). All
@@ -626,7 +670,7 @@ final class PlexHomeViewController: UIViewController {
         // whatever sits behind the home view (the SwiftUI shell / system)
         // rather than a flat colour. Search keeps the same clear root: with
         // its three background layers (ambient/blur/backdrop) kept out of the
-        // hierarchy, a clear background lets the uniform system `.searchable`
+        // hierarchy, a clear background lets the uniform system search
         // surround show through seamlessly — an opaque fill there instead reads
         // as a darker panel inset from the surround.
         view.backgroundColor = .clear
@@ -850,7 +894,7 @@ final class PlexHomeViewController: UIViewController {
         reconfigureVisibleSearchCells()
     }
 
-    /// Query updates from the SwiftUI `.searchable` shell. Debounced search,
+    /// Query updates from `SearchContainerViewController`. Debounced search,
     /// identical to PlexSearchView.scheduleSearch.
     func updateSearchQuery(_ rawQuery: String) {
         guard case .search = mode, rawQuery != searchQuery else { return }
@@ -977,6 +1021,16 @@ final class PlexHomeViewController: UIViewController {
             sections.append(.searchGrid(id: id, title: group.title, items: mapToMediaItems(group.metas)))
             searchGroupMetas[id] = group.metas
         }
+        // Temporary probe (Search cannot move Down) — see the SearchFocus
+        // category in RootShellViewController.
+        searchFocusLog.error(
+            """
+            sections=\(sections.count, privacy: .public) \
+            items=\(sections.reduce(0) { $0 + $1.items.count }, privacy: .public) \
+            cvHidden=\(self.collectionView.isHidden, privacy: .public) \
+            stateHidden=\(self.stateView.isHidden, privacy: .public) \
+            cvFocusable=\(self.collectionView.canBecomeFocused, privacy: .public)
+            """)
         return sections
     }
 
@@ -1370,7 +1424,7 @@ final class PlexHomeViewController: UIViewController {
         }
 
         // Search has NO ambient wash, frosted base, or hero — it renders on a
-        // flat opaque surface inside the system `.searchable` container. Keep
+        // flat opaque surface inside the system search container. Keep
         // all three background layers OUT of the hierarchy entirely (they stay
         // allocated so the rest of the code's references are valid, just never
         // parented), so none can paint an image into the search surface.
@@ -1427,7 +1481,7 @@ final class PlexHomeViewController: UIViewController {
     private static let searchTopFadeHeight: CGFloat = 200
 
     /// Search surface only: fade result rows out at the top so they dissolve
-    /// before reaching the persistent system `.searchable` bar (instead of
+    /// before reaching the persistent system search bar (instead of
     /// hard-cutting behind it). A gradient mask on the collection, re-pinned to
     /// the viewport each scroll frame so it stays fixed while the focus-driven
     /// scroll moves content under it. Other modes (hero surfaces) never get the
@@ -1788,8 +1842,19 @@ final class PlexHomeViewController: UIViewController {
         } else {
             // Content path. Reveal the collection view + backdrop, then
             // decide whether to show the inline connection banner.
+            let wasUnfocusable = collectionView.isHidden
             stateView.isHidden = true
             collectionView.isHidden = false
+            // A hidden collection view is invisible to the focus engine, so
+            // while this page was loading there was nothing on it to focus and
+            // focus parked outside it. Un-hiding does not make the engine look
+            // again — tell the shell to re-drive. The error and empty branches
+            // above have their own `setNeedsFocusUpdate()`; only the content
+            // path was silent, which is why Discover (the one surface that sits
+            // in `.loading` long enough to matter) came up dead.
+            if wasUnfocusable {
+                NotificationCenter.default.post(name: .contentBecameFocusable, object: nil)
+            }
             backdropView.isHidden = !showHomeHero
             let shouldShowBanner = !authManager.isConnected
             updateConnectionBanner(shouldShowBanner)
@@ -1860,7 +1925,19 @@ final class PlexHomeViewController: UIViewController {
         // VStack. When the hero is off, the first row (Continue Watching)
         // gets 48pt of breathing room at the top of the scroll.
         updateContentTopInset()
-        collectionView.remembersLastFocusedIndexPath = true
+        // NOT in search mode. The search page swaps its content wholesale
+        // between the prompt/recents cell and grouped result grids, so the
+        // remembered path routinely names a cell that no longer exists. When
+        // the engine tries to enter the collection with an invalid remembered
+        // path it resolves to nothing and produces NO focus update at all,
+        // which is exactly why Down off the keyboard reached the results after
+        // a search and did nothing on the empty page. Preview-dismiss focus
+        // restore is a separate mechanism (`pendingPreviewRestore`).
+        if case .search = mode {
+            collectionView.remembersLastFocusedIndexPath = false
+        } else {
+            collectionView.remembersLastFocusedIndexPath = true
+        }
         collectionView.clipsToBounds = false
         // Take over the vertical focus-scroll. Left enabled, the focus engine
         // runs its OWN scroll animator whenever focus moves between rows, and
@@ -4577,9 +4654,15 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         guard indexPath.section < sectionsSnapshot.count else { return true }
         let kind = sectionsSnapshot[indexPath.section].kind
         // Prompt/state cells host their own FocusableActionButtons (recents
-        // pills, Try Again) — the CELL must stay out of the focus chain so
-        // the engine focuses the buttons directly.
-        if kind == .searchPrompt || kind == .searchState { return false }
+        // pills, Try Again). Keeping the CELL out of the focus chain does NOT
+        // let the engine reach those buttons: a collection view enumerates its
+        // focus items as CELLS, so a non-focusable cell's descendants are never
+        // offered and Down from the search keyboard found nothing to move to,
+        // with four focusable pills on screen. The cell takes focus only when
+        // it has a button, and redirects into it via
+        // `preferredFocusEnvironments`.
+        if kind == .searchPrompt { return !recentSearches.isEmpty }
+        if kind == .searchState { return currentSearchState.hasFocusableAction }
         return !isShelfKind(kind)
     }
 

@@ -16,6 +16,13 @@
 import UIKit
 import os
 
+/// Temporary probe for the Search "cannot move Down from the keyboard" issue.
+/// Query: `log show --predicate 'subsystem == "com.rivulet.app" AND category ==
+/// "SearchFocus"'`. Remove with the press/focus probes in this file once the
+/// hand-off is fixed. `.error` on purpose — `.notice` does not reach `log show`
+/// on the Simulator.
+private let focusProbeLog = Logger(subsystem: "com.rivulet.app", category: "SearchFocus")
+
 /// Invisible focus target at the left edge; focus landing here means the
 /// user pushed left out of content, which opens the sidebar.
 private final class EdgeCatcherView: UIView {
@@ -85,8 +92,17 @@ final class RootShellViewController: UIViewController {
         if let pendingSections { sidebar.setSections(pendingSections) }
 
         sidebar.onTabSelected = { [weak self] tab in
-            self?.onTabChange?(tab)
-            self?.collapseSidebar()
+            guard let self else { return }
+            // Mount BEFORE collapsing. `collapseSidebar` resolves focus
+            // immediately, but the report back through SwiftUI is async, so
+            // waiting for the binding to return parked focus in the OUTGOING
+            // tab's content for a beat and then moved it again — visible as
+            // focus landing on the tab you picked and then jumping to the one
+            // you left. `applySelection` no-ops when the binding round trip
+            // finally arrives, since `currentTab` already matches.
+            self.applySelection(tab)
+            self.onTabChange?(tab)
+            self.collapseSidebar()
         }
         sidebar.onCollapseRequested = { [weak self] in self?.collapseSidebar() }
 
@@ -101,6 +117,9 @@ final class RootShellViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleBelowTopChanged(_:)),
             name: .contentFocusBelowTopChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleContentBecameFocusable),
+            name: .contentBecameFocusable, object: nil)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -132,10 +151,15 @@ final class RootShellViewController: UIViewController {
     /// content stays reactive to TVSidebarView's observed state. The adopt
     /// call lives on RootShellHostingController (SwiftUI side) so this file
     /// stays SwiftUI-free.
+    ///
+    /// The type check comes FIRST on purpose. A directly-mounted UIKit surface
+    /// has nothing to re-point, and building one costs a whole view controller
+    /// — this runs on every SwiftUI update of TVSidebarView, which observes
+    /// eight stores and six defaults keys.
     func refreshContentRoots(_ build: (SidebarTab) -> UIViewController?) {
         for tab in contentVCs.keys {
-            guard let fresh = build(tab),
-                  let host = contentVCs[tab] as? RootShellHostingController else { continue }
+            guard let host = contentVCs[tab] as? RootShellHostingController,
+                  let fresh = build(tab) else { continue }
             host.adoptRoot(from: fresh)
         }
     }
@@ -167,6 +191,12 @@ final class RootShellViewController: UIViewController {
         // focus has to be pushed in once the hosted SwiftUI is focusable.
         contentHasHadFocus = false
         contentFocusGaveUp = false
+        // `belowTop` belongs to the page that reported it. Only the UIKit home
+        // surfaces post `.contentFocusBelowTopChanged`, so leaving it set meant
+        // arriving on Music or Live TV from a scrolled-down Home with the pill
+        // already hidden and nothing on the new page that would ever show it
+        // again. A page with an opinion re-posts on its first focus change.
+        belowTop = false
         updateChromeVisibility()
         driveFocusIntoContent()
     }
@@ -236,6 +266,20 @@ final class RootShellViewController: UIViewController {
         updateChromeVisibility()
     }
 
+    /// The mounted page finished loading and now has something focusable.
+    ///
+    /// `driveFocusIntoContent`'s retry budget is ~1s, which covers the runloop
+    /// turns a freshly mounted SwiftUI tree needs but not a network load. When
+    /// it runs out the surface is treated as permanently unfocusable and focus
+    /// stays parked on the edge catcher forever, because nothing re-resolves
+    /// focus once it settles. This is the "content arrived late" re-arm.
+    @objc private func handleContentBecameFocusable() {
+        guard !contentHasHadFocus else { return }
+        contentFocusGaveUp = false
+        updateChromeVisibility()
+        driveFocusIntoContent()
+    }
+
     // MARK: Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -244,15 +288,124 @@ final class RootShellViewController: UIViewController {
         return super.preferredFocusEnvironments
     }
 
+    // MARK: Focus probe (temporary — issue: Search cannot move Down)
+
+    private func probeName(_ item: UIFocusEnvironment?) -> String {
+        guard let item else { return "nil" }
+        let name = String(describing: type(of: item))
+        // WINDOW coordinates. `frame` is superview-relative and told me the
+        // search keyboard was 66pt tall at the origin, which is nonsense and
+        // sent a whole round of diagnosis the wrong way.
+        func box(_ view: UIView) -> String {
+            let f = view.convert(view.bounds, to: nil)
+            // Window CLASS matters: directional focus cannot cross windows, so
+            // if the search keyboard lives in its own system window that alone
+            // explains why Down never reaches the results.
+            let win = view.window.map { String(describing: type(of: $0)) } ?? "noWindow"
+            return "[\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height)) in \(win)]"
+        }
+        if let view = item as? UIView { return "\(name)\(box(view))" }
+        guard let backing = backingView(of: item) else { return "\(name)[backing=nil]" }
+        return "\(name)[backing=\(String(describing: type(of: backing)))\(box(backing))]"
+    }
+
+    private func probeHeading(_ heading: UIFocusHeading) -> String {
+        switch heading {
+        case .up: return "up"
+        case .down: return "down"
+        case .left: return "left"
+        case .right: return "right"
+        case .next: return "next"
+        case .previous: return "previous"
+        default: return "none(\(heading.rawValue))"
+        }
+    }
+
+    private func probePress(_ type: UIPress.PressType) -> String {
+        switch type {
+        case .upArrow: return "up"
+        case .downArrow: return "down"
+        case .leftArrow: return "left"
+        case .rightArrow: return "right"
+        case .select: return "select"
+        case .menu: return "menu"
+        case .playPause: return "playPause"
+        default: return "other(\(type.rawValue))"
+        }
+    }
+
+    /// Logs every press that reaches the root unhandled. A press that never
+    /// appears here was consumed lower down (the search keyboard is the
+    /// suspect); one that DOES appear means nothing claimed it and the focus
+    /// engine found no target in that direction.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        let types = presses.map { probePress($0.type) }.joined(separator: ",")
+        let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem
+        focusProbeLog.error(
+            "press [\(types, privacy: .public)] reached shell, focused=\(self.probeName(focused), privacy: .public)")
+        // Same occlusion question, asked from a tab that WORKS. If Home's
+        // focused cell reports the same full-screen occluder and moves anyway,
+        // then occlusion is not what is blocking Search and the debugger's
+        // report is describing something benign.
+        if presses.contains(where: { $0.type == .downArrow }),
+           let focusedView = backingView(of: focused) {
+            focusProbeLog.error(
+                """
+                SHELL occl tab=\(String(describing: self.currentTab), privacy: .public) \
+                sidebarView=\(String(describing: Unmanaged.passUnretained(self.sidebar.view).toOpaque()), privacy: .public) \
+                check=\(String(describing: UIFocusDebugger.checkFocusability(for: focusedView)), privacy: .public)
+                """)
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    /// The nearest backing `UIView` at or above `item` in the focus chain.
+    ///
+    /// SwiftUI's focus items are NOT UIViews, so `as? UIView` on a focused item
+    /// (and `context.nextFocusedView`, which is the same cast) is nil for every
+    /// hosted SwiftUI tab — Music and Live TV. That silently turned off both
+    /// `contentHasHadFocus` and the Menu containment check there: Music could
+    /// only ever leave via the give-up fallback, and Menu fell through to the
+    /// system and quit the app.
+    ///
+    /// Walking up to the backing view restores the exact `isDescendant(of:)`
+    /// test for those tabs, modal exclusion included — a presented controller's
+    /// view is added to the window, never to ours.
+    private func backingView(of item: UIFocusEnvironment?) -> UIView? {
+        var env = item
+        while let current = env {
+            if let view = current as? UIView { return view }
+            if let controller = current as? UIViewController { return controller.viewIfLoaded }
+            env = current.parentFocusEnvironment
+        }
+        return nil
+    }
+
+    /// Is the focused item anywhere inside this shell, sidebar included?
+    private func isInsideShell(_ item: UIFocusEnvironment?) -> Bool {
+        backingView(of: item)?.isDescendant(of: view) == true
+    }
+
+    /// Is the focused item inside the mounted content, i.e. inside the shell
+    /// but outside the sidebar?
+    private func isInsideContent(_ item: UIFocusEnvironment?) -> Bool {
+        guard let backing = backingView(of: item) else { return false }
+        return backing.isDescendant(of: view) && !backing.isDescendant(of: sidebar.view)
+    }
+
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        guard let next = context.nextFocusedView else { return }
-        if next === edgeCatcher {
-            let cameFromContent = context.previouslyFocusedView.map {
-                $0.isDescendant(of: view) && !$0.isDescendant(of: sidebar.view)
-            } ?? false
-            if cameFromContent {
+        focusProbeLog.error(
+            """
+            focus tab=\(String(describing: self.currentTab), privacy: .public) \
+            heading=\(self.probeHeading(context.focusHeading), privacy: .public) \
+            from=\(self.probeName(context.previouslyFocusedItem), privacy: .public) \
+            to=\(self.probeName(context.nextFocusedItem), privacy: .public)
+            """)
+        guard let next = context.nextFocusedItem else { return }
+        if let nextView = next as? UIView, nextView === edgeCatcher {
+            if isInsideContent(context.previouslyFocusedItem) {
                 expandSidebar()
             } else {
                 // Spurious landing (launch search); bounce back to content.
@@ -261,7 +414,7 @@ final class RootShellViewController: UIViewController {
             }
             return
         }
-        if !contentHasHadFocus, next.isDescendant(of: view), !next.isDescendant(of: sidebar.view) {
+        if !contentHasHadFocus, isInsideContent(next) {
             contentHasHadFocus = true
             updateChromeVisibility()
         }
@@ -292,9 +445,10 @@ extension RootShellViewController: MenuBackHandling {
         // is the same containment check `PlexHomeViewController.handleMenuBack`
         // already makes, which is why home correctly declined and only the
         // shell absorbed the press.
-        guard let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView,
-              focused.isDescendant(of: view)
-        else { return false }
+        // Via `backingView`, not a bare `as? UIView`: a SwiftUI tab's focused
+        // item is not a UIView, so the plain cast failed there and Menu bubbled
+        // to the system, quitting the app from Music and Live TV.
+        guard isInsideShell(UIFocusSystem.focusSystem(for: view)?.focusedItem) else { return false }
         if sidebar.isExpanded {
             // Menu in the open sidebar returns to Home (issue #192 policy);
             // on Home it falls through so the system can exit the app.
