@@ -43,6 +43,10 @@ custom_rules:
 
   tvos_context_menu_is_dead:
     name: "UIKit context menus do not work on tvOS 26"
+    # tvOS only. Context menus work fine on iOS 26, so this must not fire on
+    # RivuletiOS. Matched as a substring rather than an anchored path so the
+    # exclusion holds whether SwiftLint reports relative or absolute paths.
+    excluded: ".*RivuletiOS/.*"
     regex: "UIContextMenuInteraction|contextMenuConfigurationForItemsAt"
     match_kinds: [identifier, typeidentifier]
     message: "Dead on tvOS 26. Use a long-press plus TileMenuPopupViewController."
