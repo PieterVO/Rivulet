@@ -62,14 +62,14 @@ workflows:
 
       - name: Generate Secrets.swift from env
         script: |
-          cat > Rivulet/Config/Secrets.swift <<EOF
+          cat > RivuletCore/Config/Secrets.swift <<EOF
           import Foundation
 
           enum Secrets {
               static let sentryDSN = "${SENTRY_DSN:-}"
           }
           EOF
-          echo "Wrote Rivulet/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
+          echo "Wrote RivuletCore/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
 
       - name: Set build number from the tag
         script: |
@@ -222,8 +222,17 @@ workflows:
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
 
-      # The iOS target does not compile Secrets.swift (it lives under Rivulet/,
-      # which is tvOS-only) and ships no Sentry, so nothing is generated here.
+      - name: Generate Secrets.swift from env
+        script: |
+          mkdir -p RivuletCore/Config
+          cat > RivuletCore/Config/Secrets.swift <<EOF
+          import Foundation
+
+          enum Secrets {
+              static let sentryDSN = "${SENTRY_DSN:-}"
+          }
+          EOF
+          echo "Wrote RivuletCore/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
 
       - name: Set build number from the tag
         script: |
@@ -256,6 +265,23 @@ workflows:
             --scheme "$XCODE_SCHEME" \
             --config Release \
             --archive-flags="-destination 'generic/platform=iOS'"
+
+      # Without this the in-app frames on iOS crash and app-hang events resolve
+      # as <unknown>, which is what made RIVULET-41 unreadable on tvOS.
+      - name: Upload dSYMs to Sentry
+        ignore_failure: true
+        script: |
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "No SENTRY_AUTH_TOKEN set, skipping dSYM upload."
+            exit 0
+          fi
+          which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
+          sentry-cli debug-files upload \
+            --auth-token "$SENTRY_AUTH_TOKEN" \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT" \
+            --include-sources \
+            "$CM_BUILD_DIR/build/ios/xcarchive"
 
     artifacts:
       - build/ios/ipa/*.ipa

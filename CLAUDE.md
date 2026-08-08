@@ -472,15 +472,15 @@ CachedAsyncImage(url: imageURL) { phase in
 
 ## Build & Run
 
-One-time setup: `Rivulet/Config/Secrets.swift` is gitignored and required for the app target to compile. Copy the template and fill in real values (or leave placeholders for a build that doesn't need Sentry/TMDB/etc. to actually work):
+One-time setup: `RivuletCore/Config/Secrets.swift` is gitignored and required for **both** app targets to compile. Copy the template and fill in real values (or leave placeholders for a build that doesn't need Sentry/TMDB/etc. to actually work):
 
 ```bash
-cp Rivulet/Config/Secrets.swift.template Rivulet/Config/Secrets.swift
+cp RivuletCore/Config/Secrets.swift.template RivuletCore/Config/Secrets.swift
 ```
 
-`Secrets.swift` is the only gitignored file in `Rivulet/Config/` — the rest (`TMDBConfig`, `InsightsConfig`, `InputConfig`) are tracked and present in a fresh clone. Copying the template is the whole step: all three targets use Xcode buildable-folder references (`PBXFileSystemSynchronizedRootGroup`), so files are picked up from disk and never need adding to the project. `RivuletApp.swift` reads `Secrets.sentryDSN`, so the app target will not compile without it.
+It lives in `RivuletCore/` rather than `Rivulet/Config/` because tvOS and iOS both start Sentry through `RivuletCore/Diagnostics/SentryStartup.swift`. The rest of `Rivulet/Config/` (`TMDBConfig`, `InsightsConfig`, `InputConfig`) is tracked, tvOS-only, and present in a fresh clone. Copying the template is the whole step: every target uses Xcode buildable-folder references (`PBXFileSystemSynchronizedRootGroup`), so files are picked up from disk and never need adding to the project. Both `RivuletApp.swift` and `RivuletiOSApp.swift` read `Secrets.sentryDSN`, so neither app compiles without it.
 
-There is a single shared scheme, `Rivulet`. No SwiftFormat is configured.
+Two shared schemes: `Rivulet` (tvOS) and `Rivulet iOS`. No SwiftFormat is configured.
 
 SwiftLint is configured, but **every stock rule is off** (`only_rules: [custom_rules]`
 in `.swiftlint.yml`). It is not a style checker here and has no opinion about force
