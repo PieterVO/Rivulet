@@ -43,7 +43,21 @@ final class SeasonPillView: UIControl {
         if focused { onFocused?() }
     }
 
-    @objc private func handleSelect() { onSelected?() }
+    // Select does not fire .primaryActionTriggered on a plain UIControl on
+    // tvOS, so the wired target never ran and pill Select has never fired.
+    // Consume the press in BOTH began/ended so the focused pill owns the cycle
+    // (mirrors AboutCardControl, a UIControl in this same directory).
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.contains(where: { $0.type == .select }) { return }
+        super.pressesBegan(presses, with: event)
+    }
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.contains(where: { $0.type == .select }) {
+            onSelected?()
+            return
+        }
+        super.pressesEnded(presses, with: event)
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -55,7 +69,6 @@ final class SeasonPillView: UIControl {
 
     private func commonInit() {
         translatesAutoresizingMaskIntoConstraints = false
-        addTarget(self, action: #selector(handleSelect), for: .primaryActionTriggered)
         layer.cornerCurve = .continuous
         layer.borderWidth = 1
         layer.borderColor = UIColor.clear.cgColor
