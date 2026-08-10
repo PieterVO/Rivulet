@@ -63,6 +63,9 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('Rivulet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
+      # ARCHS=arm64: a generic simulator destination otherwise builds the
+      # x86_64 slice too, and LibDovi's tvOS-simulator xcframework carries no
+      # x86_64 dovi_* symbols — the fat link fails. Runners are arm64 anyway.
       - name: Build Rivulet iOS (Debug, simulator)
         run: |
           set -o pipefail
@@ -74,4 +77,5 @@ jobs:
             -clonedSourcePackagesDirPath SourcePackages \
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
             build
