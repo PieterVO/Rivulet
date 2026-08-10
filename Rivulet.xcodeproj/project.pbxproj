@@ -11,9 +11,9 @@
 		A70B44422F05AF3200DEF5ED /* TopShelfExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A70B44392F05AF3200DEF5ED /* TopShelfExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A740D1192F59C56300B9820B /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A740D1182F59C56300B9820B /* AVKit.framework */; };
 		A7F159552F04124A001B2177 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
-		B30000210000000000000021 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
 		B2000001AAAA000000000001 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000001 /* AetherEngine */; };
 		B30000190000000000000019 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000001 /* AetherEngine */; };
+		B30000210000000000000021 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -102,17 +102,17 @@
 			path = RivuletTests;
 			sourceTree = "<group>";
 		};
-		B30000200000000000000020 /* RivuletCore */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = RivuletCore;
-			sourceTree = "<group>";
-		};
 		B30000020000000000000002 /* RivuletiOS */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				B30000160000000000000016 /* Exceptions for "RivuletiOS" folder in "Rivulet iOS" target */,
 			);
 			path = RivuletiOS;
+			sourceTree = "<group>";
+		};
+		B30000200000000000000020 /* RivuletCore */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RivuletCore;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
