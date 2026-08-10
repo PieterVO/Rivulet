@@ -23,10 +23,6 @@
 
 import SwiftUI
 import UIKit
-import os
-
-/// Temporary; paired with the SearchFocus probes in RootShellViewController.
-private let searchProbeLog = Logger(subsystem: "com.rivulet.app", category: "SearchFocus")
 
 final class SearchContainerViewController: UIViewController {
     /// The results surface. Also the whole visible page: prompt/recents when
@@ -49,6 +45,17 @@ final class SearchContainerViewController: UIViewController {
     }
 
     init() {
+        // The page IS the search controller's results controller, which is what
+        // lets the search controller collapse its keyboard when focus moves down
+        // into the results and grow the page to fill the space.
+        //
+        // A previous attempt mounted the page as our own child with a hardcoded
+        // 207pt top inset, to take the layout away from the search controller.
+        // It fixed nothing — the real cause was `sidebar.view` occluding every
+        // focusable item (see `RootShellViewController.updateChromeVisibility`) —
+        // and it cost the keyboard collapse, because the search controller no
+        // longer knew when focus left it. Do not take the layout back; fix focus
+        // hand-off with the press correction below instead.
         searchController = UISearchController(searchResultsController: results)
         searchContainer = UISearchContainerViewController(searchController: searchController)
         super.init(nibName: nil, bundle: nil)
@@ -63,20 +70,12 @@ final class SearchContainerViewController: UIViewController {
         searchController.searchResultsUpdater = self
         searchController.searchBar.delegate = self
         searchController.searchBar.placeholder = "Search your libraries"
-        // Both of these are about OCCLUSION, not appearance.
-        //
-        // `obscuresBackgroundDuringPresentation` defaults to true and puts a
-        // dimming view over the results controller until the search controller
-        // decides to show it. The focus engine excludes visually occluded
-        // items, so every cell underneath was unfocusable and Down off the
-        // keyboard produced no focus update at all — UIFocusDebugger reported
-        // it verbatim: "The item is being visually occluded". It only appeared
-        // to work after a search because that is when the dimming view goes.
-        //
-        // Our results controller IS the page — prompt, recents, inline states
-        // and grids — so it must be visible from the moment the tab mounts,
-        // empty query included. (`showsSearchResultsController` is unavailable
-        // on tvOS; clearing the obscuring view is the whole fix here.)
+        // OCCLUSION, not appearance. This defaults to true and puts a dimming
+        // view over the results controller until the search controller decides
+        // to show it. Our results controller IS the page — prompt, recents,
+        // inline states and grids — so it has to be visible from the moment the
+        // tab mounts, empty query included. (`showsSearchResultsController`,
+        // the iOS way to force that, is unavailable on tvOS.)
         searchController.obscuresBackgroundDuringPresentation = false
 
         // A recents pill sets the query from inside the results controller;
@@ -100,7 +99,11 @@ final class SearchContainerViewController: UIViewController {
 
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        [searchContainer]
+        // ALWAYS the container for the keyboard half, never
+        // `searchController.searchBar` directly: routing through the container
+        // is what brings the tvOS keyboard up in the first place, and aiming at
+        // the bar bypassed it — the keyboard was then never created at all.
+        preferredHalf == .results ? [results] : [searchContainer]
     }
 
     // MARK: - Music hand-off
@@ -137,87 +140,140 @@ final class SearchContainerViewController: UIViewController {
         if presentedViewController == nil { reportNested(false) }
     }
 
-    /// Temporary probe: sample the results page on every vertical press, so
-    /// the log says what was reachable at the moment the press was made rather
-    /// than whenever a snapshot last happened to be recomputed.
+    /// Leaving the tab starts the next visit clean: empty query, focus back on
+    /// the keyboard. Gated on `presentedViewController` because the music detail
+    /// COVERS the page rather than leaving it, and returning from an album to a
+    /// wiped query would lose the user's place.
+    ///
+    /// The controller is cached per tab in the shell, so without this the stale
+    /// query and its results survive every switch away and back.
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        guard presentedViewController == nil else { return }
+        preferredHalf = .keyboard
+        guard searchController.searchBar.text?.isEmpty == false else { return }
+        searchController.searchBar.text = nil
+        // Assigning `text` does not call the delegate, so the page has to be
+        // told itself or it keeps rendering the previous results.
+        results.updateSearchQuery("")
+    }
+
+    // MARK: - Keyboard ⇄ results hand-off
+
+    /// Which half of the page the next focus REQUEST should aim at. Only the
+    /// press hand-off below writes it, so it always reflects a deliberate move.
+    private enum Half { case keyboard, results }
+    private var preferredHalf: Half = .keyboard
+
+    /// Move Down out of the keyboard, and Up out of the results' top row.
+    ///
+    /// The focus engine acts on arrow presses BEFORE the responder chain, and
+    /// only presses it DECLINED bubble. So a Down press arriving here is one the
+    /// engine could not use: it found nothing below the keyboard. Redirecting on
+    /// that press therefore steals nothing — the keyboard's own Left/Right
+    /// letter navigation and the results' own row-to-row moves never reach this
+    /// method, because the engine consumes them.
+    ///
+    /// This is the same declined-press escape the player chrome uses
+    /// (`InsightsPanelContainerView`, `InfoScrollView`), and it is deliberately
+    /// not a `UIFocusGuide`: a guide has to be POSITIONED where the engine will
+    /// find it, and the whole problem is that the search controller lays out
+    /// the keyboard and the results in a hierarchy we do not control, so there
+    /// is no frame we can pin a guide to and trust.
+    ///
+    /// Gated on where focus ACTUALLY is, not on `preferredHalf`, so the two can
+    /// never drift apart.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if presses.contains(where: { $0.type == .upArrow || $0.type == .downArrow }) {
-            searchProbeLog.error(
-                "results \(self.results.searchFocusDebugState(), privacy: .public)")
-            // UIFocusDebugger answers directly what I have been inferring:
-            // whether the engine considers the cell focusable, and what a move
-            // from the currently focused item would actually do.
-            let system = UIFocusSystem.focusSystem(for: view)
-            let focused = system?.focusedItem
-            let sameSystem = system === results.debugFocusSystem
-            searchProbeLog.error("SYSTEM sameAsResults=\(sameSystem, privacy: .public)")
-            if let cell = results.debugFirstVisibleCell {
-                searchProbeLog.error(
-                    "FOCUSABILITY \(String(describing: UIFocusDebugger.checkFocusability(for: cell)), privacy: .public)")
-                searchProbeLog.error(
-                    "OCCLUDERS \(Self.occluders(of: cell), privacy: .public)")
-            }
-            if let focused {
-                searchProbeLog.error(
-                    "SIMULATE \(String(describing: UIFocusDebugger.simulateFocusUpdateRequest(from: focused)), privacy: .public)")
+        let types = Set(presses.map(\.type))
+        if types.contains(.downArrow), !focusIsInResults {
+            rescue(to: .results)
+        } else if types.contains(.upArrow), let from = results.focusedSectionForHandoff {
+            correctUpward(from: from)
+        }
+        // Enqueued LAST so it runs after the engine's move and after any rescue
+        // above. The results page cannot be trusted to scroll itself: see
+        // `revealFocusedRowIfNeeded`.
+        if types.contains(.upArrow) || types.contains(.downArrow) {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.results.revealFocusedRowIfNeeded()
             }
         }
         super.pressesBegan(presses, with: event)
     }
-}
 
-// MARK: - Temporary tree probe
+    /// Hand off only if the engine could not do it itself.
+    ///
+    /// `pressesBegan` fires whether or not the engine acted on the arrow, so
+    /// intervening synchronously moved focus a SECOND time and landed a row past
+    /// the intended one — visible once the top-inset fix let the engine make the
+    /// Down move on its own. Sample the focused item, let the engine have the
+    /// turn, and step in only if nothing actually moved.
+    /// Up out of a results row, keyed on the DESTINATION rather than on whether
+    /// the engine moved.
+    ///
+    /// Gating on "the engine could not move" was wrong here: on Up it CAN move,
+    /// it just picks the keyboard. Revealing the focused row scrolls the row above
+    /// off the collection's top edge, the engine will not focus an off-screen
+    /// item, and the keyboard is the only remaining candidate above — so row 1 got
+    /// skipped while every press looked handled.
+    private func correctUpward(from section: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Landed back inside the page: the engine got it right, leave it.
+            guard self.results.focusedSectionForHandoff == nil else { return }
+            guard section > 0, self.results.focusRow(section - 1) else {
+                // Genuinely left from the top row: the keyboard is correct, just
+                // keep our own aim in step with where focus actually went.
+                self.preferredHalf = .keyboard
+                return
+            }
+            self.preferredHalf = .results
+        }
+    }
 
-private extension SearchContainerViewController {
-    static func backing(_ item: UIFocusEnvironment?) -> UIView? {
-        var env = item
+    private func rescue(to half: Half) {
+        let before = UIFocusSystem.focusSystem(for: view)?.focusedItem
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  UIFocusSystem.focusSystem(for: self.view)?.focusedItem === before
+            else { return }
+            // The page has to be scrolled to the top and its cell realized
+            // before the request, or there is nothing for focus to land on.
+            if half == .results { self.results.aimFocusAtTopRow() }
+            self.move(to: half)
+        }
+    }
+
+    private func move(to half: Half) {
+        preferredHalf = half
+        // Requested from HERE on purpose: `setNeedsFocusUpdate()` is ignored
+        // unless the asking environment currently contains focus, and this
+        // controller is the nearest one that contains both halves.
+        //
+        // There used to be a `results.view.isUserInteractionEnabled = false`
+        // around this, to stop the search container resolving back into the
+        // results. It was self-defeating: disabling interaction removes the
+        // subtree from the focus system, so nothing contained focus any more and
+        // the request that followed was ignored outright — `moved=false`. It is
+        // also unnecessary now that the results page is our own child rather than
+        // the search controller's results, so `searchContainer` has nothing but
+        // the chrome to resolve to.
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    private var focusIsInResults: Bool {
+        guard let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem else { return false }
+        var env: UIFocusEnvironment? = focused
         while let current = env {
-            if let view = current as? UIView { return view }
-            if let controller = current as? UIViewController { return controller.viewIfLoaded }
+            if let view = current as? UIView {
+                return view.isDescendant(of: results.view)
+            }
+            if current === results { return true }
             env = current.parentFocusEnvironment
         }
-        return nil
-    }
-
-    /// Every view painted ON TOP of `view`: at each level of the superview
-    /// chain, the siblings that come after it in `subviews`. Pointers included
-    /// so the culprit can be matched against the address UIFocusDebugger
-    /// reports for "visually occluded by".
-    static func occluders(of view: UIView?) -> String {
-        guard var node = view else { return "nil" }
-        var out: [String] = []
-        while let parent = node.superview {
-            if let index = parent.subviews.firstIndex(of: node) {
-                for sibling in parent.subviews[(index + 1)...] {
-                    let f = sibling.convert(sibling.bounds, to: nil)
-                    let ptr = Unmanaged.passUnretained(sibling).toOpaque()
-                    let owner = (sibling.next as? UIViewController).map { String(describing: type(of: $0)) } ?? "-"
-                    out.append(
-                        "\(type(of: sibling))@\(ptr)"
-                        + "[\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))]"
-                        + " hidden=\(sibling.isHidden) alpha=\(sibling.alpha)"
-                        + " opaque=\(sibling.isOpaque) bg=\(sibling.backgroundColor.map { "\($0)" } ?? "nil")"
-                        + " owner=\(owner)"
-                        + " under=\(String(describing: type(of: parent)))")
-                }
-            }
-            node = parent
-        }
-        return out.isEmpty ? "none" : out.joined(separator: "  |  ")
-    }
-
-    static func chain(_ view: UIView?) -> String {
-        var names: [String] = []
-        var current = view
-        while let node = current {
-            var name = String(describing: type(of: node))
-            if let owner = node.next as? UIViewController {
-                name += "(\(String(describing: type(of: owner))))"
-            }
-            names.append(name)
-            current = node.superview
-        }
-        return names.isEmpty ? "nil" : names.joined(separator: " < ")
+        return false
     }
 }
 

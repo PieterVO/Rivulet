@@ -140,6 +140,14 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.4 (77)", [
+            "Search now moves down from the keyboard into your results",
+            "Moving up from a row of results no longer skips the row above it",
+            "Search results scroll into view instead of sitting under the keyboard",
+            "Recent searches move left and right smoothly again",
+            "Search starts fresh each time you open the tab",
+            "Removed diagnostic logging that shipped in the last build",
+        ]),
         ("1.0.4 (76)", [
             "Fixed Search and Discover, where no button press did anything after opening them",
             "The playback controls now hide on their own again after a few seconds",

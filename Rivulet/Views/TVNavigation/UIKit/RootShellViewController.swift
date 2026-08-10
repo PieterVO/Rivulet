@@ -14,14 +14,6 @@
 //
 
 import UIKit
-import os
-
-/// Temporary probe for the Search "cannot move Down from the keyboard" issue.
-/// Query: `log show --predicate 'subsystem == "com.rivulet.app" AND category ==
-/// "SearchFocus"'`. Remove with the press/focus probes in this file once the
-/// hand-off is fixed. `.error` on purpose — `.notice` does not reach `log show`
-/// on the Simulator.
-private let focusProbeLog = Logger(subsystem: "com.rivulet.app", category: "SearchFocus")
 
 /// Invisible focus target at the left edge; focus landing here means the
 /// user pushed left out of content, which opens the sidebar.
@@ -89,6 +81,7 @@ final class RootShellViewController: UIViewController {
         view.addSubview(sidebar.view)
         sidebar.didMove(toParent: self)
         sidebar.setExpanded(false, animated: false)
+        sidebar.view.isUserInteractionEnabled = false
         if let pendingSections { sidebar.setSections(pendingSections) }
 
         sidebar.onTabSelected = { [weak self] tab in
@@ -239,6 +232,7 @@ final class RootShellViewController: UIViewController {
     private func expandSidebar() {
         guard !sidebar.isExpanded, !interactionBlocked else { return }
         sidebar.setExpanded(true, animated: true)
+        updateChromeVisibility()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -246,6 +240,7 @@ final class RootShellViewController: UIViewController {
     private func collapseSidebar() {
         guard sidebar.isExpanded else { return }
         sidebar.setExpanded(false, animated: true)
+        updateChromeVisibility()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -254,6 +249,15 @@ final class RootShellViewController: UIViewController {
         guard isViewLoaded else { return }
         if interactionBlocked, sidebar.isExpanded { collapseSidebar() }
         sidebar.setPillHidden(belowTop || pillSuppressed || interactionBlocked)
+        // `sidebar.view` is full-screen, transparent and the LAST subview here,
+        // so while collapsed it is an interactive layer painted over every
+        // content view. `UIFocusDebugger` names it as the occluder for every
+        // single focusable item on the page beneath it. Home tolerates that, so
+        // it is not uniformly fatal, but there is no reason for a collapsed
+        // chrome overlay to be in hit-testing or in the engine's occlusion
+        // consideration at all. Nothing inside it is focusable while collapsed;
+        // the pill is decoration.
+        sidebar.view.isUserInteractionEnabled = sidebar.isExpanded
         // While expanded, the sidebar's focus containment already guards the
         // catcher; it only needs to vanish when interaction is blocked or
         // before the mounted content has held focus (see `contentHasHadFocus`
@@ -286,77 +290,6 @@ final class RootShellViewController: UIViewController {
         if sidebar.isExpanded { return [sidebar.focusTarget] }
         if let content = contentVCs[currentTab] { return [content] }
         return super.preferredFocusEnvironments
-    }
-
-    // MARK: Focus probe (temporary — issue: Search cannot move Down)
-
-    private func probeName(_ item: UIFocusEnvironment?) -> String {
-        guard let item else { return "nil" }
-        let name = String(describing: type(of: item))
-        // WINDOW coordinates. `frame` is superview-relative and told me the
-        // search keyboard was 66pt tall at the origin, which is nonsense and
-        // sent a whole round of diagnosis the wrong way.
-        func box(_ view: UIView) -> String {
-            let f = view.convert(view.bounds, to: nil)
-            // Window CLASS matters: directional focus cannot cross windows, so
-            // if the search keyboard lives in its own system window that alone
-            // explains why Down never reaches the results.
-            let win = view.window.map { String(describing: type(of: $0)) } ?? "noWindow"
-            return "[\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height)) in \(win)]"
-        }
-        if let view = item as? UIView { return "\(name)\(box(view))" }
-        guard let backing = backingView(of: item) else { return "\(name)[backing=nil]" }
-        return "\(name)[backing=\(String(describing: type(of: backing)))\(box(backing))]"
-    }
-
-    private func probeHeading(_ heading: UIFocusHeading) -> String {
-        switch heading {
-        case .up: return "up"
-        case .down: return "down"
-        case .left: return "left"
-        case .right: return "right"
-        case .next: return "next"
-        case .previous: return "previous"
-        default: return "none(\(heading.rawValue))"
-        }
-    }
-
-    private func probePress(_ type: UIPress.PressType) -> String {
-        switch type {
-        case .upArrow: return "up"
-        case .downArrow: return "down"
-        case .leftArrow: return "left"
-        case .rightArrow: return "right"
-        case .select: return "select"
-        case .menu: return "menu"
-        case .playPause: return "playPause"
-        default: return "other(\(type.rawValue))"
-        }
-    }
-
-    /// Logs every press that reaches the root unhandled. A press that never
-    /// appears here was consumed lower down (the search keyboard is the
-    /// suspect); one that DOES appear means nothing claimed it and the focus
-    /// engine found no target in that direction.
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        let types = presses.map { probePress($0.type) }.joined(separator: ",")
-        let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem
-        focusProbeLog.error(
-            "press [\(types, privacy: .public)] reached shell, focused=\(self.probeName(focused), privacy: .public)")
-        // Same occlusion question, asked from a tab that WORKS. If Home's
-        // focused cell reports the same full-screen occluder and moves anyway,
-        // then occlusion is not what is blocking Search and the debugger's
-        // report is describing something benign.
-        if presses.contains(where: { $0.type == .downArrow }),
-           let focusedView = backingView(of: focused) {
-            focusProbeLog.error(
-                """
-                SHELL occl tab=\(String(describing: self.currentTab), privacy: .public) \
-                sidebarView=\(String(describing: Unmanaged.passUnretained(self.sidebar.view).toOpaque()), privacy: .public) \
-                check=\(String(describing: UIFocusDebugger.checkFocusability(for: focusedView)), privacy: .public)
-                """)
-        }
-        super.pressesBegan(presses, with: event)
     }
 
     /// The nearest backing `UIView` at or above `item` in the focus chain.
@@ -396,13 +329,6 @@ final class RootShellViewController: UIViewController {
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        focusProbeLog.error(
-            """
-            focus tab=\(String(describing: self.currentTab), privacy: .public) \
-            heading=\(self.probeHeading(context.focusHeading), privacy: .public) \
-            from=\(self.probeName(context.previouslyFocusedItem), privacy: .public) \
-            to=\(self.probeName(context.nextFocusedItem), privacy: .public)
-            """)
         guard let next = context.nextFocusedItem else { return }
         if let nextView = next as? UIView, nextView === edgeCatcher {
             if isInsideContent(context.previouslyFocusedItem) {

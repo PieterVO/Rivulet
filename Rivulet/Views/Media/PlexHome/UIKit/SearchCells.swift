@@ -98,12 +98,6 @@ final class SearchPromptCell: UICollectionViewCell {
         ])
     }
 
-    /// Temporary probe: how many pills the focus engine could actually land on
-    /// (0 when the whole scroll is hidden because there are no recents).
-    var debugFocusablePillCount: Int {
-        pillScroll.isHidden ? 0 : pillStack.arrangedSubviews.filter { $0.canBecomeFocused }.count
-    }
-
     /// The cell is the collection view's focus item, but it is a big empty area
     /// and should never hold focus itself — redirect straight into the pills.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {

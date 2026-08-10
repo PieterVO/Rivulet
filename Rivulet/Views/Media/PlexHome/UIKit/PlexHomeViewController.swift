@@ -43,9 +43,6 @@ import Combine
 import os.log
 
 private let homeUIKitLog = Logger(subsystem: "com.rivulet.app", category: "PlexHomeUIKit")
-/// Temporary probe for the Search "cannot move Down" issue; paired with the
-/// press/focus probes in RootShellViewController. Remove together.
-private let searchFocusLog = Logger(subsystem: "com.rivulet.app", category: "SearchFocus")
 
 // MARK: - Section model
 
@@ -381,46 +378,7 @@ final class PlexHomeViewController: UIViewController {
 
     // Callbacks back into the SwiftUI shell.
     var onSelectMusic: ((PlexMetadata) -> Void)?
-    /// Temporary probe: the first visible cell, for UIFocusDebugger.
-    var debugFirstVisibleCell: UICollectionViewCell? {
-        collectionView.visibleCells.min { a, b in
-            (collectionView.indexPath(for: a)?.section ?? 0) < (collectionView.indexPath(for: b)?.section ?? 0)
-        }
-    }
 
-    /// Temporary probe: the focus system the results actually belong to.
-    var debugFocusSystem: UIFocusSystem? { UIFocusSystem.focusSystem(for: collectionView) }
-
-    /// Temporary probe: what is actually on screen and focusable in search
-    /// mode, sampled at press time rather than at snapshot time so it cannot
-    /// be missed. Paired with the SearchFocus probes; remove together.
-    func searchFocusDebugState() -> String {
-        let cvBox = collectionView.convert(collectionView.bounds, to: nil)
-        var parts = [
-            "cv[\(Int(cvBox.minX)),\(Int(cvBox.minY)) \(Int(cvBox.width))x\(Int(cvBox.height))]",
-            "cvHidden=\(collectionView.isHidden)",
-            "stateHidden=\(stateView.isHidden)",
-            "recents=\(recentSearches.count)",
-            "remembers=\(collectionView.remembersLastFocusedIndexPath)",
-            "visible=\(collectionView.visibleCells.count)"
-        ]
-        for cell in collectionView.visibleCells {
-            let box = cell.convert(cell.bounds, to: nil)
-            var desc = "\(type(of: cell))[\(Int(box.minY)) h\(Int(box.height))]"
-            // The link I asserted and never checked: does the delegate actually
-            // report this cell focusable, and does the cell agree?
-            if let path = collectionView.indexPath(for: cell) {
-                desc += " canFocus=\(self.collectionView(collectionView, canFocusItemAt: path))"
-                desc += " cbf=\(cell.canBecomeFocused)"
-                desc += " pref=\(cell.preferredFocusEnvironments.count)"
-            }
-            if let prompt = cell as? SearchPromptCell {
-                desc += " pills=\(prompt.debugFocusablePillCount)"
-            }
-            parts.append(desc)
-        }
-        return parts.joined(separator: " ")
-    }
 
     /// Search mode: the controller changed the query itself (a recents pill
     /// was tapped) — the container mirrors it into the search bar.
@@ -626,7 +584,6 @@ final class PlexHomeViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        updateSearchTopFade()
         // Diagnostic only — the embedded orthogonal scrollers are NOT
         // configured or driven in any way (the layout owns them and reverts
         // external writes; the shelf margin lives in the section contentInsets
@@ -900,6 +857,12 @@ final class PlexHomeViewController: UIViewController {
         guard case .search = mode, rawQuery != searchQuery else { return }
         searchQuery = rawQuery
         let trimmed = trimmedSearchQuery
+        // A new query shows its results from the top. Without this the page
+        // keeps whatever offset the last visit left, so the first row is
+        // scrolled out of sight above the viewport and a Down press off the
+        // keyboard lands on the SECOND row — the engine picking the first row
+        // that is actually visible.
+        scrollToContentTop()
 
         guard trimmed.count >= Self.searchMinQueryLength else {
             searchTask?.cancel()
@@ -1021,16 +984,6 @@ final class PlexHomeViewController: UIViewController {
             sections.append(.searchGrid(id: id, title: group.title, items: mapToMediaItems(group.metas)))
             searchGroupMetas[id] = group.metas
         }
-        // Temporary probe (Search cannot move Down) — see the SearchFocus
-        // category in RootShellViewController.
-        searchFocusLog.error(
-            """
-            sections=\(sections.count, privacy: .public) \
-            items=\(sections.reduce(0) { $0 + $1.items.count }, privacy: .public) \
-            cvHidden=\(self.collectionView.isHidden, privacy: .public) \
-            stateHidden=\(self.stateView.isHidden, privacy: .public) \
-            cvFocusable=\(self.collectionView.canBecomeFocused, privacy: .public)
-            """)
         return sections
     }
 
@@ -1364,6 +1317,10 @@ final class PlexHomeViewController: UIViewController {
     /// so focus lands on Play exactly as it does at launch.
     private var wantsTopFocus = false
 
+    /// Set by `focusRowAbove()` for exactly one focus update: the section whose
+    /// first cell should take focus. Cleared as soon as it is read.
+    private var pendingRowFocusSection: Int?
+
     /// Last value posted on `.contentFocusBelowTopChanged`, so the SwiftUI
     /// shell only hears about crossings of the top-row boundary, not every
     /// focus move.
@@ -1469,53 +1426,14 @@ final class PlexHomeViewController: UIViewController {
     /// reserves space below the connection banner when it's visible
     /// (mirrors SwiftUI's banner positioning above the content).
     private func updateContentTopInset() {
+        // Search needs no extra top inset: `UISearchContainerViewController`
+        // already sizes the results view to the area BELOW the keyboard, so
+        // nothing scrolls under the chrome and content starts where the view
+        // starts. (Measured: results view is [0,207 1920x873] on 1080p.)
         let baseTop: CGFloat = showHomeHero ? 0 : 48
         let topInset = baseTop + connectionBannerTopInset
         if collectionView.contentInset.top != topInset {
             collectionView.contentInset.top = topInset
-        }
-    }
-
-    private var searchTopFadeMask: CAGradientLayer?
-    /// Height of the top fade band under the persistent search bar. Tunable.
-    private static let searchTopFadeHeight: CGFloat = 200
-
-    /// Search surface only: fade result rows out at the top so they dissolve
-    /// before reaching the persistent system search bar (instead of
-    /// hard-cutting behind it). A gradient mask on the collection, re-pinned to
-    /// the viewport each scroll frame so it stays fixed while the focus-driven
-    /// scroll moves content under it. Other modes (hero surfaces) never get the
-    /// mask — it would clip the full-bleed hero.
-    private func updateSearchTopFade() {
-        guard case .search = mode else {
-            if collectionView.layer.mask != nil, collectionView.layer.mask === searchTopFadeMask {
-                collectionView.layer.mask = nil
-            }
-            return
-        }
-        let mask: CAGradientLayer
-        if let existing = searchTopFadeMask {
-            mask = existing
-        } else {
-            let g = CAGradientLayer()
-            g.colors = [UIColor.clear.cgColor, UIColor.black.cgColor]
-            g.startPoint = CGPoint(x: 0.5, y: 0)
-            g.endPoint = CGPoint(x: 0.5, y: 1)
-            searchTopFadeMask = g
-            mask = g
-        }
-        // collectionView.bounds.origin tracks contentOffset; pinning the mask
-        // frame to it keeps the fade band over the visible viewport top.
-        let bounds = collectionView.bounds
-        let height = max(bounds.height, 1)
-        let fade = min(Self.searchTopFadeHeight, height)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        mask.frame = bounds
-        mask.locations = [0, NSNumber(value: Double(fade / height))]
-        CATransaction.commit()
-        if collectionView.layer.mask !== mask {
-            collectionView.layer.mask = mask
         }
     }
 
@@ -4545,6 +4463,87 @@ final class PlexHomeViewController: UIViewController {
         scrollToCenter(frame: attrs.frame)
     }
 
+    /// Scroll whatever is focused right now fully on screen.
+    ///
+    /// Driven from OUTSIDE the focus delegate on purpose. The outer collection
+    /// view's `didUpdateFocusIn` does not reliably run for a tile inside a shelf
+    /// row's nested collection view — the nested view's own delegate takes it,
+    /// and that one only drives horizontal scroll — so the self-driven vertical
+    /// scroll never happened for search results. Measured symptom: focus sat on
+    /// row 1's first tile while the page was clamped at its bottom offset (223 ==
+    /// contentSize.height - bounds.height), putting row 1 at window y=32 under a
+    /// viewport starting at 207. Focus was correct and invisible, which reads as
+    /// Down and Up both skipping the first row.
+    /// Scroll a row fully into view and hand it focus. False if it cannot.
+    ///
+    /// Needed because the engine will not move to a row that is scrolled off the
+    /// collection's top edge, and revealing a lower row necessarily pushes the
+    /// one above off: two 492pt rows do not fit an 873pt viewport. On Search that
+    /// made Up out of row 2 land on the keyboard, skipping row 1 — the engine did
+    /// move, it just picked the only thing above that was still on screen.
+    /// Section index of the currently focused item, or nil when focus is not in
+    /// this page. Resolved from the focused VIEW, not an index path: tiles in
+    /// shelf rows live in a nested collection view and never resolve to one.
+    var focusedSectionForHandoff: Int? {
+        guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
+              focused.isDescendant(of: collectionView)
+        else { return nil }
+        return sectionIndex(forFocusedView: focused)
+    }
+
+    func focusRow(_ target: Int) -> Bool {
+        guard target >= 0, target < sectionsSnapshot.count else { return false }
+        // Scroll NOT animated, and before the request: the cell has to exist and
+        // be on screen at the moment the engine resolves preferred focus.
+        if let attrs = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: target)) {
+            let insetTop = collectionView.adjustedContentInset.top
+            let maxOffset = max(-insetTop, collectionView.contentSize.height - collectionView.bounds.height)
+            let clamped = max(-insetTop, min(attrs.frame.minY - insetTop, maxOffset))
+            if abs(collectionView.contentOffset.y - clamped) > 1 {
+                offsetLink?.invalidate()
+                offsetLink = nil
+                collectionView.contentOffset.y = clamped
+                collectionView.layoutIfNeeded()
+            }
+        }
+        guard collectionView.cellForItem(at: IndexPath(item: 0, section: target)) != nil else { return false }
+        pendingRowFocusSection = target
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        return true
+    }
+
+    func revealFocusedRowIfNeeded() {
+        guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
+              focused.isDescendant(of: collectionView)
+        else { return }
+        revealFocusedView(focused)
+    }
+
+    /// Minimal vertical scroll to bring a focused descendant fully on screen.
+    ///
+    /// Frame-based, not section-based: the caller is the path where the section
+    /// index could not be resolved. Scrolls to the nearest edge rather than
+    /// centring, so a row already mostly visible barely moves.
+    private func revealFocusedView(_ view: UIView) {
+        // `collectionView` bounds.origin IS the content offset, so converting
+        // into it yields content coordinates directly.
+        let frameInContent = view.convert(view.bounds, to: collectionView)
+        let insetTop = collectionView.adjustedContentInset.top
+        let offset = collectionView.contentOffset.y
+        var target = offset
+        if frameInContent.minY < offset + insetTop {
+            target = frameInContent.minY - insetTop
+        } else if frameInContent.maxY > offset + collectionView.bounds.height {
+            target = frameInContent.maxY - collectionView.bounds.height
+        }
+        let top = -insetTop
+        let maxOffset = max(top, collectionView.contentSize.height - collectionView.bounds.height)
+        let clamped = max(top, min(target, maxOffset))
+        guard abs(offset - clamped) > 1 else { return }
+        animateContentOffset(toY: clamped)
+    }
+
     private func scrollToCenter(frame: CGRect) {
         let target = frame.midY - collectionView.bounds.height / 2
         let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height)
@@ -4607,6 +4606,14 @@ final class PlexHomeViewController: UIViewController {
     // MARK: - UIFocusEnvironment override
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        // Explicit row hand-off (Up out of a lower row). First, because it is a
+        // deliberate one-shot and must beat every heuristic below it.
+        if let section = pendingRowFocusSection {
+            pendingRowFocusSection = nil
+            if let cell = collectionView.cellForItem(at: IndexPath(item: 0, section: section)) {
+                return [cell]
+            }
+        }
         // Contentless Home (error / empty): steer focus onto the state view's
         // action button so the user is never stranded with nothing focusable.
         // The collection is hidden in these states, so it has no competing cell.
@@ -5026,7 +5033,6 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let offset = scrollView.contentOffset.y
-        updateSearchTopFade()
         backdropView.applyScrollOffset(offset)
         // Parallax the hero paging dots up so they don't sink too low when the
         // page scrolls below the hero: they ride the content at 1x while the
@@ -5050,6 +5056,18 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // Focus left the page (sidebar, modal). Chrome must be back
             // before the sidebar can be interacted with.
             postFocusBelowTop(false)
+            // ...unless focus is still INSIDE the page and only the section
+            // lookup failed, which it does for a tile inside a shelf row's
+            // nested collection view. `isScrollEnabled = false` means the engine
+            // will not scroll for us, so bailing here left a focused row sitting
+            // off-screen: measured on Search with row 1 at window y=32 while the
+            // viewport starts at 207, focused and completely hidden behind the
+            // keyboard. That reads as "Down skipped the first row" when focus
+            // was on it the whole time. Reveal it from its own frame, which
+            // needs no section index.
+            if let next = context.nextFocusedView, next.isDescendant(of: collectionView) {
+                revealFocusedView(next)
+            }
             return
         }
         postFocusBelowTop(nextSectionIndex > topSectionIndex)
@@ -5210,6 +5228,37 @@ extension PlexHomeViewController: MenuBackHandling {
         return true
     }
 
+    /// Jump the page to its resting top offset and lay out, so the first
+    /// section's cell exists. No animation: the focus engine re-resolves
+    /// mid-flight and lands on whatever row is passing.
+    private func scrollToContentTop() {
+        // Cancel any in-flight focus-scroll so it can't animate back over us.
+        offsetLink?.invalidate()
+        offsetLink = nil
+        collectionView.contentOffset = CGPoint(x: 0, y: -collectionView.adjustedContentInset.top)
+        collectionView.layoutIfNeeded()
+    }
+
+    /// Scroll to the top row and mark it as the preferred focus target, WITHOUT
+    /// requesting a focus update.
+    ///
+    /// Split out because the requester is not always this controller.
+    /// `setNeedsFocusUpdate()` is ignored unless the environment asking for it
+    /// currently CONTAINS focus, so when Search hands off from the keyboard the
+    /// request has to come from `SearchContainerViewController` (which contains
+    /// both the keyboard and this page) while the aim is set here.
+    func aimFocusAtTopRow() {
+        scrollToContentTop()
+
+        // Hero modes reuse the launch routing so focus lands on Play; Search
+        // has no hero, so `wantsTopFocus` aims at its first section instead.
+        if heroSectionIndex != nil {
+            needsInitialHeroFocus = true
+        } else {
+            wantsTopFocus = true
+        }
+    }
+
     /// Snap to the top row and put focus there.
     ///
     /// The jump is deliberate. While the page is scrolled deep the top row's
@@ -5220,19 +5269,7 @@ extension PlexHomeViewController: MenuBackHandling {
     /// at the top). Setting the offset and laying out first creates the cell,
     /// so the focus request has somewhere to land.
     private func returnToTopRow() {
-        // Cancel any in-flight focus-scroll so it can't animate back over us.
-        offsetLink?.invalidate()
-        offsetLink = nil
-        collectionView.contentOffset = CGPoint(x: 0, y: -collectionView.adjustedContentInset.top)
-        collectionView.layoutIfNeeded()
-
-        // Hero modes reuse the launch routing so focus lands on Play; Search
-        // has no hero, so `wantsTopFocus` aims at its first section instead.
-        if heroSectionIndex != nil {
-            needsInitialHeroFocus = true
-        } else {
-            wantsTopFocus = true
-        }
+        aimFocusAtTopRow()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
         // The hero's buttons live in a SwiftUI subview that may not be
