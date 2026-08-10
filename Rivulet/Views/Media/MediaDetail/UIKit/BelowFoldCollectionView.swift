@@ -92,6 +92,12 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// the season it resolved as selected. The container builds the season pills
     /// from this instead of fetching `/children` a second time of its own.
     var onSeasonsLoaded: (([MediaItem], Int) -> Void)?
+    /// Per-season watched counts recomputed from the refreshed episodes, keyed by
+    /// season ref itemID. A watch-state refresh reconfigures episode cells and
+    /// nothing else — it never re-runs the seasons fetch — so anything showing a
+    /// season's played count needs this to repaint (CLAUDE.md: "Changing watch
+    /// state must repaint").
+    var onSeasonProgressRefreshed: (([String: ChildProgress]) -> Void)?
 
     /// Which sub-target of the focused episode card is focused (thumb vs
     /// description). Set from the cell's focus reporting.
@@ -648,6 +654,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             changed.append(.episode(id))
         }
         guard !changed.isEmpty else { return }
+        // Published before the cell reconfigure so every watch-derived surface
+        // moves together. Derived from these same episodes rather than a second
+        // seasons fetch — the counts are already in hand.
+        onSeasonProgressRefreshed?(Self.seasonProgress(from: episodes))
         var snapshot = dataSource.snapshot()
         // Only reconfigure identifiers the snapshot still holds — a refresh can
         // land after the rail has been re-configured for a different show.
@@ -656,6 +666,23 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         guard !targets.isEmpty else { return }
         snapshot.reconfigureItems(targets)
         dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    /// Group episodes into per-season played/total counts, keyed by season ref
+    /// itemID. Mirrors Plex's leafCount / viewedLeafCount, which is where
+    /// `MediaItem.childProgress` comes from on the seasons fetch, so a refreshed
+    /// count and a fetched one mean the same thing. `isPlayed` is the played
+    /// flag, not a resume fraction — this is a count, not a progress rule.
+    private static func seasonProgress(from episodes: [MediaItem]) -> [String: ChildProgress] {
+        var counts: [String: (played: Int, total: Int)] = [:]
+        for episode in episodes {
+            guard let seasonID = episode.parentRef?.itemID else { continue }
+            var count = counts[seasonID] ?? (played: 0, total: 0)
+            count.total += 1
+            if episode.userState.isPlayed { count.played += 1 }
+            counts[seasonID] = count
+        }
+        return counts.mapValues { ChildProgress(played: $0.played, total: $0.total) }
     }
 
     private func ingestEpisodesOnly(_ episodes: [MediaItem]) {

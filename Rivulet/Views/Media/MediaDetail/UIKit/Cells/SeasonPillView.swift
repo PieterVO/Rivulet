@@ -22,11 +22,13 @@ final class SeasonPillView: UIControl {
     private var isSelectedSeason = false
     private var isFocusedPill = false
 
-    /// Invoked when this pill takes focus (just previews — bright highlight, the
-    /// rail does NOT move on focus in ATV+).
+    /// Invoked when this pill takes focus. The host scrolls the rail to the
+    /// season from here: moving across the pills live-scrolls the episodes, so
+    /// the focused pill IS the current season.
     var onFocused: (() -> Void)?
-    /// Invoked when this pill is pressed/selected — THIS is what moves the rail
-    /// to the season (ATV+ requires a select, not just focus).
+    /// Invoked when this pill is pressed/selected. Focus already switched the
+    /// season, so Select opens that season's own detail page. Where the host
+    /// leaves that unwired it falls back to re-affirming the season in the rail.
     var onSelected: (() -> Void)?
 
     /// Host-controlled focusability. Pills are focusable ONLY while the user is

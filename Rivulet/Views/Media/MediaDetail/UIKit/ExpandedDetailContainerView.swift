@@ -134,6 +134,12 @@ final class ExpandedDetailContainerView: UIView {
     /// fires on every episode focus move as the rail tracks seasons, so without a
     /// same-season no-op the poster load would restart on each one and flicker.
     private var stripSeasonID: String?
+    /// Watched counts recomputed from the rail's own episodes after a watch-state
+    /// change, keyed by season ref itemID. `seasonItems` comes from the seasons
+    /// fetch, which only re-runs on a full `configure` — so without this the strip
+    /// kept saying "3 watched" while the episode cell directly below it had
+    /// already picked up its watched glyph.
+    private var seasonProgressOverrides: [String: ChildProgress] = [:]
 
     /// Which row of the details has focus. The VC sets this before requesting a
     /// focus update so `belowFoldFocusEnvironment` routes to the right place.
@@ -573,6 +579,14 @@ final class ExpandedDetailContainerView: UIView {
         belowFoldCollection.onSeasonsLoaded = { [weak self] seasons, selectedIndex in
             self?.applySeasons(seasons, selectedIndex: selectedIndex)
         }
+        // The watch-state refresh reconfigures episode cells only; the strip's
+        // counts come from the seasons fetch, which it does not re-run. Take the
+        // recomputed counts off the refreshed episodes instead.
+        belowFoldCollection.onSeasonProgressRefreshed = { [weak self] progress in
+            guard let self, !progress.isEmpty else { return }
+            self.seasonProgressOverrides.merge(progress) { _, new in new }
+            self.refreshSeasonStripMeta()
+        }
         belowFoldCollection.configure(item: item, detail: nil)
         // Entering details starts on the episodes; the selected pill tracks the
         // focused episode's season (set when an episode takes focus).
@@ -887,12 +901,43 @@ final class ExpandedDetailContainerView: UIView {
     /// there is nothing to re-derive here and no second `/children` fetch.
     func applySeasons(_ seasons: [MediaItem], selectedIndex: Int) {
         seasonItems = seasons
+        // A fresh seasons fetch carries current counts, so the post-playback
+        // overrides have nothing left to correct. Also stops a previous item's
+        // counts surviving the reset `applySeasons([], …)` on a carousel move.
+        seasonProgressOverrides = [:]
         setSeasonPills(seasons.map { SeasonPillView.seasonLabel(for: $0) },
                        seasonRefIDs: seasons.map { $0.ref.itemID },
                        selectedIndex: selectedIndex)
         // The strip shows for ANY season count — a single-season show still gets
         // its summary and progress even though the pills (a chooser) stay hidden.
         updateSeasonStrip(seasons.isEmpty ? nil : min(max(0, selectedIndex), seasons.count - 1))
+    }
+
+    /// "Season 3 · 10 episodes · 4 watched". The counts prefer a post-playback
+    /// refresh over the seasons fetch's own snapshot: that fetch only re-runs on
+    /// a full `configure`, so after finishing an episode it still reports the
+    /// pre-playback count (see `seasonProgressOverrides`).
+    private func seasonMetaText(for season: MediaItem) -> String {
+        var meta = SeasonPillView.seasonLabel(for: season)
+        let progress = seasonProgressOverrides[season.ref.itemID] ?? season.childProgress
+        if let progress, progress.total > 0 {
+            meta += " · \(progress.total) episode\(progress.total == 1 ? "" : "s")"
+            if progress.played >= progress.total {
+                meta += " · all watched"
+            } else if progress.played > 0 {
+                meta += " · \(progress.played) watched"
+            }
+        }
+        return meta
+    }
+
+    /// Re-render the counts for the season the strip is ALREADY showing. Separate
+    /// from `updateSeasonStrip` on purpose: that one is keyed on a season change
+    /// and would either no-op here or restart the poster load and flicker.
+    private func refreshSeasonStripMeta() {
+        guard let id = stripSeasonID,
+              let season = seasonItems.first(where: { $0.ref.itemID == id }) else { return }
+        stripMeta.text = seasonMetaText(for: season)
     }
 
     /// Fill the info strip from a season (nil hides it). Display-only; the poster
@@ -910,16 +955,7 @@ final class ExpandedDetailContainerView: UIView {
         guard stripSeasonID != season.ref.itemID else { return }
         stripSeasonID = season.ref.itemID
         seasonInfoStrip.isHidden = false
-        var meta = SeasonPillView.seasonLabel(for: season)
-        if let cp = season.childProgress, cp.total > 0 {
-            meta += " · \(cp.total) episode\(cp.total == 1 ? "" : "s")"
-            if cp.played >= cp.total {
-                meta += " · all watched"
-            } else if cp.played > 0 {
-                meta += " · \(cp.played) watched"
-            }
-        }
-        stripMeta.text = meta
+        stripMeta.text = seasonMetaText(for: season)
         stripSummary.text = season.overview
         stripPosterToken &+= 1
         let token = stripPosterToken
@@ -946,9 +982,6 @@ final class ExpandedDetailContainerView: UIView {
         for (i, label) in labels.enumerated() {
             let pill = SeasonPillView()
             pill.configure(label: label, isSelected: i == selectedSeasonIndex)
-            // Focusing a pill marks this season current (ATV+ switches on focus).
-            // Focus only previews the pill (bright highlight) — the rail does NOT
-            // move on focus, matching ATV+. The current/selected season stays put.
             // ATV+ switches the season on FOCUS (move), not on press: as the user
             // moves Left/Right across the pills, the episode rail live-scrolls to
             // each season. The focused pill becomes the selected/current season.
