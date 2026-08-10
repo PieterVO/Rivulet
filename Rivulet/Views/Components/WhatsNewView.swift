@@ -140,6 +140,15 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.5 (78)", [
+            "A show's page now shows each season's poster, episode count and summary",
+            "The episode row now marks where each season starts",
+            "Selecting a season opens its own page, with only its episodes and extras",
+            "A season's page now leads with its poster",
+            "A caption placed left or right now sits at that edge instead of drifting in",
+            "Discover no longer hides loaded rows behind a No Content message",
+            "Changing your sidebar libraries now applies right away, with no reload prompt",
+        ]),
         ("1.0.4 (77)", [
             "Search now moves down from the keyboard into your results",
             "Moving up from a row of results no longer skips the row above it",
