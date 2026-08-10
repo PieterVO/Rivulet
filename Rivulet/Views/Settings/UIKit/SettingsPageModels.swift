@@ -226,6 +226,14 @@ enum SettingsContent {
                             kind: .navigationValue(.displaySizePicker, value: {
                                 DisplaySize(rawValue: SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue))?.description ?? ""
                             })),
+            // Discover is a sidebar tab, not a Home row, so it sits in the
+            // unheaded block with the other whole-app placement rows.
+            toggle("showDiscoverTab", "Show Discover Tab", key: "showDiscoverTab", default: true),
+            // Nothing to place when there is no Discover tab, so this dims with
+            // it rather than vanishing (a toggle only re-dims the visible rows,
+            // it does not rebuild the list).
+            toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true,
+                   enabledWhen: { SettingsStore.bool("showDiscoverTab", default: true) }),
             // Profiles themselves are switched from the sidebar now, so this is
             // all that is left of the retired User Profiles page.
             SettingsRowItem(id: "profilePickerOnLaunch", title: "Profile Picker on Launch",
@@ -235,18 +243,11 @@ enum SettingsContent {
 
             // Titles drop whatever their caption already says ("Home Hero" under
             // HOME reads as "Home Home Hero"), the way Apple TV Settings puts a
-            // bare "Siri" row under SIRI. A prefix naming something OTHER than
-            // the group stays, e.g. Discover Above Libraries under HOME.
+            // bare "Siri" row under SIRI.
             .header("Home"),
             SettingsRowItem(id: "homeRows", title: "Rows", kind: .navigation(.homeRows)),
             toggle("homeHero", "Hero", key: "showHomeHero", default: true),
-            toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false),
-            toggle("showDiscoverTab", "Show Discover Tab", key: "showDiscoverTab", default: true),
-            // Nothing to place when there is no Discover tab, so this dims with
-            // it rather than vanishing (a toggle only re-dims the visible rows,
-            // it does not rebuild the list).
-            toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true,
-                   enabledWhen: { SettingsStore.bool("showDiscoverTab", default: true) })
+            toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [
             .header("Library"),
