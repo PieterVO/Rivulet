@@ -32,9 +32,25 @@ enum HomeRowSettings {
     /// repaints without waiting for the next poll.
     static let changedNotification = Notification.Name("homeRowVisibilityChanged")
 
-    private static let hiddenKey = "hiddenHomeRowIdentifiers"
+    private static let hiddenBaseKey = "hiddenHomeRowIdentifiers"
 
     private static var defaults: UserDefaults { .standard }
+
+    /// Namespaced PER PLEX HOME PROFILE, the same way `LibrarySettingsManager`
+    /// namespaces its own keys.
+    ///
+    /// Load-bearing on a shared server. Home rows are derived from the signed-in
+    /// account's pinned libraries, so two profiles on one Apple TV see different
+    /// rows; a single global key would let one profile's hidden rows suppress
+    /// another's, and the identifiers collide because they carry the section id
+    /// rather than the account. Mirrors the key
+    /// `PlexUserProfileManager` writes (`selectedPlexUserId`).
+    private static var hiddenKey: String {
+        guard let userId = defaults.object(forKey: "selectedPlexUserId") as? Int else {
+            return hiddenBaseKey
+        }
+        return "\(hiddenBaseKey)_user_\(userId)"
+    }
 
     /// Identifiers the user has hidden. Empty by default: a fresh install shows
     /// exactly what Plex says, and nothing here diverges until asked.
