@@ -70,6 +70,10 @@ Docs/
 # Playwright MCP session scratch (browser snapshots, traces, etc.)
 .playwright-mcp/
 
+# Node / wrangler local state (miniflare R2, cached account + request metadata)
+node_modules/
+.wrangler/
+
 # Rolling worklog + lessons — kept locally, not in the repo.
 tasks/
 .superpowers/
