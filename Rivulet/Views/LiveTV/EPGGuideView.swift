@@ -49,8 +49,6 @@ enum EPGTheme {
     static let infoBarHeight: CGFloat = 300
     /// Height of the UIKit category pills between the info bar and time ruler.
     static let categoryBarHeight: CGFloat = 64
-    /// Vertical breathing room below the UIKit navigation chrome.
-    static let guideTopPadding: CGFloat = 35
     /// Gap between the info bar and the time ruler.
     static let rulerGap: CGFloat = 0
     /// Extra gap between the time ruler and the first row.
@@ -565,10 +563,17 @@ final class EPGContainerView: UIView {
     /// Symmetric boundary handoff from the top programme row back to the last
     /// focused category pill. Called only for a declined Up press or a gated
     /// indirect-touch Up swipe while section zero owns focus.
-    func moveFocusToCategories() {
+    ///
+    /// Returns false when there is no realized pill to hand off to. The
+    /// remembered index survives a `reloadData()` that shortens the category
+    /// list, and `cellForItem` is nil for anything not on screen right now.
+    /// The press caller must not swallow the arrow in that case, or Up dead-ends
+    /// with no way back to the pills to refresh the remembered index.
+    @discardableResult
+    func moveFocusToCategories() -> Bool {
         guard pendingCategoryFocusTarget == nil,
               let target = categoryBar.preferredFocusTarget()
-        else { return }
+        else { return false }
         pendingCategoryFocusTarget = target
 
         DispatchQueue.main.async { [weak self] in
@@ -577,6 +582,7 @@ final class EPGContainerView: UIView {
             self.updateFocusIfNeeded()
             self.pendingCategoryFocusTarget = nil
         }
+        return true
     }
 
     /// Prefer the programme crossing the visible timeline's leading edge in
@@ -1120,8 +1126,8 @@ final class ProgramCellView: UICollectionViewCell {
         if presses.contains(where: { $0.type == .upArrow }),
            let cv = enclosingCollectionView,
            cv.indexPath(for: self)?.section == 0,
-           let container = enclosingEPGContainer {
-            container.moveFocusToCategories()
+           let container = enclosingEPGContainer,
+           container.moveFocusToCategories() {
             return
         }
         super.pressesBegan(presses, with: event)
