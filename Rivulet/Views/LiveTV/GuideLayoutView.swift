@@ -143,7 +143,6 @@ struct GuideLayoutView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     guideContent
-                        .padding(.top, EPGTheme.guideTopPadding)
                         .opacity(displayMode == .fullscreen ? 0 : 1)
                         .disabled(displayMode == .fullscreen)
                 }

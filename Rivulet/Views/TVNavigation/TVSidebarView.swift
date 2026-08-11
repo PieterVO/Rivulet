@@ -60,6 +60,14 @@ struct TVSidebarView: View {
         return dataStore.libraries.first(where: { $0.key == key })?.isMusicLibrary ?? false
     }
 
+    /// The collapsed pill sits top-left, over the guide's info bar, which puts
+    /// it on top of the focused programme's poster. Hide it here rather than
+    /// pushing the whole guide down to clear it.
+    private var isLiveTVSelected: Bool {
+        if case .liveTV = selectedTab { return true }
+        return false
+    }
+
     /// The sidebar's content, built from LIVE values: this view observes all
     /// the feeding stores, so any change re-renders and pushes fresh sections
     /// into the shell. The old snapshot dance existed only because the system
@@ -105,7 +113,7 @@ struct TVSidebarView: View {
         RootShellHost(
             selection: tabSelection,
             interactionBlocked: nestedNavState.isNested || nestedNavState.isSettingsSubPage,
-            pillSuppressed: isMusicLibrarySelected,
+            pillSuppressed: isMusicLibrarySelected || isLiveTVSelected,
             sections: shellSections,
             content: { tab in contentViewController(for: tab) })
         .ignoresSafeArea()
