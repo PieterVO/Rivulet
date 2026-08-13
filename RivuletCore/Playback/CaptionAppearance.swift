@@ -111,15 +111,27 @@ enum CaptionAppearance {
     /// Clamps a MediaAccessibility relative-character-size value to a usable font scale.
     ///
     /// `MACaptionAppearanceGetRelativeCharacterSize` already returns the size as a
-    /// multiplicative scale factor (≈1.0 at the default), NOT an offset — so it is
+    /// multiplicative scale factor (1.0 at the default), NOT an offset — so it is
     /// used directly. A non-positive value means "unset"; treat that as 1.0.
     ///
-    /// The bounds are a sanity net against a nonsense value, NOT a style
-    /// decision: they were 0.5...2.0, which silently compressed the ends of
-    /// the system's own range, so captions stopped tracking the Subtitles &
-    /// Captioning size setting at the extremes. Widened to cover anything
-    /// tvOS plausibly reports; the caption is still bounded in practice by
-    /// the overlay's own max width.
+    /// The API does not return a continuous value. Measured on tvOS 26.5 by
+    /// writing `MACaptionCharScale` into caption profiles and reading it back,
+    /// it QUANTISES to five buckets — 0.35, 0.6, 1.0, 1.5, 2.0 — and reports
+    /// 1.0 for anything outside that range. So the bounds below are only a
+    /// sanity net; they can never actually bind. 0.35 is the smallest bucket,
+    /// not "the smallest caption size", and reading it as the latter is what
+    /// mis-calibrated `CaptionOverlayView.Metrics.fontHeightFraction` (#299).
+    ///
+    /// The quantised value is the RIGHT one to render from, despite being lossy:
+    /// AVKit quantises too. "Large Text" (stored 1.75) and "Outline Text"
+    /// (stored 1.5) both report 1.5 and both render at exactly the same size,
+    /// measured identically to the pixel. So no raw-pref reading is needed, and
+    /// none should be added.
+    ///
+    /// What this value is NOT is a multiplier. AVKit's size is not linear in it
+    /// — see `CaptionOverlayView.Metrics.sizeLadder`, which maps each reported
+    /// value to a measured fraction of presentation height. Multiplying by this
+    /// number directly is ~11% short everywhere except the default.
     static func fontScale(forRelativeSize relative: CGFloat) -> CGFloat {
         guard relative > 0 else { return 1.0 }
         return min(max(relative, 0.25), 4.0)

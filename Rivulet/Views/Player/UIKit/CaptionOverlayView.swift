@@ -92,28 +92,76 @@ final class CaptionOverlayView: UIView {
     // sizes type from the VIDEO height rather than a fixed point size, boxes
     // the text tightly, and draws one background per cue rather than per line.
 
-    fileprivate enum Metrics {
+    enum Metrics {
 
-        /// Caption point size as a fraction of the PRESENTATION height, before
-        /// the user's relative-size multiplier.
+        /// Caption size as a fraction of the PRESENTATION height, for each value
+        /// the system can report. MEASURED against AVKit, not derived.
         ///
-        /// The WebVTT caption spec default is 5% (`5vh`); this sits near it,
-        /// tuned on device against AVPlayer — at the smallest system caption
-        /// size `MACaptionAppearanceGetRelativeCharacterSize` reports 0.35, and
-        /// 1080 x 0.0529 x 0.35 = 20pt is the match. Every other size follows
-        /// from the multiplier.
+        /// `MACaptionAppearanceGetRelativeCharacterSize` is not a multiplier you
+        /// can multiply by. It reports one of five quantised values, and AVKit's
+        /// own size does NOT scale linearly with them — a plain multiply is
+        /// ~11% short at every setting except the default:
         ///
-        /// Do NOT re-tune this to compensate for a size problem: if captions
-        /// are the wrong size, suspect the multiplier reaching us instead (see
-        /// `CaptionAppearance.fontScale`, whose clamp used to swallow 0.35 and
-        /// silently flatten the bottom of the range).
+        ///     reported   AVKit @1080   ratio    a linear multiply would give
+        ///       0.35        18.5pt     0.40x                0.35x
+        ///       0.6         31.0pt     0.67x                0.6x
+        ///       1.0         46.2pt     1.00x                1.0x
+        ///       1.5         78.0pt     1.69x                1.5x
+        ///       2.0        104.1pt     2.25x                2.0x
         ///
-        /// Deliberately NOT the letterboxed picture height: Apple sizes
-        /// captions from the presentation and only *positions* them against the
-        /// picture, so a 2.39:1 film gets the same type as a 16:9 one rather
-        /// than shrunken type. tvOS always presents 1080 points tall regardless
-        /// of whether the display is 1080p or 4K, so this is stable.
-        static let fontHeightFraction: CGFloat = 0.0529
+        /// Method (tvOS 26.5 simulator): an AVPlayerViewController playing a
+        /// plain black HLS stream with a fixed WebVTT cue, with reference glyphs
+        /// of the same vertical extremes drawn at known point sizes through the
+        /// same MediaAccessibility font descriptor; ink heights compared in one
+        /// screenshot. Sizes off the ladder were reached by writing
+        /// `MACaptionCharScale` into injected caption profiles.
+        ///
+        /// This was a single `0.0529` multiplier from `9f4acd3` (shipped
+        /// v1.0.4-74), giving 57.1pt at the default: **24% oversized**, issue
+        /// #299. The note behind it claimed a match at "the smallest caption
+        /// size", where the API reports 0.35 — but 0.35 is the smallest BUCKET,
+        /// and the same commit widened `CaptionAppearance.fontScale`'s clamp
+        /// from 0.5 to 0.25, so at that one value the two changes cancelled to
+        /// within a point. It was calibrated at the only place in the range that
+        /// could not reveal the regression. **Measure both ends.**
+        ///
+        /// Deliberately NOT the letterboxed picture height: AVKit sizes captions
+        /// from the presentation and only *positions* them against the picture,
+        /// so a 2.39:1 film gets the same type as a 16:9 one rather than
+        /// shrunken type. Verified by shrinking the player view to 960x540, at
+        /// which AVKit's captions halve — they follow the VIEW, not the video's
+        /// intrinsic size. tvOS always presents 1080 points tall regardless of
+        /// whether the display is 1080p or 4K, so this is stable.
+        static let sizeLadder: [(reported: CGFloat, fraction: CGFloat)] = [
+            (0.35, 0.0172),
+            (0.60, 0.0287),
+            (1.00, 0.0428),
+            (1.50, 0.0722),
+            (2.00, 0.0964)
+        ]
+
+        /// Caption point size for a presentation height and the system's
+        /// reported relative character size.
+        ///
+        /// Interpolates between the measured rungs rather than matching exactly,
+        /// so a value tvOS does not currently report still lands sensibly
+        /// instead of falling back to a wrong multiply. Pure and static so the
+        /// calibration is testable without building a view.
+        static func pointSize(presentationHeight: CGFloat, fontScale: CGFloat) -> CGFloat {
+            let height = presentationHeight > 0 ? presentationHeight : assumedVideoHeight
+            return height * fraction(forReported: fontScale)
+        }
+
+        static func fraction(forReported reported: CGFloat) -> CGFloat {
+            guard let first = sizeLadder.first, let last = sizeLadder.last else { return 0 }
+            if reported <= first.reported { return first.fraction }
+            if reported >= last.reported { return last.fraction }
+            for (low, high) in zip(sizeLadder, sizeLadder.dropFirst()) where reported <= high.reported {
+                let t = (reported - low.reported) / (high.reported - low.reported)
+                return low.fraction + t * (high.fraction - low.fraction)
+            }
+            return last.fraction
+        }
 
         /// Fallback presentation height, for a degenerate zero-height layout pass.
         static let assumedVideoHeight: CGFloat = 1080
@@ -308,8 +356,7 @@ final class CaptionOverlayView: UIView {
 
     /// Caption point size for this presentation, before per-cue styling.
     private func baseFontSize(in size: CGSize) -> CGFloat {
-        let height = size.height > 0 ? size.height : Metrics.assumedVideoHeight
-        return height * Metrics.fontHeightFraction * style.fontScale
+        Metrics.pointSize(presentationHeight: size.height, fontScale: style.fontScale)
     }
 
     // MARK: Layout
