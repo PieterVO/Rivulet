@@ -149,8 +149,9 @@ final class PillTabBarView: UIView {
     /// `pressesBegan` guard cannot do this job).
     ///
     /// From a pill, Left/Right may land on exactly ONE view: the immediately
-    /// adjacent pill. Anything else is cancelled, including the end of the row,
-    /// where the move is refused outright so focus holds on the edge pill.
+    /// adjacent pill. Anything else is cancelled — at the ends that is the whole
+    /// story (focus holds on the edge pill); in the middle the cancel is followed
+    /// by a driven move to the neighbour the engine should have picked.
     ///
     /// The looser "did it leave the pill row?" test this replaces was not
     /// enough on device: Left on the leftmost pill jumped focus clear across
@@ -165,11 +166,36 @@ final class PillTabBarView: UIView {
               let fromIndex = pillIndex(containing: previous) else {
             return super.shouldUpdateFocus(in: context)
         }
+        let movingLeft = context.focusHeading == .left
         let landing = context.nextFocusedView.flatMap(pillIndex(containing:))
         guard Self.allowsHorizontalMove(from: fromIndex, to: landing,
-                                        movingLeft: context.focusHeading == .left,
-                                        pillCount: pills.count) else { return false }
+                                        movingLeft: movingLeft,
+                                        pillCount: pills.count) else {
+            // Refusing alone is only right at the two ends. In the middle the
+            // engine simply aimed somewhere other than the neighbour — this bar
+            // scrolls and clips (the Insights panel's tabs overflow its 600pt
+            // width; the Info popup's three never do), so a partially-hidden
+            // neighbour loses the spatial search to the list below, or to
+            // nothing at all. Cancel that and drive the move, or the whole bar
+            // dead-ends on whichever pill focus landed on (#288).
+            let wanted = fromIndex + (movingLeft ? -1 : 1)
+            if pills.indices.contains(wanted) {
+                drivenTarget = pills[wanted]
+                setNeedsFocusUpdate()
+            }
+            return false
+        }
         return super.shouldUpdateFocus(in: context)
+    }
+
+    /// Target for one driven horizontal move — see `shouldUpdateFocus`. Held
+    /// until the update lands (cleared in `didUpdateFocus`) because the request
+    /// is made from inside an in-flight update, so it resolves a cycle later.
+    private var drivenTarget: PillTabItemView?
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        drivenTarget = nil
     }
 
     /// Whether a horizontal move from pill `fromIndex` may land on pill
@@ -196,6 +222,7 @@ final class PillTabBarView: UIView {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let drivenTarget { return [drivenTarget] }
         if pills.indices.contains(selectedIndex) { return [pills[selectedIndex]] }
         return pills.first.map { [$0] } ?? []
     }

@@ -104,3 +104,4 @@ Screenshots/*
 !Screenshots/AppStore/
 Screenshots/AppStore/*
 !Screenshots/AppStore/*.png
+.repowise/wiki.db
