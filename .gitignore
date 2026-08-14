@@ -104,4 +104,9 @@ Screenshots/*
 !Screenshots/AppStore/
 Screenshots/AppStore/*
 !Screenshots/AppStore/*.png
-.repowise/wiki.db
+.repowise/
+
+# MCP server config — machine-specific, holds absolute local paths.
+.mcp.json
+.vscode/mcp.json
+.vscode/extensions.json

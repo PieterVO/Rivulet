@@ -1,3 +1,4 @@
 {
-    "chatgpt.openOnStartup": false
+    "chatgpt.openOnStartup": false,
+    "repowise.diagnostics.enabled": false
 }
