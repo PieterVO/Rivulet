@@ -91,9 +91,19 @@ final class SearchContainerViewController: UIViewController {
         }
 
         addChild(searchContainer)
-        searchContainer.view.frame = view.bounds
-        searchContainer.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // The spacer above the search field (#292). The search controller lays
+        // its field out at its own top edge, which is where the collapsed
+        // sidebar pill draws, so the pill sat on the field. Inset the whole
+        // container rather than the field: its internal layout is not ours.
+        searchContainer.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(searchContainer.view)
+        NSLayoutConstraint.activate([
+            searchContainer.view.topAnchor.constraint(
+                equalTo: view.topAnchor, constant: ShellPillMetrics.contentClearance),
+            searchContainer.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            searchContainer.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            searchContainer.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
         searchContainer.didMove(toParent: self)
     }
 

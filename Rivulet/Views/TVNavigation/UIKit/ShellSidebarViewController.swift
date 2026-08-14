@@ -60,6 +60,17 @@ private enum Metrics {
     static let glassTint = UIColor.black.withAlphaComponent(0.12)
 }
 
+/// How far down a page's own content has to start to clear the collapsed pill.
+///
+/// The pill draws over the top-left of whatever tab is mounted, and it only
+/// hides once focus moves below the top row — so anything a page puts at its
+/// own top edge renders under it. Home with the hero off put the first row's
+/// title there (#298) and Search put the text field there (#292).
+enum ShellPillMetrics {
+    /// Pill bottom (50 + 60) plus a small gap.
+    static let contentClearance: CGFloat = Metrics.pillOrigin.y + Metrics.pillHeight + 14
+}
+
 /// System row coloring: focused = solid white capsule, dark content; selected
 /// but unfocused = translucent capsule, full-white content; otherwise bare, dim.
 private func sidebarRowColors(focused: Bool, selected: Bool) -> (background: UIColor, content: UIColor) {

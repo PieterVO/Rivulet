@@ -1441,7 +1441,13 @@ final class PlexHomeViewController: UIViewController {
         // already sizes the results view to the area BELOW the keyboard, so
         // nothing scrolls under the chrome and content starts where the view
         // starts. (Measured: results view is [0,207 1920x873] on 1080p.)
-        let baseTop: CGFloat = showHomeHero ? 0 : 48
+        // With no hero the first row's title IS the top of the page, and the
+        // collapsed sidebar pill draws over it (#298), so clear the pill rather
+        // than just giving the row breathing room. Search keeps the old margin:
+        // its container carries the same clearance already.
+        var noHeroTop = ShellPillMetrics.contentClearance
+        if case .search = mode { noHeroTop = 48 }
+        let baseTop: CGFloat = showHomeHero ? 0 : noHeroTop
         let topInset = baseTop + connectionBannerTopInset
         if collectionView.contentInset.top != topInset {
             collectionView.contentInset.top = topInset
