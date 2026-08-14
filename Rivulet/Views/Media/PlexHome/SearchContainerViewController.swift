@@ -31,6 +31,10 @@ final class SearchContainerViewController: UIViewController {
     private let searchController: UISearchController
     private let searchContainer: UISearchContainerViewController
 
+    /// Where tvOS puts the search bar with no extra inset. Measured, and
+    /// asserted by `SearchChromeLayoutTests`.
+    static let titleSafeTop: CGFloat = 60
+
     /// Reports whether a music detail is covering the page, so the shell can
     /// treat Search the way it treats any nested navigation.
     ///
@@ -90,20 +94,24 @@ final class SearchContainerViewController: UIViewController {
             self?.presentMusicDetail(meta)
         }
 
+        // The spacer above the search field (#292): the collapsed sidebar pill
+        // draws over the bar's left end.
+        //
+        // Sizing the container does NOT move it. The search controller does not
+        // lay out inside us at all: it presents full screen into the window, and
+        // `_UISearchControllerView` measures 1920x1080 under a UITransitionView
+        // whatever frame the container has. What the bar DOES follow is the safe
+        // area. Measured natural frame is (80, 60) 1760x70, which is the tvOS
+        // title-safe origin, so the inset below is the distance from there to
+        // the pill's bottom. The presented view stays full screen, so the
+        // keyboard and results shift with the bar and no height is lost.
+        searchController.additionalSafeAreaInsets.top =
+            ShellPillMetrics.contentClearance - Self.titleSafeTop
+
         addChild(searchContainer)
-        // The spacer above the search field (#292). The search controller lays
-        // its field out at its own top edge, which is where the collapsed
-        // sidebar pill draws, so the pill sat on the field. Inset the whole
-        // container rather than the field: its internal layout is not ours.
-        searchContainer.view.translatesAutoresizingMaskIntoConstraints = false
+        searchContainer.view.frame = view.bounds
+        searchContainer.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(searchContainer.view)
-        NSLayoutConstraint.activate([
-            searchContainer.view.topAnchor.constraint(
-                equalTo: view.topAnchor, constant: ShellPillMetrics.contentClearance),
-            searchContainer.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            searchContainer.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            searchContainer.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
         searchContainer.didMove(toParent: self)
     }
 
