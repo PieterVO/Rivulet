@@ -288,10 +288,10 @@ final class CardStepperButton: UIControl {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let isFocused = context.nextFocusedView === self
-        coordinator.addCoordinatedAnimations({
+        coordinator.animateFocusChange(gained: isFocused) {
             self.backgroundColor = isFocused ? .white : UIColor.white.withAlphaComponent(0.08)
             self.symbolView.tintColor = isFocused ? .black : .white
-        }, completion: nil)
+        }
     }
 }
 
@@ -374,7 +374,7 @@ final class CardTrackRowButton: UIControl {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let isFocused = context.nextFocusedView === self
-        coordinator.addCoordinatedAnimations({
+        coordinator.animateFocusChange(gained: isFocused) {
             // System-picker focus treatment: white fill, black content.
             self.backgroundColor = isFocused ? .white : .clear
             self.titleLabel.textColor = isFocused ? .black : .white
@@ -382,6 +382,6 @@ final class CardTrackRowButton: UIControl {
                 ? UIColor.black.withAlphaComponent(0.6)
                 : UIColor.white.withAlphaComponent(0.6)
             self.checkmarkView.tintColor = isFocused ? .black : .white
-        }, completion: nil)
+        }
     }
 }

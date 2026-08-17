@@ -8,11 +8,11 @@
 //  Restricts a flat, cross-library `[PlexMetadata]` list to the libraries the
 //  user actually wants to see.
 //
-//  Why this has to exist at all: Rivulet's hidden-library / shown-on-Home sets
-//  are CLIENT-side UserDefaults (`LibrarySettingsManager`) and are never sent
-//  to Plex. Most Home rows dodge the problem structurally — Recently Added is
-//  built by iterating `librariesForHomeScreen` and pulling each library's own
-//  scoped hub, so a hidden library is simply never asked. But
+//  Why this has to exist at all: Rivulet's hidden-library set is CLIENT-side
+//  UserDefaults (`LibrarySettingsManager`) and is never sent to Plex. Most Home
+//  rows dodge the problem structurally — they are built by iterating
+//  `librariesPinnedToHome` and pulling each library's own scoped hub, so a
+//  hidden library is simply never asked. But
 //  `/hubs/continueWatching` and the global `/hubs` are ACCOUNT-level endpoints:
 //  they return one flat list spanning every library on the server, with no
 //  per-library request scoping available. Consuming them whole is what makes a
@@ -56,10 +56,10 @@ nonisolated enum PlexLibraryVisibilityFilter {
     /// Fails OPEN in two cases, both deliberate:
     ///
     /// 1. **Empty key set.** On a cold launch the library list has not loaded
-    ///    yet, and `LibrarySettingsManager.isLibraryShownOnHome` itself returns
-    ///    `true` for everything until `homeVisibilityConfigured` flips. Treating
-    ///    "no keys" as "hide everything" would blank Continue Watching and the
-    ///    hero on every launch until libraries land.
+    ///    yet, so `librariesPinnedToHome` is empty for reasons that have nothing
+    ///    to do with the user's choices. Treating "no keys" as "hide everything"
+    ///    would blank Continue Watching and the hero on every launch until
+    ///    libraries land.
     /// 2. **Unattributed item.** Some hub payloads omit section fields entirely.
     ///    An item we cannot attribute is not evidence that it is hidden, and
     ///    dropping it would silently lose legitimate content.

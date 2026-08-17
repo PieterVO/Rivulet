@@ -257,7 +257,14 @@ actor CacheManager {
 
     // MARK: - Library Hubs Cache (for individual library screens)
 
-    private let libraryHubsCachePrefix = "library_hubs_"
+    // NB: versioned for the same reason the MediaItem projection below is —
+    // this decodes into `PlexHub`, so a field added to that model reads back as
+    // nil from every file an older build wrote. v2: `PlexHub.promoted` arrived
+    // 2026-08-03 and `projectHomeItems` gates each Home row on it, so pre-v2
+    // files silently cost a pinned library its row until a network refresh
+    // landed. Bump this whenever `PlexHub` gains a field Home reads.
+    private let libraryHubsCacheBase = "library_hubs_"
+    private let libraryHubsCachePrefix = "library_hubs_v2_"
 
     func cacheLibraryHubs(_ hubs: [PlexHub], forLibrary libraryKey: String) {
         let fileName = "\(libraryHubsCachePrefix)\(libraryKey).json"
@@ -395,7 +402,9 @@ actor CacheManager {
         if let files = try? FileManager.default.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) {
             for file in files {
                 let fileName = file.lastPathComponent
-                if fileName.hasPrefix(libraryHubsCachePrefix) {
+                // Base prefix, not the versioned one, so a force-refresh also
+                // sweeps the files older versions left behind.
+                if fileName.hasPrefix(libraryHubsCacheBase) {
                     try? FileManager.default.removeItem(at: file)
                     memoryCache.removeObject(forKey: fileName as NSString)
                     removeTimestamp(for: fileName)

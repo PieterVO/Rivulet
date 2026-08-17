@@ -31,9 +31,6 @@ final class SearchContainerViewController: UIViewController {
     private let searchController: UISearchController
     private let searchContainer: UISearchContainerViewController
 
-    /// Where tvOS puts the search bar with no extra inset. Measured, and
-    /// asserted by `SearchChromeLayoutTests`.
-    static let titleSafeTop: CGFloat = 60
 
     /// Reports whether a music detail is covering the page, so the shell can
     /// treat Search the way it treats any nested navigation.
@@ -94,20 +91,17 @@ final class SearchContainerViewController: UIViewController {
             self?.presentMusicDetail(meta)
         }
 
-        // The spacer above the search field (#292): the collapsed sidebar pill
-        // draws over the bar's left end.
+        // NO safe-area inset here for the sidebar pill (#292). Pushing the
+        // chrome down with `additionalSafeAreaInsets` DID clear the pill, but
+        // the search controller collapses the keyboard by scrolling the chrome
+        // up off screen and restores it with its own arithmetic, which the inset
+        // is not part of: coming back from a row left the keyboard clipped by
+        // about the inset's height, every time, no matter what the page's own
+        // padding was. Search suppresses the pill instead (`TVSidebarView`),
+        // which is what Live TV already does for the same collision.
         //
-        // Sizing the container does NOT move it. The search controller does not
-        // lay out inside us at all: it presents full screen into the window, and
-        // `_UISearchControllerView` measures 1920x1080 under a UITransitionView
-        // whatever frame the container has. What the bar DOES follow is the safe
-        // area. Measured natural frame is (80, 60) 1760x70, which is the tvOS
-        // title-safe origin, so the inset below is the distance from there to
-        // the pill's bottom. The presented view stays full screen, so the
-        // keyboard and results shift with the bar and no height is lost.
-        searchController.additionalSafeAreaInsets.top =
-            ShellPillMetrics.contentClearance - Self.titleSafeTop
-
+        // This is the same lesson as the note in `init`: the search controller
+        // owns this layout, and perturbing it costs more than it buys.
         addChild(searchContainer)
         searchContainer.view.frame = view.bounds
         searchContainer.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -117,11 +111,25 @@ final class SearchContainerViewController: UIViewController {
 
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // ALWAYS the container for the keyboard half, never
-        // `searchController.searchBar` directly: routing through the container
-        // is what brings the tvOS keyboard up in the first place, and aiming at
-        // the bar bypassed it — the keyboard was then never created at all.
-        preferredHalf == .results ? [results] : [searchContainer]
+        guard preferredHalf == .keyboard else { return [results] }
+        // ORDER matters, and both entries are load-bearing.
+        //
+        // The container alone is not enough. `results` IS the search
+        // controller's `searchResultsController` (see `init`), so asking the
+        // container to resolve focus can resolve straight back DOWN into the
+        // results, which is exactly what made Up from the top row look dead:
+        // the request was made and satisfied, by the item we were trying to
+        // leave. (A sibling note added in 9a1ffda claims the container "has
+        // nothing but the chrome to resolve to". That described an approach
+        // abandoned in the same commit; the page is not our own child.)
+        //
+        // The bar alone is not enough either, which is the finding that note
+        // got right: routing through the container is what CREATES the tvOS
+        // keyboard, and aiming at the bar on first mount meant it never
+        // appeared. So the bar goes first, for the case where the keyboard
+        // already exists and is merely collapsed, and the container stays
+        // behind it for the case where it has to be built.
+        return [searchController.searchBar, searchContainer]
     }
 
     // MARK: - Music hand-off
@@ -183,6 +191,29 @@ final class SearchContainerViewController: UIViewController {
     private enum Half { case keyboard, results }
     private var preferredHalf: Half = .keyboard
 
+    /// Re-expand the collapsed keyboard.
+    ///
+    /// The search controller shrinks its chrome to the bare field once focus
+    /// moves into the results, and only grows it back when the field becomes
+    /// first responder again. Focus alone does not do it, which is why coming
+    /// back up landed on the field with the keyboard still collapsed, and why
+    /// from the top row Up did nothing at all: the engine will not focus an
+    /// item that is not on screen, and while collapsed there were no keys to
+    /// focus. Aiming `preferredFocusEnvironments` at the bar instead of the
+    /// container is NOT the fix here — see the note there, it stops the
+    /// keyboard being created in the first place.
+    private func reopenKeyboard() {
+        // Start the page moving BEFORE the keyboard opens, so the two run
+        // together. Getting down to a row leaves the page scrolled, and the
+        // search controller does not scroll it back when the chrome grows again,
+        // so the rows sat over the lower half of the re-expanded keyboard.
+        // Animated on the page's shared focus-scroll curve: snapping it first
+        // read as a jump ahead of the keyboard.
+        results.animateToContentTop()
+        guard !searchController.searchBar.isFirstResponder else { return }
+        searchController.searchBar.becomeFirstResponder()
+    }
+
     /// Move Down out of the keyboard, and Up out of the results' top row.
     ///
     /// The focus engine acts on arrow presses BEFORE the responder chain, and
@@ -203,10 +234,17 @@ final class SearchContainerViewController: UIViewController {
     /// never drift apart.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         let types = Set(presses.map(\.type))
+        // Read-and-clear on EVERY arrow, so the flag never carries over from an
+        // earlier press and makes the next one think a move happened.
+        let engineMoved = results.consumeEngineMovedFocus()
         if types.contains(.downArrow), !focusIsInResults {
             rescue(to: .results)
-        } else if types.contains(.upArrow), let from = results.focusedSectionForHandoff {
-            correctUpward(from: from)
+        } else if types.contains(.upArrow),
+                  // Fall back to the last row focus was in: when the engine
+                  // jumps straight out to the keyboard it does so BEFORE this
+                  // runs, and the live section is already nil by now.
+                  let from = results.focusedSectionForHandoff ?? results.lastFocusedSection {
+            correctUpward(from: from, engineMoved: engineMoved)
         }
         // Enqueued LAST so it runs after the engine's move and after any rescue
         // above. The results page cannot be trusted to scroll itself: see
@@ -235,18 +273,54 @@ final class SearchContainerViewController: UIViewController {
     /// off the collection's top edge, the engine will not focus an off-screen
     /// item, and the keyboard is the only remaining candidate above — so row 1 got
     /// skipped while every press looked handled.
-    private func correctUpward(from section: Int) {
+    private func correctUpward(from section: Int, engineMoved: Bool) {
+        let before = UIFocusSystem.focusSystem(for: view)?.focusedItem
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // Landed back inside the page: the engine got it right, leave it.
-            guard self.results.focusedSectionForHandoff == nil else { return }
-            guard section > 0, self.results.focusRow(section - 1) else {
-                // Genuinely left from the top row: the keyboard is correct, just
-                // keep our own aim in step with where focus actually went.
-                self.preferredHalf = .keyboard
+
+            // Whether the engine moved takes TWO signals, because it can act on
+            // either side of the responder chain. `engineMoved` is the page's
+            // own record of a move it made BEFORE the press was delivered; the
+            // identity check below catches one made after. Judging by identity
+            // alone read an already-handled press as a decline and moved a
+            // second row: from row 3 Up landed on row 1, from row 2 on the
+            // keyboard. Judging by the flag alone misses the other ordering.
+            let movedAfter = UIFocusSystem.focusSystem(for: self.view)?.focusedItem !== before
+            let moved = engineMoved || movedAfter
+            let landedInPage = self.results.focusedSectionForHandoff != nil
+
+            if moved {
+                // Its row-to-row moves are right; the only choice it gets wrong
+                // is leaving for the keyboard while a row above was available.
+                guard !landedInPage else { return }
+                guard section > 0, self.results.focusRow(section - 1) else {
+                    // Genuinely left from the top row. Focus is on the field but
+                    // the chrome is still collapsed, so grow it back or the
+                    // keyboard stays half off screen.
+                    self.preferredHalf = .keyboard
+                    self.reopenKeyboard()
+                    return
+                }
+                // Re-ask from HERE. `focusRow` scrolled the row in and marked it
+                // as the one-shot target, but made its own request from
+                // `results`, which no longer contains focus: the engine has
+                // already moved to the keyboard, and `setNeedsFocusUpdate()` is
+                // ignored unless the asking environment contains focus. The
+                // target survives (consumed on read, and that read never
+                // happened), so asking again from the controller that owns BOTH
+                // halves lands on it. Without this the skipped row stays skipped.
+                self.move(to: .results)
                 return
             }
-            self.preferredHalf = .results
+
+            // Declined: nothing above was on screen to take focus. From the top
+            // row that is the collapsed keyboard, which the engine will not
+            // focus until it is back; below it, a row scrolled out of view.
+            guard section > 0, self.results.focusRow(section - 1) else {
+                self.move(to: .keyboard)
+                return
+            }
+            self.move(to: .results)
         }
     }
 
@@ -265,6 +339,7 @@ final class SearchContainerViewController: UIViewController {
 
     private func move(to half: Half) {
         preferredHalf = half
+        if half == .keyboard { reopenKeyboard() }
         // Requested from HERE on purpose: `setNeedsFocusUpdate()` is ignored
         // unless the asking environment currently contains focus, and this
         // controller is the nearest one that contains both halves.
@@ -273,10 +348,13 @@ final class SearchContainerViewController: UIViewController {
         // around this, to stop the search container resolving back into the
         // results. It was self-defeating: disabling interaction removes the
         // subtree from the focus system, so nothing contained focus any more and
-        // the request that followed was ignored outright — `moved=false`. It is
-        // also unnecessary now that the results page is our own child rather than
-        // the search controller's results, so `searchContainer` has nothing but
-        // the chrome to resolve to.
+        // the request that followed was ignored outright — `moved=false`.
+        //
+        // The resolving-back it was fighting is real, though. It is handled in
+        // `preferredFocusEnvironments` by naming the bar ahead of the container,
+        // which steers the request without taking anything out of the focus
+        // system. (The old claim that the results page is "our own child" and so
+        // cannot be resolved back into is wrong — see that note.)
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }

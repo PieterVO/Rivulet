@@ -125,6 +125,81 @@ final class HomePromotedHubRowsTests: XCTestCase {
         XCTAssertFalse(library.isPinnedToHome)
     }
 
+    // MARK: - What order those rows come out in
+
+    private func library(_ key: String, hidden: Int = 0) -> PlexLibrary {
+        PlexLibrary(key: key, type: "movie", title: key, agent: "a", scanner: "s",
+                    language: "en", uuid: key, updatedAt: nil, createdAt: nil,
+                    scannedAt: nil, Location: nil, hidden: hidden)
+    }
+
+    /// Issue #295: the right rows, the wrong order. `/library/sections` comes
+    /// back in the server's order, and Plex's rule is that the app's own sidebar
+    /// order decides Home's row order (that order is per app install, never
+    /// server-side). `librariesPinnedToHome` gets both the order and the
+    /// sidebar filter by deriving from `visibleLibraries`, so this is the piece
+    /// that has to hold: reorder wins, and anything the user hasn't placed keeps
+    /// its server position at the end rather than vanishing.
+    @MainActor
+    func test_sortLibraries_appliesSidebarOrderAndKeepsUnplacedOnesAtTheEnd() {
+        let mgr = LibrarySettingsManager.shared
+        let saved = mgr.libraryOrder
+        defer { mgr.libraryOrder = saved }
+
+        let serverOrder = [library("1"), library("2"), library("3"), library("4")]
+
+        mgr.libraryOrder = []
+        XCTAssertEqual(mgr.sortLibraries(serverOrder).map(\.key), ["1", "2", "3", "4"],
+                       "no stored order = the server's order, so a fresh install is unchanged")
+
+        mgr.libraryOrder = ["3", "1"]
+        XCTAssertEqual(mgr.sortLibraries(serverOrder).map(\.key), ["3", "1", "2", "4"])
+
+        mgr.libraryOrder = ["9", "2"]
+        XCTAssertEqual(mgr.sortLibraries(serverOrder).map(\.key), ["2", "1", "3", "4"],
+                       "a key for a library that is gone is inert, not a dropped row")
+    }
+
+    /// The other half of #295: one "hidden" means hidden. A library switched off
+    /// in Settings → Libraries used to keep its Home rows, because the
+    /// projection read Plex's pin state and ignored Rivulet's sidebar set, so
+    /// hiding "Kids Movies" left "Recently Added in Kids Movies" on Home.
+    /// Both gates now have to pass, and neither can add a library the other
+    /// excluded.
+    @MainActor
+    func test_librariesPinnedToHome_needsBothPlexPinAndSidebarVisibility() {
+        let store = PlexDataStore.shared
+        let mgr = LibrarySettingsManager.shared
+        let savedLibraries = store.libraries
+        let savedHidden = mgr.hiddenLibraryKeys
+        let savedOrder = mgr.libraryOrder
+        defer {
+            store.libraries = savedLibraries
+            mgr.hiddenLibraryKeys = savedHidden
+            mgr.libraryOrder = savedOrder
+        }
+
+        mgr.libraryOrder = []
+        mgr.hiddenLibraryKeys = []
+        store.libraries = [
+            library("1"),              // pinned in Plex, shown here
+            library("2"),              // pinned in Plex, hidden here
+            library("3", hidden: 1),   // unpinned in Plex, shown here
+        ]
+
+        XCTAssertEqual(store.librariesPinnedToHome.map(\.key), ["1", "2"],
+                       "Plex's pin alone decides the candidate set")
+
+        mgr.hiddenLibraryKeys = ["2"]
+        XCTAssertEqual(store.librariesPinnedToHome.map(\.key), ["1"],
+                       "hiding a library in the sidebar takes its Home rows with it")
+
+        mgr.hiddenLibraryKeys = []
+        mgr.libraryOrder = ["3", "2", "1"]
+        XCTAssertEqual(store.librariesPinnedToHome.map(\.key), ["2", "1"],
+                       "the sidebar order applies, and cannot promote a library Plex left unpinned")
+    }
+
     // MARK: - Decoding
 
     /// `promoted` has to survive decoding or every row is filtered on nil.

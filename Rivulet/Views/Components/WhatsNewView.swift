@@ -140,6 +140,21 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.5 (79)", [
+            "New Input Test in Settings under About records what your remote actually sends",
+            "Home rows now follow the libraries you have pinned to Home on your Plex server",
+            "Your sidebar library order now sets the order Home draws its rows in",
+            "Losing the server now shows one message instead of a banner that shifted rows",
+            "Starting playback with the server unreachable now offers a retry",
+            "The collapsed sidebar no longer covers the top row of content or the search field",
+            "Moving up from the top row of search results now reaches the keyboard",
+            "Captions are now the same size Apple TV uses for its own player",
+            "A season's page no longer leads with the show's poster",
+            "Live TV guide groups now move up and down correctly",
+            "The Live TV guide is no longer padded down by the sidebar",
+            "Focused rows in the sidebar and Settings no longer leave a fading highlight",
+            "The Discover toggles now sit in their own group in Settings",
+        ]),
         ("1.0.5 (78)", [
             "A show's page now shows each season's poster, episode count and summary",
             "The episode row now marks where each season starts",

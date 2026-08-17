@@ -1184,12 +1184,9 @@ final class PreviewCarouselViewController: UIViewController {
             authToken: token,
             startOffset: resumeOffset
         )
-        let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
-        // Present from the topmost VC so Play works both directly on the
+        // Presents from the topmost VC so Play works both directly on the
         // carousel AND from the episode detail page presented over it.
-        var top: UIViewController = self
-        while let presented = top.presentedViewController { top = presented }
-        top.present(playerVC, animated: true)
+        PlayerPresenter.present(viewModel: viewModel, from: self)
     }
 
     // NOTE: Menu is owned SOLELY by the .menu UITapGestureRecognizer

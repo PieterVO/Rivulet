@@ -457,12 +457,6 @@ final class PlexHomeViewController: UIViewController {
     /// Transient toast for watchlist-write errors. Bottom-anchored, fades
     /// in when `watchlistService.transientWriteError` becomes non-nil.
     private var watchlistToast: WatchlistToastView!
-    /// Yellow warning banner at the top of the content scroll when we're
-    /// rendering cached content but the Plex connection check is failing.
-    private var connectionBanner: ConnectionErrorBannerView!
-    /// Top inset reserved for the connection banner when it's visible.
-    /// Stored so we can toggle it cleanly without recomputing.
-    private var connectionBannerTopInset: CGFloat = 0
 
     private var sectionsSnapshot: [HomeSectionData] = []
 
@@ -830,7 +824,7 @@ final class PlexHomeViewController: UIViewController {
     private static let searchMinQueryLength = 2
     private static let searchDebounceNs: UInt64 = 350_000_000
     private static let maxRecentSearches = 10
-    private static let recentSearchesKey = "recentSearches"
+    private static let recentSearchItemsKey = "recentSearchItems"
 
     private var trimmedSearchQuery: String {
         searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -841,25 +835,24 @@ final class PlexHomeViewController: UIViewController {
         return isSearchLoading || lastSubmittedQuery != trimmedSearchQuery
     }
 
-    private var recentSearches: [String] {
-        let data = UserDefaults.standard.data(forKey: Self.recentSearchesKey) ?? Data()
-        return (try? JSONDecoder().decode([String].self, from: data)) ?? []
+    /// Recently Searched is the items you OPENED from search, not the queries
+    /// you typed (#292) — that is what the Apple TV app's row shows, and it is
+    /// what makes a card able to carry artwork. `MediaItem` is already
+    /// `Codable`, so it stores whole.
+    private var recentSearchItems: [MediaItem] {
+        let data = UserDefaults.standard.data(forKey: Self.recentSearchItemsKey) ?? Data()
+        return (try? JSONDecoder().decode([MediaItem].self, from: data)) ?? []
     }
 
-    private func saveRecentSearch(_ query: String) {
-        var searches = recentSearches
-        searches.removeAll { $0.lowercased() == query.lowercased() }
-        searches.insert(query, at: 0)
-        if searches.count > Self.maxRecentSearches {
-            searches = Array(searches.prefix(Self.maxRecentSearches))
+    private func saveRecentSearchItem(_ item: MediaItem) {
+        var items = recentSearchItems
+        items.removeAll { $0.ref == item.ref }
+        items.insert(item, at: 0)
+        if items.count > Self.maxRecentSearches {
+            items = Array(items.prefix(Self.maxRecentSearches))
         }
-        UserDefaults.standard.set((try? JSONEncoder().encode(searches)) ?? Data(), forKey: Self.recentSearchesKey)
-    }
-
-    private func clearRecentSearches() {
-        UserDefaults.standard.set(Data(), forKey: Self.recentSearchesKey)
-        applySnapshot(animated: false)
-        reconfigureVisibleSearchCells()
+        UserDefaults.standard.set(
+            (try? JSONEncoder().encode(items)) ?? Data(), forKey: Self.recentSearchItemsKey)
     }
 
     /// Query updates from `SearchContainerViewController`. Debounced search,
@@ -931,7 +924,6 @@ final class PlexHomeViewController: UIViewController {
             isSearchLoading = false
             searchError = nil
             lastSubmittedQuery = query
-            if !items.isEmpty { saveRecentSearch(query) }
         } catch {
             guard token == searchToken else { return }
             searchResults = []
@@ -1007,8 +999,8 @@ final class PlexHomeViewController: UIViewController {
             let section = sectionsSnapshot[indexPath.section]
             switch section.kind {
             case .searchPrompt:
-                (collectionView.cellForItem(at: indexPath) as? SearchPromptCell)?
-                    .configure(recentSearches: recentSearches)
+                (collectionView.cellForItem(at: indexPath) as? SearchRecentsCell)?
+                    .configure(recentItems: recentSearchItems)
             case .searchState:
                 (collectionView.cellForItem(at: indexPath) as? SearchStateCell)?
                     .configure(state: currentSearchState)
@@ -1042,6 +1034,12 @@ final class PlexHomeViewController: UIViewController {
             default:
                 break
             }
+        }
+        // Recently Searched is written HERE, on open, not on submit: the row
+        // shows what you went to, not what you typed (#292). Music returns
+        // above, so its 1:1 artwork never lands in a 2:3 card.
+        if indexPath.item < section.items.count {
+            saveRecentSearchItem(section.items[indexPath.item])
         }
         presentPreview(forSection: section, indexPath: indexPath)
     }
@@ -1332,6 +1330,19 @@ final class PlexHomeViewController: UIViewController {
     /// first cell should take focus. Cleared as soon as it is read.
     private var pendingRowFocusSection: Int?
 
+    /// Whether the focus engine has moved focus since this was last read.
+    /// See the note in `didUpdateFocusIn`; read through `consumeEngineMovedFocus`.
+    private var engineMovedFocus = false
+
+    /// The section focus was in most recently. Survives focus leaving the page.
+    private(set) var lastFocusedSection: Int?
+
+    /// Read-and-clear: did the engine move focus since the last press?
+    func consumeEngineMovedFocus() -> Bool {
+        defer { engineMovedFocus = false }
+        return engineMovedFocus
+    }
+
     /// Last value posted on `.contentFocusBelowTopChanged`, so the SwiftUI
     /// shell only hears about crossings of the top-row boundary, not every
     /// focus move.
@@ -1445,10 +1456,14 @@ final class PlexHomeViewController: UIViewController {
         // collapsed sidebar pill draws over it (#298), so clear the pill rather
         // than just giving the row breathing room. Search keeps the old margin:
         // its container carries the same clearance already.
+        // Search takes no FIXED inset. The search controller already sizes the
+        // results view to the area below its chrome, and the recents cell adds
+        // the small remainder itself, so a constant on top of that just stacked
+        // (48 + 48 put the first row 139pt below the keyboard's separator, twice
+        // the Apple TV app's gap).
         var noHeroTop = ShellPillMetrics.contentClearance
-        if case .search = mode { noHeroTop = 48 }
-        let baseTop: CGFloat = showHomeHero ? 0 : noHeroTop
-        let topInset = baseTop + connectionBannerTopInset
+        if case .search = mode { noHeroTop = 0 }
+        let topInset: CGFloat = showHomeHero ? 0 : noHeroTop
         if collectionView.contentInset.top != topInset {
             collectionView.contentInset.top = topInset
         }
@@ -1647,25 +1662,9 @@ final class PlexHomeViewController: UIViewController {
     }
 
     // MARK: - State overlays (loading / empty / error / not-connected,
-    //          connection banner, watchlist toast)
+    //          watchlist toast)
 
     private func configureStateOverlays() {
-        // Connection-error banner. Sits at the top of the screen above
-        // the collection view. Hidden by default.
-        connectionBanner = ConnectionErrorBannerView()
-        connectionBanner.translatesAutoresizingMaskIntoConstraints = false
-        connectionBanner.isHidden = true
-        connectionBanner.onRetry = { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.authManager.verifyAndFixConnection()
-                if self.authManager.isConnected {
-                    await self.dataStore.refreshHubs()
-                }
-            }
-        }
-        view.addSubview(connectionBanner)
-
         // Full-screen state placeholder.
         stateView = HomeStateView()
         stateView.translatesAutoresizingMaskIntoConstraints = false
@@ -1681,10 +1680,6 @@ final class PlexHomeViewController: UIViewController {
         view.addSubview(watchlistToast)
 
         NSLayoutConstraint.activate([
-            connectionBanner.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 100),
-            connectionBanner.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            connectionBanner.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-
             stateView.topAnchor.constraint(equalTo: view.topAnchor),
             stateView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stateView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -1763,19 +1758,16 @@ final class PlexHomeViewController: UIViewController {
             stateView.isHidden = false
             collectionView.isHidden = true
             backdropView.isHidden = true
-            connectionBanner.isHidden = true
         } else if (isLoadingHubs && hubsEmpty) || isWaitingForHero {
             stateView.configure(kind: .loading)
             stateView.isHidden = false
             collectionView.isHidden = true
             backdropView.isHidden = true
-            connectionBanner.isHidden = true
         } else if let error = hubsError, hubsEmpty {
             stateView.configure(kind: .error(message: error))
             stateView.isHidden = false
             collectionView.isHidden = true
             backdropView.isHidden = true
-            connectionBanner.isHidden = true
             stateViewHasFocusableAction = true
             setNeedsFocusUpdate()
         } else if hubsEmpty {
@@ -1783,12 +1775,12 @@ final class PlexHomeViewController: UIViewController {
             stateView.isHidden = false
             collectionView.isHidden = true
             backdropView.isHidden = true
-            connectionBanner.isHidden = true
             stateViewHasFocusableAction = true
             setNeedsFocusUpdate()
         } else {
-            // Content path. Reveal the collection view + backdrop, then
-            // decide whether to show the inline connection banner.
+            // Content path: cached content renders whether or not the server
+            // is reachable. Offline is announced by `ConnectionAlert` and
+            // costs this layout nothing.
             let wasUnfocusable = collectionView.isHidden
             stateView.isHidden = true
             collectionView.isHidden = false
@@ -1803,8 +1795,7 @@ final class PlexHomeViewController: UIViewController {
                 NotificationCenter.default.post(name: .contentBecameFocusable, object: nil)
             }
             backdropView.isHidden = !showHomeHero
-            let shouldShowBanner = !authManager.isConnected
-            updateConnectionBanner(shouldShowBanner)
+            ConnectionAlert.presentOnceIfOffline(from: self)
         }
 
         // Splash handoff: the launch splash (ContentView) dismisses on
@@ -1841,20 +1832,6 @@ final class PlexHomeViewController: UIViewController {
         return true
     }
 
-    private func updateConnectionBanner(_ shouldShow: Bool) {
-        if shouldShow {
-            connectionBanner.setMessage(authManager.connectionError)
-        }
-        if connectionBanner.isHidden != !shouldShow {
-            connectionBanner.isHidden = !shouldShow
-        }
-        let bannerHeight: CGFloat = shouldShow ? 120 : 0
-        if connectionBannerTopInset != bannerHeight {
-            connectionBannerTopInset = bannerHeight
-            updateContentTopInset()
-        }
-    }
-
     // MARK: - Layout
 
     private func configureCollectionView() {
@@ -1868,6 +1845,16 @@ final class PlexHomeViewController: UIViewController {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.delegate = self
         collectionView.contentInsetAdjustmentBehavior = .never
+        // Search: tell the search controller WHICH scroll view drives its
+        // chrome. It collapses the field out of the way as the results scroll
+        // and brings it back at the top, but only if it is watching the right
+        // scroll view; the header for this API says that with none set "UIKit
+        // uses a heuristic to search for one", and that heuristic is what made
+        // the chrome collapse on the way down and never come back on the way
+        // up. Wiring it means our own scroll-to-top restores the field.
+        if case .search = mode {
+            setContentScrollView(collectionView, for: .top)
+        }
         // SwiftUI: `.padding(.top, heroActive ? 0 : 48)` on the content
         // VStack. When the hero is off, the first row (Continue Watching)
         // gets 48pt of breathing room at the top of the scroll.
@@ -1919,7 +1906,7 @@ final class PlexHomeViewController: UIViewController {
         // .sortHeader section only ever exists in library snapshots).
         collectionView.register(MediaLibrarySortControl.self, forCellWithReuseIdentifier: MediaLibrarySortControl.reuseID)
         // Search-mode cells (inert registrations in other modes).
-        collectionView.register(SearchPromptCell.self, forCellWithReuseIdentifier: SearchPromptCell.reuseID)
+        collectionView.register(SearchRecentsCell.self, forCellWithReuseIdentifier: SearchRecentsCell.reuseID)
         collectionView.register(SearchStateCell.self, forCellWithReuseIdentifier: SearchStateCell.reuseID)
 
         view.addSubview(collectionView)
@@ -2288,17 +2275,12 @@ final class PlexHomeViewController: UIViewController {
             return cell
 
         case .searchPrompt:
-            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: SearchPromptCell.reuseID, for: indexPath) as! SearchPromptCell
-            cell.configure(recentSearches: recentSearches)
-            cell.onRecentSelected = { [weak self] query in
-                guard let self else { return }
-                // Run the recalled query directly; the shell mirrors it into
-                // the keyboard field via onSearchQueryChangedByController.
-                self.searchQuery = query
-                self.onSearchQueryChangedByController?(query)
-                self.submitSearch()
-            }
-            cell.onClearRecents = { [weak self] in self?.clearRecentSearches() }
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: SearchRecentsCell.reuseID, for: indexPath) as! SearchRecentsCell
+            cell.configure(recentItems: recentSearchItems)
+            // A card reopens the ITEM, the way the Apple TV row does. It no
+            // longer re-runs a stored query, so nothing is written back into
+            // the keyboard field.
+            cell.onRecentSelected = { [weak self] item in self?.selectMediaItem(item) }
             return cell
 
         case .searchState:
@@ -2422,22 +2404,13 @@ final class PlexHomeViewController: UIViewController {
     }
 
     private func observeAuth() {
-        // Connection state controls the inline banner + the
-        // notConnectedView precedence (via hasCredentials → authToken).
+        // Connection state drives the notConnectedView precedence (via
+        // hasCredentials → authToken) and, on the content path, the
+        // once-per-outage offline popup.
         authManager.$isConnected
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateHomeState()
-            }
-            .store(in: &dataStoreObservers)
-
-        authManager.$connectionError
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                if !self.authManager.isConnected {
-                    self.connectionBanner.setMessage(self.authManager.connectionError)
-                }
             }
             .store(in: &dataStoreObservers)
 
@@ -2497,11 +2470,15 @@ final class PlexHomeViewController: UIViewController {
     /// change notification of its own, and the Continue Watching row and the
     /// hero are both filtered client-side from caches that were written under
     /// the OLD visibility. Without this they stay wrong until the next 3-minute
-    /// poll. Recently Added needs nothing here — it is rebuilt per library from
-    /// `librariesForHomeScreen`, so a hidden library is structurally absent.
+    /// poll.
+    ///
+    /// Keyed on `librariesPinnedToHome`, which is the set Home actually draws
+    /// rows from. An earlier version watched the sidebar set while the
+    /// projection ignored sidebar visibility entirely, so hiding a library
+    /// re-ran a projection that produced the same rows.
     private func reprojectIfHomeLibrariesChanged() {
         guard case .home = mode else { return }
-        let keys = Set(dataStore.librariesForHomeScreen.map { $0.key })
+        let keys = Set(dataStore.librariesPinnedToHome.map { $0.key })
         guard lastHomeLibraryKeys != nil else {
             // First observation is the baseline, not a change.
             lastHomeLibraryKeys = keys
@@ -3492,7 +3469,7 @@ final class PlexHomeViewController: UIViewController {
         case .home:
             return PlexLibraryVisibilityFilter.filter(
                 items,
-                toLibraryKeys: dataStore.librariesForHomeScreen.map { $0.key }
+                toLibraryKeys: dataStore.librariesPinnedToHome.map { $0.key }
             )
         case .library, .discover, .search:
             return items
@@ -3874,15 +3851,9 @@ final class PlexHomeViewController: UIViewController {
                 loadingArtImage: artImage,
                 loadingThumbImage: thumbImage
             )
-            let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel, onDismiss: { [weak self] in
+            PlayerPresenter.present(viewModel: viewModel, from: self, onDismiss: { [weak self] in
                 Task { await self?.dataStore.refreshHubs() }
             })
-
-            // Walk up to the topmost presented controller so we don't try to
-            // present from a stale parent (covers re-entry after dismiss).
-            var topVC: UIViewController = self
-            while let presented = topVC.presentedViewController { topVC = presented }
-            topVC.present(playerVC, animated: true)
         }
     }
 
@@ -4534,6 +4505,19 @@ final class PlexHomeViewController: UIViewController {
         guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
               focused.isDescendant(of: collectionView)
         else { return }
+        // On Search, landing on the TOP row means the page belongs at its top,
+        // not merely scrolled far enough for that row to be visible.
+        //
+        // A minimal reveal leaves the row exactly where coming down from row 2
+        // put it, which is ~180pt higher than where the keyboard hand-off puts
+        // it: row 1 sat in two different places depending on how you reached it,
+        // and in the higher one it ran up under the search chrome. The hand-off
+        // down from the keyboard already scrolls to the top, so this is what
+        // makes the two directions agree.
+        if case .search = mode, sectionIndex(forFocusedView: focused) == 0 {
+            animateToContentTop()
+            return
+        }
         revealFocusedView(focused)
     }
 
@@ -4685,7 +4669,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // with four focusable pills on screen. The cell takes focus only when
         // it has a button, and redirects into it via
         // `preferredFocusEnvironments`.
-        if kind == .searchPrompt { return !recentSearches.isEmpty }
+        if kind == .searchPrompt { return !recentSearchItems.isEmpty }
         if kind == .searchState { return currentSearchState.hasFocusableAction }
         return !isShelfKind(kind)
     }
@@ -5067,6 +5051,14 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView,
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
+        // The engine acts on an arrow BEFORE the press reaches the responder
+        // chain, so by the time a press hand-off runs, any move it made has
+        // already happened here. Recording it is the only way that hand-off can
+        // tell "the engine moved me up a row" from "the engine declined and I
+        // have not moved at all" — the two look identical from the press.
+        if context.nextFocusedView !== context.previouslyFocusedView {
+            engineMovedFocus = true
+        }
         // Resolve the section that owns the newly-focused view.
         guard let nextSectionIndex = focusedSectionIndex(in: context) else {
             updateLeftEdgeGuide(for: nil)
@@ -5088,6 +5080,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             return
         }
         postFocusBelowTop(nextSectionIndex > topSectionIndex)
+        // Kept AFTER focus leaves the page, so a press hand-off can still say
+        // which row it came from. `focusedSectionForHandoff` is nil by then.
+        lastFocusedSection = nextSectionIndex
         let kind: HomeSectionKind? = sectionsSnapshot.indices.contains(nextSectionIndex)
             ? sectionsSnapshot[nextSectionIndex].kind
             : nil
@@ -5243,6 +5238,25 @@ extension PlexHomeViewController: MenuBackHandling {
 
         returnToTopRow()
         return true
+    }
+
+    /// Ride the page back to its top on the shared focus-scroll curve.
+    ///
+    /// The Search hand-off calls this when focus returns to the keyboard:
+    /// reaching a lower row leaves the page scrolled, and the search controller
+    /// does not scroll it back when its chrome grows again, so the rows sat over
+    /// the re-expanded keyboard. Animated rather than snapped because it plays
+    /// alongside the keyboard's own expansion, and `FocusScrollMotion.ease` is
+    /// the same curve as every other scroll on the page. The instant version
+    /// below cannot be used here: it reads as a jump before the keyboard opens.
+    ///
+    /// Safe to animate, unlike the focus-driven callers, because focus is on its
+    /// way OUT of the collection — there is no passing row for the engine to
+    /// re-resolve onto mid-flight.
+    func animateToContentTop() {
+        let top = -collectionView.adjustedContentInset.top
+        guard abs(collectionView.contentOffset.y - top) > 1 else { return }
+        animateContentOffset(toY: top)
     }
 
     /// Jump the page to its resting top offset and lay out, so the first

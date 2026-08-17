@@ -258,15 +258,9 @@ private struct AutoPlayLauncherModifier: ViewModifier {
                         loadingThumbImage: nil
                     )
 
-                    let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
-
                     if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                        let rootVC = windowScene.windows.first?.rootViewController {
-                        var topVC = rootVC
-                        while let presented = topVC.presentedViewController {
-                            topVC = presented
-                        }
-                        topVC.present(playerVC, animated: false)
+                        PlayerPresenter.present(viewModel: viewModel, from: rootVC, animated: false)
                     }
 
                     // Schedule auto-stop after test duration

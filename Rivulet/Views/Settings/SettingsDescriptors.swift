@@ -55,15 +55,11 @@ enum SettingsDescriptorStore {
         // MARK: Appearance
         "libraries": SettingDescriptor(
             icon: "sidebar.squares.left",
-            description: "Choose which libraries appear in the sidebar and set their display order."
+            description: "Choose which libraries appear in the sidebar and set their order. Both apply to Home as well: a library you turn off here loses its Home rows, and the order you set here is the order Home draws them in."
         ),
         "libraryRow": SettingDescriptor(
             icon: "sidebar.squares.left",
-            description: "Click to toggle sidebar visibility. Press and hold to reorder or configure Home screen visibility."
-        ),
-        "resetLibraries": SettingDescriptor(
-            icon: "arrow.counterclockwise",
-            description: "Reset all library visibility, ordering, and Home screen preferences to their defaults."
+            description: "Click to show or hide this library in the sidebar and on Home. Press and hold to move it up or down."
         ),
         "displaySize": SettingDescriptor(
             icon: "textformat.size",
@@ -72,7 +68,7 @@ enum SettingsDescriptorStore {
 
         "homeRows": SettingDescriptor(
             icon: "rectangle.grid.1x2",
-            description: "Choose which rows appear on Home. The rows themselves, their titles and their order come from your Plex account, so they match the Plex app. Turn one off here to hide it on this Apple TV only."
+            description: "Turn individual Home rows off. The rows and their titles come from your Plex account, so they match the Plex app. Turning one off here hides it on this Apple TV only. A library appears here once it is pinned to Home in Plex, under Settings then Manage then Libraries."
         ),
         "showAllHomeRows": SettingDescriptor(
             icon: "eye",
@@ -298,6 +294,10 @@ enum SettingsDescriptorStore {
         "inputDiagnostics": SettingDescriptor(
             icon: "dot.radiowaves.left.and.right",
             description: "Show every remote button press on screen, with how long it was held and which remote sent it. Helpful when reporting a problem with a third-party remote. Leave this off for normal viewing."
+        ),
+        "inputTest": SettingDescriptor(
+            icon: "checklist",
+            description: "Asks you to press a short list of buttons, then records what your remote actually sent for each one. The result goes to Rivulet's diagnostics so a reported problem can be traced. Nothing about what you watch is included."
         ),
 
         // MARK: Content Filtering

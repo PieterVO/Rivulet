@@ -537,7 +537,7 @@ enum SettingsContent {
         var rows: [SettingsRowItem] = [
             SettingsRowItem(id: "addAllLibraries", title: "Add All",
                             kind: .action(destructive: false, handler: { vc in
-                LibrarySettingsManager.shared.showAllLibraries(keys)
+                LibrarySettingsManager.shared.showAllLibraries()
                 (vc as? SettingsPageViewController)?.reloadRows()
             })),
             SettingsRowItem(id: "removeAllLibraries", title: "Remove All",
@@ -708,7 +708,13 @@ enum SettingsContent {
             SettingsRowItem(id: "inputDiagnostics", title: "Input Diagnostics", kind: .toggle(
                 get: { InputProbe.isEnabled },
                 set: { InputProbe.setEnabled($0) }
-            ))
+            )),
+            // Runs whether or not the toggle above is on: the test is the
+            // supported way to report a remote problem, so it must not need a
+            // second switch flipped first.
+            SettingsRowItem(id: "inputTest", title: "Run Input Test", kind: .action(destructive: false, handler: { vc in
+                vc.present(InputTestViewController(), animated: true)
+            }))
         ]
     }
 

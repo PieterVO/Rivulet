@@ -34,4 +34,26 @@ enum PlayerPresenter {
         vc.onDismiss = onDismiss
         return vc
     }
+
+    /// Present a playback session, walking to whatever is actually on screen
+    /// above `presenter`. Every VOD play path goes through here, which makes
+    /// it the one place the offline gate has to live: returns false when the
+    /// server is unreachable, having shown the popup instead. A Retry that
+    /// reconnects re-runs the presentation.
+    @discardableResult
+    static func present(
+        viewModel: UniversalPlayerViewModel,
+        from presenter: UIViewController,
+        animated: Bool = true,
+        onDismiss: (() -> Void)? = nil
+    ) -> Bool {
+        let allowed = ConnectionAlert.allowPlayback(from: presenter) {
+            present(viewModel: viewModel, from: presenter,
+                    animated: animated, onDismiss: onDismiss)
+        }
+        guard allowed else { return false }
+        let vc = makeViewController(viewModel: viewModel, onDismiss: onDismiss)
+        presenter.topmostPresented.present(vc, animated: animated)
+        return true
+    }
 }

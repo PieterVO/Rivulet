@@ -207,7 +207,7 @@ private final class PillButton: UIView {
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                 with coordinator: UIFocusAnimationCoordinator) {
         let focused = context.nextFocusedView === self
-        coordinator.addCoordinatedAnimations({
+        coordinator.animateFocusChange(gained: focused) {
             if focused {
                 self.backgroundColor = self.destructive ? .systemRed : .white
                 self.labelView.textColor = self.destructive ? .white : .black
@@ -218,6 +218,6 @@ private final class PillButton: UIView {
                 self.labelView.textColor = .white
                 self.transform = .identity
             }
-        })
+        }
     }
 }

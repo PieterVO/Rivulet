@@ -68,6 +68,16 @@ struct TVSidebarView: View {
         return false
     }
 
+    /// Same collision on Search: the pill sits on the left end of the system
+    /// search field (#292). The field cannot be pushed clear of it — the search
+    /// controller owns that layout and restores it with its own arithmetic, so
+    /// insetting it left the keyboard clipped on the way back from a result
+    /// (see `SearchContainerViewController.viewDidLoad`). Hide the pill instead.
+    private var isSearchSelected: Bool {
+        if case .search = selectedTab { return true }
+        return false
+    }
+
     /// The sidebar's content, built from LIVE values: this view observes all
     /// the feeding stores, so any change re-renders and pushes fresh sections
     /// into the shell. The old snapshot dance existed only because the system
@@ -113,7 +123,7 @@ struct TVSidebarView: View {
         RootShellHost(
             selection: tabSelection,
             interactionBlocked: nestedNavState.isNested || nestedNavState.isSettingsSubPage,
-            pillSuppressed: isMusicLibrarySelected || isLiveTVSelected,
+            pillSuppressed: isMusicLibrarySelected || isLiveTVSelected || isSearchSelected,
             sections: shellSections,
             content: { tab in contentViewController(for: tab) })
         .ignoresSafeArea()
@@ -215,7 +225,7 @@ struct TVSidebarView: View {
                 try? await Task.sleep(for: .seconds(2))
                 await dataStore.loadLibrariesIfNeeded()
                 await dataStore.loadLibraryHubsIfNeeded()
-                dataStore.startBackgroundPrefetch(libraries: dataStore.visibleVideoLibraries)
+                dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
 
                 // Rebuild the library GUID index in the background. Used by Discover and
                 // Watchlist surfaces to answer "do I own this?" in O(1). The index
@@ -373,7 +383,7 @@ struct TVSidebarView: View {
                         Task {
                             await dataStore.loadLibrariesIfNeeded()
                             await dataStore.loadLibraryHubsIfNeeded()
-                            dataStore.startBackgroundPrefetch(libraries: dataStore.visibleVideoLibraries)
+                            dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
                         }
                     }
                 }
@@ -649,15 +659,9 @@ struct TVSidebarView: View {
                     loadingArtImage: artImage,
                     loadingThumbImage: thumbImage
                 )
-                let playerVC = PlayerPresenter.makeViewController(viewModel: viewModel)
-
                 if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                    let rootVC = scene.windows.first?.rootViewController {
-                    var topVC = rootVC
-                    while let presented = topVC.presentedViewController {
-                        topVC = presented
-                    }
-                    topVC.present(playerVC, animated: true)
+                    PlayerPresenter.present(viewModel: viewModel, from: rootVC)
                 }
             }
         }

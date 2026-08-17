@@ -201,18 +201,31 @@ class PlexDataStore: ObservableObject {
         !visibleMusicLibraries.isEmpty
     }
 
-    /// Video and music libraries that should appear on the Home screen
-    var librariesForHomeScreen: [PlexLibrary] {
-        visibleMediaLibraries.filter { librarySettings.isLibraryShownOnHome($0.key) }
-    }
-
-    /// Libraries the user pinned to Home in Plex, in the server's order. This is
-    /// the ONLY thing that decides which libraries contribute a Home row; see
-    /// `projectHomeItems`. Deliberately not filtered by Rivulet's own
-    /// shown-on-Home / visibility settings, so Home matches the Plex app rather
-    /// than being a second, silently diverging configuration.
+    /// The libraries that contribute a Home row, in the order Home draws them.
+    /// See `projectHomeItems`. Two gates, and both have to pass:
+    ///
+    /// 1. Plex's own pin (`isPinnedToHome`, the server-side `hidden` field) says
+    ///    which libraries Plex itself would put on Home. Rivulet can subtract
+    ///    from that set but never add to it, which is what keeps the row set a
+    ///    single source of truth (see `HomeRowSettings` for the same rule at row
+    ///    granularity).
+    /// 2. The sidebar toggle in Settings → Libraries. One "hidden" means hidden:
+    ///    a library you switched off leaves the sidebar, the hero AND its Home
+    ///    rows together. It used to leave only the first two, so hiding a
+    ///    library still left "Recently Added in <it>" sitting on Home.
+    ///
+    /// The ORDER comes free with gate 2, and has to be this device's. Plex's own
+    /// rule is "the order of pinned items in your home sidebar controls the
+    /// order of content on your Home screen", and that sidebar order is per app
+    /// install, never server-side (see `LibrarySettingsManager.isLibraryVisible`
+    /// for the measurement). `/library/sections` order is the server's, which is
+    /// why issue #295 saw the right rows in the wrong order. `visibleLibraries`
+    /// is already sorted by the order the user sets in Settings → Libraries, so
+    /// deriving from it makes Rivulet follow the same rule Plex does. It
+    /// defaults to the server's order until they reorder anything, since
+    /// `syncOrderWithLibraries` seeds `libraryOrder` in fetch order.
     var librariesPinnedToHome: [PlexLibrary] {
-        libraries.filter { ($0.isVideoLibrary || $0.isMusicLibrary) && $0.isPinnedToHome }
+        visibleMediaLibraries.filter { $0.isPinnedToHome }
     }
 
     // Track if initial load has been attempted
@@ -287,7 +300,22 @@ class PlexDataStore: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.projectHomeItems() }
         }
+
+        // Same for the sidebar order — it decides Home's row order too
+        // (`librariesPinnedToHome`), so a reorder in Settings has to repaint on
+        // the way back out. `dropFirst` skips the initial value; the
+        // `syncOrderWithLibraries` append inside the library fetch is followed
+        // by its own projection either way.
+        librarySettings.$libraryOrder
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.projectHomeItems() }
+            }
+            .store(in: &cancellables)
     }
+
+    private var cancellables = Set<AnyCancellable>()
 
     private func setupPollingObservers() {
         // Observe app lifecycle
@@ -850,12 +878,12 @@ class PlexDataStore: ObservableObject {
         }
 
         // Home reads `promoted` off these hubs (see `projectHomeItems`), so every
-        // library PINNED IN PLEX has to be fetched or its row is silently
-        // missing. Union with Rivulet's own shown-on-Home set so the library
+        // library that contributes a Home row has to be fetched or its row is
+        // silently missing. Union with the rest of the sidebar so the library
         // pages that rely on this prefetch keep theirs too.
         var librariesToLoad = librariesPinnedToHome
         let pinnedKeys = Set(librariesToLoad.map { $0.key })
-        librariesToLoad += librariesForHomeScreen.filter { !pinnedKeys.contains($0.key) }
+        librariesToLoad += visibleMediaLibraries.filter { !pinnedKeys.contains($0.key) }
 
         // Skip if no libraries configured for Home
         guard !librariesToLoad.isEmpty else {
@@ -1102,7 +1130,10 @@ class PlexDataStore: ObservableObject {
             ))
         }
 
-        // One row per promoted hub, per pinned library, in the server's order.
+        // One row per promoted hub, per pinned library. Library order is the
+        // sidebar's (see `librariesPinnedToHome`); the rows WITHIN a library
+        // stay in the server's order, which is where Plex's own drag-to-reorder
+        // in Manage Recommendations lands.
         for library in librariesPinnedToHome {
             for hub in libraryHubs[library.key] ?? [] {
                 guard hub.promoted == true else { continue }
@@ -1670,14 +1701,11 @@ class PlexDataStore: ObservableObject {
             return
         }
 
-        let videoLibraries = libraries
-
         // Run heavy prefetch work off the main actor; only hop back when touching UI state.
         prefetchTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
 
-            // Prefetch content for each visible/pinned video library only
-            for library in videoLibraries {
+            for library in libraries {
                 guard !Task.isCancelled else { break }
 
                 let libraryKey = library.key
@@ -1687,7 +1715,14 @@ class PlexDataStore: ObservableObject {
                 let hasShowsCache = await self.cacheManager.getCachedShows(forLibrary: libraryKey) != nil
                 let hasHubsCache = await self.cacheManager.getCachedLibraryHubs(forLibrary: libraryKey) != nil
 
-                if hasMoviesCache || hasShowsCache {
+                // The ITEMS half is video-only: `cacheMovies`/`cacheShows` are the
+                // only item caches, so an artist library would spend a request and
+                // then have nowhere to put the result. The HUBS half below is not,
+                // and must not be — a pinned music library needs its hubs on disk
+                // for its Home row to survive a cold launch. Passing only video
+                // libraries in was what left "Recently Added in Music" waiting on
+                // the network every time while the movie rows came back instantly.
+                if hasMoviesCache || hasShowsCache || !library.isVideoLibrary {
                 } else {
                     // Fetch and cache library items
                     do {

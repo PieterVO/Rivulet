@@ -130,6 +130,34 @@ enum InputProbe {
     private static var lastEventAt: TimeInterval?
     private static weak var hud: InputProbeHUDView?
 
+    /// What an observer is told. `began` exists so a caller can tell "nothing
+    /// arrived" from "it began and never terminated" without waiting for
+    /// `sweepStale`, which only runs on the NEXT event and so never fires when
+    /// the stuck press is the last input the app sees.
+    enum ProbeEvent {
+        case began(type: String)
+        case finished(InputPressTracker.Verdict)
+    }
+
+    /// Set while the guided input test is on screen. Ingress recording runs for
+    /// an observer whether or not the user has the diagnostics toggle on — the
+    /// test is the supported way to get this data, so it must not need a second
+    /// switch flipped first.
+    private(set) static var observer: ((ProbeEvent) -> Void)?
+
+    static func beginObserving(_ block: @escaping (ProbeEvent) -> Void) {
+        tracker = InputPressTracker()
+        observer = block
+        // The HUD is window-level and re-fronts itself on every event, so it
+        // would sit on top of the test's own prompt.
+        hud?.isHidden = true
+    }
+
+    static func endObserving() {
+        observer = nil
+        hud?.isHidden = false
+    }
+
     static func setEnabled(_ on: Bool) {
         SettingsStore.setBool(settingsKey, on)
         isEnabled = on
@@ -151,7 +179,7 @@ enum InputProbe {
     /// gesture recognizer has had a chance to consume it. Called from the
     /// `MenuPressInterceptor` `sendEvent` swizzle.
     static func record(presses: Set<UIPress>) {
-        guard isEnabled else { return }
+        guard isEnabled || observer != nil else { return }
         let now = ProcessInfo.processInfo.systemUptime
         for warning in tracker.sweepStale(now: now) { log("⚠︎ \(warning)") }
 
@@ -168,11 +196,13 @@ enum InputProbe {
                     tracker.gamepadEvent()
                     log("● gc \(state)")
                 }
+                observer?(.began(type: name))
             case .ended, .cancelled:
                 let cancelled = press.phase == .cancelled
                 log("▸ \(name) \(cancelled ? "cancelled" : "ended")")
                 if let verdict = tracker.finished(name, at: now, cancelled: cancelled) {
                     log(describe(verdict))
+                    observer?(.finished(verdict))
                 }
             default:
                 break
@@ -216,6 +246,24 @@ enum InputProbe {
         log("→ \(action) via \(source)")
     }
 
+    // MARK: Reporting
+
+    /// Ships one finished input test as its own Sentry event.
+    ///
+    /// Deliberately NOT breadcrumbs. Breadcrumbs only travel attached to an
+    /// event, so with no crash they never leave the device at all, and the
+    /// SDK's ring buffer evicts them long before an unrelated crash arrives.
+    /// One self-contained event carries the whole transcript and is findable by
+    /// its fixed fingerprint, which groups every run into a single Sentry issue.
+    static func captureTestResult(_ transcript: String) {
+        let event = Sentry.Event(level: .info)
+        event.message = SentryMessage(formatted: "Remote input test")
+        event.fingerprint = ["rivulet-input-test"]
+        event.tags = ["input_test": "1"]
+        event.extra = ["transcript": transcript]
+        SentryBridge.capture(event: event)
+    }
+
     // MARK: Formatting
 
     private static func describe(_ verdict: InputPressTracker.Verdict) -> String {
@@ -242,6 +290,9 @@ enum InputProbe {
     }
 
     private static func log(_ text: String) {
+        // Observer-only mode (the guided test with the toggle off) records
+        // ingress but must not print, breadcrumb, or draw the HUD.
+        guard isEnabled else { return }
         let now = ProcessInfo.processInfo.systemUptime
         let delta = "+\(Int((now - (lastEventAt ?? now)) * 1000))ms"
         lastEventAt = now

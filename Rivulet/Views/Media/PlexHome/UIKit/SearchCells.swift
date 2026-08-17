@@ -8,34 +8,61 @@
 //  Full-width cells for the UIKit search surface (PlexHomeViewController
 //  in `.search` mode):
 //
-//   - SearchPromptCell: the empty-query state — magnifier + "Search Your
-//     Libraries" prompt with the recent-searches pill row beneath it.
-//     Port of PlexSearchView.searchPromptView / recentSearchesView.
+//   - SearchRecentsCell: the empty-query state — a left-aligned "Recently
+//     Searched" row of the items you last opened from search (#292).
 //   - SearchStateCell: inline searching / error / no-results states.
 //     Port of PlexSearchView.loadingView / errorView / noResultsView.
 //
 //  Both cells are non-focusable containers (canFocusItemAt false in the
-//  controller); their interactive content (recents pills, Try Again) are
+//  controller); their interactive content (recent cards, Try Again) are
 //  FocusableActionButtons, which the engine focuses directly.
+//
+//  The section that hosts the recents cell is still called `.searchPrompt`
+//  (24 references). It no longer renders a prompt: the centred magnifier and
+//  "Search Your Libraries" went with the Apple TV layout, so an empty-query
+//  screen with no recents yet is deliberately blank.
 //
 
 import UIKit
 
-// MARK: - Prompt + recent searches
+// MARK: - Recently Searched
 
 @MainActor
-final class SearchPromptCell: UICollectionViewCell {
-    static let reuseID = "SearchPromptCell"
+final class SearchRecentsCell: UICollectionViewCell {
+    static let reuseID = "SearchRecentsCell"
 
-    var onRecentSelected: ((String) -> Void)?
-    var onClearRecents: (() -> Void)?
+    var onRecentSelected: ((MediaItem) -> Void)?
 
-    private let iconView = UIImageView()
-    private let titleLabel = UILabel()
-    private let recentHeaderLabel = UILabel()
-    private let pillScroll = UIScrollView()
-    private let pillStack = UIStackView()
-    private let outerStack = UIStackView()
+    /// MEASURED off the Apple TV app's own Recently Searched row (screenshots
+    /// on #292, scaled from its 1400px capture at 0.668 px/pt).
+    private enum Metrics {
+        static let cardWidth: CGFloat = 560
+        static let cardHeight: CGFloat = 164
+        static let cardSpacing: CGFloat = 40
+        /// Poster inset inside the card. The poster is the card's full height
+        /// minus this top and bottom, at the 2:3 poster ratio.
+        static let posterInset: CGFloat = 17
+        static let posterHeight: CGFloat = cardHeight - posterInset * 2
+        static let posterWidth: CGFloat = (cardHeight - posterInset * 2) * 2 / 3
+        static let posterToText: CGFloat = 25
+        static let cardRadius: CGFloat = 20
+        static let posterRadius: CGFloat = 8
+        /// Gap below the keyboard's separator line.
+        ///
+        /// The search controller already sizes the results view to the area
+        /// below its chrome, leaving ~43pt of its own, so this is the remainder
+        /// needed to match the Apple TV app's ~57pt. It is the ONLY top spacing
+        /// now: the page's `contentInset.top` is 0 in search mode, because 48
+        /// there plus 48 here stacked into a 139pt gap.
+        static let topPadding: CGFloat = 17
+        static let headerToRow: CGFloat = 16
+    }
+
+    private let headerLabel = UILabel()
+    private let cardScroll = UIScrollView()
+    private let cardStack = UIStackView()
+    /// One per visible card, cancelled on reconfigure/reuse.
+    private var artworkTasks: [Task<Void, Never>] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -47,118 +74,177 @@ final class SearchPromptCell: UICollectionViewCell {
     private func setUp() {
         backgroundColor = .clear
 
-        iconView.image = UIImage(systemName: "magnifyingglass")?
-            .withConfiguration(UIImage.SymbolConfiguration(pointSize: 48, weight: .light))
-        iconView.tintColor = .secondaryLabel
-        iconView.contentMode = .scaleAspectFit
+        // Matches the shelf row headers (ShelfRowCell) so Search reads as the
+        // same page as Home, not a separate design.
+        headerLabel.text = "Recently Searched"
+        headerLabel.font = .systemFont(ofSize: 32, weight: .semibold)
+        headerLabel.textColor = .secondaryLabel
+        headerLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        titleLabel.text = "Search Your Libraries"
-        titleLabel.font = .systemFont(ofSize: 38, weight: .medium)
-        titleLabel.textColor = .label
-        titleLabel.textAlignment = .center
+        cardStack.axis = .horizontal
+        cardStack.spacing = Metrics.cardSpacing
+        cardStack.alignment = .center
+        cardStack.translatesAutoresizingMaskIntoConstraints = false
 
-        recentHeaderLabel.text = "RECENT"
-        recentHeaderLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        recentHeaderLabel.textColor = .secondaryLabel
-        recentHeaderLabel.textAlignment = .center
+        // clipsToBounds off so the focused card's scale is not cut off at the
+        // scroller's edges.
+        cardScroll.showsHorizontalScrollIndicator = false
+        cardScroll.clipsToBounds = false
+        cardScroll.addSubview(cardStack)
+        cardScroll.translatesAutoresizingMaskIntoConstraints = false
 
-        pillStack.axis = .horizontal
-        pillStack.spacing = 16
-        pillStack.alignment = .center
-        pillStack.translatesAutoresizingMaskIntoConstraints = false
-
-        pillScroll.showsHorizontalScrollIndicator = false
-        pillScroll.clipsToBounds = false
-        pillScroll.addSubview(pillStack)
-        pillScroll.translatesAutoresizingMaskIntoConstraints = false
-
-        outerStack.axis = .vertical
-        outerStack.alignment = .center
-        outerStack.spacing = 16
-        outerStack.translatesAutoresizingMaskIntoConstraints = false
-        outerStack.addArrangedSubview(iconView)
-        outerStack.addArrangedSubview(titleLabel)
-        outerStack.setCustomSpacing(48, after: titleLabel)
-        outerStack.addArrangedSubview(recentHeaderLabel)
-        outerStack.addArrangedSubview(pillScroll)
-        contentView.addSubview(outerStack)
+        contentView.addSubview(headerLabel)
+        contentView.addSubview(cardScroll)
 
         NSLayoutConstraint.activate([
-            outerStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 120),
-            outerStack.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            outerStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -40),
+            headerLabel.topAnchor.constraint(
+                equalTo: contentView.topAnchor, constant: Metrics.topPadding),
+            headerLabel.leadingAnchor.constraint(
+                equalTo: contentView.leadingAnchor, constant: MediaRowMetrics.rowLeading),
 
-            pillScroll.heightAnchor.constraint(equalToConstant: 96),
-            pillScroll.widthAnchor.constraint(lessThanOrEqualToConstant: 1400),
+            // Full-bleed scroller: cards scroll past both screen edges, and the
+            // row's left margin comes from the stack's own leading inset, the
+            // way the shelf rows do it.
+            cardScroll.topAnchor.constraint(
+                equalTo: headerLabel.bottomAnchor, constant: Metrics.headerToRow),
+            cardScroll.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            cardScroll.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            cardScroll.heightAnchor.constraint(equalToConstant: Metrics.cardHeight),
+            cardScroll.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -40),
 
-            pillStack.leadingAnchor.constraint(equalTo: pillScroll.contentLayoutGuide.leadingAnchor, constant: 8),
-            pillStack.trailingAnchor.constraint(equalTo: pillScroll.contentLayoutGuide.trailingAnchor, constant: -8),
-            pillStack.centerYAnchor.constraint(equalTo: pillScroll.frameLayoutGuide.centerYAnchor),
-            pillScroll.contentLayoutGuide.heightAnchor.constraint(equalTo: pillScroll.frameLayoutGuide.heightAnchor)
+            cardStack.leadingAnchor.constraint(
+                equalTo: cardScroll.contentLayoutGuide.leadingAnchor,
+                constant: MediaRowMetrics.rowLeading),
+            cardStack.trailingAnchor.constraint(
+                equalTo: cardScroll.contentLayoutGuide.trailingAnchor,
+                constant: -MediaRowMetrics.rowLeading),
+            cardStack.centerYAnchor.constraint(equalTo: cardScroll.frameLayoutGuide.centerYAnchor),
+            cardScroll.contentLayoutGuide.heightAnchor.constraint(
+                equalTo: cardScroll.frameLayoutGuide.heightAnchor)
         ])
     }
 
     /// The cell is the collection view's focus item, but it is a big empty area
-    /// and should never hold focus itself — redirect straight into the pills.
+    /// and should never hold focus itself — redirect straight into the cards.
+    /// (A collection view enumerates focus items as CELLS, so a non-focusable
+    /// cell would hide the cards from the engine entirely.)
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        pillScroll.isHidden ? super.preferredFocusEnvironments : pillStack.arrangedSubviews
+        cardScroll.isHidden ? super.preferredFocusEnvironments : cardStack.arrangedSubviews
     }
 
-    func configure(recentSearches: [String]) {
-        pillStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let hasRecents = !recentSearches.isEmpty
-        recentHeaderLabel.isHidden = !hasRecents
-        pillScroll.isHidden = !hasRecents
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        cancelArtwork()
+    }
+
+    private func cancelArtwork() {
+        artworkTasks.forEach { $0.cancel() }
+        artworkTasks.removeAll()
+    }
+
+    func configure(recentItems: [MediaItem]) {
+        cancelArtwork()
+        cardStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let hasRecents = !recentItems.isEmpty
+        headerLabel.isHidden = !hasRecents
+        cardScroll.isHidden = !hasRecents
         guard hasRecents else { return }
 
-        let clear = Self.makePill(icon: "xmark", text: "Clear", dimmed: true)
-        clear.onPrimaryAction = { [weak self] in self?.onClearRecents?() }
-        pillStack.addArrangedSubview(clear)
-
-        for search in recentSearches {
-            let pill = Self.makePill(icon: "clock.arrow.circlepath", text: search, dimmed: false)
-            pill.onPrimaryAction = { [weak self] in self?.onRecentSelected?(search) }
-            pillStack.addArrangedSubview(pill)
+        for item in recentItems {
+            let (card, poster) = Self.makeCard(for: item)
+            card.onPrimaryAction = { [weak self] in self?.onRecentSelected?(item) }
+            cardStack.addArrangedSubview(card)
+            guard let url = item.artwork.poster else { continue }
+            // @MainActor class, so the task inherits the main actor and the
+            // assignment needs no hop. Cancelled on reuse via `artworkTasks`.
+            artworkTasks.append(Task { [weak poster] in
+                let image = await ImageCacheManager.shared.image(for: url)
+                guard !Task.isCancelled else { return }
+                poster?.image = image
+            })
         }
-        // Shrink the scroll to its content when the pills don't fill the cap.
-        pillScroll.layoutIfNeeded()
+        cardScroll.layoutIfNeeded()
     }
 
-    /// A recents pill: glass capsule + icon + label, white-fill inversion on
-    /// focus via FocusableActionButton (matches the detail action pills).
-    private static func makePill(icon: String, text: String, dimmed: Bool) -> FocusableActionButton {
+    /// One Recently Searched card: poster, title, "Movie · 1977".
+    ///
+    /// `.glass` focus rather than the pill inversion the recents pills used:
+    /// a card carries artwork, and a white fill with inverted text under a
+    /// full-colour poster reads as a rendering bug.
+    ///
+    /// Returns the poster view so the caller can fill it asynchronously.
+    private static func makeCard(for item: MediaItem) -> (FocusableActionButton, UIImageView) {
         let button = FocusableActionButton()
+        button.focusStyle = .glass
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.layer.cornerRadius = 16
+        button.layer.cornerRadius = Metrics.cardRadius
 
-        let iconView = UIImageView(image: UIImage(systemName: icon)?
-            .withConfiguration(UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)))
-        iconView.tintColor = dimmed ? UIColor.white.withAlphaComponent(0.6) : .white
-        iconView.contentMode = .scaleAspectFit
+        let poster = UIImageView()
+        poster.contentMode = .scaleAspectFill
+        poster.clipsToBounds = true
+        poster.layer.cornerRadius = Metrics.posterRadius
+        poster.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        poster.translatesAutoresizingMaskIntoConstraints = false
 
-        let label = UILabel()
-        label.text = text
-        label.font = .systemFont(ofSize: 26, weight: .medium)
-        label.textColor = dimmed ? UIColor.white.withAlphaComponent(0.6) : .white
-        label.numberOfLines = 1
+        let title = UILabel()
+        title.text = item.title
+        title.font = .systemFont(ofSize: 31, weight: .semibold)
+        title.textColor = .white
+        title.numberOfLines = 1
+        title.lineBreakMode = .byTruncatingTail
 
-        let stack = UIStackView(arrangedSubviews: [iconView, label])
-        stack.axis = .horizontal
-        stack.spacing = 12
-        stack.alignment = .center
-        stack.isUserInteractionEnabled = false
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(stack)
+        let subtitle = UILabel()
+        subtitle.text = subtitleText(for: item)
+        subtitle.font = .systemFont(ofSize: 24, weight: .regular)
+        subtitle.textColor = UIColor.white.withAlphaComponent(0.6)
+        subtitle.numberOfLines = 1
+        subtitle.lineBreakMode = .byTruncatingTail
+
+        let text = UIStackView(arrangedSubviews: [title, subtitle])
+        text.axis = .vertical
+        text.spacing = 6
+        text.alignment = .leading
+        text.isUserInteractionEnabled = false
+        text.translatesAutoresizingMaskIntoConstraints = false
+
+        button.addSubview(poster)
+        button.addSubview(text)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(equalTo: button.topAnchor, constant: 18),
-            stack.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -18)
+            button.widthAnchor.constraint(equalToConstant: Metrics.cardWidth),
+            button.heightAnchor.constraint(equalToConstant: Metrics.cardHeight),
+
+            poster.leadingAnchor.constraint(
+                equalTo: button.leadingAnchor, constant: Metrics.posterInset),
+            poster.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+            poster.widthAnchor.constraint(equalToConstant: Metrics.posterWidth),
+            poster.heightAnchor.constraint(equalToConstant: Metrics.posterHeight),
+
+            text.leadingAnchor.constraint(
+                equalTo: poster.trailingAnchor, constant: Metrics.posterToText),
+            text.trailingAnchor.constraint(
+                lessThanOrEqualTo: button.trailingAnchor, constant: -Metrics.posterInset),
+            text.centerYAnchor.constraint(equalTo: button.centerYAnchor)
         ])
 
-        button.invertOnFocus = [iconView, label]
-        return button
+        return (button, poster)
+    }
+
+    /// "Movie · 1977" / "TV Show". Apple puts a genre in the middle slot;
+    /// `MediaItem` carries no genre, and fetching one per card would be a
+    /// metadata round trip per recent, so the kind and year are the whole line.
+    private static func subtitleText(for item: MediaItem) -> String {
+        var parts: [String] = []
+        switch item.kind {
+        case .movie: parts.append("Movie")
+        case .show: parts.append("TV Show")
+        case .season: parts.append("Season")
+        case .episode: parts.append("Episode")
+        case .collection: parts.append("Collection")
+        case .person, .unknown: break
+        }
+        if let year = item.year { parts.append(String(year)) }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -250,7 +336,7 @@ final class SearchStateCell: UICollectionViewCell {
         ])
     }
 
-    /// Same redirect as `SearchPromptCell`: the cell is the focus item the
+    /// Same redirect as `SearchRecentsCell`: the cell is the focus item the
     /// collection view offers, Try Again is what should actually take focus.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         retryButton.isHidden ? super.preferredFocusEnvironments : [retryButton]
