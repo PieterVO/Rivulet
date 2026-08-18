@@ -842,11 +842,9 @@ struct UniversalPlayerView: View {
             playerContentLayer
                 .zIndex(2)
 
-            // Post-Video Summary Overlay - separate layer with its own focus handling
-            if viewModel.postVideoState != .hidden {
-                PostVideoSummaryView(viewModel: viewModel)
-                    .zIndex(100)
-            }
+            // Post-video ("Up Next") is UIKit, mounted by
+            // PlayerContainerViewController above this hosting view — it needs
+            // to be a real focus environment the container can hand focus to.
         }
         .animation(.easeInOut(duration: 1.0), value: viewModel.playbackState)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)

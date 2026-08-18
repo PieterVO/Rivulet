@@ -45,6 +45,11 @@ class PlayerContainerViewController: UIViewController {
     /// reads this when it comes online; Task 3 only derives the rail
     /// button's availability from it.
     private var upNextEpisodesCache: [PlexMetadata] = []
+
+    /// The end-of-episode Up Next page. Built on first use and added above
+    /// every other chrome layer while `postVideoState != .hidden`; removed
+    /// (not just hidden) when it goes away so its buttons cannot hold focus.
+    private var postVideoOverlay: PostVideoOverlayView?
     /// Snapshot of the last `$insightsCast` emission, read when the rail's
     /// Insights panel is presented.
     private var insightsCastCache: [MediaPerson] = []
@@ -404,6 +409,12 @@ class PlayerContainerViewController: UIViewController {
     /// prefers the rail (its own preferred-focus handles which button
     /// lands, remembering the last-focused control).
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        // Post-video owns the screen while it is up, so it owns focus. Without
+        // this the engine kept resolving into the chrome (or nowhere) and the
+        // page rendered with no button focused.
+        if let overlay = postVideoOverlay, overlay.superview != nil {
+            return [overlay]
+        }
         if let panel = activeRailPanel, panel.window != nil {
             return [panel]
         }
@@ -441,10 +452,15 @@ class PlayerContainerViewController: UIViewController {
                 vm.cancelSkipCountdown()
                 return
             }
+            // Back closes the Up Next page and puts the video back at full
+            // size; it does NOT leave the player. Every other layer here
+            // (scrub, rail panel, ambient pause) already unwinds one step per
+            // press, and post-video was the odd one out — it took the whole
+            // player down with it, so a user who only wanted the credits back
+            // had to restart the episode. A second press then exits, through
+            // the checks below.
             if vm.postVideoState != .hidden {
-                print("🎮 [DISMISS INTERCEPT] Post-video visible - dismissing normally")
                 vm.dismissPostVideo()
-                fadeOutThenDismiss(animated: flag, completion: completion)
                 return
             }
             if vm.isScrubbing {
@@ -1210,7 +1226,18 @@ class PlayerContainerViewController: UIViewController {
         // pill's visibility/ownership in sync when it appears or dismisses.
         vm.$postVideoState
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.applyChromeVisibility() }
+            .sink { [weak self] state in
+                self?.applyChromeVisibility()
+                self?.applyPostVideoState(state)
+            }
+            .store(in: &cancellables)
+
+        // The page's live parts: the countdown ring and the Play Next / Play
+        // Now title both key off the countdown.
+        vm.$countdownSeconds
+            .combineLatest(vm.$isCountdownPaused, vm.$nextEpisode)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshPostVideoContent() }
             .store(in: &cancellables)
 
         vm.$subtitleTracks
@@ -1519,6 +1546,71 @@ class PlayerContainerViewController: UIViewController {
     ///   proxy is always invisible) — it must never be focusable while
     ///   controls are hidden, mid-scrub, or ambient, and only actually
     ///   reachable once controls-focus mode has moved focus onto the rail.
+    // MARK: - Post-video (Up Next)
+
+    /// Mount or unmount the Up Next page and hand it focus. The focus update
+    /// is the load-bearing half: `preferredFocusEnvironments` alone changes
+    /// nothing until the engine is asked to re-resolve, which is why the
+    /// SwiftUI version rendered with nothing focused.
+    private func applyPostVideoState(_ state: PostVideoState) {
+        if state != .hidden {
+            let overlay = postVideoOverlay ?? makePostVideoOverlay()
+            if overlay.superview == nil {
+                overlay.frame = view.bounds
+                overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                overlay.alpha = 0
+                overlay.resetFocusGrace()
+                view.addSubview(overlay)
+                UIView.animate(withDuration: 0.35) { overlay.alpha = 1 }
+            }
+            refreshPostVideoContent()
+        } else {
+            postVideoOverlay?.removeFromSuperview()
+        }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    private func makePostVideoOverlay() -> PostVideoOverlayView {
+        let overlay = PostVideoOverlayView()
+        overlay.onPlayNext = { [weak self] in
+            guard let vm = self?.viewModel else { return }
+            Task { await vm.playNextEpisode() }
+        }
+        overlay.onDismiss = { [weak self] in
+            guard let vm = self?.viewModel else { return }
+            // Mid-countdown the button stops the countdown and leaves the page
+            // up; with no countdown it returns to fullscreen video.
+            if vm.countdownSeconds > 0 && !vm.isCountdownPaused {
+                vm.cancelCountdown()
+            } else {
+                vm.dismissPostVideo()
+            }
+        }
+        overlay.onUserFocusMove = { [weak self] in
+            guard let vm = self?.viewModel else { return }
+            if vm.countdownSeconds > 0 && !vm.isCountdownPaused { vm.cancelCountdown() }
+        }
+        postVideoOverlay = overlay
+        return overlay
+    }
+
+    private func refreshPostVideoContent() {
+        guard let vm = viewModel, let overlay = postVideoOverlay, overlay.superview != nil else { return }
+        overlay.setLoading(vm.postVideoState == .loading)
+        overlay.configure(
+            nextEpisode: vm.nextEpisode,
+            serverURL: vm.serverURL,
+            authToken: vm.authToken,
+            backdrop: vm.loadingArtImage ?? vm.loadingThumbImage
+        )
+        overlay.setCountdown(
+            remaining: vm.countdownSeconds,
+            total: vm.countdownTotalSeconds,
+            isPaused: vm.isCountdownPaused
+        )
+    }
+
     private func applyChromeVisibility() {
         guard let vm = viewModel else { return }
         let ambient = vm.pausePresentation != .frame
