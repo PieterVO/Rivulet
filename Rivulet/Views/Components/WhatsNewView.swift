@@ -140,6 +140,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        // confirm build number at release
+        ("1.0.5 (80)", [
+            "Updated AetherEngine to 6.32.0",
+        ]),
         ("1.0.5 (79)", [
             "New Input Test in Settings under About records what your remote actually sends",
             "Home rows now follow the libraries you have pinned to Home on your Plex server",
