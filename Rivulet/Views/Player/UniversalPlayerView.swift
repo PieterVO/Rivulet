@@ -1221,6 +1221,15 @@ struct UniversalPlayerView: View {
             return "link.badge.plus"
         case .unknown:
             return "exclamationmark.triangle.fill"
+        case .engineFailure(let kind, _):
+            // Reuse the one engine-kind taxonomy instead of opening a third
+            // switch over the same strings. "Is this a network thing or a
+            // codec thing" is the same question the router already answers.
+            switch DirectPlayFailureKind(engineKind: kind) {
+            case .network: return "wifi.exclamationmark"
+            case .unsupportedCodec: return "film.fill"
+            default: return "exclamationmark.triangle.fill"
+            }
         }
     }
 
@@ -1247,6 +1256,12 @@ struct UniversalPlayerView: View {
             return "Invalid Stream"
         case .unknown:
             return "Playback Error"
+        case .engineFailure(let kind, _):
+            switch DirectPlayFailureKind(engineKind: kind) {
+            case .network: return "Connection Problem"
+            case .unsupportedCodec: return "Format Not Supported"
+            default: return "Playback Error"
+            }
         }
     }
 

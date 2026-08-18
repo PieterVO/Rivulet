@@ -61,6 +61,22 @@ enum PlayerError: Error, Equatable, Sendable {
     case networkError(String)
     case codecUnsupported(String)
     case unknown(String)
+    /// A failure AetherEngine classified for us (`PlaybackErrorInfo`).
+    ///
+    /// `kind` is the engine's `PlaybackErrorKind.rawValue`, which upstream
+    /// documents as API and stable across releases, so it is safe to switch on
+    /// and safe to ship straight into a Sentry tag. It is carried as a String
+    /// rather than mirrored into a host enum because the engine's set is open
+    /// by design: it grows on minor releases, and an unlisted kind has to ride
+    /// through to telemetry intact rather than collapse to "unknown" the way
+    /// the substring rules below do. Only the kinds that change what the user
+    /// should do are named anywhere in this file.
+    ///
+    /// `message` is the same text `PlaybackState.error` carries. On the native
+    /// paths it is `AVPlayerItem.error.localizedDescription`, so it is in the
+    /// device's language and cannot be pattern-matched: that is precisely why
+    /// `kind` exists.
+    case engineFailure(kind: String, message: String)
 
     /// Technical description for logging and Sentry - includes internal details
     var technicalDescription: String {
@@ -75,6 +91,8 @@ enum PlayerError: Error, Equatable, Sendable {
             return "Unsupported codec: \(codec)"
         case .unknown(let message):
             return "Playback error: \(message)"
+        case .engineFailure(let kind, let message):
+            return "Playback error [\(kind)]: \(message)"
         }
     }
 
@@ -103,7 +121,29 @@ enum PlayerError: Error, Equatable, Sendable {
                 return "The stream from your server couldn't be played. The server may still be preparing the video."
             }
             return "Something went wrong during playback. Please try again."
+        case .engineFailure(let kind, _):
+            // Only the kinds that change what the user should DO get their own
+            // sentence. Everything else reads the same as any other playback
+            // failure, because to the viewer it is one.
+            switch kind {
+            case EngineFailureKind.sourceRateLimited:
+                return "Your server is refusing new streams right now. Wait a moment and try again."
+            case EngineFailureKind.sourceRefused:
+                return "Your server refused this video. It may have moved, or your access to it may have changed."
+            case EngineFailureKind.dolbyVisionRequiresHardware:
+                return "This Dolby Vision file has no fallback layer this Apple TV can decode."
+            default:
+                return "This video couldn't be played. Please try again."
+            }
         }
+    }
+
+    /// AetherEngine's own classification of this failure, when it has one.
+    /// Nil for every error the host authored, which is what keeps it honest as
+    /// a Sentry tag: present means the engine said so.
+    var engineKind: String? {
+        if case .engineFailure(let kind, _) = self { return kind }
+        return nil
     }
 
     /// Whether the user should be offered a retry option
@@ -113,6 +153,11 @@ enum PlayerError: Error, Equatable, Sendable {
             return true
         case .invalidURL, .codecUnsupported:
             return false
+        case .engineFailure(let kind, _):
+            // A hardware decode limit is the one class retrying cannot move.
+            // Rate limiting is retryable on purpose: the engine's own note on
+            // that kind is that the same request is expected to work later.
+            return kind != EngineFailureKind.dolbyVisionRequiresHardware
         }
     }
 
@@ -120,6 +165,45 @@ enum PlayerError: Error, Equatable, Sendable {
     var localizedDescription: String {
         technicalDescription
     }
+}
+
+// MARK: - Engine failure kinds
+
+/// The `PlaybackErrorKind` raw values Rivulet actually branches on.
+///
+/// AetherEngine publishes ~20 of these and adds more on minor releases. Naming
+/// the full set here would be a mirror that goes stale silently; naming only
+/// the ones we react to keeps the staleness visible, because an unlisted kind
+/// simply takes a default arm rather than disappearing.
+///
+/// These strings are AetherEngine's API surface. Do not "tidy" the spelling.
+enum EngineFailureKind {
+    /// Origin answered 429/503/509. The source is not gone and the same
+    /// request is expected to work later, so this must not be treated as a
+    /// dead source.
+    static let sourceRateLimited = "sourceRateLimited"
+    /// Origin answered an HTTP status instead of media (401/403/404/5xx).
+    /// `underlyingCode` carries that status. Before AetherEngine 6.29.0 this
+    /// and a genuinely corrupt file both arrived as `sourceOpenFailed` with
+    /// FFmpeg's "Invalid data found when processing input", which is the whole
+    /// reason RIVULET-19 could not be split.
+    static let sourceRefused = "sourceRefused"
+    /// The source could not be opened, probed or routed. Post-6.29.0 this is
+    /// the genuinely-unreadable half of what RIVULET-19 used to be.
+    static let sourceOpenFailed = "sourceOpenFailed"
+    /// Dolby Vision with no base layer the software path can decode.
+    static let dolbyVisionRequiresHardware = "dolbyVisionRequiresHardware"
+    /// A live probe that burned its whole reconnect budget without opening.
+    static let liveSourceUnavailable = "liveSourceUnavailable"
+    /// `AVPlayerItem` reached `.failed`; domain/code classify it, not the text.
+    static let nativeItemFailed = "nativeItemFailed"
+    /// The audio bridge produced no encoded audio, so the first segment cut
+    /// failed. Upstream's note: a host with a fallback ladder should DEMOTE on
+    /// this one rather than end the ladder, which is what our HLS fallback
+    /// already does.
+    static let audioBridgeProducedNoOutput = "audioBridgeProducedNoOutput"
+    /// The software decode pipeline failed.
+    static let softwarePipelineFailed = "softwarePipelineFailed"
 }
 
 // MARK: - Cancellation

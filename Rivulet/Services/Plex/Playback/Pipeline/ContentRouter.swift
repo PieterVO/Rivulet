@@ -52,6 +52,48 @@ enum DirectPlayFailureKind: String, Sendable {
     case unknown
 }
 
+extension DirectPlayFailureKind {
+
+    /// Map an AetherEngine `PlaybackErrorKind` raw value onto our own buckets.
+    ///
+    /// This replaces guesswork, not a working rule. The old path lowercased the
+    /// engine's message and looked for "open input", "decoder", "stream info"
+    /// and friends, which fails twice over: half those messages are
+    /// `AVPlayerItem.error.localizedDescription`, so they are in the device's
+    /// language and match nothing on a non-English Apple TV, and the two things
+    /// worth telling apart in RIVULET-19 (an origin answering with an HTTP
+    /// status vs a genuinely unreadable file) produced the identical FFmpeg
+    /// sentence until AetherEngine 6.29.0 split them.
+    ///
+    /// Unlisted kinds land on `.runtimeFatal` rather than `.unknown` on
+    /// purpose: the engine only publishes one of these when a session actually
+    /// died, so "we have no bucket for it" is not the same claim as "we do not
+    /// know that anything failed". The raw kind travels to Sentry beside this,
+    /// so a kind that starts showing up in the default arm is visible there
+    /// rather than silently pooled.
+    init(engineKind: String) {
+        switch engineKind {
+        case EngineFailureKind.sourceRefused,
+             EngineFailureKind.sourceRateLimited,
+             EngineFailureKind.liveSourceUnavailable:
+            self = .network
+        case EngineFailureKind.sourceOpenFailed,
+             "customSourceProbeFailed",
+             "hlsPlaylistOnRawLivePath",
+             "masterPlaylistRejected",
+             "noPlayableTrackWithinBudget":
+            self = .demuxInit
+        case EngineFailureKind.dolbyVisionRequiresHardware,
+             "demuxedAudioLiveUnsupported":
+            self = .unsupportedCodec
+        case EngineFailureKind.softwarePipelineFailed:
+            self = .decodeInit
+        default:
+            self = .runtimeFatal
+        }
+    }
+}
+
 /// Playback startup plan with primary route, fallback routes, and routing reasons.
 struct PlaybackPlan: Sendable, CustomStringConvertible {
     let policy: PlaybackPolicy

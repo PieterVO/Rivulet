@@ -1346,6 +1346,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                 return .demuxInit
             case .unknown:
                 return .unknown
+            case .engineFailure(let kind, _):
+                // The engine already classified this. Everything below is the
+                // guess we make when nobody did.
+                return DirectPlayFailureKind(engineKind: kind)
             }
         }
 
@@ -1517,7 +1521,13 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // classified and then discarded, so if the HLS fallback ALSO
                 // failed we reported the fallback's error and destroyed the only
                 // evidence of why direct play died in the first place.
-                diagnostics.recordPrimaryFailure(error, kind: kind, route: "aether")
+                diagnostics.recordPrimaryFailure(
+                    error,
+                    kind: kind,
+                    route: "aether",
+                    engineKind: (error as? PlayerError)?.engineKind,
+                    engineUnderlying: aetherPlayer?.lastEngineErrorUnderlying
+                )
                 // RIVULET-19 diagnostics. Fire-and-forget, deliberately NOT
                 // awaited: the user's recovery is the HLS fallback below and
                 // nothing may delay it. See `probeStreamBodyForDiagnostics`.

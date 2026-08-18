@@ -133,11 +133,24 @@ final class PlaybackDiagnostics {
     /// This is the whole point of the type. Without it, an Aether failure that
     /// is successfully papered over by the HLS fallback is invisible, and one
     /// that ISN'T gets reported as an HLS bug.
-    func recordPrimaryFailure(_ error: Error, kind: DirectPlayFailureKind, route: String) {
+    /// - Parameter engineKind: AetherEngine's own `PlaybackErrorKind` raw
+    ///   value, when the failure came from the engine. Sent as its own tag
+    ///   rather than folded into `kind`: `DirectPlayFailureKind` has six
+    ///   buckets chosen for fallback decisions, and collapsing twenty engine
+    ///   kinds into them is exactly what made RIVULET-19 unsplittable.
+    /// - Parameter engineUnderlying: domain and code beneath the engine's
+    ///   error. For `sourceRefused` / `sourceRateLimited` the code is the
+    ///   origin's HTTP status.
+    func recordPrimaryFailure(_ error: Error,
+                              kind: DirectPlayFailureKind,
+                              route: String,
+                              engineKind: String? = nil,
+                              engineUnderlying: (domain: String?, code: Int?)? = nil) {
         let nsError = error as NSError
         rootCause = [
             "route": route,
             "kind": kind.rawValue,
+            "engine_kind": engineKind ?? "none",
             "message": error.localizedDescription,
             "domain": nsError.domain,
             "code": nsError.code,
@@ -155,6 +168,17 @@ final class PlaybackDiagnostics {
             scope.setTag(value: "primary_route_failed", key: "playback_event")
             scope.setTag(value: route, key: "failed_route")
             scope.setTag(value: kind.rawValue, key: "failure_kind")
+            if let engineKind {
+                scope.setTag(value: engineKind, key: "engine_failure_kind")
+            }
+            if let engineUnderlying {
+                if let domain = engineUnderlying.domain {
+                    scope.setTag(value: domain, key: "engine_underlying_domain")
+                }
+                if let code = engineUnderlying.code {
+                    scope.setTag(value: String(code), key: "engine_underlying_code")
+                }
+            }
             self.apply(to: scope)
         }
     }

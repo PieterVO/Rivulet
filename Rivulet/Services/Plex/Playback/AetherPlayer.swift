@@ -152,15 +152,21 @@ final class AetherPlayer: PlayerProtocol {
 
     private func wireUpPublishers() {
         engine.$state
+            // Read `errorInfo` on the PUBLISHING turn, not after the hop.
+            // AetherEngine assigns it immediately before `state` and clears it
+            // when state leaves `.error`, so it is exact here and merely
+            // probably-still-there one runloop turn later. Pairing them in the
+            // map costs a tuple and removes the question.
+            .map { [engine] aetherState in (aetherState, engine.errorInfo) }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] aetherState in
+            .sink { [weak self] aetherState, errorInfo in
                 guard let self else { return }
                 self.engineIsPlaying = (aetherState == .playing)
                 // Recompute BEFORE publishing the state so the view model's
                 // ".playing while still buffering" reconciliation sees the
                 // combined flag the moment a seek lands.
                 self.recomputeIsBuffering()
-                self.stateSubject.send(Self.translate(aetherState))
+                self.stateSubject.send(Self.translate(aetherState, errorInfo: errorInfo))
             }
             .store(in: &cancellables)
 
@@ -364,7 +370,34 @@ final class AetherPlayer: PlayerProtocol {
         if combined != isBuffering { isBuffering = combined }
     }
 
-    private static func translate(_ s: PlaybackState) -> UniversalPlaybackState {
+    /// Map the engine's state, carrying its own classification of a failure
+    /// rather than re-deriving one from the message.
+    ///
+    /// `errorInfo` is nil only if the engine cleared it between publishing the
+    /// error and this call, which the paired read in `wireUpPublishers` makes
+    /// unreachable in practice. `.unknown` stays as the honest answer for that
+    /// case: it is what we actually know.
+    /// Wrap a failed `engine.load` in the engine's OWN classification.
+    ///
+    /// AetherEngine assigns `errorInfo` immediately before the throw reaches
+    /// us, so take it. This is the RIVULET-19 site: `String(describing:)` of an
+    /// engine error is the un-matchable string the host's substring classifier
+    /// was guessing at, and since 6.29.0 the engine splits the two failures
+    /// that were indistinguishable inside it (an origin answering with an HTTP
+    /// status, vs a body that genuinely is not media — both used to surface as
+    /// FFmpeg's "Invalid data found when processing input").
+    ///
+    /// Both load paths funnel through here: live and VOD had the same three
+    /// lines, and a fix in one of them is a fix owed to the other.
+    private func loadFailure(from error: Error) -> PlayerError {
+        if let info = engine.errorInfo {
+            return .engineFailure(kind: info.kind.rawValue, message: info.message)
+        }
+        return .loadFailed(String(describing: error))
+    }
+
+    private static func translate(_ s: PlaybackState,
+                                  errorInfo: PlaybackErrorInfo?) -> UniversalPlaybackState {
         switch s {
         case .idle: return .idle
         case .loading: return .loading
@@ -372,8 +405,24 @@ final class AetherPlayer: PlayerProtocol {
         case .paused: return .paused
         case .seeking: return .buffering
         case .ended: return .ended
-        case .error(let message): return .failed(.unknown(message))
+        case .error(let message):
+            guard let errorInfo else { return .failed(.unknown(message)) }
+            return .failed(.engineFailure(kind: errorInfo.kind.rawValue,
+                                          message: errorInfo.message))
         }
+    }
+
+    /// Domain and code of whatever failed underneath the engine's most recent
+    /// error, for telemetry that wants to split one kind further.
+    ///
+    /// `sourceRefused` and `sourceRateLimited` put the origin's HTTP status in
+    /// `underlyingCode`, which is the single field that answers RIVULET-19's
+    /// open question: which non-media body the demuxer was handed. Kept off
+    /// `PlayerError` because nothing in the UI branches on it.
+    var lastEngineErrorUnderlying: (domain: String?, code: Int?)? {
+        guard let info = engine.errorInfo else { return nil }
+        guard info.underlyingDomain != nil || info.underlyingCode != nil else { return nil }
+        return (info.underlyingDomain, info.underlyingCode)
     }
 
     private static func translateTrack(_ t: TrackInfo) -> MediaTrack {
@@ -704,7 +753,7 @@ final class AetherPlayer: PlayerProtocol {
             // Rethrow untouched so the type survives; wrapping it in a
             // PlayerError makes it indistinguishable from a real failure.
             if isCancellationError(error) { throw error }
-            let pe = PlayerError.loadFailed(String(describing: error))
+            let pe = loadFailure(from: error)
             errorSubject.send(pe)
             throw pe
         }
@@ -835,7 +884,7 @@ final class AetherPlayer: PlayerProtocol {
             // destroys the type, so downstream can no longer tell a
             // cancellation from a genuine startup failure (RIVULET-19).
             if isCancellationError(error) { throw error }
-            let pe = PlayerError.loadFailed(String(describing: error))
+            let pe = loadFailure(from: error)
             errorSubject.send(pe)
             throw pe
         }

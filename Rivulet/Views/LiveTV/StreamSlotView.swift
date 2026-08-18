@@ -218,6 +218,8 @@ struct StreamSlotView: View {
                 return message
             case .unknown(let message):
                 return message
+            case .engineFailure(_, let message):
+                return message
             }
         }
         return nil
