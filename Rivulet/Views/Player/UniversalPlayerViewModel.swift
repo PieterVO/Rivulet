@@ -421,6 +421,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var plexSessionId: String?
     /// Playback startup/fallback plan for Rivulet direct-play-first policy.
     private var playbackPlan: PlaybackPlan?
+    /// The route actually serving playback right now.
+    ///
+    /// Starts as the plan's primary and flips in `attemptRivuletHLSFallback`
+    /// when the server transcode takes over. `playbackPlan` is written once per
+    /// startup and never rewritten, so reading `.primary` for this describes
+    /// what was planned rather than what is playing: after an Aether startup
+    /// failure it reported `aether` for a session running on HLS, which put
+    /// every rescued session under the route it failed to use.
+    private var activeRoute: PlaybackRoute?
     /// Optional prebuilt HLS fallback URL/headers to reduce fallback startup latency.
     private var rivuletFallbackURL: URL?
     private var rivuletFallbackHeaders: [String: String] = [:]
@@ -571,6 +580,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         streamURL = nil
         streamHeaders = [:]
         playbackPlan = nil
+        activeRoute = nil
         rivuletFallbackURL = nil
         rivuletFallbackHeaders = [:]
     }
@@ -696,6 +706,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         )
         let plan = ContentRouter.plan(for: routingContext)
         playbackPlan = plan
+        activeRoute = plan.primary
         rivuletFallbackURL = nil
         rivuletFallbackHeaders = [:]
         // Tag the chosen route for App Hang triage (RIVULET-41).
@@ -844,7 +855,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// (engine cues on aether, /library/streams sidecars on hls) and are never
     /// burned in.
     var streamingModeInfo: StreamingModeInfo {
-        if case .aether = playbackPlan?.primary {
+        if case .aether = activeRoute {
             let audioCodec = metadata.Media?.first?.Part?.first?
                 .Stream?.first(where: { $0.isAudio })?.codec
                 ?? metadata.Media?.first?.audioCodec
@@ -966,7 +977,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                         self.diagnostics.recordPrimaryFailure(
                             itemError,
                             kind: self.classifyDirectPlayFailure(PlayerError.loadFailed(message)),
-                            route: self.playbackPlan?.primary.description.lowercased() ?? "unknown"
+                            route: self.activeRoute?.description.lowercased() ?? "unknown"
                         )
                         if self.shouldAttemptRivuletFallbackOnItemFailure() {
                             let failureKind = self.classifyDirectPlayFailure(PlayerError.loadFailed(message))
@@ -1111,7 +1122,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             "stall_seconds": stallSeconds,
             "position_seconds": currentTime,
             "resolved_to": next.appHangLabel,
-            "route": playbackPlan?.primary.description.lowercased() ?? "unknown"
+            "route": activeRoute?.description.lowercased() ?? "unknown"
         ]
         SentryBridge.addBreadcrumb(crumb)
     }
@@ -2335,6 +2346,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         streamURL = fallback.url
         streamHeaders = fallback.headers
         plexSessionId = fallback.sessionId
+        // The Aether session is torn down above, so this is the point the
+        // session stops being the planned route. Tag it before the preflight:
+        // a fallback that dies in preflight still died on HLS.
+        activeRoute = .hls(url: fallback.url, headers: fallback.headers)
+        AppHangContext.setPlaybackRoute(activeRoute?.description)
 
         diagnostics.step("hls_fallback_preflight", detail: "reason=\(reason) kind=\(failureKind.rawValue)")
         let transcodeReady = await waitForHLSTranscodeReady(url: fallback.url, headers: fallback.headers)
