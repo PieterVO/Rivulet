@@ -143,6 +143,7 @@ struct WhatsNewView: View {
         // confirm build number at release
         ("1.0.5 (80)", [
             "Updated AetherEngine to 6.32.0",
+            "Playback errors now say what went wrong instead of one generic message",
         ]),
         ("1.0.5 (79)", [
             "New Input Test in Settings under About records what your remote actually sends",
