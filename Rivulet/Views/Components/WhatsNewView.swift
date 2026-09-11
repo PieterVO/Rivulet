@@ -143,6 +143,7 @@ struct WhatsNewView: View {
         // confirm build number at release
         ("1.0.5 (82)", [
             "Updated AetherEngine to 6.81.0",
+            "Autoplay no longer flashes black between episodes",
         ]),
         ("1.0.5 (81)", [
             "Extras and special features now resume where you left off",
