@@ -103,6 +103,7 @@ final class CardStatsView: UIView, InfoTabSheet {
         SectionSpec(name: "DECODE", rows: [
             RowSpec(title: "Backend", value: { $0.backend }),
             RowSpec(title: "Audio Bridge", value: { $0.audioBridge }),
+            RowSpec(title: "Audio Delivery", value: { $0.audioDelivery }),
         ]),
         SectionSpec(name: "STREAM", rows: [
             RowSpec(title: "Bitrate", value: { $0.instantBitrateMbps.map(PlayerInfoSheetStyle.mbps) }),

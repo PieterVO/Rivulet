@@ -994,11 +994,40 @@ final class AetherPlayer: PlayerProtocol {
     ///    before the first sample and on the `hls`/AVPlayer-bypass path (no
     ///    loopback pipeline). Its own fields are path-asymmetric, so the
     ///    Advanced view prunes absent rows rather than showing placeholders.
+    /// Map the engine's `AudioDelivery` to a stats row, or nil to omit the row.
+    ///
+    /// Switched exhaustively with no `default` on purpose: this file is the only
+    /// place an AetherEngine type is named, so a case the engine adds should
+    /// fail the build here rather than silently render as a blank row.
+    private static func audioDeliveryLabel(_ delivery: AudioDelivery) -> String? {
+        switch delivery {
+        case .none: return nil  // Pre-load or torn down: nothing to report yet.
+        case .noAudioInSource: return "No audio in source"
+        case .streamCopy: return "Stream copy"
+        case .bridged: return "Bridged"
+        case .decoded: return "Decoded"
+        case .droppedNoPipeline: return "Video only (audio dropped)"
+        case .playerManaged: return "AVFoundation"
+        }
+    }
+
+    /// Keep the outgoing item on screen until the next `load()` replaces it.
+    ///
+    /// Call immediately before an episode swap that reuses this player. Video
+    /// renders through the engine's own layer (`engine.bind(view:)`), so without
+    /// this the gap between items is a black frame. Consumed by the next
+    /// `load()`; a `stop()` in between cancels it, and it no-ops when the
+    /// outgoing session is not on the engine's native backend.
+    func prepareForItemReplacement() {
+        engine.prepareForItemReplacement()
+    }
+
     func advancedStats() -> AetherAdvancedStats {
         let t = engine.diagnostics.liveTelemetry
         return AetherAdvancedStats(
             backend: engine.activeVideoDecoder,
             audioBridge: engine.activeAudioDecoder,
+            audioDelivery: Self.audioDeliveryLabel(engine.audioDelivery),
             instantBitrateMbps: t?.instantBitrateMbps,
             averageBitrateMbps: t?.averageBitrateMbps,
             audioBridgeBitrateMbps: t?.audioBridgeBitrateMbps,
@@ -1033,6 +1062,11 @@ struct AetherAdvancedStats {
     // Decoder identity (from engine.activeVideoDecoder / activeAudioDecoder).
     let backend: String?
     let audioBridge: String?
+    /// How the session's audio reaches the renderer, mapped from the engine's
+    /// own `audioDelivery`. Worth a row of its own because `audioBridge` names
+    /// a decoder and this names a FATE: "Video only" here is the engine saying
+    /// the source has audio it could not deliver, which no decoder label shows.
+    let audioDelivery: String?
     // Enthusiast telemetry.
     let instantBitrateMbps: Double?
     let averageBitrateMbps: Double?
@@ -1056,6 +1090,7 @@ struct AetherAdvancedStats {
     init(
         backend: String? = nil,
         audioBridge: String? = nil,
+        audioDelivery: String? = nil,
         instantBitrateMbps: Double? = nil,
         averageBitrateMbps: Double? = nil,
         audioBridgeBitrateMbps: Double? = nil,
@@ -1076,6 +1111,7 @@ struct AetherAdvancedStats {
     ) {
         self.backend = backend
         self.audioBridge = audioBridge
+        self.audioDelivery = audioDelivery
         self.instantBitrateMbps = instantBitrateMbps
         self.averageBitrateMbps = averageBitrateMbps
         self.audioBridgeBitrateMbps = audioBridgeBitrateMbps

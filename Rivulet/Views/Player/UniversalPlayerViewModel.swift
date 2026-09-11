@@ -4957,6 +4957,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Clear preloaded data
         clearPreloadedData()
 
+        // The swap reuses this AetherPlayer, so the engine replaces the item on
+        // a layer that is already on screen. Without this the outgoing item is
+        // detached before the incoming one is ready and the viewer sees a black
+        // frame between episodes. The request is consumed by the load inside
+        // startPlayback().
+        aetherPlayer?.prepareForItemReplacement()
+
         // Start playback — new time observer starts with time ≈ 0 after this returns
         await startPlayback()
 
