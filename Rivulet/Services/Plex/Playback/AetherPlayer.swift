@@ -726,7 +726,17 @@ final class AetherPlayer: PlayerProtocol {
             // page the broadcast FLAGS as a subtitle page; AU FTA channels carry
             // captions on 801 without that flag, so auto-detect returns nothing.
             // Region-default to 801 for AU, otherwise auto-detect.
-            teletextPage: Self.regionTeletextPage()
+            teletextPage: Self.regionTeletextPage(),
+            // Broadcast H.264 routinely mis-signals interlaced content as
+            // progressive (codecpar fieldOrder=0; MBAFF is only flagged
+            // per-frame), which routes it down the engine's NATIVE path with
+            // no deinterlacer — visible combing. Ask for the software path on
+            // live demux sessions: bwdif deinterlaces genuinely interlaced
+            // frames and passes true progressive through untouched, so a
+            // correctly-signalled progressive channel only pays a SW decode.
+            // The engine ignores this on the native-HLS shortcut, which never
+            // enters the demux dispatch, so it is scoped to `!isHLS` anyway.
+            preferredDecodePath: isHLS ? .automatic : .software
         )
         // Same reason as the VOD path: a zap is new content, and broadcast
         // mixes 4:3 SD with 16:9 HD channel to channel, so a reused slot must
@@ -735,18 +745,6 @@ final class AetherPlayer: PlayerProtocol {
         userIntendsToPlay = true
         pendingReloadSince = nil
         do {
-            // Broadcast H.264 routinely mis-signals interlaced content as
-            // progressive (codecpar fieldOrder=0; MBAFF is only flagged
-            // per-frame), which routes it down the engine's NATIVE path with
-            // no deinterlacer — visible combing. Force the software path for
-            // live demux sessions: bwdif deinterlaces genuinely interlaced
-            // frames and passes true progressive through untouched, so a
-            // correctly-signalled progressive channel only pays a SW decode.
-            // (Engine flag is labeled test-only but is the exact switch for
-            // this; reset immediately after dispatch. Not applied to the
-            // native-HLS shortcut, which never enters the demux dispatch.)
-            if !isHLS { AetherEngine.setForceSoftwarePathForTesting(true) }
-            defer { if !isHLS { AetherEngine.setForceSoftwarePathForTesting(false) } }
             try await engine.load(url: url, startPosition: nil, options: options)
         } catch {
             // The caller left the slot / retuned while the load was in flight.
