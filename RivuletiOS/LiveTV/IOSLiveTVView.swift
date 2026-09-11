@@ -63,7 +63,7 @@ struct IOSLiveTVView: View {
 
             HStack(spacing: 4) {
                 if !store.channels.isEmpty {
-                    Button("Jump to now", systemImage: "arrow.right.and.line.vertical.and.arrow.left") {
+                    Button("Jump to now", systemImage: "clock.arrow.circlepath") {
                         snapToNowToken += 1
                     }
                     .labelStyle(.iconOnly)
