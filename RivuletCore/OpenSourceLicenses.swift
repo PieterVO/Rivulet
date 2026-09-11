@@ -35,7 +35,7 @@ enum OpenSourceLicenses {
     /// Where the corresponding FFmpeg source and the scripts/configure flags used to build the
     /// bundled frameworks can be obtained — required to satisfy the LGPL. FFmpegBuild hosts the
     /// build script (build.sh) with the exact flags and the pinned upstream source revisions
-    /// (FFmpeg n8.1, dav1d 1.5.1).
+    /// (FFmpeg n8.1, dav1d 1.5.4).
     static let ffmpegSourceURL = "https://github.com/superuser404notfound/FFmpegBuild"
 
     /// Where the corresponding AetherEngine source for the version linked by this app can be
@@ -60,7 +60,7 @@ enum OpenSourceLicenses {
         [
             Entry(
                 name: "AetherEngine",
-                summary: "Video playback engine — the default player for on-demand titles. Dynamically linked and used under the GNU Lesser General Public License, version 3, with an Apple Store / DRM Exception. Copyright © 2026 Vincent Herbst. The complete corresponding source for the exact version linked by this app (tag 6.32.0, commit 324c60f) is available at \(aetherSourceURL).",
+                summary: "Video playback engine — the default player for on-demand titles. Dynamically linked and used under the GNU Lesser General Public License, version 3, with an Apple Store / DRM Exception. Copyright © 2026 Vincent Herbst. The complete corresponding source for the exact version linked by this app (tag 6.81.0, commit c7e7adb) is available at \(aetherSourceURL).",
                 licenseText: aetherLGPLv3
             ),
             Entry(
@@ -75,8 +75,18 @@ enum OpenSourceLicenses {
             ),
             Entry(
                 name: "dav1d",
-                summary: "AV1 video decoder bundled with the FFmpeg build (dav1d 1.5.1). Used under the BSD 2-Clause License. Copyright © 2018-2019, VideoLAN and dav1d authors. Source: https://code.videolan.org/videolan/dav1d (tag 1.5.1).",
+                summary: "AV1 video decoder bundled with the FFmpeg build (dav1d 1.5.4). Used under the BSD 2-Clause License. Copyright © 2018-2019, VideoLAN and dav1d authors. Source: https://code.videolan.org/videolan/dav1d (tag 1.5.4).",
                 licenseText: dav1dBSD2
+            ),
+            Entry(
+                name: "zimg",
+                summary: "Colourspace and scaling library bundled with the FFmpeg build (zimg 3.0.6). Used under the WTFPL. Copyright © the zimg authors. Source: https://github.com/sekrit-twc/zimg (tag release-3.0.6).",
+                licenseText: zimgWTFPL
+            ),
+            Entry(
+                name: "libzvbi",
+                summary: "DVB teletext and VBI decoding for Live TV, bundled with the FFmpeg build (libzvbi 0.2.45). The library is dynamically linked and used under the GNU Lesser General Public License, version 2.1 or later, whose full text is reproduced in the FFmpeg entry above. Copyright © the libzvbi authors. Two files in it, src/ure.c and src/ure.h, carry their own MIT license, reproduced here. Source: https://github.com/zapping-vbi/zvbi (tag v0.2.45).",
+                licenseText: libzvbiUreMIT
             ),
             Entry(
                 name: "libdovi (dovi_tool)",
@@ -564,6 +574,61 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
 ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""#
+
+    static let zimgWTFPL = #"""
+            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+                    Version 2, December 2004
+
+ Copyright (C) 2004 Sam Hocevar <sam@hocevar.net>
+
+ Everyone is permitted to copy and distribute verbatim or modified
+ copies of this license document, and changing it is allowed as long
+ as the name is changed.
+
+            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+  0. You just DO WHAT THE FUCK YOU WANT TO.
+"""#
+
+    /// Only `src/ure.c` and `src/ure.h` of libzvbi carry this; the library
+    /// itself is LGPL-2.1-or-later, whose text the FFmpeg entry reproduces.
+    static let libzvbiUreMIT = #"""
+libzvbi: src/ure.c and src/ure.h (Unicode regular expression matcher)
+
+These two files are part of the shipped Libzvbi framework and carry their
+own MIT license rather than libzvbi's LGPL. The notice below is reproduced
+verbatim from src/ure.c of libzvbi v0.2.44.
+
+    Copyright 1997, 1998, 1999 Computing Research Labs,
+    New Mexico State University
+
+    Modifications and fixes for the Zapping 0.5 release by
+    Iñaki García Etxebarrria <garetxe@users.sourceforge.net>
+
+    Modifications by Michael H. Schimek <mschimek@users.sf.net>
+    for libzvbi 0.1: Added character classes :gfx: and :drcs:,
+    commented out the surrogate expansion and IGNORE_NONSPACING
+    in ure_exec since we don't need that.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+    THE COMPUTING RESEARCH LAB OR NEW MEXICO STATE UNIVERSITY BE LIABLE FOR ANY
+    CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT
+    OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+    THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """#
 
 
