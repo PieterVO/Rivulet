@@ -153,7 +153,30 @@ class PlexAuthManager: ObservableObject {
                 selectedServerURL = nil
                 userDefaults.removeObject(forKey: serverURLKey)
             }
+
+            if let url = selectedServerURL, !Self.isPlayableDirectURL(url) {
+                Task { await upgradeConnectionIfBetterExists(from: url) }
+            }
         }
+    }
+
+    /// Launch reuses a saved URL for as long as it answers, so a URL won in a
+    /// bad moment sticks: raw HTTPS browses but cannot play (#314), and relay
+    /// caps playback at 480p. The app starts on the saved URL; this re-probes
+    /// in the background and switches only to a direct URL playback can use,
+    /// never sideways (relay to raw HTTPS would trade 480p for no playback).
+    private func upgradeConnectionIfBetterExists(from url: String) async {
+        guard let token = authToken,
+              let servers = try? await networkManager.getServers(authToken: token) else { return }
+        let server = servers.first(where: { urlBelongs(url, to: $0) })
+            ?? savedServerName.flatMap { name in servers.first(where: { $0.name == name }) }
+        guard let server,
+              let best = await findBestConnection(for: server, reuseLastGood: false),
+              Self.isPlayableDirectURL(best),
+              selectedServerURL == url else { return }
+        print("🔐 PlexAuthManager: Upgrading connection \(url) -> \(best)")
+        selectedServerURL = best
+        userDefaults.set(best, forKey: serverURLKey)
     }
 
     /// Migrate tokens from UserDefaults to Keychain (one-time, for existing users)
@@ -282,7 +305,7 @@ class PlexAuthManager: ObservableObject {
     /// - If httpsRequired=false + local: HTTP (fastest) > plex.direct
     /// - Remote: plex.direct URLs from the API
     /// - Relay: strictly last resort
-    private func findBestConnection(for server: PlexDevice) async -> String? {
+    private func findBestConnection(for server: PlexDevice, reuseLastGood: Bool = true) async -> String? {
         // For shared servers (not owned by user), use server-specific accessToken
         let tokenToUse = server.accessToken
 
@@ -290,7 +313,7 @@ class PlexAuthManager: ObservableObject {
         // to THIS server (matching a connection's host:port or embedding the
         // machineIdentifier, as plex.direct URLs do). Guards the switch-server
         // flow against reusing another server's URL.
-        if let lastGood = selectedServerURL, urlBelongs(lastGood, to: server) {
+        if reuseLastGood, let lastGood = selectedServerURL, urlBelongs(lastGood, to: server) {
             print("🔐 PlexAuthManager: Trying last-known-good URL first: \(lastGood)")
             if await testConnection(lastGood, serverToken: tokenToUse) {
                 print("🔐 PlexAuthManager: ✅ Last-known-good works — skipping the probe ladder")
@@ -307,16 +330,22 @@ class PlexAuthManager: ObservableObject {
             connectionScore(conn1) > connectionScore(conn2)
         }
 
-        // Build the prioritized probe chains. Index order IS the priority order.
-        // Each chain tries the connection's advertised URI (now an https
-        // plex.direct URL with a valid cert) and, for http-only connections,
-        // upgrades to HTTPS via certificate extraction.
+        // Build the prioritized probe chains. Index order IS the priority order,
+        // and it goes by what playback can use: every direct URL the players
+        // accept (any connection, score order) outranks every raw-HTTPS URL,
+        // which only the API can use (#314), and relay stays last. A remote
+        // plex.direct URL therefore beats a local raw IP over HTTPS.
         var chains: [() async -> String?] = []
 
-        // One chain per candidate connection, in score order.
-        for connection in sortedConnections {
+        let directConnections = sortedConnections.filter { !$0.relay }
+        for connection in directConnections {
             chains.append { [weak self] in
-                await self?.probeConnectionChain(connection, tokenToUse: tokenToUse)
+                await self?.probePlayable(connection, tokenToUse: tokenToUse)
+            }
+        }
+        for connection in directConnections {
+            chains.append { [weak self] in
+                await self?.probeRawHTTPS(connection, tokenToUse: tokenToUse)
             }
         }
 
@@ -387,78 +416,54 @@ class PlexAuthManager: ObservableObject {
         }
     }
 
-    /// Per-connection cascade: try the advertised URI directly, then (for an
-    /// http connection) raw HTTPS with certificate extraction, then a
-    /// plex.direct URL built from the extracted cert hash.
-    private func probeConnectionChain(
-        _ connection: PlexConnection,
-        tokenToUse: String?
-    ) async -> String? {
+    /// Tier-one cascade for one connection: URLs both the API and the players
+    /// accept. The advertised URI first. For an https plex.direct connection
+    /// whose name fails (router DNS-rebinding protection refuses plex.direct
+    /// names that resolve to private IPs, GitHub #224), plain HTTP to the raw
+    /// address when local, which works whenever Secure connections is
+    /// Preferred. For an http connection, a plex.direct URL built from the
+    /// hash in the server's certificate.
+    private func probePlayable(_ connection: PlexConnection, tokenToUse: String?) async -> String? {
         if await testConnection(connection.uri, serverToken: tokenToUse) {
             return connection.uri
         }
         print("🔐 PlexAuthManager: ❌ Connection failed: \(connection.uri)")
 
-        // HTTPS candidates advertise a plex.direct URI. Routers with DNS
-        // rebinding protection refuse plex.direct names that resolve to
-        // private IPs, so the advertised URI can fail while the server itself
-        // is perfectly reachable (GitHub #224 — official clients fall back to
-        // the raw address, so "Plex app works, Rivulet doesn't"). Fall back to
-        // the raw address over HTTPS (PlexCertificateDelegate trusts the Plex
-        // cert), then plain HTTP for local connections.
+        let host = connection.IPv6 ? "[\(connection.address)]" : connection.address
         guard connection.protocolType == "http" else {
-            let host = connection.IPv6 ? "[\(connection.address)]" : connection.address
-            let rawHTTPS = "https://\(host):\(connection.port)"
-            print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTPS)")
-            if await testConnection(rawHTTPS, serverToken: tokenToUse) {
-                return rawHTTPS
-            }
-            if connection.local {
-                let rawHTTP = "http://\(host):\(connection.port)"
-                print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTP)")
-                if await testConnection(rawHTTP, serverToken: tokenToUse) {
-                    return rawHTTP
-                }
-            }
-            return nil
+            guard connection.local else { return nil }
+            let rawHTTP = "http://\(host):\(connection.port)"
+            print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTP)")
+            return await testConnection(rawHTTP, serverToken: tokenToUse) ? rawHTTP : nil
         }
 
-        // Try raw HTTPS as last resort for this connection.
-        // API calls can trust self-signed certs, but media playback should prefer a valid TLS endpoint.
-        let httpsURI = connection.uri.replacingOccurrences(of: "http://", with: "https://")
-        print("🔐 PlexAuthManager: Trying HTTPS fallback: \(httpsURI)...")
-        let (success, certHash) = await testConnectionWithCertExtraction(httpsURI, serverToken: tokenToUse)
-        if success {
-            // If we have a cert hash, prefer plex.direct for playback compatibility
-            if let hash = certHash {
-                let plexDirectURI = buildPlexDirectURL(
-                    address: connection.address,
-                    port: connection.port,
-                    subdomainHash: hash
-                )
-                if await testConnection(plexDirectURI, serverToken: tokenToUse) {
-                    return plexDirectURI
-                }
-            }
-            // Fall back to raw HTTPS if plex.direct failed
-            print("🔐 PlexAuthManager: ✅ HTTPS fallback works: \(httpsURI)")
-            return httpsURI
+        let (_, certHash) = await testConnectionWithCertExtraction(
+            "https://\(host):\(connection.port)", serverToken: tokenToUse
+        )
+        guard let hash = certHash else { return nil }
+        let plexDirectURI = buildPlexDirectURL(
+            address: connection.address,
+            port: connection.port,
+            subdomainHash: hash
+        )
+        if await testConnection(plexDirectURI, serverToken: tokenToUse) {
+            return plexDirectURI
         }
-        print("🔐 PlexAuthManager: ❌ HTTPS fallback failed: \(httpsURI)")
-
-        // If we extracted a plex.direct hash from the certificate error, try that
-        if let hash = certHash {
-            let plexDirectURI = buildPlexDirectURL(
-                address: connection.address,
-                port: connection.port,
-                subdomainHash: hash
-            )
-            if await testConnection(plexDirectURI, serverToken: tokenToUse) {
-                return plexDirectURI
-            }
-            print("🔐 PlexAuthManager: ❌ plex.direct failed: \(plexDirectURI)")
-        }
+        print("🔐 PlexAuthManager: ❌ plex.direct failed: \(plexDirectURI)")
         return nil
+    }
+
+    /// Tier-two probe: HTTPS to the raw address. It passes only because
+    /// PlexCertificateDelegate trusts the mismatched cert; FFmpeg, AVPlayer
+    /// and the HLS preflight have no such override, so this URL browses and
+    /// plays nothing (GitHub #314). It exists for servers that require secure
+    /// connections behind a router that blocks plex.direct, where browsing
+    /// beats no connection at all.
+    private func probeRawHTTPS(_ connection: PlexConnection, tokenToUse: String?) async -> String? {
+        let host = connection.IPv6 ? "[\(connection.address)]" : connection.address
+        let rawHTTPS = "https://\(host):\(connection.port)"
+        print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTPS)")
+        return await testConnection(rawHTTPS, serverToken: tokenToUse) ? rawHTTPS : nil
     }
 
     /// Whether a persisted URL plausibly belongs to `server`: its host:port
@@ -541,6 +546,22 @@ class PlexAuthManager: ObservableObject {
         }
 
         return false
+    }
+
+    /// Whether playback can use this URL directly: not relay, and not HTTPS
+    /// to a bare IP literal (a cert the players reject). plex.direct names
+    /// and plain HTTP qualify.
+    static func isPlayableDirectURL(_ urlString: String) -> Bool {
+        guard let components = URLComponents(string: urlString),
+              let host = components.host else { return false }
+        if PlexRelay.isRelayURL(urlString) { return false }
+        guard components.scheme == "https" else { return true }
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        let isIPv4 = bare.split(separator: ".", omittingEmptySubsequences: false)
+            .map { UInt8($0) != nil }.allSatisfy { $0 }
+            && bare.split(separator: ".").count == 4
+        let isIPLiteral = isIPv4 || bare.contains(":")
+        return !isIPLiteral
     }
 
     /// Test if a connection URL is reachable

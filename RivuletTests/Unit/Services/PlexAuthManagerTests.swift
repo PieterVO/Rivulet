@@ -314,6 +314,22 @@ final class PlexAuthManagerTests: XCTestCase {
         let ipWithDashes = address.replacingOccurrences(of: ".", with: "-")
         return "https://\(ipWithDashes).\(machineIdentifier).plex.direct:\(port)"
     }
+
+    // MARK: - Playable connection tier (#314)
+
+    @MainActor
+    func testIsPlayableDirectURL() {
+        let playable = PlexAuthManager.isPlayableDirectURL
+        XCTAssertTrue(playable("http://192.168.50.5:32400"))
+        XCTAssertTrue(playable("http://[fd00::1]:32400"))
+        XCTAssertTrue(playable("https://192-168-50-5.abc123.plex.direct:32400"))
+        XCTAssertTrue(playable("https://plex.example.com"))
+        XCTAssertFalse(playable("https://192.168.50.5:32400"))
+        XCTAssertFalse(playable("https://8.8.8.8:32400"))
+        XCTAssertFalse(playable("https://[fd00::1]:32400"))
+        XCTAssertFalse(playable("https://1-2-3-4.abc123.plex.direct:8443"))
+        XCTAssertFalse(playable("not a url"))
+    }
 }
 
 // MARK: - Test Helpers
