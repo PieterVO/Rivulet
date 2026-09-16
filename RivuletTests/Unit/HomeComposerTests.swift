@@ -75,7 +75,7 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?) async throws -> StreamInfo {
         throw MediaProviderError.notFound
     }
-    func progressReporter(for itemRef: MediaItemRef, playSessionID: String?) -> any ProgressReporter {
+    func progressReporter(for itemRef: MediaItemRef, playSessionID: String?) -> any Rivulet.ProgressReporter {
         StubReporter()
     }
     func setSelectedAudioTrack(_ trackID: String, source sourceID: String, of itemRef: MediaItemRef) async throws {}
@@ -88,7 +88,7 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
     func removeFromWatchlist(_ ref: MediaItemRef) async throws {}
 }
 
-struct StubReporter: ProgressReporter {
+struct StubReporter: Rivulet.ProgressReporter {
     func start() async {}
     func progress(position: TimeInterval) async {}
     func paused(at position: TimeInterval) async {}
