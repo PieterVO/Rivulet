@@ -706,6 +706,28 @@ The Plex Discover API uses three different hosts:
 | Pagination | `X-Plex-Container-Size` is rejected on the watchlist endpoint |
 | Mutations | Resolve external GUID → discover `ratingKey` via matches endpoint first, then PUT actions |
 
+## Plex server API gotchas
+
+**`X-Plex-Container-Size` is ignored unless `X-Plex-Container-Start` is sent
+with it.** Measured on PMS 1.43.4: `/library/recentlyAdded?X-Plex-Container-Size=1`
+returned all 50 items (75KB); adding `X-Plex-Container-Start=0` returned one
+(1.7KB). So a `limit:` argument that only sets the size parameter silently does
+nothing, and the caller pays for the full page. `getRecentlyAdded` has shipped
+that way, which is why its `start` is an optional parameter rather than always 0:
+`PlexProvider.recentlyAdded` and `PlexMusicProvider.recentlyAddedAlbums` were
+tuned against the over-fetch, and the music one filters `type == "album"` out of
+it, so making the limit work would shrink its results.
+
+**Neither `updatedAt` nor `scannedAt` on `/library/sections` detects new content.**
+On the same server a section's `updatedAt` was six months stale with items added
+that morning (it tracks section settings, not contents), and `scannedAt` moved on
+every library at once from the scheduled scan whether or not anything was added.
+The working signal is the newest item on `/library/recentlyAdded` capped with
+`X-Plex-Container-Start=0&X-Plex-Container-Size=1`, keyed on ratingKey + addedAt +
+`updatedAt` together, because an episode added to the season that is already
+newest keeps that season's ratingKey and moves only its timestamps. `PlexDataStore`'s 30s poll
+uses exactly this to decide when to refetch Home's Recently Added rows (#315).
+
 ## Plex Live TV
 
 ### Stream URL Types
