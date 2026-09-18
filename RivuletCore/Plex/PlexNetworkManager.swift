@@ -832,10 +832,17 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     }
 
     /// Get recently added items
+    /// - Parameter start: Pass 0 to make `limit` take effect. PMS ignores
+    ///   `X-Plex-Container-Size` unless `X-Plex-Container-Start` is sent with
+    ///   it: measured on PMS 1.43.4, size=1 alone returned all 50 items
+    ///   (75KB), and start=0&size=1 returned one (1.7KB). Left optional so the
+    ///   existing over-fetching callers keep the result set they were tuned
+    ///   against.
     func getRecentlyAdded(
         serverURL: String,
         authToken: String,
         sectionId: String? = nil,
+        start: Int? = nil,
         limit: Int = 20
     ) async throws -> [PlexMetadata] {
         var urlString = "\(serverURL)/library/recentlyAdded"
@@ -847,9 +854,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             throw PlexAPIError.invalidURL
         }
 
-        components.queryItems = [
-            URLQueryItem(name: "X-Plex-Container-Size", value: "\(limit)")
-        ]
+        var queryItems = [URLQueryItem(name: "X-Plex-Container-Size", value: "\(limit)")]
+        if let start {
+            queryItems.insert(URLQueryItem(name: "X-Plex-Container-Start", value: "\(start)"), at: 0)
+        }
+        components.queryItems = queryItems
 
         guard let url = components.url else {
             throw PlexAPIError.invalidURL

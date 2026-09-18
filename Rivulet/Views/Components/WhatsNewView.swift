@@ -141,6 +141,9 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         // confirm build number at release
+        ("1.0.5 (84)", [
+            "New movies and shows now reach the Home screen without a restart",
+        ]),
         ("1.0.5 (83)", [
             "Fixed videos failing to play on some home networks",
         ]),

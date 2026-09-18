@@ -279,6 +279,10 @@ class PlexDataStore: ObservableObject {
     private var lastHubsFetchAt: Date?
     private var lastContinueWatchingFetchAt: Date?
 
+    /// Identity of the newest added item at the last poll. nil means the poll
+    /// has not established its baseline yet, which is not a change.
+    private var lastRecentlyAddedStamp: String?
+
     /// Staggered Continue-Watching-only re-fetches after playback ends. The
     /// player's single 2s-delayed refresh races the server committing the
     /// final timeline/scrobble into the hub — when the server is slower, that
@@ -458,6 +462,54 @@ class PlexDataStore: ObservableObject {
               let token = authManager.selectedServerToken else { return }
 
         await fetchContinueWatchingOnly(serverURL: serverURL, token: token)
+        await refreshLibraryHubsIfContentAdded()
+    }
+
+    /// Home's "Recently Added <Library>" rows are projected from `libraryHubs`,
+    /// and nothing ever refreshed that dictionary: `loadLibraryHubsIfNeeded`
+    /// only fetches libraries it has no hubs for, and the 3-minute poll covers
+    /// `/hubs` + `/hubs/continueWatching` only. So a title added after launch
+    /// showed up on the library page (which fetches its own) but not on Home
+    /// until the app was relaunched (GitHub #315).
+    ///
+    /// Re-pulling every library's hub payload on the 30s tick is far too fat,
+    /// so this polls the newest item instead and only pays for the hub refetch
+    /// when that item changes. Measured against the reference PMS 1.43.4:
+    /// `/library/recentlyAdded` capped to one item is 1.7KB / ~140ms, versus
+    /// ~100KB for a single library's promoted hubs.
+    ///
+    /// The two obvious-looking cheaper signals on `/library/sections` are both
+    /// wrong, measured on the same server: a section's `updatedAt` was six
+    /// months stale with items added that morning, and its `scannedAt` is a
+    /// scheduled-scan stamp that moves on every library at once whether or not
+    /// anything was added.
+    private func refreshLibraryHubsIfContentAdded() async {
+        guard didCompleteInitialHubFetch,
+              let serverURL = authManager.selectedServerURL,
+              let authToken = authManager.selectedServerToken else { return }
+
+        let newest = try? await networkManager.getRecentlyAdded(
+            serverURL: serverURL,
+            authToken: authToken,
+            start: 0,
+            limit: 1
+        ).first
+        guard let stamp = Self.recentlyAddedStamp(newest) else { return }
+
+        let previous = lastRecentlyAddedStamp
+        lastRecentlyAddedStamp = stamp
+        guard let previous, previous != stamp else { return }
+
+        await loadLibraryHubsIfNeeded(forceRefresh: true)
+    }
+
+    /// Identity of the newest added item, as the change token for the poll
+    /// above. `ratingKey` alone is not enough: a new episode dropped into the
+    /// season that is already newest keeps that season's key and only moves its
+    /// timestamps, so both are part of the token.
+    nonisolated static func recentlyAddedStamp(_ newest: PlexMetadata?) -> String? {
+        guard let newest, let ratingKey = newest.ratingKey else { return nil }
+        return "\(ratingKey)/\(newest.addedAt ?? 0)/\(newest.updatedAt ?? 0)"
     }
 
     // MARK: - Connection Recovery
@@ -534,6 +586,7 @@ class PlexDataStore: ObservableObject {
         libraries = []
         hasLoadedLibraries = false
         libraryHubs.removeAll()
+        lastRecentlyAddedStamp = nil
         libraryHubFetchFailures.removeAll()
         homeItems = []
         libraryItemsByKey.removeAll()
@@ -953,7 +1006,7 @@ class PlexDataStore: ObservableObject {
                     }
 
                     for await (key, _, hubs) in group {
-                        noteLibraryHubFetchResult(key: key, hubs: hubs)
+                        await noteLibraryHubFetchResult(key: key, hubs: hubs)
                     }
                 }
             }
@@ -984,7 +1037,7 @@ class PlexDataStore: ObservableObject {
                     }
 
                     for await (key, _, hubs) in group {
-                        noteLibraryHubFetchResult(key: key, hubs: hubs)
+                        await noteLibraryHubFetchResult(key: key, hubs: hubs)
                     }
                 }
             }
@@ -1011,7 +1064,14 @@ class PlexDataStore: ObservableObject {
     /// clears any prior failure mark; failure (nil) leaves the last-known hubs
     /// in place and marks the key so `projectHomeItems()` carries that
     /// library's Recently Added row over instead of dropping it.
-    private func noteLibraryHubFetchResult(key: String, hubs: [PlexHub]?) {
+    ///
+    /// The disk write is here because it is the one place every successful hub
+    /// fetch passes through. It used to live only in `startBackgroundPrefetch`,
+    /// which writes each library's file once and then skips on `hasHubsCache`
+    /// forever, so the cache froze at whatever the first launch saw while the
+    /// in-memory copy moved on. Every later cold launch then painted Recently
+    /// Added from that frozen file until the network refresh landed (#315).
+    private func noteLibraryHubFetchResult(key: String, hubs: [PlexHub]?) async {
         guard let hubs else {
             libraryHubFetchFailures.insert(key)
             return
@@ -1019,6 +1079,7 @@ class PlexDataStore: ObservableObject {
         libraryHubs[key] = hubs
         libraryHubFetchFailures.remove(key)
         recordFetch(for: "libraryHubs:\(key)")
+        await cacheManager.cacheLibraryHubs(hubs, forLibrary: key)
     }
 
     /// Breadcrumb a per-library hub fetch failure so a missing Home shelf is
@@ -1964,6 +2025,7 @@ class PlexDataStore: ObservableObject {
         libraries = []
         hasLoadedLibraries = false
         libraryHubs.removeAll()
+        lastRecentlyAddedStamp = nil
         libraryHubFetchFailures.removeAll()
         homeItems = []
         libraryItemsByKey.removeAll()
