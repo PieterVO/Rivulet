@@ -471,6 +471,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var rivuletFallbackHeaders: [String: String] = [:]
     /// One-shot direct-play -> HLS fallback guards (prevents loops).
     private var hasAttemptedRivuletHLSFallback = false
+    /// One-shot: the enriched HLS asset failed and we rebuilt on the plain URL.
+    private var hasRetriedWithoutEnrichment = false
     private var isAttemptingRivuletHLSFallback = false
     /// Causal-chain diagnostics for this playback session. Carries the ORIGINAL
     /// (primary-route) failure through to whatever error finally surfaces, so a
@@ -1015,6 +1017,12 @@ final class UniversalPlayerViewModel: ObservableObject {
                             kind: self.classifyDirectPlayFailure(PlayerError.loadFailed(message)),
                             route: self.activeRoute?.description.lowercased() ?? "unknown"
                         )
+                        // The enriched asset is a custom scheme nothing else
+                        // can load, so its failure is total. The plain URL
+                        // behind it already passed preflight, so rebuild on it
+                        // and keep the session instead of spending the one-shot
+                        // HLS fallback (or ending playback) over track labels.
+                        if self.retryWithoutEnrichment() { break }
                         if self.shouldAttemptRivuletFallbackOnItemFailure() {
                             let failureKind = self.classifyDirectPlayFailure(PlayerError.loadFailed(message))
                             let resumeTime = self.currentTime
@@ -1205,6 +1213,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         errorMessage = nil
         playbackState = .loading
         hasAttemptedRivuletHLSFallback = false
+        hasRetriedWithoutEnrichment = false
         isAttemptingRivuletHLSFallback = false
 
         // Stop existing player before retrying
@@ -1259,6 +1268,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
         hasAttemptedRivuletHLSFallback = false
+        hasRetriedWithoutEnrichment = false
         isAttemptingRivuletHLSFallback = false
 
         addPlaybackSelectionBreadcrumb(reason: "startAVPlayerPlayback")
@@ -1408,6 +1418,33 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard let plan else { return false }
         return plan.fallbacks.contains { route in
             if case .hls = route { return true }
+            return false
+        }
+    }
+
+    /// Rebuild the current item on the plain URL after an enriched HLS asset
+    /// failed. Returns true when it took over, so the caller stops.
+    ///
+    /// Fires at most once per session and only while the enricher is the active
+    /// asset, so a genuine stream problem still reaches the HLS fallback and the
+    /// error path below it. The cost of the retry is generic audio/subtitle
+    /// track labels; the cost of not retrying is the whole session.
+    private func retryWithoutEnrichment() -> Bool {
+        guard let enricher = hlsManifestEnricher, !hasRetriedWithoutEnrichment else { return false }
+        guard let url = streamURL else { return false }
+        hasRetriedWithoutEnrichment = true
+
+        diagnostics.step(
+            "hls_enricher_retry_plain",
+            detail: enricher.lastFailure ?? "item failed with enriched asset active"
+        )
+        do {
+            try loadAVPlayer(url: url, headers: streamHeaders, allowEnrichment: false)
+            player?.play()
+            return true
+        } catch {
+            // Nothing recoverable left; fall through to the normal failure path.
+            hlsManifestEnricher = nil
             return false
         }
     }
@@ -2006,7 +2043,18 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - AVPlayer Creation
 
     /// Create an AVPlayer for a URL (direct play or HLS).
-    private func loadAVPlayer(url: URL, headers: [String: String]?) throws {
+    /// - Parameter allowEnrichment: false rebuilds the item on the plain URL,
+    ///   skipping `HLSManifestEnricher`. The enricher exists only to inject
+    ///   audio/subtitle track LABELS, but it does so by handing AVFoundation a
+    ///   custom-scheme asset, and nothing but the delegate can load that scheme.
+    ///   So any failure inside it costs the whole session, on the HLS route that
+    ///   is itself already the fallback after an Aether startup failure. Sentry
+    ///   RIVULET-62 catches exactly that: direct play 404s, the HLS preflight
+    ///   proves the plain URL serves a variant with segments, and then the
+    ///   enriched asset dies with "unsupported URL" (RIVULET-55) and the user
+    ///   gets nothing. `retryWithoutEnrichment` calls this to trade the labels
+    ///   for a session that plays.
+    private func loadAVPlayer(url: URL, headers: [String: String]?, allowEnrichment: Bool = true) throws {
         teardownAVPlayerObservers()
         player?.pause()
         hlsManifestEnricher = nil
@@ -2016,7 +2064,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // For HLS URLs, use the manifest enricher to inject audio/subtitle track labels.
         // The enricher intercepts ONLY the master playlist (custom scheme), patches it,
         // and rewrites all sub-URLs to absolute HTTP so AVPlayer fetches them directly.
-        if url.path.contains("start.m3u8") || url.pathExtension == "m3u8",
+        if allowEnrichment,
+           url.path.contains("start.m3u8") || url.pathExtension == "m3u8",
            let headers = headers {
             let enricher = HLSManifestEnricher(metadata: metadata, headers: headers, originalURL: url)
             if let enrichedURL = enricher.enrichedURL(from: url) {
