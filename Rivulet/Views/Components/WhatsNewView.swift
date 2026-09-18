@@ -143,6 +143,8 @@ struct WhatsNewView: View {
         // confirm build number at release
         ("1.0.6 (85)", [
             "Updated AetherEngine to 7.7.0",
+            "The next episode now starts faster when autoplay is on",
+            "Settings now shows which playback engine version you are running",
         ]),
         ("1.0.6 (84)", [
             "New movies and shows now reach the Home screen without a restart",
