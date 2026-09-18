@@ -145,6 +145,7 @@ struct WhatsNewView: View {
             "Updated AetherEngine to 7.7.0",
             "The next episode now starts faster when autoplay is on",
             "Settings now shows which playback engine version you are running",
+            "Fixed playback failing outright when the server falls back to transcoding",
         ]),
         ("1.0.6 (84)", [
             "New movies and shows now reach the Home screen without a restart",
