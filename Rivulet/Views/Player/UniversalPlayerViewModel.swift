@@ -4809,17 +4809,24 @@ final class UniversalPlayerViewModel: ObservableObject {
                 authToken: authToken,
                 partKey: partKey
             )
-            preloadedNextStreamHeaders = [
-                "X-Plex-Token": authToken,
-                "X-Plex-Client-Identifier": PlexAPI.clientIdentifier,
-                "X-Plex-Platform": PlexAPI.platform,
-                "X-Plex-Device": PlexAPI.deviceName,
-                "X-Plex-Product": PlexAPI.productName
-            ]
+            // Must be the SAME builder the load uses: these headers are the
+            // prewarm adoption key below, and a hand-copied duplicate that
+            // drifts from `rivuletDirectPlayHeaders()` warms bytes the load
+            // then refuses to take, silently and with no symptom but a slow
+            // start.
+            preloadedNextStreamHeaders = rivuletDirectPlayHeaders()
             if let preloadedURL = preloadedNextStreamURL {
                 let headers = preloadedNextStreamHeaders
                 Task(priority: .utility) {
-                    await networkManager.warmDirectPlayStream(url: preloadedURL, headers: headers)
+                    // Warms the BYTES, not just the connection: the engine
+                    // holds the opening range in memory and the next `load()`
+                    // of this exact URL serves its parse reads out of RAM
+                    // instead of paying two to three sequential round trips.
+                    // The swap path hands these very values to that load
+                    // (`streamURL` / `streamHeaders`), so the key matches.
+                    // Superseded the HEAD-only connection warm this replaced,
+                    // which fetched no bytes for the load to adopt.
+                    await AetherPlayer.prewarm(url: preloadedURL, headers: headers)
                 }
             }
         }

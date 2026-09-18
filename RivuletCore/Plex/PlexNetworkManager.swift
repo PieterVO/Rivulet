@@ -1834,47 +1834,6 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Warm up a direct-play URL so the first real playback request sees lower startup latency.
-    /// This is best-effort and intentionally silent on failures.
-    func warmDirectPlayStream(url: URL, headers: [String: String]) async {
-        var headRequest = URLRequest(url: url)
-        headRequest.httpMethod = "HEAD"
-        headRequest.timeoutInterval = 4
-        headRequest.cachePolicy = .reloadIgnoringLocalCacheData
-        for (key, value) in headers {
-            headRequest.addValue(value, forHTTPHeaderField: key)
-        }
-
-        do {
-            let (_, response) = try await session.data(for: headRequest)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if (200...399).contains(status) {
-                return
-            }
-            if status != 405 && status != 501 {
-                return
-            }
-        } catch {
-            // Fall through to range probe.
-        }
-
-        var rangeRequest = URLRequest(url: url)
-        rangeRequest.httpMethod = "GET"
-        rangeRequest.timeoutInterval = 4
-        rangeRequest.cachePolicy = .reloadIgnoringLocalCacheData
-        rangeRequest.addValue("bytes=0-1", forHTTPHeaderField: "Range")
-        for (key, value) in headers {
-            rangeRequest.addValue(value, forHTTPHeaderField: key)
-        }
-
-        do {
-            let (_, response) = try await session.data(for: rangeRequest)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        } catch {
-            // Best effort only.
-        }
-    }
-
     /// Stop a Plex transcode session. Call this when stopping playback to free server resources
     /// and prevent timeouts when immediately starting a new session.
     func stopTranscodeSession(serverURL: String, authToken: String, sessionId: String) async {

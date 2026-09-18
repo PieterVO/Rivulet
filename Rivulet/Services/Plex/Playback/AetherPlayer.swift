@@ -140,6 +140,30 @@ final class AetherPlayer: PlayerProtocol {
     /// background timestamp so the teardown-drain wait still applies.
     private var pendingReloadSince: Date?
 
+    /// AetherEngine's own version string. SwiftPM resolves a package to a
+    /// revision rather than a tag, so nothing else in the app can name the
+    /// engine release at runtime: `Package.resolved` is a build artifact and
+    /// the licenses screen carries a hand-maintained copy. Settings → About
+    /// prints this one, which the engine states about itself.
+    static var engineVersion: String { AetherEngine.version }
+
+    /// Warm the opening bytes of a source the engine is not playing yet, so a
+    /// later `load()` of that URL skips the cold open's two-to-three sequential
+    /// round trips (AetherEngine 7.7.0).
+    ///
+    /// The URL and headers are the adoption key and must be byte-identical to
+    /// the ones the load will carry, or the bytes are fetched and never taken.
+    /// Needs no engine instance, so a host warms while its player is still on
+    /// the current item. Best-effort by contract: it declines rather than
+    /// queues when the origin has no free request slot, and the bytes live in
+    /// memory only until adopted or dropped under pressure.
+    static func prewarm(url: URL, headers: [String: String]) async {
+        let report = await AetherEngine.prewarm(url: url, httpHeaders: headers)
+        if let declined = report.declined {
+            print("[AetherPlayer] prewarm declined: \(declined)")
+        }
+    }
+
     init() {
         do {
             self.engine = try AetherEngine()
