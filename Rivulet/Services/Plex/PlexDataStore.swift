@@ -116,32 +116,40 @@ class PlexDataStore: ObservableObject {
         lastFetchTimestamps.removeAll()
     }
 
-    // MARK: - Full Metadata Cache (stale-while-revalidate)
+    // MARK: - Logo Metadata Cache (stale-while-revalidate)
 
-    /// Cached full metadata responses keyed by ratingKey, with fetch timestamp
-    private var fullMetadataCache: [String: (metadata: PlexMetadata, fetchedAt: Date)] = [:]
-    private let fullMetadataCacheLimit = 50
+    /// Metadata fetched purely to resolve `clearLogoPath`, keyed by ratingKey.
+    ///
+    /// This holds PLAIN `/library/metadata/{key}` responses, not `getFullMetadata`
+    /// ones: every reader wants `clearLogoPath` and nothing else, and the seven
+    /// include params cost 28% more bytes and twice the latency (measured against
+    /// PMS 1.43.4: 24835B/142ms vs 17962B/71ms, clearLogo present in both). Do not
+    /// read extras, markers, chapters, collections or onDeck off these entries;
+    /// they are not in there. It is named for what it carries so the next caller
+    /// does not assume otherwise.
+    private var logoMetadataCache: [String: (metadata: PlexMetadata, fetchedAt: Date)] = [:]
+    private let logoMetadataCacheLimit = 50
 
-    /// Get cached full metadata for a ratingKey (returns nil if not cached)
-    func getCachedFullMetadata(for ratingKey: String) -> PlexMetadata? {
-        return fullMetadataCache[ratingKey]?.metadata
+    /// Get cached logo metadata for a ratingKey (returns nil if not cached)
+    func getCachedLogoMetadata(for ratingKey: String) -> PlexMetadata? {
+        return logoMetadataCache[ratingKey]?.metadata
     }
 
-    /// Check if cached full metadata is fresh enough to skip a network request
-    func isFullMetadataFresh(for ratingKey: String, within interval: TimeInterval = 120) -> Bool {
-        guard let entry = fullMetadataCache[ratingKey] else { return false }
+    /// Check if cached logo metadata is fresh enough to skip a network request
+    func isLogoMetadataFresh(for ratingKey: String, within interval: TimeInterval = 120) -> Bool {
+        guard let entry = logoMetadataCache[ratingKey] else { return false }
         return Date().timeIntervalSince(entry.fetchedAt) < interval
     }
 
-    /// Cache full metadata with LRU eviction at 50 entries
-    func cacheFullMetadata(_ metadata: PlexMetadata, for ratingKey: String) {
+    /// Cache logo metadata with LRU eviction at 50 entries
+    func cacheLogoMetadata(_ metadata: PlexMetadata, for ratingKey: String) {
         // LRU eviction: remove oldest entry if at capacity and this is a new key
-        if fullMetadataCache[ratingKey] == nil && fullMetadataCache.count >= fullMetadataCacheLimit {
-            if let oldestKey = fullMetadataCache.min(by: { $0.value.fetchedAt < $1.value.fetchedAt })?.key {
-                fullMetadataCache.removeValue(forKey: oldestKey)
+        if logoMetadataCache[ratingKey] == nil && logoMetadataCache.count >= logoMetadataCacheLimit {
+            if let oldestKey = logoMetadataCache.min(by: { $0.value.fetchedAt < $1.value.fetchedAt })?.key {
+                logoMetadataCache.removeValue(forKey: oldestKey)
             }
         }
-        fullMetadataCache[ratingKey] = (metadata: metadata, fetchedAt: Date())
+        logoMetadataCache[ratingKey] = (metadata: metadata, fetchedAt: Date())
     }
 
     // MARK: - Hero Cache (per library)
@@ -577,7 +585,7 @@ class PlexDataStore: ObservableObject {
         clearHeroCache()
         clearNextEpisodeCache()
         clearFreshnessTimestamps()
-        fullMetadataCache.removeAll()
+        logoMetadataCache.removeAll()
 
         // Clear in-memory data (libraries may differ per user)
         hubs = []
@@ -2046,7 +2054,7 @@ class PlexDataStore: ObservableObject {
         nextEpisodeCache.removeAll()
         heroItemsCache.removeAll()
         clearFreshnessTimestamps()
-        fullMetadataCache.removeAll()
+        logoMetadataCache.removeAll()
         TopShelfCache.shared.clear()
         // Wipe ALL on-disk content caches. Sign-out must leave nothing of the
         // previous account behind: the home launch-paints straight from

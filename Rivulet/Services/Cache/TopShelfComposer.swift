@@ -77,7 +77,7 @@ enum TopShelfComposer {
     /// first (which carries the grandparent key), then resolve the grandparent
     /// (show) metadata where the show logo lives.
     private static func fullMetadata(for ratingKey: String, serverURL: String, token: String) async -> PlexMetadata? {
-        if let cached = PlexDataStore.shared.getCachedFullMetadata(for: ratingKey) {
+        if let cached = PlexDataStore.shared.getCachedLogoMetadata(for: ratingKey) {
             // For episodes, the show logo lives on the grandparent — resolve that.
             if cached.type == "episode", let gp = cached.grandparentRatingKey {
                 return await fetchAndCache(gp, serverURL: serverURL, token: token) ?? cached
@@ -92,10 +92,12 @@ enum TopShelfComposer {
     }
 
     private static func fetchAndCache(_ ratingKey: String, serverURL: String, token: String) async -> PlexMetadata? {
-        if let cached = PlexDataStore.shared.getCachedFullMetadata(for: ratingKey) { return cached }
+        if let cached = PlexDataStore.shared.getCachedLogoMetadata(for: ratingKey) { return cached }
         do {
-            let m = try await PlexNetworkManager.shared.getFullMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-            PlexDataStore.shared.cacheFullMetadata(m, for: ratingKey)
+            // Plain metadata: `clearLogoPath` is all this path reads. See
+            // `logoMetadataCache`.
+            let m = try await PlexNetworkManager.shared.getMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+            PlexDataStore.shared.cacheLogoMetadata(m, for: ratingKey)
             return m
         } catch {
             return nil
