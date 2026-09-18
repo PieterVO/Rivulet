@@ -141,6 +141,9 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         // confirm build number at release
+        ("1.0.6 (85)", [
+            "Updated AetherEngine to 7.7.0",
+        ]),
         ("1.0.6 (84)", [
             "New movies and shows now reach the Home screen without a restart",
         ]),
