@@ -61,7 +61,6 @@ final class InsightsCastListView: UIView {
     private let cast: [MediaPerson]
     private let trivia: TitleTrivia?
     private let suppressedTriviaIDs: Set<String>
-    private let hideSpoilers: Bool
     private let onSelectCast: (MediaPerson) -> Void
 
     /// Number of trivia fact rows currently in the stack (i.e. for the
@@ -86,14 +85,12 @@ final class InsightsCastListView: UIView {
         cast: [MediaPerson],
         trivia: TitleTrivia?,
         suppressedTriviaIDs: Set<String>,
-        hideSpoilers: Bool,
         initialTab: InsightsTab,
         onSelectCast: @escaping (MediaPerson) -> Void
     ) {
         self.cast = cast
         self.trivia = trivia
         self.suppressedTriviaIDs = suppressedTriviaIDs
-        self.hideSpoilers = hideSpoilers
         self.onSelectCast = onSelectCast
         super.init(frame: .zero)
         setupContent()
@@ -167,13 +164,13 @@ final class InsightsCastListView: UIView {
     private func buildRows(for tab: InsightsTab) {
         switch tab {
         case .topTen:
-            let facts = trivia?.topTenFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs) ?? []
+            let facts = trivia?.topTenFacts(suppressed: suppressedTriviaIDs) ?? []
             buildTriviaRows(facts)
             addAttributionFooterIfNeeded()
         case .cast:
             buildCastRows(cast)
         case .category(let category):
-            let facts = (trivia?.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs) ?? [])
+            let facts = (trivia?.visibleFacts(suppressed: suppressedTriviaIDs) ?? [])
                 .filter { $0.category == category }
             buildTriviaRows(facts)
             addAttributionFooterIfNeeded()

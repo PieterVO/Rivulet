@@ -5,7 +5,7 @@
 //  TriviaFactTests.swift
 //  RivuletTests
 //
-//  Decode + spoiler/suppression filtering for the Insights trivia store.
+//  Decode + suppression filtering for the Insights trivia store.
 //
 
 import XCTest
@@ -50,45 +50,25 @@ final class TriviaFactTests: XCTestCase {
         XCTAssertEqual(trivia.facts.last?.category, .other)
     }
 
-    func testMissingSpoilerFieldFailsClosedAndIsHidden() throws {
-        // A fact with no spoiler field must default to a spoiler (fail closed),
-        // so a corrupt payload hides it under hide-spoilers rather than leaking.
-        let noSpoiler = """
-        { "id": "tmdb://1", "type": "movie", "generatedAt": "", "pipelineVersion": 1,
-          "attribution": [],
-          "facts": [ { "id": "f_nospoil", "text": "A fact with no spoiler field.",
-            "category": "production",
-            "source": { "name": "Wikipedia", "url": "https://w/x" } } ] }
-        """.data(using: .utf8)!
-        let trivia = try JSONDecoder().decode(TitleTrivia.self, from: noSpoiler)
-        XCTAssertGreaterThanOrEqual(trivia.facts[0].spoiler, 1, "missing spoiler must fail closed (>= 1)")
-        let visible = trivia.visibleFacts(hideSpoilers: true, suppressed: [])
-        XCTAssertTrue(visible.isEmpty, "a fail-closed fact must be hidden when spoilers are hidden")
-    }
-
-    func testHideSpoilersDropsLevelOneAndAbove() throws {
+    func testPlotFactsAreShown() throws {
+        // Opening Trivia is asking for information, so a fact the pipeline tagged
+        // as a plot spoiler (f_plot1) is shown like any other.
         let trivia = try decoded()
-        let visible = trivia.visibleFacts(hideSpoilers: true, suppressed: [])
-        XCTAssertFalse(visible.contains { $0.id == "f_plot1" }, "level-1 spoiler must be hidden")
-        XCTAssertTrue(visible.contains { $0.id == "f_prod1" })
-    }
-
-    func testShowSpoilersKeepsAll() throws {
-        let trivia = try decoded()
-        let visible = trivia.visibleFacts(hideSpoilers: false, suppressed: [])
+        let visible = trivia.visibleFacts(suppressed: [])
         XCTAssertEqual(visible.count, 4)
+        XCTAssertTrue(visible.contains { $0.id == "f_plot1" })
     }
 
     func testSuppressedFactsAlwaysDropped() throws {
         let trivia = try decoded()
-        let visible = trivia.visibleFacts(hideSpoilers: false, suppressed: ["f_cast1"])
-        XCTAssertFalse(visible.contains { $0.id == "f_cast1" }, "suppressed fact must be hidden even with spoilers shown")
+        let visible = trivia.visibleFacts(suppressed: ["f_cast1"])
+        XCTAssertFalse(visible.contains { $0.id == "f_cast1" }, "suppressed fact must be hidden")
         XCTAssertEqual(visible.count, 3)
     }
 
     func testVisibleFactsOrderedByCategory() throws {
         let trivia = try decoded()
-        let visible = trivia.visibleFacts(hideSpoilers: false, suppressed: [])
+        let visible = trivia.visibleFacts(suppressed: [])
         // production (0) before casting (1) before reference (3) before other (7).
         let cats = visible.map { $0.category }
         XCTAssertEqual(cats, [.production, .casting, .reference, .other])
@@ -141,27 +121,23 @@ final class TriviaFactTests: XCTestCase {
 
     func testTopTenFactsExcludesNilAndBelowThresholdInterest() throws {
         let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
-        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        let topTen = trivia.topTenFacts(suppressed: [])
         let ids = topTen.map(\.id)
         XCTAssertFalse(ids.contains("f_low"), "interest 3 is below the >=7 threshold")
         XCTAssertFalse(ids.contains("f_nointerest"), "nil interest is never eligible for Top 10")
     }
 
-    func testTopTenFactsRespectsHideSpoilers() throws {
+    func testTopTenFactsIncludesPlotFacts() throws {
         let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
-        let topTenHidden = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
-        XCTAssertFalse(topTenHidden.map(\.id).contains("f_spoiler_high"), "spoiler facts must be excluded when hideSpoilers is true, even at interest 10")
-
-        let topTenShown = trivia.topTenFacts(hideSpoilers: false, suppressed: [])
-        XCTAssertTrue(topTenShown.map(\.id).contains("f_spoiler_high"))
+        XCTAssertTrue(trivia.topTenFacts(suppressed: []).map(\.id).contains("f_spoiler_high"))
     }
 
     func testTopTenFactsSortedDescendingByInterest() throws {
         let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
-        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        let topTen = trivia.topTenFacts(suppressed: [])
         let scores = topTen.map { $0.interest ?? 0 }
         XCTAssertEqual(scores, scores.sorted(by: >), "must be sorted descending by interest")
-        XCTAssertEqual(topTen.first?.id, "f_high1")
+        XCTAssertEqual(topTen.first?.interest, 10)
     }
 
     func testTopTenFactsCapsAtTen() throws {
@@ -175,20 +151,20 @@ final class TriviaFactTests: XCTestCase {
         }
         """.data(using: .utf8)!
         let trivia = try JSONDecoder().decode(TitleTrivia.self, from: manyHighFactsJSON)
-        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
+        let topTen = trivia.topTenFacts(suppressed: [])
         XCTAssertEqual(topTen.count, 10, "15 qualifying facts must cap at 10")
     }
 
     func testTopTenFactsReturnsFewerThanTenWhenFewQualify() throws {
         let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
-        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: [])
-        // Only f_high1 (10), f_high2 (9), f_borderline (7) qualify with hideSpoilers=true.
-        XCTAssertEqual(topTen.count, 3)
+        let topTen = trivia.topTenFacts(suppressed: [])
+        // f_high1 (10), f_spoiler_high (10), f_high2 (9), f_borderline (7).
+        XCTAssertEqual(topTen.count, 4)
     }
 
     func testTopTenFactsRespectsSuppression() throws {
         let trivia = try JSONDecoder().decode(TitleTrivia.self, from: payloadWithInterest)
-        let topTen = trivia.topTenFacts(hideSpoilers: true, suppressed: ["f_high1"])
+        let topTen = trivia.topTenFacts(suppressed: ["f_high1"])
         XCTAssertFalse(topTen.map(\.id).contains("f_high1"))
     }
 }

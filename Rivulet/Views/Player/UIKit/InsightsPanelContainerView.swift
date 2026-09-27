@@ -41,7 +41,6 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
     private let cast: [MediaPerson]
     private let trivia: TitleTrivia?
     private let suppressedTriviaIDs: Set<String>
-    private let hideSpoilers: Bool
     private let provider: PersonFilmographyProviding
 
     private let availableTabs: [InsightsTab]
@@ -67,7 +66,6 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
         cast: cast,
         trivia: trivia,
         suppressedTriviaIDs: suppressedTriviaIDs,
-        hideSpoilers: hideSpoilers,
         initialTab: currentTab,
         onSelectCast: { [weak self] person in
             self?.crossfadeToActor(person)
@@ -85,16 +83,14 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
         cast: [MediaPerson],
         trivia: TitleTrivia? = nil,
         suppressedTriviaIDs: Set<String> = [],
-        hideSpoilers: Bool = true,
         provider: PersonFilmographyProviding = PersonFilmographyProvider()
     ) {
         self.cast = cast
         self.trivia = trivia
         self.suppressedTriviaIDs = suppressedTriviaIDs
-        self.hideSpoilers = hideSpoilers
         self.provider = provider
         let tabs = InsightsTab.availableTabs(
-            cast: cast, trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs, hideSpoilers: hideSpoilers)
+            cast: cast, trivia: trivia, suppressedTriviaIDs: suppressedTriviaIDs)
         self.availableTabs = tabs
         // Prefer Top 10 as the landing tab when available (it's the curated
         // highlight reel); otherwise Cast; otherwise the first category.

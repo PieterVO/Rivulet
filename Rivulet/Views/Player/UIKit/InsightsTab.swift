@@ -32,22 +32,21 @@ enum InsightsTab: Hashable {
     /// inputs — pure, no UIKit dependency, directly unit-testable. Order:
     /// Top 10 (if >=1 qualifying fact), Cast (if non-empty), then one pill
     /// per `TriviaCategory` (in `TriviaCategory.allCases` declaration order)
-    /// that has >=1 visible fact after spoiler/suppression filtering.
+    /// that has >=1 visible fact after suppression filtering.
     static func availableTabs(
         cast: [MediaPerson],
         trivia: TitleTrivia?,
-        suppressedTriviaIDs: Set<String>,
-        hideSpoilers: Bool
+        suppressedTriviaIDs: Set<String>
     ) -> [InsightsTab] {
         var tabs: [InsightsTab] = []
-        if let trivia, !trivia.topTenFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs).isEmpty {
+        if let trivia, !trivia.topTenFacts(suppressed: suppressedTriviaIDs).isEmpty {
             tabs.append(.topTen)
         }
         if !cast.isEmpty {
             tabs.append(.cast)
         }
         if let trivia {
-            let visible = trivia.visibleFacts(hideSpoilers: hideSpoilers, suppressed: suppressedTriviaIDs)
+            let visible = trivia.visibleFacts(suppressed: suppressedTriviaIDs)
             for category in TriviaCategory.allCases where visible.contains(where: { $0.category == category }) {
                 tabs.append(.category(category))
             }

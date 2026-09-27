@@ -19,8 +19,6 @@ nonisolated struct TriviaFact: Codable, Identifiable, Sendable, Hashable {
     let id: String
     let text: String
     let category: TriviaCategory
-    /// 0 = no spoiler · 1 = this title's plot · 2 = later episodes/seasons.
-    let spoiler: Int
     let source: TriviaSource
     /// How interesting the fact is, 1-10, scored by the pipeline's extraction
     /// LLM. `nil` when absent (facts published before the field existed) — a
@@ -28,7 +26,7 @@ nonisolated struct TriviaFact: Codable, Identifiable, Sendable, Hashable {
     let interest: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, text, category, spoiler, source, interest
+        case id, text, category, source, interest
     }
 
     init(from decoder: Decoder) throws {
@@ -38,12 +36,6 @@ nonisolated struct TriviaFact: Codable, Identifiable, Sendable, Hashable {
         // Unknown categories degrade to `.other` rather than failing the whole
         // payload — the store's category enum may grow ahead of the client.
         category = (try? c.decode(TriviaCategory.self, forKey: .category)) ?? .other
-        // Fail CLOSED on a missing/malformed spoiler tag: default to the
-        // highest level (2) so a corrupt payload hides the fact under the
-        // hide-spoilers toggle rather than leaking it over the user's video.
-        // The pipeline always emits a valid 0/1/2; this guards R2 corruption
-        // or a future schema change, where showing-by-default is the wrong risk.
-        spoiler = (try? c.decode(Int.self, forKey: .spoiler)) ?? 2
         source = try c.decode(TriviaSource.self, forKey: .source)
         interest = try? c.decode(Int.self, forKey: .interest)
     }
@@ -104,19 +96,15 @@ extension TitleTrivia {
 }
 
 extension TitleTrivia {
-    /// Facts to display, honoring the user's hide-spoilers preference and the
-    /// server-served suppression list, ordered by category (display order).
+    /// Facts to display, ordered by category (display order). Every fact is
+    /// shown, plot details included: opening Trivia is asking for information.
     ///
-    /// - `hideSpoilers`: when true, drop any fact with `spoiler >= 1`. Without
-    ///   playhead sync we can't know what the viewer has passed, so this-title
-    ///   plot facts (level 1) are treated as spoilers too.
     /// - `suppressed`: fact ids the Worker reports as auto-hidden (report
-    ///   threshold crossed). Always dropped regardless of the toggle.
-    func visibleFacts(hideSpoilers: Bool, suppressed: Set<String>) -> [TriviaFact] {
+    ///   threshold crossed). Always dropped.
+    func visibleFacts(suppressed: Set<String>) -> [TriviaFact] {
         facts
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter { !suppressed.contains($0.id) }
-            .filter { hideSpoilers ? $0.spoiler == 0 : true }
             .sorted { lhs, rhs in
                 let li = TriviaCategory.allCases.firstIndex(of: lhs.category) ?? Int.max
                 let ri = TriviaCategory.allCases.firstIndex(of: rhs.category) ?? Int.max
@@ -128,13 +116,11 @@ extension TitleTrivia {
     /// first, capped at 10. A `nil` interest (old-schema fact, not yet
     /// regenerated under the scoring pipeline) is never eligible.
     ///
-    /// - `hideSpoilers`: when true, drop any fact with `spoiler >= 1`.
     /// - `suppressed`: fact ids to exclude (auto-hidden by Worker).
-    func topTenFacts(hideSpoilers: Bool, suppressed: Set<String>) -> [TriviaFact] {
+    func topTenFacts(suppressed: Set<String>) -> [TriviaFact] {
         facts
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .filter { !suppressed.contains($0.id) }
-            .filter { hideSpoilers ? $0.spoiler == 0 : true }
             .filter { $0.interest != nil && $0.interest! >= 7 }
             .sorted { lhs, rhs in
                 (lhs.interest ?? 0) > (rhs.interest ?? 0)

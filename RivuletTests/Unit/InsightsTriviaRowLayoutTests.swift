@@ -100,7 +100,7 @@ final class InsightsTriviaRowLayoutTests: XCTestCase {
         // Cast present so the initial tab is Cast-adjacent Top 10 absent —
         // mirror the real flow: land on a tab, then switch to a category.
         let container = InsightsPanelContainerView(
-            cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [], hideSpoilers: true)
+            cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [])
         PlayerRailPanelView.present(content: container, width: 640, in: root, aboveRail: rail, towards: rail)
         window.layoutIfNeeded()
 
@@ -155,7 +155,7 @@ final class InsightsTriviaRowLayoutTests: XCTestCase {
         ])
 
         let container = InsightsPanelContainerView(
-            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true)
+            cast: [], trivia: trivia, suppressedTriviaIDs: [])
         PlayerRailPanelView.present(content: container, width: 640, in: root, aboveRail: rail, towards: rail)
         window.layoutIfNeeded()
 
@@ -174,7 +174,7 @@ final class InsightsTriviaRowLayoutTests: XCTestCase {
 
     func test_initPath_rowsHaveTextDrivenHeights() {
         let list = InsightsCastListView(
-            cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [], hideSpoilers: true,
+            cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [],
             initialTab: .category(.production), onSelectCast: { _ in })
         layout(list)
         assertTextDrivenHeights(list, path: "init")
@@ -182,7 +182,7 @@ final class InsightsTriviaRowLayoutTests: XCTestCase {
 
     func test_setTabPath_rowsHaveTextDrivenHeights() {
         let list = InsightsCastListView(
-            cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [], hideSpoilers: true,
+            cast: [], trivia: makeTrivia(), suppressedTriviaIDs: [],
             initialTab: .topTen, onSelectCast: { _ in })
         layout(list)
         list.setTab(.category(.production))

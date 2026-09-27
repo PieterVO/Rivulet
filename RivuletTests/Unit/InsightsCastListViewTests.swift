@@ -36,7 +36,7 @@ final class InsightsCastListViewTests: XCTestCase {
         let cast = [MediaPerson(id: "1", name: "Actor One", role: nil, imageURL: nil)]
         let trivia = trivia(facts: [fact(id: "f1", category: .production, interest: 8)])
         let view = InsightsCastListView(
-            cast: cast, trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            cast: cast, trivia: trivia, suppressedTriviaIDs: [],
             initialTab: .cast, onSelectCast: { _ in })
         XCTAssertEqual(view.triviaRowCount, 0)
         XCTAssertEqual(view.castRowCount, 1)
@@ -48,7 +48,7 @@ final class InsightsCastListViewTests: XCTestCase {
             fact(id: "f2", category: .casting, interest: 8),
         ])
         let view = InsightsCastListView(
-            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            cast: [], trivia: trivia, suppressedTriviaIDs: [],
             initialTab: .category(.production), onSelectCast: { _ in })
         XCTAssertEqual(view.triviaRowCount, 1)
         XCTAssertEqual(view.castRowCount, 0)
@@ -60,7 +60,7 @@ final class InsightsCastListViewTests: XCTestCase {
             fact(id: "f2", category: .casting, interest: 3),
         ])
         let view = InsightsCastListView(
-            cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            cast: [], trivia: trivia, suppressedTriviaIDs: [],
             initialTab: .topTen, onSelectCast: { _ in })
         XCTAssertEqual(view.triviaRowCount, 1)
     }
@@ -69,7 +69,7 @@ final class InsightsCastListViewTests: XCTestCase {
         let cast = [MediaPerson(id: "1", name: "Actor One", role: nil, imageURL: nil)]
         let trivia = trivia(facts: [fact(id: "f1", category: .production, interest: 8)])
         let view = InsightsCastListView(
-            cast: cast, trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true,
+            cast: cast, trivia: trivia, suppressedTriviaIDs: [],
             initialTab: .cast, onSelectCast: { _ in })
         XCTAssertEqual(view.castRowCount, 1)
         XCTAssertEqual(view.triviaRowCount, 0)

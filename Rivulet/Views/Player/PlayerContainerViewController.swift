@@ -1390,8 +1390,7 @@ class PlayerContainerViewController: UIViewController {
                 content: InsightsPanelContainerView(
                     cast: self.insightsCastCache,
                     trivia: self.insightsTriviaCache,
-                    suppressedTriviaIDs: self.suppressedTriviaIDsCache,
-                    hideSpoilers: Self.hideTriviaSpoilers),
+                    suppressedTriviaIDs: self.suppressedTriviaIDsCache),
                 width: 640, from: rail.insightsButton)
         }
 
@@ -1399,22 +1398,13 @@ class PlayerContainerViewController: UIViewController {
         // hidden (its default in PlayerRailView) until the feature is ready.
     }
 
-    /// Spoiler filtering is forced OFF for everyone for now, and the Appearance
-    /// setting that used to drive it is gone. `TriviaFact` fails CLOSED on a
-    /// missing or malformed spoiler tag, so filtering on it dropped facts that
-    /// were never spoilers. The `hideSpoilers:` plumbing stays — flip this one
-    /// constant (or re-add the setting behind it) to bring the filter back.
-    private static let hideTriviaSpoilers = false
-
     /// Whether the Insights panel has anything to show: a non-empty cast
-    /// list, or at least one trivia fact left after the hide-spoilers /
-    /// suppression filter. Either section alone is enough to surface the
+    /// list, or at least one trivia fact left after the suppression filter. Either section alone is enough to surface the
     /// rail button; both empty means fully graceful-absent (no button).
     private var insightsButtonShouldBeAvailable: Bool {
         if !insightsCastCache.isEmpty { return true }
         guard let trivia = insightsTriviaCache else { return false }
-        return !trivia.visibleFacts(hideSpoilers: Self.hideTriviaSpoilers,
-                                    suppressed: suppressedTriviaIDsCache).isEmpty
+        return !trivia.visibleFacts(suppressed: suppressedTriviaIDsCache).isEmpty
     }
 
     /// Re-derives the rail's Insights button visibility from the current

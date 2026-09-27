@@ -14,9 +14,9 @@ import XCTest
 
 final class InsightsTabTests: XCTestCase {
 
-    private func fact(id: String, category: TriviaCategory, spoiler: Int = 0, interest: Int? = nil) -> TriviaFact {
+    private func fact(id: String, category: TriviaCategory, interest: Int? = nil) -> TriviaFact {
         let json = """
-        { "id": "\(id)", "text": "Fact text.", "category": "\(category.rawValue)", "spoiler": \(spoiler),
+        { "id": "\(id)", "text": "Fact text.", "category": "\(category.rawValue)",
           \(interest.map { "\"interest\": \($0)," } ?? "")
           "source": { "name": "Wikipedia", "url": "https://w/x" } }
         """.data(using: .utf8)!
@@ -34,26 +34,26 @@ final class InsightsTabTests: XCTestCase {
     }
 
     func testNoCastNoTriviaYieldsNoTabs() {
-        let tabs = InsightsTab.availableTabs(cast: [], trivia: nil, suppressedTriviaIDs: [], hideSpoilers: true)
+        let tabs = InsightsTab.availableTabs(cast: [], trivia: nil, suppressedTriviaIDs: [])
         XCTAssertTrue(tabs.isEmpty)
     }
 
     func testCastOnlyYieldsOnlyCastTab() {
         let cast = [MediaPerson(id: "1", name: "Actor", role: nil, imageURL: nil)]
-        let tabs = InsightsTab.availableTabs(cast: cast, trivia: nil, suppressedTriviaIDs: [], hideSpoilers: true)
+        let tabs = InsightsTab.availableTabs(cast: cast, trivia: nil, suppressedTriviaIDs: [])
         XCTAssertEqual(tabs, [.cast])
     }
 
     func testTopTenTabOmittedWhenNoFactQualifies() {
         let trivia = trivia(facts: [fact(id: "f1", category: .production, interest: 3)])
-        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true)
+        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: [])
         XCTAssertFalse(tabs.contains(.topTen))
         XCTAssertTrue(tabs.contains(.category(.production)))
     }
 
     func testTopTenTabPresentWhenAFactQualifies() {
         let trivia = trivia(facts: [fact(id: "f1", category: .production, interest: 8)])
-        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true)
+        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: [])
         XCTAssertTrue(tabs.contains(.topTen))
     }
 
@@ -64,20 +64,13 @@ final class InsightsTabTests: XCTestCase {
             fact(id: "f2", category: .production, interest: 8),
             fact(id: "f3", category: .casting, interest: 3),
         ])
-        let tabs = InsightsTab.availableTabs(cast: cast, trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true)
+        let tabs = InsightsTab.availableTabs(cast: cast, trivia: trivia, suppressedTriviaIDs: [])
         XCTAssertEqual(tabs, [.topTen, .cast, .category(.production), .category(.casting), .category(.music)])
-    }
-
-    func testCategoryWithZeroVisibleFactsAfterFilteringGetsNoTab() {
-        // Only fact in .goof is a spoiler; hideSpoilers=true filters it out entirely.
-        let trivia = trivia(facts: [fact(id: "f1", category: .goof, spoiler: 1, interest: 8)])
-        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: [], hideSpoilers: true)
-        XCTAssertTrue(tabs.isEmpty, "the only fact is spoiler-filtered out, so no category tab and no Top 10 tab should appear")
     }
 
     func testSuppressedFactExcludedFromTabAvailability() {
         let trivia = trivia(facts: [fact(id: "f1", category: .lore, interest: 8)])
-        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: ["f1"], hideSpoilers: true)
+        let tabs = InsightsTab.availableTabs(cast: [], trivia: trivia, suppressedTriviaIDs: ["f1"])
         XCTAssertTrue(tabs.isEmpty)
     }
 
