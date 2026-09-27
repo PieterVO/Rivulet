@@ -5,12 +5,12 @@
 //  LiveBrowseViewController.swift
 //  Rivulet
 //
-//  The Browse layout for Live TV, after the Apple TV app: shelves of 16:9
-//  cards (recordings, favourites, what is on now, what starts soon, then each
-//  channel group) under a header that describes whatever has focus. Offered
-//  beside the Guide and Channels layouts, not instead of them.
+//  What's On, the default Live TV layout (the Guide is the other), after the
+//  Apple TV app: shelves of 16:9 cards (recordings, favourites, what is on
+//  now, what starts soon, genres, then each channel group) under a header
+//  that describes whatever has focus.
 //
-//  Selecting a live card plays it full screen with the showcase chrome. Back
+//  Selecting a live card plays it full screen on the VOD glass rail. Back
 //  from there keeps it playing in the header's corner; selecting it again
 //  takes it back full screen with no new tune. Multiview opens from the
 //  player's chrome or from a card's long-press menu, and a tile can come back
@@ -44,11 +44,14 @@ final class LiveBrowseViewController: UIViewController {
     }
 
     private var collectionView: UICollectionView!
-    /// Keyed by item id, so a card whose programme changes is refreshed in
-    /// place instead of replaced (which would drop focus).
+    /// One section and one item per shelf, both keyed by the shelf id: each
+    /// row is a `ShelfRowCell` (Home's self-scrolling row), whose content is
+    /// pushed in by `configureRow` rather than diffed.
     private var dataSource: UICollectionViewDiffableDataSource<String, String>!
-    private var items: [String: LiveCardItem] = [:]
-    private var shelfTitles: [String: String] = [:]
+    private var shelves: [String: Shelf] = [:]
+    /// Resting horizontal offset per shelf, so a row keeps its place across
+    /// cell reuse and rebuilds.
+    private var shelfOffsets: [String: CGFloat] = [:]
 
     private let emptyLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .large)
@@ -65,10 +68,18 @@ final class LiveBrowseViewController: UIViewController {
     private static let timeFormat = Date.FormatStyle.dateTime.hour().minute()
 
     private enum Metrics {
-        static let side: CGFloat = 90
-        static let headerHeight: CGFloat = 470
-        static let cardWidth: CGFloat = 400
-        static let miniSize = CGSize(width: 448, height: 252)
+        /// The Browse page's margin: Apple's live-row margin, which its rows
+        /// use too (see `MediaRowMetrics.liveLeading`).
+        static let side: CGFloat = MediaRowMetrics.liveLeading
+        static let top: CGFloat = MediaRowMetrics.rowLeading
+        /// The clock's line at the top right, above the corner player.
+        static let clockBand: CGFloat = 48
+        /// The corner player: a card's size, rounded to exact 16:9 (a card's
+        /// 406x228 is not, which leaves a hairline strip beside the picture).
+        static let miniSize = CGSize(width: 400, height: 225)
+        /// Just tall enough for the corner player; the description on the left
+        /// fits in the same band. Anything more was empty space above the rows.
+        static let headerHeight: CGFloat = top + clockBand + miniSize.height + 18
     }
 
     init(sourceIdFilter: String?) {
@@ -204,10 +215,10 @@ final class LiveBrowseViewController: UIViewController {
             backdrop.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.68),
             backdrop.heightAnchor.constraint(equalToConstant: Metrics.headerHeight + 60),
 
-            clockLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 40),
+            clockLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: Metrics.top),
             clockLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.side),
 
-            miniPlayer.topAnchor.constraint(equalTo: clockLabel.bottomAnchor, constant: 18),
+            miniPlayer.topAnchor.constraint(equalTo: view.topAnchor, constant: Metrics.top + Metrics.clockBand),
             miniPlayer.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.side),
             miniPlayer.widthAnchor.constraint(equalToConstant: Metrics.miniSize.width),
             miniPlayer.heightAnchor.constraint(equalToConstant: Metrics.miniSize.height),
@@ -304,19 +315,22 @@ final class LiveBrowseViewController: UIViewController {
     // MARK: - Shelves
 
     private func setUpShelves() {
+        // Home's shelf layout: one full-bleed row per section, the row itself
+        // carrying the page margin and the peeks (see `MediaRowMetrics`). An
+        // orthogonal section cannot: its landings pin a card to the raw
+        // screen edge, which is what knocked these rows out of line.
         let layout = UICollectionViewCompositionalLayout { _, _ in
-            let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1),
-                                                                heightDimension: .fractionalHeight(1)))
-            let group = NSCollectionLayoutGroup.horizontal(
-                layoutSize: .init(widthDimension: .absolute(Metrics.cardWidth),
-                                  heightDimension: .absolute(Metrics.cardWidth * LiveCardCell.aspect)),
-                subitems: [item])
+            let rowSize = NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1),
+                heightDimension: .absolute(MediaRowMetrics.liveHeight + MediaRowMetrics.focusGrowthPadding))
+            let group = NSCollectionLayoutGroup.horizontal(layoutSize: rowSize,
+                                                           subitems: [NSCollectionLayoutItem(layoutSize: rowSize)])
             let section = NSCollectionLayoutSection(group: group)
-            section.orthogonalScrollingBehavior = .continuous
-            section.interGroupSpacing = 40
-            section.contentInsets = .init(top: 18, leading: Metrics.side, bottom: 56, trailing: Metrics.side)
+            section.contentInsetsReference = .none
+            section.contentInsets = .init(top: MediaRowMetrics.rowTopInset, leading: 0,
+                                          bottom: MediaRowMetrics.rowBottomInset, trailing: 0)
             let header = NSCollectionLayoutBoundarySupplementaryItem(
-                layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(50)),
+                layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(40)),
                 elementKind: UICollectionView.elementKindSectionHeader,
                 alignment: .top)
             header.contentInsets = .init(top: 0, leading: Metrics.side, bottom: 0, trailing: Metrics.side)
@@ -329,14 +343,12 @@ final class LiveBrowseViewController: UIViewController {
         collectionView.clipsToBounds = true
         collectionView.remembersLastFocusedIndexPath = true
         collectionView.contentInsetAdjustmentBehavior = .never
-        collectionView.register(LiveCardCell.self, forCellWithReuseIdentifier: LiveCardCell.reuseID)
-        collectionView.register(LiveShelfHeaderView.self,
+        collectionView.register(ShelfRowCell.self, forCellWithReuseIdentifier: ShelfRowCell.reuseID)
+        collectionView.register(HubHeaderView.self,
                                 forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
-                                withReuseIdentifier: LiveShelfHeaderView.reuseID)
-        collectionView.delegate = self
+                                withReuseIdentifier: HubHeaderView.reuseID)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
-        collectionView.addGestureRecognizer(TileLongPress.makeRecognizer(target: self, action: #selector(longPressed(_:))))
 
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.topAnchor, constant: Metrics.headerHeight),
@@ -346,17 +358,59 @@ final class LiveBrowseViewController: UIViewController {
         ])
 
         dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { [weak self] cv, indexPath, id in
-            let cell = cv.dequeueReusableCell(withReuseIdentifier: LiveCardCell.reuseID, for: indexPath) as! LiveCardCell
-            if let item = self?.items[id] { cell.configure(item) }
-            return cell
+            let row = cv.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
+            self?.configureRow(row, shelfId: id)
+            return row
         }
         dataSource.supplementaryViewProvider = { [weak self] cv, kind, indexPath in
-            let header = cv.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: LiveShelfHeaderView.reuseID,
-                                                             for: indexPath) as! LiveShelfHeaderView
-            if let self, let shelf = self.dataSource.sectionIdentifier(for: indexPath.section) {
-                header.title = self.shelfTitles[shelf]
+            let header = cv.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: HubHeaderView.reuseID,
+                                                             for: indexPath) as! HubHeaderView
+            if let self, let id = self.dataSource.sectionIdentifier(for: indexPath.section) {
+                header.configure(title: self.shelves[id]?.title ?? "", style: .swiftUIInfiniteRow)
             }
             return header
+        }
+    }
+
+    /// Bind a row to one shelf. The tile provider captures the shelf VALUE,
+    /// so the count the row is configured with and the cards it vends always
+    /// come from the same snapshot.
+    private func configureRow(_ row: ShelfRowCell, shelfId: String) {
+        guard let shelf = shelves[shelfId] else { return }
+        let cards = shelf.items
+        row.cellProvider = { innerCV, indexPath in
+            let cell = innerCV.dequeueReusableCell(withReuseIdentifier: LiveCardCell.reuseID,
+                                                   for: indexPath) as! LiveCardCell
+            if indexPath.item < cards.count { cell.configure(cards[indexPath.item]) }
+            return cell
+        }
+        row.onSelect = { [weak self, weak row] index in
+            guard index < cards.count else { return }
+            self?.activate(cards[index], sourceFrame: row?.frameInWindow(forItem: index))
+        }
+        row.onLongPressItem = { [weak self, weak row] index in
+            guard index < cards.count else { return }
+            self?.presentMenu(for: cards[index], sourceFrame: row?.frameInWindow(forItem: index))
+        }
+        row.onFocusItem = { [weak self] index in
+            guard index < cards.count else { return }
+            self?.showInfo(for: cards[index])
+        }
+        row.onOffsetChanged = { [weak self] offset in
+            self?.shelfOffsets[shelfId] = offset
+        }
+        // The token is the row's cards by identity only, so a programme
+        // changing on one channel does not reload the row (reloadData re-vends
+        // cells at new indices and drops focus). Changed content is pushed into
+        // the cards already on screen instead, which also moves their progress.
+        var token = Hasher()
+        for card in cards { token.combine(card.id) }
+        row.configure(kind: .live, realCount: cards.count, hasSkeleton: false,
+                      contentToken: token.finalize(), initialOffset: shelfOffsets[shelfId] ?? 0)
+        let inner = row.rowCollectionView!
+        for case let cell as LiveCardCell in inner.visibleCells {
+            guard let indexPath = inner.indexPath(for: cell), indexPath.item < cards.count else { continue }
+            cell.configure(cards[indexPath.item])
         }
     }
 
@@ -420,6 +474,22 @@ final class LiveBrowseViewController: UIViewController {
             shelves.append(Shelf(id: "soon", title: "Starting Soon", items: Array(soon)))
         }
 
+        // A shelf per genre, when the lineup spans more than one. A channel's
+        // usual genre, not what is on this minute: rows that regrouped at
+        // every programme boundary moved under focus. A genre with only a
+        // channel or two gets no row of its own.
+        let byGenre = Dictionary(grouping: channels) { channel in
+            LiveGenre.of(channel, airing: nil, guide: store.epg[channel.id] ?? [])
+        }
+        let genres = LiveGenre.allCases.filter { (byGenre[$0] ?? []).count >= 3 }
+        if genres.count > 1 {
+            for genre in genres {
+                let id = "genre|\(genre.rawValue)"
+                let list = Array((byGenre[genre] ?? []).prefix(60))
+                shelves.append(Shelf(id: id, title: genre.rawValue, items: onNow(list, section: id)))
+            }
+        }
+
         // A shelf per channel group, when the source groups at all.
         let groups = Dictionary(grouping: channels) {
             $0.groupTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -433,41 +503,37 @@ final class LiveBrowseViewController: UIViewController {
             }
         }
 
-        return shelves.map { Shelf(id: $0.id, title: $0.title, items: $0.items.uniquedById()) }
+        return shelves.map { Shelf(id: $0.id, title: $0.title, items: $0.items.uniquedById().markingRecordings(store)) }
     }
 
     private func rebuildShelves() {
         guard dataSource != nil else { return }
-        let shelves = buildShelves()
-        let previous = items
-        var next: [String: LiveCardItem] = [:]
-        var titles: [String: String] = [:]
+        let built = buildShelves().filter { !$0.items.isEmpty }
+        shelves = Dictionary(built.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let existing = Set(dataSource.snapshot().itemIdentifiers)
         var snapshot = NSDiffableDataSourceSnapshot<String, String>()
-        for shelf in shelves where !shelf.items.isEmpty {
+        for shelf in built {
             snapshot.appendSections([shelf.id])
-            titles[shelf.id] = shelf.title
-            let fresh = shelf.items.filter { next[$0.id] == nil }
-            for item in fresh { next[item.id] = item }
-            snapshot.appendItems(fresh.map(\.id), toSection: shelf.id)
+            snapshot.appendItems([shelf.id], toSection: shelf.id)
         }
-        let changed = next.values.filter { previous[$0.id] != nil && previous[$0.id] != $0 }.map(\.id)
-        if !changed.isEmpty { snapshot.reconfigureItems(changed) }
-        items = next
-        shelfTitles = titles
+        // A row's identity never changes, so diffing alone never reaches it.
+        // Reconfiguring hands every existing row its new cards, the ones
+        // prepared just off screen as well as the visible ones.
+        snapshot.reconfigureItems(built.map(\.id).filter(existing.contains))
         dataSource.apply(snapshot, animatingDifferences: false)
 
         // Keep the header in step with a card whose programme just changed,
         // and give it something to say before anything has focus.
         if let focused = focusedItem() {
             showInfo(for: focused)
-        } else if titleLabel.text == nil, let first = shelves.first(where: { !$0.items.isEmpty })?.items.first {
+        } else if titleLabel.text == nil, let first = built.first?.items.first {
             showInfo(for: first)
         }
         updateEmptyState(loading: LiveTVDataStore.shared.isLoadingChannels)
     }
 
     private func updateEmptyState(loading: Bool) {
-        let empty = items.isEmpty
+        let empty = shelves.isEmpty
         if empty && loading {
             spinner.startAnimating()
         } else {
@@ -477,9 +543,14 @@ final class LiveBrowseViewController: UIViewController {
     }
 
     private func focusedItem() -> LiveCardItem? {
-        guard let indexPath = TileLongPress.focusedCell(in: collectionView),
-              let id = dataSource.itemIdentifier(for: indexPath) else { return nil }
-        return items[id]
+        for case let row as ShelfRowCell in collectionView.visibleCells {
+            guard let index = row.focusedItemIndex(),
+                  let indexPath = collectionView.indexPath(for: row),
+                  let id = dataSource.itemIdentifier(for: indexPath),
+                  let cards = shelves[id]?.items, index < cards.count else { continue }
+            return cards[index]
+        }
+        return nil
     }
 
     // MARK: - Actions
@@ -512,16 +583,7 @@ final class LiveBrowseViewController: UIViewController {
         }
     }
 
-    @objc private func longPressed(_ recognizer: UILongPressGestureRecognizer) {
-        guard recognizer.state == .began,
-              let indexPath = TileLongPress.focusedCell(in: collectionView),
-              let id = dataSource.itemIdentifier(for: indexPath),
-              let item = items[id] else { return }
-        let frame = collectionView.cellForItem(at: indexPath).map { $0.convert($0.bounds, to: nil) }
-        presentMenu(for: item, sourceFrame: frame)
-    }
-
-    /// Full screen with the showcase chrome. The corner channel comes back
+    /// Full screen on the glass rail. The corner channel comes back
     /// as it is; any other channel replaces it.
     private func play(_ channel: UnifiedChannel) {
         var adopting: LiveTVSessionHandoff?
@@ -532,12 +594,12 @@ final class LiveBrowseViewController: UIViewController {
                 mini.stop()
             }
         }
-        presentPlayer(LiveTVAetherPlayerViewController(channel: channel, chromeStyle: .showcase, adopting: adopting))
+        presentPlayer(LiveTVAetherPlayerViewController(channel: channel, adopting: adopting))
     }
 
     private func play(adopting session: LiveTVSessionHandoff) {
         stopMini()
-        presentPlayer(LiveTVAetherPlayerViewController(channel: session.channel, chromeStyle: .showcase,
+        presentPlayer(LiveTVAetherPlayerViewController(channel: session.channel,
                                                        adopting: session))
     }
 
@@ -602,50 +664,4 @@ final class LiveBrowseViewController: UIViewController {
     private func stopMini() {
         takeMini()?.stop()
     }
-}
-
-// MARK: - Collection delegate
-
-extension LiveBrowseViewController: UICollectionViewDelegate {
-    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        guard let id = dataSource.itemIdentifier(for: indexPath), let item = items[id] else { return }
-        let frame = collectionView.cellForItem(at: indexPath).map { $0.convert($0.bounds, to: nil) }
-        activate(item, sourceFrame: frame)
-    }
-
-    func collectionView(_ collectionView: UICollectionView, didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
-                        with coordinator: UIFocusAnimationCoordinator) {
-        guard let indexPath = context.nextFocusedIndexPath,
-              let id = dataSource.itemIdentifier(for: indexPath),
-              let item = items[id] else { return }
-        showInfo(for: item)
-    }
-}
-
-// MARK: - Shelf header
-
-final class LiveShelfHeaderView: UICollectionReusableView {
-    static let reuseID = "LiveShelfHeaderView"
-
-    private let label = UILabel()
-
-    var title: String? {
-        get { label.text }
-        set { label.text = newValue }
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        label.font = .systemFont(ofSize: 32, weight: .semibold)
-        label.textColor = UIColor.white.withAlphaComponent(0.9)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }

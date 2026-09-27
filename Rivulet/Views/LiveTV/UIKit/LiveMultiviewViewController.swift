@@ -56,6 +56,8 @@ final class LiveMultiviewViewController: UIViewController {
     /// place instead of replaced (which would drop focus).
     private var addMoreSource: UICollectionViewDiffableDataSource<Int, String>!
     private var addMoreItems: [String: LiveCardItem] = [:]
+    /// A re-rank was held back while focus was in the row.
+    private var addMoreNeedsRank = false
 
     private var cancellables = Set<AnyCancellable>()
     /// Where focus goes on the next update, consumed once it lands.
@@ -133,6 +135,13 @@ final class LiveMultiviewViewController: UIViewController {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _, _ in self?.reloadAddMore() }
             .store(in: &cancellables)
+        // And re-ranks when the sound moves to another tile.
+        viewModel.$focusedSlotIndex
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.reloadAddMore() }
+            .store(in: &cancellables)
     }
 
     override func viewDidLayoutSubviews() {
@@ -156,6 +165,10 @@ final class LiveMultiviewViewController: UIViewController {
         super.didUpdateFocus(in: context, with: coordinator)
         guard let next = context.nextFocusedView else { return }
         if next === pendingFocus { pendingFocus = nil }
+        if addMoreNeedsRank, !next.isDescendant(of: addMoreCollection) {
+            // Outside the focus update, so the apply does not run inside it.
+            DispatchQueue.main.async { [weak self] in self?.reloadAddMore() }
+        }
 
         if next === watchHint {
             DispatchQueue.main.async { [weak self] in self?.setMode(.watch) }
@@ -671,15 +684,52 @@ final class LiveMultiviewViewController: UIViewController {
         guard addMoreSource != nil else { return }
         let store = LiveTVDataStore.shared
         let active = viewModel.activeChannelIds
-        let channels = store.channels
-            .filter { !active.contains($0.id) }
-            .sorted { a, b in
-                let fa = a.isFavourite || store.isFavorite(a)
-                let fb = b.isFavourite || store.isFavorite(b)
-                if fa != fb { return fa }
-                return (a.channelNumber ?? Int.max) < (b.channelNumber ?? Int.max)
+        // Never re-rank under the viewer's cursor: adding a channel moves the
+        // sound to the new tile, which re-ranked the row they were picking
+        // from. While focus is in the row only channels now playing leave it,
+        // in place; the new order lands when focus leaves.
+        if let focused = UIFocusSystem.focusSystem(for: addMoreCollection)?.focusedItem as? UIView,
+           focused.isDescendant(of: addMoreCollection) {
+            addMoreNeedsRank = true
+            var snapshot = addMoreSource.snapshot()
+            let playing = snapshot.itemIdentifiers.filter { id in
+                addMoreItems[id]?.channel.map { active.contains($0.id) } ?? false
             }
-            .prefix(80)
+            guard !playing.isEmpty else { return }
+            snapshot.deleteItems(playing)
+            addMoreSource.apply(snapshot, animatingDifferences: false)
+            return
+        }
+        addMoreNeedsRank = false
+        // Most like what is being listened to first: the same kind of
+        // programme (another football game), then the same genre, then the
+        // same channel group; favourites lead within each, then number.
+        let reference = viewModel.focusedStream?.channel ?? viewModel.streams.first?.channel
+        let referenceProgram = reference.flatMap { store.getCurrentProgram(for: $0) }
+        let referenceLabels = LiveGenre.specificLabels(of: referenceProgram)
+        let referenceGenre = reference.flatMap {
+            LiveGenre.of($0, airing: referenceProgram, guide: store.epg[$0.id] ?? [])
+        }
+        func tier(_ channel: UnifiedChannel) -> Int {
+            guard reference != nil else { return 0 }
+            let program = store.getCurrentProgram(for: channel)
+            if !referenceLabels.isDisjoint(with: LiveGenre.specificLabels(of: program)) { return 0 }
+            if let referenceGenre,
+               LiveGenre.of(channel, airing: program, guide: store.epg[channel.id] ?? []) == referenceGenre { return 1 }
+            if let group = reference?.groupTitle, !group.isEmpty, channel.groupTitle == group { return 2 }
+            return 3
+        }
+        let ranked = store.channels
+            .filter { !active.contains($0.id) }
+            .map { (channel: $0, tier: tier($0)) }
+            .sorted { a, b in
+                if a.tier != b.tier { return a.tier < b.tier }
+                let fa = a.channel.isFavourite || store.isFavorite(a.channel)
+                let fb = b.channel.isFavourite || store.isFavorite(b.channel)
+                if fa != fb { return fa }
+                return (a.channel.channelNumber ?? Int.max) < (b.channel.channelNumber ?? Int.max)
+            }
+        let channels = ranked.prefix(80).map(\.channel)
         let items = channels
             .map { LiveCardItem.channel($0, program: store.getCurrentProgram(for: $0), section: "add") }
             .uniquedById()
@@ -723,6 +773,8 @@ final class LiveMultiviewTileView: UIView {
     private let surface = AetherPlayer.makeRenderSurface()
     private let spinner = UIActivityIndicatorView(style: .large)
     private let pausedIcon = UIImageView(image: UIImage(systemName: "pause.fill"))
+    /// Shown once the tile has stopped retrying a channel that will not play.
+    private let unavailableLabel = UILabel()
     private let speakerIcon = UIImageView(image: UIImage(systemName: "speaker.wave.2.fill"))
     private let captionScrim = CAGradientLayer()
     private let captionLabel = UILabel()
@@ -737,8 +789,6 @@ final class LiveMultiviewTileView: UIView {
         layer.cornerRadius = 18
         layer.cornerCurve = .continuous
         layer.masksToBounds = true
-        layer.borderColor = UIColor.white.cgColor
-        layer.borderWidth = 0
 
         surface.frame = bounds
         surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -753,6 +803,10 @@ final class LiveMultiviewTileView: UIView {
         spinner.color = .white
         spinner.hidesWhenStopped = true
         pausedIcon.tintColor = .white
+        unavailableLabel.text = "Channel Unavailable"
+        unavailableLabel.font = .systemFont(ofSize: 26, weight: .semibold)
+        unavailableLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+        unavailableLabel.isHidden = true
         pausedIcon.preferredSymbolConfiguration = .init(pointSize: 48, weight: .semibold)
         speakerIcon.tintColor = .white
         speakerIcon.preferredSymbolConfiguration = .init(pointSize: 22, weight: .semibold)
@@ -761,7 +815,7 @@ final class LiveMultiviewTileView: UIView {
         speakerIcon.layer.shadowRadius = 6
         speakerIcon.layer.shadowOffset = .zero
 
-        [captionLabel, spinner, pausedIcon, speakerIcon].forEach {
+        [captionLabel, spinner, pausedIcon, unavailableLabel, speakerIcon].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             addSubview($0)
         }
@@ -775,6 +829,8 @@ final class LiveMultiviewTileView: UIView {
             spinner.centerYAnchor.constraint(equalTo: centerYAnchor),
             pausedIcon.centerXAnchor.constraint(equalTo: centerXAnchor),
             pausedIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            unavailableLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            unavailableLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(selected))
@@ -802,13 +858,16 @@ final class LiveMultiviewTileView: UIView {
         captionLabel.text = [slot.channel.channelNumber.map(String.init), slot.channel.name]
             .compactMap { $0 }
             .joined(separator: " · ")
+        // A failure still being retried shows the spinner; only a tile that
+        // recovery gave up on says the channel is unavailable.
         switch slot.playbackState {
-        case .loading, .buffering, .idle:
-            spinner.startAnimating()
+        case .loading, .buffering, .idle, .failed:
+            if slot.isUnavailable { spinner.stopAnimating() } else { spinner.startAnimating() }
         default:
             spinner.stopAnimating()
         }
         pausedIcon.isHidden = slot.playbackState != .paused
+        unavailableLabel.isHidden = !slot.isUnavailable
         speakerIcon.isHidden = slot.isMuted
     }
 
@@ -848,9 +907,10 @@ final class LiveMultiviewTileView: UIView {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
+        // Scale only, as the Apple TV app does: no outline around a playing
+        // picture, which distracts and would sit static long enough to burn in.
         coordinator.addCoordinatedAnimations {
             self.transform = focused ? CGAffineTransform(scaleX: 1.03, y: 1.03) : .identity
-            self.layer.borderWidth = focused ? 5 : 0
         }
     }
 }

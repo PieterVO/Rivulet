@@ -94,7 +94,8 @@ Rivulet/                # The tvOS app — everything below.
 │   ├── Discover/       # DiscoverViewModel (SwiftUI Discover* views removed; UIKit home renders Discover)
 │   ├── LiveTV/         # EPGGuideView + GuideLayoutView + LiveGuideInfoCardView (56-style guide),
 │   │                   #   LiveTVAetherPlayerViewController (UIKit live rail), LiveTVContainerView,
-│   │                   #   ChannelListView, MultiStreamViewModel, StreamSlotView, AetherSlotPlayerView
+│   │                   #   MultiStreamViewModel; UIKit/: LiveBrowseViewController ("What's On"),
+│   │                   #   LiveMultiviewViewController, LiveCardCell, LiveMiniPlayerView
 │   ├── Settings/       # SettingsDescriptors, SettingsModels, PlexAuthView
 │   │   └── UIKit/      # SettingsContainer/Page VCs, SettingsCell, SettingsPageModels (canonical)
 │   ├── Components/     # CachedAsyncImage, GlassRowStyle, WhatsNewView
@@ -340,8 +341,8 @@ UniversalPlayerViewModel  ← state, markers, post-video, NowPlaying, route chan
         ├── .aether → AetherPlayer, rendered via AetherVideoSurfaceView (direct-play URL exists; the default)
         └── .hls    → AVPlayer on Plex server transcode (no direct-play URL, or fallback after Aether failure)
 
-Live TV: MultiStreamViewModel / StreamSlotView instantiate AetherPlayer() per grid slot,
-         rendered via AetherSlotPlayerView (AVPlayerLayer). Up to 4 concurrent slots.
+Live TV: MultiStreamViewModel instantiates AetherPlayer() per multiview slot, rendered by
+         LiveMultiviewTileView through the engine surface. Up to 4 concurrent slots.
 ```
 
 Key components:
@@ -385,7 +386,7 @@ Key components:
 3. `.hls` — server-side transcode; primary when no direct-play URL exists, and the fallback after an Aether startup failure. `requiresVideoTranscode` codecs force a video transcode (not just remux) on this route.
 
 #### Live TV
-Routes through **AetherPlayer** per grid slot (`MultiStreamViewModel` / `StreamSlotView` instantiate `AetherPlayer()`, rendered via `AetherSlotPlayerView`). The grid supports up to 4 concurrent slots (opt-in past 2). HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
+Two layouts: What's On (`LiveBrowseViewController`, the default) and the Guide (`GuideLayoutView`). Both play through `LiveTVAetherPlayerViewController` on the VOD glass rail. Multiview (`LiveMultiviewViewController`) runs **AetherPlayer** per slot (`MultiStreamViewModel` instantiates `AetherPlayer()`, each tile binds the engine surface), up to 4 concurrent slots. HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
 
 ### Content Filter (VOD)
 
@@ -652,7 +653,7 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 | Rail panel (UIKit) | `Views/Player/UIKit/PlayerRailPanelView.swift` |
 | Up Next panel (UIKit) | `Views/Player/UIKit/PlayerUpNextPanelView.swift` |
 | Player (AetherEngine adapter) | `Services/Plex/Playback/AetherPlayer.swift` |
-| Live TV slot render surface | `Views/LiveTV/AetherSlotPlayerView.swift` |
+| Live TV multiview (tiles bind the engine surface) | `Views/LiveTV/UIKit/LiveMultiviewViewController.swift` |
 | Routing decisions | `Services/Plex/Playback/Pipeline/ContentRouter.swift` |
 | Aether render surface | `Views/Player/Aether/AetherVideoSurfaceView.swift` |
 

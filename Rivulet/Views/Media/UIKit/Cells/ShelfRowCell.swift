@@ -38,12 +38,14 @@ final class ShelfRowCell: UICollectionViewCell {
         case continueWatching
         case poster
         case music   // 1:1 square (same width as poster)
+        case live    // Live TV Browse card (16:9, four across)
 
         var tileWidth: CGFloat {
             switch self {
             case .continueWatching: return MediaRowMetrics.cwWidth
             case .poster:           return MediaRowMetrics.posterWidth
             case .music:            return MediaRowMetrics.musicWidth
+            case .live:             return MediaRowMetrics.liveWidth
             }
         }
         var tileHeight: CGFloat {
@@ -51,11 +53,26 @@ final class ShelfRowCell: UICollectionViewCell {
             case .continueWatching: return MediaRowMetrics.cwHeight
             case .poster:           return MediaRowMetrics.posterHeight
             case .music:            return MediaRowMetrics.musicHeight
+            case .live:             return MediaRowMetrics.liveHeight
             }
         }
-        var gap: CGFloat { self == .continueWatching ? MediaRowMetrics.cwGap : MediaRowMetrics.posterGap }
-        var fullCount: Int { self == .continueWatching ? MediaRowMetrics.cwFullCount : MediaRowMetrics.posterFullCount }
+        var gap: CGFloat {
+            switch self {
+            case .continueWatching: return MediaRowMetrics.cwGap
+            case .poster, .music:   return MediaRowMetrics.posterGap
+            case .live:             return MediaRowMetrics.liveGap
+            }
+        }
+        var fullCount: Int {
+            switch self {
+            case .continueWatching: return MediaRowMetrics.cwFullCount
+            case .poster, .music:   return MediaRowMetrics.posterFullCount
+            case .live:             return MediaRowMetrics.liveFullCount
+            }
+        }
         var pitch: CGFloat { tileWidth + gap }
+        /// The row's margin: the app's `rowLeading`, except Live TV's wider one.
+        var leading: CGFloat { self == .live ? MediaRowMetrics.liveLeading : MediaRowMetrics.rowLeading }
     }
 
     // MARK: Callbacks to the owning controller (reset on every configure)
@@ -69,6 +86,8 @@ final class ShelfRowCell: UICollectionViewCell {
     /// recognizer — the system context-menu path never engages on tvOS 26
     /// (see TileMenuPopupViewController's header).
     var onLongPressItem: ((Int) -> Void)?
+    /// Focus landed on a tile (Live TV Browse describes it in its header).
+    var onFocusItem: ((Int) -> Void)?
     /// Reports resting offsets so the owner can restore them across reuse.
     var onOffsetChanged: ((CGFloat) -> Void)?
 
@@ -224,6 +243,7 @@ final class ShelfRowCell: UICollectionViewCell {
         rowCollectionView.register(ContinueWatchingCell.self, forCellWithReuseIdentifier: ContinueWatchingCell.reuseID)
         rowCollectionView.register(WatchlistPosterCell.self, forCellWithReuseIdentifier: WatchlistPosterCell.reuseID)
         rowCollectionView.register(PosterSkeletonCell.self, forCellWithReuseIdentifier: PosterSkeletonCell.reuseID)
+        rowCollectionView.register(LiveCardCell.self, forCellWithReuseIdentifier: LiveCardCell.reuseID)
 
         contentView.addSubview(headerLabel)
         contentView.addSubview(rowCollectionView)
@@ -258,7 +278,7 @@ final class ShelfRowCell: UICollectionViewCell {
             // Cell origin in screen space — negative when the container is
             // translated left past the screen edge.
             let screenMinX = convert(CGPoint.zero, to: window).x
-            let targetInset = MediaRowMetrics.rowLeading - screenMinX
+            let targetInset = tileKind.leading - screenMinX
             if abs(flow.sectionInset.left - targetInset) > 0.5 {
                 flow.sectionInset.left = targetInset
                 flow.invalidateLayout()
@@ -514,10 +534,12 @@ final class ShelfRowCell: UICollectionViewCell {
         flow.minimumInteritemSpacing = kind.gap
         flow.sectionInset = UIEdgeInsets(
             top: 0,
-            left: MediaRowMetrics.rowLeading + panelOvershoot.left,
+            left: kind.leading + panelOvershoot.left,
             bottom: 0,
-            right: MediaRowMetrics.rowTrailing + panelOvershoot.right
+            right: kind.leading + panelOvershoot.right
         )
+        // Nil during init (metrics apply before the header is built).
+        headerLeadingConstraint?.constant = kind.leading
     }
 
     // MARK: Offset math
@@ -643,6 +665,7 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
                         with coordinator: UIFocusAnimationCoordinator) {
         guard let next = context.nextFocusedIndexPath else { return }
         lastFocusedItemIndex = next.item
+        if next.item < realCount { onFocusItem?(next.item) }
         let target = snappedOffset(toShow: next.item)
         guard abs(target - collectionView.contentOffset.x) > 0.5 else { return }
         animateOffset(to: target)

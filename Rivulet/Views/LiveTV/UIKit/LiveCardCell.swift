@@ -29,6 +29,8 @@ struct LiveCardItem: Hashable {
     let channel: UnifiedChannel?
     let program: UnifiedProgram?
     let recording: LiveTVScheduledRecording?
+    /// The programme is set to record (see `markingRecordings`).
+    var setToRecord = false
 
     static func channel(_ channel: UnifiedChannel, program: UnifiedProgram?, section: String) -> LiveCardItem {
         LiveCardItem(id: "\(section)|\(channel.id)", kind: .channel, channel: channel,
@@ -47,6 +49,17 @@ struct LiveCardItem: Hashable {
 }
 
 extension Array where Element == LiveCardItem {
+    /// Each card's `setToRecord`, from the store's schedule. Recording cards
+    /// already say so themselves.
+    func markingRecordings(_ store: LiveTVDataStore) -> [LiveCardItem] {
+        map { item in
+            guard item.kind != .recording, let program = item.program else { return item }
+            var marked = item
+            marked.setToRecord = store.activeRecording(for: program) != nil
+            return marked
+        }
+    }
+
     /// First of each id. A diffable snapshot traps on a repeated identifier,
     /// and a merged lineup can list a channel twice.
     func uniquedById() -> [LiveCardItem] {
@@ -60,6 +73,9 @@ final class LiveCardCell: UICollectionViewCell {
     static let aspect: CGFloat = 9.0 / 16.0
 
     private let card = UIView()
+    /// A very blurred colour field behind a card with no wide art: the
+    /// programme's square or poster art, else the channel's logo.
+    private let colorField = UIImageView()
     private let artView = UIImageView()
     private let logoFallback = UIImageView()
     private let gradient = CAGradientLayer()
@@ -74,8 +90,10 @@ final class LiveCardCell: UICollectionViewCell {
 
     private var artTask: Task<Void, Never>?
     private var logoTask: Task<Void, Never>?
+    private var fieldTask: Task<Void, Never>?
     private var artURL: URL?
     private var logoURL: URL?
+    private var fieldURL: URL?
 
     private static let timeFormat = Date.FormatStyle.dateTime.hour().minute()
 
@@ -95,10 +113,13 @@ final class LiveCardCell: UICollectionViewCell {
         contentView.layer.shadowRadius = 24
         contentView.layer.shadowOffset = CGSize(width: 0, height: 16)
 
+        // A few pixels stretched with linear filtering is the blur.
+        colorField.contentMode = .scaleToFill
+        colorField.layer.magnificationFilter = .linear
         artView.contentMode = .scaleAspectFill
         artView.clipsToBounds = true
         logoFallback.contentMode = .scaleAspectFit
-        [artView, logoFallback].forEach {
+        [colorField, artView, logoFallback].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview($0)
         }
@@ -135,6 +156,11 @@ final class LiveCardCell: UICollectionViewCell {
             card.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             card.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             card.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            colorField.topAnchor.constraint(equalTo: card.topAnchor),
+            colorField.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            colorField.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            colorField.bottomAnchor.constraint(equalTo: card.bottomAnchor),
 
             artView.topAnchor.constraint(equalTo: card.topAnchor),
             artView.leadingAnchor.constraint(equalTo: card.leadingAnchor),
@@ -197,10 +223,14 @@ final class LiveCardCell: UICollectionViewCell {
         super.prepareForReuse()
         artTask?.cancel()
         logoTask?.cancel()
+        fieldTask?.cancel()
         artTask = nil
         logoTask = nil
+        fieldTask = nil
         artURL = nil
         logoURL = nil
+        fieldURL = nil
+        colorField.image = nil
         artView.image = nil
         logoFallback.image = nil
         cornerLogo.image = nil
@@ -217,11 +247,13 @@ final class LiveCardCell: UICollectionViewCell {
             detailLabel.text = [channel?.channelNumber.map(String.init), channel?.name]
                 .compactMap { $0 }
                 .joined(separator: " · ")
-            setPill("▶ LIVE", color: .systemRed)
+            // On now and set to record means it is recording.
+            setPill(item.setToRecord ? "● REC" : "▶ LIVE", color: .systemRed)
         case .upcoming:
             titleLabel.text = program?.title ?? "Upcoming"
             detailLabel.text = channel?.name
-            setPill(program.map { $0.startTime.formatted(Self.timeFormat) }, color: UIColor.white.withAlphaComponent(0.25))
+            setPill(program.map { $0.startTime.formatted(Self.timeFormat) }, color: UIColor.white.withAlphaComponent(0.25),
+                    recordDot: item.setToRecord)
         case .recording:
             let recording = item.recording
             titleLabel.text = recording?.title ?? "Recording"
@@ -232,7 +264,7 @@ final class LiveCardCell: UICollectionViewCell {
                 setPill("● REC", color: .systemRed)
             } else {
                 setPill(recording.map { $0.startTime.formatted(Self.timeFormat) },
-                        color: UIColor.white.withAlphaComponent(0.25))
+                        color: UIColor.white.withAlphaComponent(0.25), recordDot: true)
             }
         }
 
@@ -247,17 +279,26 @@ final class LiveCardCell: UICollectionViewCell {
         setNeedsLayout()
 
         // Art: the programme's own 16:9 image (its icon counts once the
-        // classifier has seen it is wide), else the channel's logo on the
-        // card's dark fill.
+        // classifier has seen it is wide), else the channel's logo over a
+        // blurred field of the programme's other art, or of the logo itself.
         let wideIcon = program?.iconURL.flatMap { EPGImageClassifier.shared.isLandscape($0) ? $0 : nil }
         let art = program?.landscapeURL ?? wideIcon ?? item.recording?.posterURL
         let logo = channel?.logoURL
         load(art: art)
         load(logo: logo, asFallback: art == nil)
+        load(field: art == nil ? (program?.posterURL ?? program?.iconURL ?? logo) : nil)
     }
 
-    private func setPill(_ text: String?, color: UIColor) {
-        pill.text = text
+    /// `recordDot` puts the guide's red record dot before `text`: scheduled
+    /// to record, not yet recording.
+    private func setPill(_ text: String?, color: UIColor, recordDot: Bool = false) {
+        let label = NSMutableAttributedString()
+        if recordDot, text != nil {
+            label.append(NSAttributedString(string: "● ", attributes: [.foregroundColor: UIColor.systemRed]))
+        }
+        label.append(NSAttributedString(string: text ?? "", attributes: [.foregroundColor: UIColor.white]))
+        label.addAttribute(.font, value: pill.font as Any, range: NSRange(location: 0, length: label.length))
+        pill.attributedText = label
         pill.isHidden = text == nil
         pillBackground.isHidden = text == nil
         pillBackground.backgroundColor = color
@@ -274,6 +315,84 @@ final class LiveCardCell: UICollectionViewCell {
             guard let self, !Task.isCancelled, self.artURL == url else { return }
             self.artView.image = image
         }
+    }
+
+    private func load(field url: URL?) {
+        guard url != fieldURL else { return }
+        fieldTask?.cancel()
+        fieldURL = url
+        colorField.image = nil
+        guard let url else { return }
+        fieldTask = Task { [weak self] in
+            let field = await Self.colorField(for: url)
+            guard let self, !Task.isCancelled, self.fieldURL == url else { return }
+            self.colorField.image = field
+        }
+    }
+
+    private static let fieldCache = NSCache<NSURL, UIImage>()
+
+    private static func colorField(for url: URL) async -> UIImage? {
+        if let cached = fieldCache.object(forKey: url as NSURL) { return cached }
+        guard let source = await ImageCacheManager.shared.image(for: url, quality: .thumb)?.cgImage else { return nil }
+        let field = await Task.detached(priority: .utility) { colorField(from: source) }.value
+        if let field { fieldCache.setObject(field, forKey: url as NSURL) }
+        return field
+    }
+
+    /// `source` reduced to a 4x3 field of its colours, dimmed so white text
+    /// reads over it. Each cell is an alpha-weighted mean, so a logo on a
+    /// transparent background gives the logo's colour; a nearly empty cell
+    /// takes the whole image's.
+    nonisolated static func colorField(from source: CGImage) -> UIImage? {
+        let (sw, sh, fw, fh) = (24, 18, 4, 3)
+        let dim = 0.55
+        var px = [UInt8](repeating: 0, count: sw * sh * 4)
+        let drawn = px.withUnsafeMutableBytes { buffer -> Bool in
+            guard let ctx = CGContext(data: buffer.baseAddress, width: sw, height: sh, bitsPerComponent: 8,
+                                      bytesPerRow: sw * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.interpolationQuality = .high
+            let scale = max(CGFloat(sw) / CGFloat(source.width), CGFloat(sh) / CGFloat(source.height))
+            let w = CGFloat(source.width) * scale, h = CGFloat(source.height) * scale
+            ctx.draw(source, in: CGRect(x: (CGFloat(sw) - w) / 2, y: (CGFloat(sh) - h) / 2, width: w, height: h))
+            return true
+        }
+        guard drawn else { return nil }
+
+        func sums(_ xs: Range<Int>, _ ys: Range<Int>) -> (r: Double, g: Double, b: Double, a: Double) {
+            var r = 0.0, g = 0.0, b = 0.0, a = 0.0
+            for y in ys {
+                for x in xs {
+                    let i = (y * sw + x) * 4
+                    r += Double(px[i]); g += Double(px[i + 1]); b += Double(px[i + 2]); a += Double(px[i + 3])
+                }
+            }
+            return (r, g, b, a)
+        }
+        let whole = sums(0..<sw, 0..<sh)
+        guard whole.a > 0 else { return nil }
+
+        let (bw, bh) = (sw / fw, sh / fh)
+        var out = [UInt8](repeating: 255, count: fw * fh * 4)
+        for fy in 0..<fh {
+            for fx in 0..<fw {
+                let cell = sums(fx * bw..<(fx + 1) * bw, fy * bh..<(fy + 1) * bh)
+                let s = cell.a > Double(bw * bh) * 255 * 0.15 ? cell : whole
+                let o = (fy * fw + fx) * 4
+                // Premultiplied sums over the alpha sum: the straight colour.
+                out[o] = UInt8(min(255, s.r / s.a * 255 * dim))
+                out[o + 1] = UInt8(min(255, s.g / s.a * 255 * dim))
+                out[o + 2] = UInt8(min(255, s.b / s.a * 255 * dim))
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(out) as CFData),
+              let image = CGImage(width: fw, height: fh, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: fw * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { return nil }
+        return UIImage(cgImage: image)
     }
 
     /// The logo goes big in the middle when there is no art, and small in
@@ -310,6 +429,9 @@ final class LiveCardCell: UICollectionViewCell {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
+        // Shelf cards sit 8pt apart, so the grown card must draw over its
+        // neighbours.
+        layer.zPosition = focused ? 1 : 0
         coordinator.addCoordinatedAnimations {
             self.transform = focused ? CGAffineTransform(scaleX: 1.08, y: 1.08) : .identity
             self.contentView.layer.shadowOpacity = focused ? 0.55 : 0

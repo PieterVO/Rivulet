@@ -62,18 +62,16 @@ final class LiveTimeshiftBadgeView: UIView {
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: 34),
         ])
-        update(behindLiveSeconds: 0, hasRewindWindow: false, isPaused: false)
+        update(behindLiveSeconds: 0, isLive: true, isPaused: false)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Anything under a few seconds behind still reads as live: a live
-    /// session always trails the edge by its holdback, and a badge that
-    /// flickered "−0:03" at rest would be noise.
-    static let liveToleranceSeconds: Double = 5
-
-    func update(behindLiveSeconds: Double, hasRewindWindow: Bool, isPaused: Bool) {
-        let isLive = !hasRewindWindow || behindLiveSeconds < Self.liveToleranceSeconds
+    /// `isLive` is the engine's live-edge verdict (`LiveTimeshift.isAtLiveEdge`,
+    /// or true with no rewind window), not a distance: the distance sawtooths
+    /// by a segment in every healthy session, so any fixed threshold either
+    /// flickered at rest or hid a real rewind.
+    func update(behindLiveSeconds: Double, isLive: Bool, isPaused: Bool) {
         glyph.isHidden = !isPaused
         dot.isHidden = !isLive || isPaused
         if isLive && !isPaused {

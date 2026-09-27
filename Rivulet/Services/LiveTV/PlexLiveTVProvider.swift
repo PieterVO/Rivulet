@@ -622,9 +622,16 @@ extension PlexLiveTVProvider: LiveTVRecordingProvider {
         var options: [LiveTVRecordOption] = []
         for (index, template) in templates.enumerated() {
             let isSeries = template.type == 2
+            // `onlyNewAirings` is an enum (0 every airing, 1 new only), and the
+            // template's current value is the server's last choice, so both
+            // series options state theirs rather than inheriting it.
+            let hasAiringsPref = isSeries && template.prefs["onlyNewAirings"] != nil
+            let template = hasAiringsPref ? template.withOnlyNewAirings(false) : template
             let title: String
             switch template.type {
-            case 1: title = "Record Movie"
+            // Plex types every non-episodic guide airing (sport, news) as a
+            // movie, so "Record Movie" mislabelled most of them.
+            case 1: title = "Record"
             case 2: title = "Record Series"
             case 4: title = "Record Episode"
             default: title = "Record \(template.title)"
@@ -637,19 +644,8 @@ extension PlexLiveTVProvider: LiveTVRecordingProvider {
                 payload: payload
             ))
             // Same rule, new airings only, when the template lets us ask.
-            if isSeries, template.prefs["onlyNewAirings"] != nil {
-                let newOnly = PlexSubscriptionTemplateOption(
-                    title: template.title,
-                    type: template.type,
-                    parameters: template.parameters,
-                    targetLibrarySectionID: template.targetLibrarySectionID,
-                    targetSectionLocationID: template.targetSectionLocationID,
-                    librarySectionTitle: template.librarySectionTitle,
-                    airingsType: template.airingsType,
-                    prefs: template.prefs.merging(["onlyNewAirings": "true"]) { _, new in new },
-                    selected: false
-                )
-                if let newPayload = try? String(decoding: encoder.encode(newOnly), as: UTF8.self) {
+            if hasAiringsPref {
+                if let newPayload = try? String(decoding: encoder.encode(template.withOnlyNewAirings(true)), as: UTF8.self) {
                     options.append(LiveTVRecordOption(
                         id: "\(guid)#\(index)#new",
                         title: "Record New Episodes",
@@ -723,8 +719,8 @@ extension PlexLiveTVProvider: LiveTVRecordingProvider {
         let rules = try await networkManager.getSubscriptions(serverURL: serverURL, authToken: authToken)
         return rules.map { rule in
             var detail: [String] = []
+            // Type 1 is not labelled: Plex files sport and news as movies too.
             switch rule.type {
-            case 1: detail.append("Movie")
             case 2: detail.append(rule.airingsType ?? "Series")
             case 4: detail.append("Episode")
             default: break
@@ -749,5 +745,18 @@ extension PlexLiveTVProvider: LiveTVRecordingProvider {
     private static func imageURL(_ path: String, serverURL: String, authToken: String) -> URL? {
         if path.hasPrefix("http://") || path.hasPrefix("https://") { return URL(string: path) }
         return URL(string: "\(serverURL)\(path)?X-Plex-Token=\(authToken)")
+    }
+}
+
+private extension PlexSubscriptionTemplateOption {
+    /// This rule with Plex's airings preference set: every airing, or new only.
+    func withOnlyNewAirings(_ newOnly: Bool) -> Self {
+        Self(title: title, type: type, parameters: parameters,
+             targetLibrarySectionID: targetLibrarySectionID,
+             targetSectionLocationID: targetSectionLocationID,
+             librarySectionTitle: librarySectionTitle,
+             airingsType: airingsType,
+             prefs: prefs.merging(["onlyNewAirings": newOnly ? "1" : "0"]) { _, new in new },
+             selected: selected)
     }
 }

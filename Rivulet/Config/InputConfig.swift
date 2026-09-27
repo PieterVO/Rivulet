@@ -25,10 +25,9 @@ enum InputConfig {
     /// purpose) are never deduped because they share a source. Sized above the
     /// observed skew but below a human's fastest deliberate double-click.
     ///
-    /// The VOD player no longer has two detectors (its GameController mirrors
-    /// are off, see `RemoteInputHandler.uikitOwnsPresses`); Live TV's Channels
-    /// layout still does, and an MPRemoteCommand seek can still pair with a
-    /// press.
+    /// No player has two press detectors any more (`RemoteInputHandler` acts
+    /// only on input with no UIPress), but an MPRemoteCommand seek can still
+    /// pair with a press.
     static let scrubNudgeDedupeWindow: TimeInterval = 0.25
     static let blockDismissTimeout: TimeInterval = 0.3
 

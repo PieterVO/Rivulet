@@ -5,21 +5,30 @@
 //  LiveTVContainerView.swift
 //  Rivulet
 //
-//  Container view that switches between the Channel, Guide and Browse
-//  layouts based on user settings
+//  Container view that switches between the Guide and What's On layouts
+//  based on user settings
 //
 
 import SwiftUI
 
 // MARK: - Live TV Layout Option
 
+/// Raw values are what `liveTVLayout` stores, so they never change; a saved
+/// "Channels" (a retired layout) falls back to the default.
 enum LiveTVLayout: String, CaseIterable, CustomStringConvertible {
-    case channels = "Channels"
     case guide = "Guide"
     /// Shelves of live cards, after the Apple TV app (UIKit).
     case browse = "Browse"
 
-    var description: String { rawValue }
+    var description: String {
+        switch self {
+        case .guide: return "Guide"
+        case .browse: return "What's On"
+        }
+    }
+
+    /// With nothing saved, or a saved layout that no longer exists.
+    static let fallback: LiveTVLayout = .browse
 }
 
 // MARK: - Live TV Container View
@@ -28,18 +37,16 @@ struct LiveTVContainerView: View {
     /// Optional source ID to filter channels. nil = show all sources.
     var sourceIdFilter: String?
 
-    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = "Guide"
+    @AppStorage("liveTVLayout") private var liveTVLayoutRaw = LiveTVLayout.fallback.rawValue
     @StateObject private var dataStore = LiveTVDataStore.shared
 
     private var layout: LiveTVLayout {
-        LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .guide
+        LiveTVLayout(rawValue: liveTVLayoutRaw) ?? .fallback
     }
 
     var body: some View {
         Group {
             switch layout {
-            case .channels:
-                ChannelListView(sourceIdFilter: sourceIdFilter)
             case .guide:
                 GuideLayoutView(sourceIdFilter: sourceIdFilter)
             case .browse:

@@ -8,7 +8,6 @@
 //  Central state management for multi-stream Live TV playback
 //
 
-import SwiftUI
 import Combine
 import UIKit
 import Sentry
@@ -37,6 +36,9 @@ final class MultiStreamViewModel: ObservableObject {
         var playbackState: UniversalPlaybackState
         var currentProgram: UnifiedProgram?
         var isMuted: Bool
+        /// Recovery gave up on this channel; the tile says so. A failure
+        /// that is still being retried is not this.
+        var isUnavailable = false
 
         // MARK: - Convenience Accessors
 
@@ -46,14 +48,6 @@ final class MultiStreamViewModel: ObservableObject {
 
         var playbackStatePublisher: AnyPublisher<UniversalPlaybackState, Never> {
             aetherPlayer.playbackStatePublisher
-        }
-
-        var currentTime: TimeInterval {
-            aetherPlayer.currentTime
-        }
-
-        var duration: TimeInterval {
-            aetherPlayer.duration
         }
 
         func play() {
@@ -81,66 +75,60 @@ final class MultiStreamViewModel: ObservableObject {
             // fails closed on a playlist body (AE#140). Every channel granted
             // direct play then played fullscreen and not in multiview.
             let forceEngineDemux = url.path.hasPrefix("/livetv/sessions/")
-            try await aetherPlayer.loadLive(url: url, headers: headers,
-                                            forceEngineDemux: forceEngineDemux,
-                                            role: .multiviewSlot)
+            // The keepalive owns the tuned session from before the load, as in
+            // the fullscreen player: started after it, a load that failed left
+            // its fresh Plex grab unreported and unreleased for 300s, one per
+            // retry.
             liveKeepalive.start(url: url)
+            do {
+                try await aetherPlayer.loadLive(url: url, headers: headers,
+                                                forceEngineDemux: forceEngineDemux,
+                                                role: .multiviewSlot)
+            } catch {
+                // A failed load releases its grab now rather than holding it
+                // through the retry's backoff.
+                liveKeepalive.stop()
+                throw error
+            }
         }
     }
 
     // MARK: - Published State
 
-    @Published private(set) var streams: [StreamSlot] = []
-    @Published var focusedSlotIndex: Int = 0
-    @Published var showControls = true
-    @Published var showChannelPicker = false {
+    @Published private(set) var streams: [StreamSlot] = [] {
         didSet {
-            if showChannelPicker {
-                // Picker opened - cancel timer so controls don't hide while browsing
-                controlsTimer?.invalidate()
-                controlsTimer = nil
-            } else if oldValue && !showChannelPicker {
-                // Picker closed - restart timer to hide controls
-                startControlsHideTimer()
+            guard streams.count != oldValue.count else { return }
+            let count = streams.count
+            // Crashes and hangs carry how many tiles were running, so four
+            // streams (open to everyone, no longer an opt-in) can be watched.
+            SentryBridge.configureScope { scope in
+                if count == 0 {
+                    scope.removeTag(key: "multiview_streams")
+                } else {
+                    scope.setTag(value: String(count), key: "multiview_streams")
+                }
             }
         }
     }
+    @Published var focusedSlotIndex: Int = 0
     @Published var layoutMode: LayoutMode = .grid
-    @Published var replaceSlotIndex: Int? = nil  // Set when replacing a stream
-    @Published private(set) var isScrubbing = false
-    @Published private(set) var scrubSpeed: Int = 0
-    @Published private(set) var scrubTime: TimeInterval = 0
 
     // MARK: - Private State
 
     private var cancellables: [UUID: Set<AnyCancellable>] = [:]
-    private var controlsTimer: Timer?
-    private let controlsHideDelay: TimeInterval = 5
     private var autoRecoveryTasks: [UUID: Task<Void, Never>] = [:]
     private var stalledStateSince: [UUID: Date] = [:]
     private var recoveryAttempts: [UUID: Int] = [:]
     private var recoveringSlots: Set<UUID> = []
     private var intentionallyStoppedSlots: Set<UUID> = []
     private var healthMonitorTask: Task<Void, Never>?
+    /// Retries before a tile gives up and says the channel is unavailable.
+    /// Unbounded, a dead source was tuned every 15s for as long as it stayed
+    /// on screen.
+    private let maxRecoveryAttempts = 5
     private let loadingRecoveryThreshold: TimeInterval = 25
     private let bufferingRecoveryThreshold: TimeInterval = 20
     private let debugId = String(UUID().uuidString.prefix(8))
-    private var scrubTimer: Timer?
-    private var scrubSlotID: UUID?
-    private let scrubUpdateInterval: TimeInterval = 0.1
-
-    /// Speed multipliers for each level (seconds per 100ms tick)
-    private static let scrubSpeeds: [Int: TimeInterval] = [
-        1: 1.0,
-        2: 2.0,
-        3: 4.0,
-        4: 8.0,
-        5: 15.0,
-        6: 30.0,
-        7: 45.0,
-        8: 60.0
-    ]
-
     // Track active Live TV sessions to manage screensaver correctly
     // Only re-enable screensaver when ALL sessions are closed
     private static var activeSessionCount = 0
@@ -153,11 +141,12 @@ final class MultiStreamViewModel: ObservableObject {
         return streams[focusedSlotIndex]
     }
 
+    /// Up to four. The two-stream default and its opt-in setting came from the
+    /// mpv player; AetherEngine 6.56.4 fixed what broke a third and fourth
+    /// live tile (AE#450 parked a third reader to one origin, AE#451 swept a
+    /// running tile's segment cache).
     var canAddStream: Bool {
-        // Default to 2 streams, allow 4 with user opt-in (may cause crashes)
-        let allowFourStreams = UserDefaults.standard.bool(forKey: "allowFourStreams")
-        let maxStreams = allowFourStreams ? 4 : 2
-        return streams.count < maxStreams
+        streams.count < 4
     }
 
     var activeChannelIds: Set<String> {
@@ -174,26 +163,7 @@ final class MultiStreamViewModel: ObservableObject {
         return false
     }
 
-    /// Returns true if focused stream is NOT the main/expanded stream (i.e., it's in the sidebar)
-    var isFocusedStreamInSidebar: Bool {
-        guard case .focus(let mainId) = layoutMode,
-              let focusedId = focusedStream?.id else { return false }
-        return focusedId != mainId
-    }
-
     // MARK: - Initialization
-
-    init(initialChannel: UnifiedChannel) {
-
-        // Track active sessions and prevent screensaver
-        Self.activeSessionCount += 1
-        UIApplication.shared.isIdleTimerDisabled = true
-
-        // Add the initial channel (unmuted since it's first)
-        Task {
-            await addChannel(initialChannel)
-        }
-    }
 
     /// Multiview that starts from a session already running elsewhere (the
     /// full-screen player, the guide's corner player) as its first tile, with
@@ -210,7 +180,7 @@ final class MultiStreamViewModel: ObservableObject {
 
     /// Take over a running session as a tile. Stops it instead when there is
     /// no room or the channel is already on screen.
-    func adoptStream(_ session: LiveTVSessionHandoff) {
+    private func adoptStream(_ session: LiveTVSessionHandoff) {
         guard canAddStream, !activeChannelIds.contains(session.channel.id) else {
             session.stop()
             return
@@ -242,9 +212,6 @@ final class MultiStreamViewModel: ObservableObject {
         guard !activeChannelIds.contains(channel.id) else {
             return
         }
-
-        // Close the picker immediately for responsiveness
-        showChannelPicker = false
 
         let isMuted = !streams.isEmpty  // First stream unmuted, others muted
 
@@ -380,10 +347,6 @@ final class MultiStreamViewModel: ObservableObject {
     func removeStream(at index: Int) {
         guard index >= 0, index < streams.count else { return }
 
-        if isScrubbing, streams[index].id == scrubSlotID {
-            cancelScrubFocused()
-        }
-
         let slot = streams[index]
         markSlotAsIntentionallyStopped(slot.id)
 
@@ -401,9 +364,6 @@ final class MultiStreamViewModel: ObservableObject {
         switch slot.playbackState {
         case .playing, .paused, .buffering: break
         default: return nil
-        }
-        if isScrubbing, slot.id == scrubSlotID {
-            cancelScrubFocused()
         }
         markSlotAsIntentionallyStopped(slot.id)
         slot.setMuted(false)
@@ -450,7 +410,6 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     func stopAllStreams() {
-        cancelScrubFocused()
         healthMonitorTask?.cancel()
         healthMonitorTask = nil
         for slot in streams {
@@ -470,7 +429,6 @@ final class MultiStreamViewModel: ObservableObject {
             if Self.activeSessionCount == 0 {
                 UIApplication.shared.isIdleTimerDisabled = false
             }
-        } else {
         }
     }
 
@@ -479,10 +437,6 @@ final class MultiStreamViewModel: ObservableObject {
     func setFocus(to newIndex: Int) {
         guard newIndex >= 0, newIndex < streams.count else { return }
         guard newIndex != focusedSlotIndex || streams[newIndex].isMuted else { return }
-
-        if isScrubbing, let scrubSlotID, scrubSlotID != streams[newIndex].id {
-            cancelScrubFocused()
-        }
 
         // Mute previously focused stream
         if focusedSlotIndex >= 0, focusedSlotIndex < streams.count {
@@ -510,12 +464,6 @@ final class MultiStreamViewModel: ObservableObject {
         layoutMode = .grid
     }
 
-    /// Expands the currently focused sidebar stream to be the main stream
-    func expandFocusedStream() {
-        guard let focusedStream = focusedStream else { return }
-        layoutMode = .focus(mainId: focusedStream.id)
-    }
-
     /// Replaces the stream at the given index with a new channel
     func replaceStream(at index: Int, with channel: UnifiedChannel) async {
         guard index >= 0, index < streams.count else {
@@ -530,10 +478,6 @@ final class MultiStreamViewModel: ObservableObject {
                 "channel_name": channel.name
             ]
             SentryBridge.addBreadcrumb(breadcrumb)
-
-            // Still close picker even on failure
-            showChannelPicker = false
-            replaceSlotIndex = nil
             return
         }
 
@@ -550,17 +494,7 @@ final class MultiStreamViewModel: ObservableObject {
                 "current_channel_id": currentChannelId
             ]
             SentryBridge.addBreadcrumb(breadcrumb)
-
-            showChannelPicker = false
-            replaceSlotIndex = nil
             return
-        }
-
-        // Close the picker immediately for responsiveness
-        showChannelPicker = false
-
-        if isScrubbing, streams[index].id == scrubSlotID {
-            cancelScrubFocused()
         }
 
         let oldSlot = streams[index]
@@ -647,220 +581,16 @@ final class MultiStreamViewModel: ObservableObject {
         }
 
         intentionallyStoppedSlots.remove(oldSlot.id)
-        replaceSlotIndex = nil
     }
 
     // MARK: - Playback Controls
 
     func togglePlayPauseOnFocused() {
         guard let slot = focusedStream else { return }
-
         if slot.isPlaying {
             slot.pause()
         } else {
             slot.play()
-        }
-
-        showControlsTemporarily()
-    }
-
-    func playFocused() {
-        focusedStream?.play()
-        showControlsTemporarily()
-    }
-
-    func pauseFocused() {
-        focusedStream?.pause()
-        showControlsTemporarily()
-    }
-
-    func playAll() {
-        for slot in streams {
-            slot.play()
-        }
-    }
-
-    func pauseAll() {
-        for slot in streams {
-            slot.pause()
-        }
-    }
-
-    func seekFocused(by seconds: TimeInterval) {
-        if isScrubbing {
-            updateScrubFocusedPosition(by: seconds)
-            return
-        }
-
-        guard let focusedSlotId = focusedStream?.id else { return }
-
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let index = self.streams.firstIndex(where: { $0.id == focusedSlotId }) else { return }
-
-            // A live tile has no duration, so the generic relative seek clamps
-            // every target to 0 — the far end of the rewind window. Seek within
-            // the window instead.
-            await self.streams[index].aetherPlayer.seekLive(by: seconds)
-            // Ensure stream is playing after seek attempt.
-            self.streams[index].play()
-        }
-
-        showControlsTemporarily()
-    }
-
-    func scrubFocusedInDirection(forward: Bool) {
-        guard let slot = focusedStream else { return }
-
-        let direction = forward ? 1 : -1
-        let slotCurrentTime = slot.currentTime
-        let slotDuration = slot.duration
-
-        if !isScrubbing || scrubSlotID != slot.id {
-            isScrubbing = true
-            scrubSlotID = slot.id
-            scrubTime = slotCurrentTime
-            scrubSpeed = direction
-            startScrubTimer()
-        } else if (scrubSpeed > 0) == forward {
-            scrubSpeed = min(8, abs(scrubSpeed) + 1) * direction
-        } else {
-            if abs(scrubSpeed) > 1 {
-                let currentDirection = scrubSpeed > 0 ? 1 : -1
-                scrubSpeed = (abs(scrubSpeed) - 1) * currentDirection
-            } else {
-                scrubSpeed = direction
-            }
-        }
-
-        let jumpAmount = forward ? InputConfig.tapSeekSeconds : -InputConfig.tapSeekSeconds
-        scrubTime = clampedScrubTime(scrubTime + jumpAmount, duration: slotDuration)
-        showControlsTemporarily()
-    }
-
-    func updateScrubFocusedPosition(by seconds: TimeInterval) {
-        if !isScrubbing {
-            guard let slot = focusedStream else { return }
-            isScrubbing = true
-            scrubSlotID = slot.id
-            scrubSpeed = 0
-            scrubTime = slot.currentTime
-        }
-
-        if let duration = focusedStreamDurationForScrub() {
-            scrubTime = clampedScrubTime(scrubTime + seconds, duration: duration)
-        } else {
-            // Fall back to non-negative scrub time when duration is unavailable.
-            scrubTime = max(0, scrubTime + seconds)
-        }
-        showControlsTemporarily()
-    }
-
-    func commitScrubFocused() {
-        guard isScrubbing, let scrubSlotID else { return }
-
-        let targetTime = scrubTime
-        stopScrubTimer()
-        isScrubbing = false
-        scrubSpeed = 0
-        self.scrubSlotID = nil
-
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let index = self.streams.firstIndex(where: { $0.id == scrubSlotID }) else { return }
-
-            await self.streams[index].aetherPlayer.seek(to: targetTime)
-            self.streams[index].play()
-        }
-
-        showControlsTemporarily()
-    }
-
-    func cancelScrubFocused() {
-        guard isScrubbing else { return }
-        stopScrubTimer()
-        isScrubbing = false
-        scrubSpeed = 0
-        scrubSlotID = nil
-        scrubTime = 0
-        showControlsTemporarily()
-    }
-
-    private func startScrubTimer() {
-        scrubTimer?.invalidate()
-        scrubTimer = Timer.scheduledTimer(withTimeInterval: scrubUpdateInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.updateScrubFromTimer()
-            }
-        }
-    }
-
-    private func stopScrubTimer() {
-        scrubTimer?.invalidate()
-        scrubTimer = nil
-    }
-
-    private func updateScrubFromTimer() {
-        guard isScrubbing, scrubSpeed != 0 else { return }
-        guard let duration = focusedStreamDurationForScrub() else { return }
-
-        let speedMagnitude = abs(scrubSpeed)
-        let direction: TimeInterval = scrubSpeed > 0 ? 1 : -1
-        let secondsPerTick = Self.scrubSpeeds[speedMagnitude] ?? 1.0
-
-        scrubTime = clampedScrubTime(scrubTime + (secondsPerTick * direction), duration: duration)
-
-        if duration > 0, (scrubTime <= 0 || scrubTime >= duration) {
-            scrubSpeed = 0
-            stopScrubTimer()
-        }
-    }
-
-    /// The scrubbing tile's reachable range. Live tiles have no duration; what
-    /// a seek can reach is the engine's rewind window, on the same session
-    /// axis `currentTime` reports.
-    private func focusedStreamDurationForScrub() -> TimeInterval? {
-        guard let scrubSlotID,
-              let index = streams.firstIndex(where: { $0.id == scrubSlotID }) else { return nil }
-        return streams[index].aetherPlayer.liveTimeshift.seekableRange?.upperBound
-            ?? streams[index].duration
-    }
-
-    private func clampedScrubTime(_ time: TimeInterval, duration: TimeInterval) -> TimeInterval {
-        let floor = scrubSlotID
-            .flatMap { id in streams.first(where: { $0.id == id }) }
-            .flatMap { $0.aetherPlayer.liveTimeshift.seekableRange?.lowerBound } ?? 0
-        if duration > 0 {
-            return max(floor, min(duration, time))
-        }
-        return max(floor, time)
-    }
-
-    // MARK: - Controls Visibility
-
-    func showControlsTemporarily() {
-        showControls = true
-        startControlsHideTimer()
-    }
-
-    /// Reset the controls hide timer (call when user navigates between buttons)
-    func resetControlsTimer() {
-        guard showControls && !showChannelPicker else { return }
-        startControlsHideTimer()
-    }
-
-    private func startControlsHideTimer() {
-        controlsTimer?.invalidate()
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                // Hide controls after timeout - user can press Select to show again
-                // Note: Timer is cancelled when picker opens, so this won't fire during picker
-                withAnimation(.easeOut(duration: 0.3)) {
-                    self.showControls = false
-                }
-            }
         }
     }
 
@@ -984,36 +714,55 @@ final class MultiStreamViewModel: ObservableObject {
         guard !recoveringSlots.contains(slotId) else { return }
 
         let attempt = recoveryAttempts[slotId, default: 0]
-        let delay = min(pow(2, Double(min(attempt, 4))), 15)  // 1s, 2s, 4s, 8s, 15s...
+        guard attempt < maxRecoveryAttempts else {
+            giveUp(on: slotId)
+            return
+        }
+        let delay = min(pow(2, Double(min(attempt, 4))), 15)  // 1s, 2s, 4s, 8s, 15s
 
         autoRecoveryTasks[slotId] = Task { [weak self] in
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
-            await self?.performAutoRecovery(for: slotId, channel: channel, reason: reason)
+            guard let self, !Task.isCancelled else { return }
+            let retry = await self.performAutoRecovery(for: slotId, channel: channel, reason: reason)
+            // A cancelled task was already removed (and maybe replaced).
+            guard !Task.isCancelled else { return }
+            // Cleared BEFORE rescheduling: a retry scheduled from inside the
+            // attempt found this task still registered and was dropped, so a
+            // tile whose tune failed sat failed forever, never reaching the cap.
+            self.autoRecoveryTasks[slotId] = nil
+            if let retry {
+                self.scheduleAutoRecovery(for: slotId, channel: channel, reason: retry)
+            }
         }
     }
 
-    private func performAutoRecovery(for slotId: UUID, channel: UnifiedChannel, reason: String) async {
-        defer {
-            autoRecoveryTasks[slotId] = nil
-        }
-
-        guard !Task.isCancelled else { return }
-        guard !intentionallyStoppedSlots.contains(slotId) else { return }
-        guard let slotIndex = streams.firstIndex(where: { $0.id == slotId }) else { return }
-        guard !recoveringSlots.contains(slotId) else { return }
+    /// One recovery attempt. Returns why to try again, or nil when done
+    /// (playing, or the tile is gone).
+    private func performAutoRecovery(for slotId: UUID, channel: UnifiedChannel, reason: String) async -> String? {
+        guard !intentionallyStoppedSlots.contains(slotId),
+              let startIndex = streams.firstIndex(where: { $0.id == slotId }),
+              !recoveringSlots.contains(slotId) else { return nil }
 
         recoveringSlots.insert(slotId)
         defer { recoveringSlots.remove(slotId) }
 
-        guard let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else {
-            scheduleAutoRecovery(for: slotId, channel: channel, reason: "no-url")
-            return
-        }
-
+        // Counted before the tune, so a tune that fails also moves toward the cap.
         recoveryAttempts[slotId, default: 0] += 1
         let attempt = recoveryAttempts[slotId] ?? 0
+        // Let go of the old session before tuning a new one, or a small tuner
+        // pool is still held by the attempt this one replaces.
+        streams[startIndex].liveKeepalive.stop()
+
+        let resolved = await LiveTVDataStore.shared.resolveStreamURL(for: channel)
+        // Find the slot again: during the await multiview may have closed
+        // (every slot gone) or dropped another tile (indices shifted), and an
+        // index taken before it crashed or wrote to the wrong tile.
+        guard !Task.isCancelled, !intentionallyStoppedSlots.contains(slotId),
+              let slotIndex = streams.firstIndex(where: { $0.id == slotId }) else { return nil }
+        guard let url = resolved else { return "no-url" }
+
         stalledStateSince[slotId] = Date()
         streams[slotIndex].playbackState = .loading
 
@@ -1035,12 +784,13 @@ final class MultiStreamViewModel: ObservableObject {
             try await slot.load(url: url, headers: LiveTVClientIdentity.streamHeaders(for: channel))
             guard !Task.isCancelled,
                   !intentionallyStoppedSlots.contains(slotId),
-                  streams.contains(where: { $0.id == slotId }) else { return }
+                  streams.contains(where: { $0.id == slotId }) else { return nil }
             slot.setMuted(muted)
             slot.play()
+            return nil
         } catch {
             if Task.isCancelled || intentionallyStoppedSlots.contains(slotId) {
-                return
+                return nil
             }
             print("📺 [MultiStreamVM \(debugId)] auto-recovery failed channel=\(channel.name) slotId=\(slotId) error=\(error)")
             SentryBridge.capture(error: error) { scope in
@@ -1053,9 +803,20 @@ final class MultiStreamViewModel: ObservableObject {
                 scope.setExtra(value: attempt, key: "recovery_attempt")
             }
 
-            // Keep retrying until stream is healthy again.
-            scheduleAutoRecovery(for: slotId, channel: channel, reason: "load-error")
+            return "load-error"
         }
+    }
+
+    /// Stop a tile whose channel will not play: release its player and tuner,
+    /// stop listening to it (its player's idle would otherwise overwrite the
+    /// state), and show it as failed. Replacing or removing it still works.
+    private func giveUp(on slotId: UUID) {
+        guard let index = streams.firstIndex(where: { $0.id == slotId }) else { return }
+        markSlotAsIntentionallyStopped(slotId)
+        cancellables.removeValue(forKey: slotId)
+        streams[index].stop()
+        streams[index].playbackState = .failed(.networkError("Channel unavailable"))
+        streams[index].isUnavailable = true
     }
 
     private func cancelAutoRecovery(for slotId: UUID) {
@@ -1078,8 +839,6 @@ final class MultiStreamViewModel: ObservableObject {
     // MARK: - Cleanup
 
     deinit {
-        controlsTimer?.invalidate()
-        scrubTimer?.invalidate()
         healthMonitorTask?.cancel()
 
         // Only decrement if stopAllStreams wasn't called (safety net)

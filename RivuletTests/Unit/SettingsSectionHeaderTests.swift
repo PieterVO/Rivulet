@@ -96,7 +96,7 @@ final class SettingsSectionHeaderTests: XCTestCase {
     }
 
     func test_liveTVAppearanceRows_moved_notDuplicated() {
-        let moved = ["liveTVAboveLibraries", "defaultLayout", "classicTVMode"]
+        let moved = ["liveTVAboveLibraries", "defaultLayout"]
         let appearanceIDs = appearance.map(\.id)
         let liveTVIDs = SettingsContent.rows(for: .liveTV).map(\.id)
         for id in moved {
@@ -106,6 +106,6 @@ final class SettingsSectionHeaderTests: XCTestCase {
                             "\(id) lost its description panel entry")
         }
         // Playback-side Live TV rows stay put.
-        XCTAssertTrue(liveTVIDs.contains("allowFourStreams"))
+        XCTAssertTrue(liveTVIDs.contains("confirmExitMultiview"))
     }
 }

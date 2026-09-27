@@ -105,7 +105,7 @@ extension IPTVProvider: LiveTVRecordingProvider {
         }
         var options = [LiveTVRecordOption(
             id: "\(program.id)#once",
-            title: program.isMovie ? "Record Movie" : "Record",
+            title: "Record",
             scope: .single,
             payload: "once"
         )]

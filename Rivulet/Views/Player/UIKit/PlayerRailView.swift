@@ -54,6 +54,10 @@ final class PlayerRailView: UIView {
     let recordButton = TransportControlButton(
         icon: UIImage(systemName: "record.circle"), accessibilityLabel: "Record",
         diameter: Metrics.buttonDiameter)
+    /// Live TV only: opens multiview with this channel in it.
+    let multiviewButton = TransportControlButton(
+        icon: UIImage(systemName: "rectangle.split.2x1"), accessibilityLabel: "Multiview",
+        diameter: Metrics.buttonDiameter)
 
     var onSubtitles: (() -> Void)?
     var onAudio: (() -> Void)?
@@ -64,6 +68,7 @@ final class PlayerRailView: UIView {
     var onReplayLongPress: (() -> Void)?
     var onGoLive: (() -> Void)?
     var onRecord: (() -> Void)?
+    var onMultiview: (() -> Void)?
 
     private let backgroundEffectView: UIVisualEffectView
     private let tintView = UIView()
@@ -132,8 +137,9 @@ final class PlayerRailView: UIView {
         cluster.axis = .horizontal
         cluster.spacing = Metrics.buttonGap
         cluster.alignment = .center
-        [subtitlesButton, audioButton, infoButton, insightsButton, upNextButton, filterButton,
-         recordButton, goLiveButton].forEach {
+        // Multiview and Record (live only, hidden on VOD) lead the row.
+        [multiviewButton, recordButton, subtitlesButton, audioButton, infoButton, insightsButton, upNextButton,
+         filterButton, goLiveButton].forEach {
             cluster.addArrangedSubview($0)
         }
 
@@ -178,6 +184,7 @@ final class PlayerRailView: UIView {
         filterButton.onPress = { [weak self] in self?.onFilter?() }
         goLiveButton.onPress = { [weak self] in self?.onGoLive?() }
         recordButton.onPress = { [weak self] in self?.onRecord?() }
+        multiviewButton.onPress = { [weak self] in self?.onMultiview?() }
         insightsButton.isHidden = true
         // Hidden until a host shows it — the Live TV rail shares this view but
         // has no content filter.
@@ -185,6 +192,7 @@ final class PlayerRailView: UIView {
         // Live TV only, and only in the states that give them meaning.
         goLiveButton.isHidden = true
         recordButton.isHidden = true
+        multiviewButton.isHidden = true
     }
 
     /// Show the content filter toggle (VOD, filtering on in Settings).
@@ -226,21 +234,15 @@ final class PlayerRailView: UIView {
         upNextButton.isHidden = !available
     }
 
-    /// Repurposes the Up Next slot as the Live TV channel list: same button
-    /// and `onUpNext` action, new icon and label, moved to the FRONT of the
-    /// cluster (left of Subtitles) and made the rail's default landing.
-    /// Changing channels is the primary thing a viewer does on live TV, so it
-    /// gets the first position and the first highlight — where Subtitles sits
-    /// on VOD.
+    /// Uses the Up Next button as the Live TV channel list: same button, place
+    /// and `onUpNext` action as VOD's Up Next, with a plain list icon. It is the
+    /// rail's default landing, since changing channels is the main thing a
+    /// viewer does on live TV.
     func setChannelListAvailable(_ available: Bool) {
         upNextButton.isHidden = !available
         guard available else { return }
-        upNextButton.setIcon(UIImage(systemName: "tv.inset.filled"))
+        upNextButton.setIcon(UIImage(systemName: "line.3.horizontal"))
         upNextButton.accessibilityLabel = "Channels"
-        // removeArrangedSubview alone leaves it in the view hierarchy, which
-        // would double-add it; insertArrangedSubview re-parents cleanly.
-        cluster.removeArrangedSubview(upNextButton)
-        cluster.insertArrangedSubview(upNextButton, at: 0)
         defaultFocusButton = upNextButton
     }
 
@@ -262,6 +264,12 @@ final class PlayerRailView: UIView {
         recordButton.isHidden = !available
         recordButton.setIcon(UIImage(systemName: isRecording ? "record.circle.fill" : "record.circle"))
         recordButton.accessibilityLabel = isRecording ? "Recording" : "Record"
+        recordButton.glyphColor = isRecording ? .systemRed : nil
+    }
+
+    /// Live TV: multiview, where the host has one to open.
+    func setMultiviewAvailable(_ available: Bool) {
+        multiviewButton.isHidden = !available
     }
 
     // MARK: - Ambient pause

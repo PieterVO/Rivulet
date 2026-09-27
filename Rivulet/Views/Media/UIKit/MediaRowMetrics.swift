@@ -63,9 +63,18 @@ enum MediaRowMetrics {
     static let cwWidth: CGFloat = 357
     static let cwHeight: CGFloat = 277
 
+    /// Live TV Browse card (16:9), on the Apple TV app's live-row geometry:
+    /// four across, its ~88pt margin and 40pt gap, so both peeks stay wide.
+    /// 2·88 + 4·406 + 3·40 = 1920 → 48pt sliver. The Browse page only; every
+    /// other shelf keeps `rowLeading`.
+    static let liveLeading: CGFloat = 88
+    static let liveWidth: CGFloat = 406
+    static let liveHeight: CGFloat = 228
+
     /// Fully-visible tile count per shelf type (the N in the equation).
     static let posterFullCount = 6
     static let cwFullCount = 5
+    static let liveFullCount = 4
 
     // MARK: Row chrome (vertical)
 
@@ -90,6 +99,7 @@ enum MediaRowMetrics {
     /// Gap between tiles within a row. Must satisfy the equation above.
     static let posterGap: CGFloat = 8
     static let cwGap: CGFloat = 8
+    static let liveGap: CGFloat = 40
 }
 
 extension NSLayoutConstraint {

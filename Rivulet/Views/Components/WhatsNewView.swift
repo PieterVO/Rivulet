@@ -142,7 +142,8 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         // confirm build number at release
         ("1.0.6 (88)", [
-            "New Browse layout for Live TV with rows of what is on now, like the Apple TV app. Choose it under Default Layout in Settings",
+            "Live TV opens on the new What's On page, with rows of what is on now",
+            "The Channels layout is gone; the Guide is still under Default Layout",
             "Watch up to four live channels at once in the new Multiview, with the sound following the one you select",
             "Record a programme, a whole series, or only new episodes from the guide with Plex DVR or Dispatcharr",
             "Hold Select on a programme in the guide to see what it is about and record it",

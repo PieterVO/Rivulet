@@ -22,6 +22,11 @@ final class TransportControlButton: UIControl {
     private let backgroundEffectView: UIVisualEffectView
 
     var onPress: (() -> Void)?
+    /// Draws the glyph in this colour, focused or not, instead of white on
+    /// glass / black on white (Live TV's Record while set to record).
+    var glyphColor: UIColor? {
+        didSet { iconView.tintColor = glyphColor ?? (isFocused ? .black : .white) }
+    }
 
     /// Fired instead of `onPress` when Select is held past `longPressThreshold`.
     /// Buttons without a handler keep firing `onPress` in `pressesBegan`
@@ -140,7 +145,7 @@ final class TransportControlButton: UIControl {
         coordinator.addCoordinatedAnimations({
             self.transform = isFocused ? CGAffineTransform(scaleX: 1.15, y: 1.15) : .identity
             self.backgroundEffectView.backgroundColor = isFocused ? .white : UIColor.white.withAlphaComponent(0.1)
-            self.iconView.tintColor = isFocused ? .black : .white
+            self.iconView.tintColor = self.glyphColor ?? (isFocused ? .black : .white)
         }, completion: nil)
     }
 }

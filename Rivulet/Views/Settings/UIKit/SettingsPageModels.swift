@@ -262,9 +262,8 @@ enum SettingsContent {
             .header("Live TV"),
             toggle("liveTVAboveLibraries", "Above Libraries", key: "liveTVAboveLibraries", default: false),
             SettingsRowItem(id: "defaultLayout", title: "Default Layout",
-                            kind: .cycle(value: { LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.guide.rawValue))?.description ?? "" },
-                                         next: { cycleLiveTVLayout() })),
-            toggle("classicTVMode", "Classic TV Mode", key: "classicTVMode", default: false)
+                            kind: .cycle(value: { (LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.fallback.rawValue)) ?? .fallback).description },
+                                         next: { cycleLiveTVLayout() }))
         ]
         return rows
     }
@@ -369,21 +368,20 @@ enum SettingsContent {
 
     // MARK: Live TV
 
-    /// Sidebar placement, Default Layout and Classic TV Mode moved to the
+    /// Sidebar placement and Default Layout moved to the
     /// Appearance page's "Live TV" group; this page keeps sources and playback.
     private static var liveTV: [SettingsRowItem] {
         [
             SettingsRowItem(id: "liveTVSources", title: "Live TV Sources", kind: .navigation(.iptv)),
             toggle("combineSources", "Combine Sources", key: "combineLiveTVSources", default: true),
             toggle("keepPlayingInGuide", "Keep Playing in Guide", key: "liveTVKeepPlayingInGuide", default: true),
-            toggle("confirmExitMultiview", "Confirm Exit Multiview", key: "confirmExitMultiview", default: true),
-            toggle("allowFourStreams", "Allow 3 or 4 Streams", key: "allowFourStreams", default: false)
+            toggle("confirmExitMultiview", "Confirm Exit Multiview", key: "confirmExitMultiview", default: true)
         ]
     }
 
     private static func cycleLiveTVLayout() {
         let all = LiveTVLayout.allCases
-        let cur = LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.guide.rawValue)) ?? all.first!
+        let cur = LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.fallback.rawValue)) ?? .fallback
         let i = all.firstIndex(of: cur) ?? 0
         SettingsStore.setString("liveTVLayout", all[(i + 1) % all.count].rawValue)
     }

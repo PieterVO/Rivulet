@@ -208,16 +208,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
     // MARK: Chrome state
 
-    /// Which chrome the player wears. `.rail` is the glass rail shared with
-    /// VOD (Up Next and Insights hidden: they mean nothing on a broadcast);
-    /// `.showcase` is the Browse layout's Apple TV-style chrome.
-    enum ChromeStyle {
-        case rail
-        case showcase
-    }
-
-    private let chromeStyle: ChromeStyle
-    private let railView: any LivePlayerChrome
+    /// The glass rail shared with VOD (Up Next and Insights hidden: they mean
+    /// nothing on a broadcast), with the live-only buttons shown.
+    private let railView = PlayerRailView()
     /// The SAME scrubber component VOD uses (same assets + spot in the rail),
     /// but driven non-seekably: it shows the current programme's air window
     /// (start/end wall-clock at the edges, current time on the playhead) with
@@ -283,18 +276,13 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// The session is handed over running; the player then closes.
     var onMinimize: ((LiveTVSessionHandoff) -> Void)?
 
-    /// Multiview from the showcase chrome: the running session moves into the
-    /// first tile. The host presents multiview once this player has closed.
+    /// Multiview from the rail: the running session moves into the first
+    /// tile. The host presents multiview once this player has closed.
     var onOpenMultiview: ((LiveTVSessionHandoff) -> Void)?
 
-    init(channel: UnifiedChannel, chromeStyle: ChromeStyle = .rail, adopting session: LiveTVSessionHandoff? = nil) {
+    init(channel: UnifiedChannel, adopting session: LiveTVSessionHandoff? = nil) {
         self.channel = session?.channel ?? channel
-        self.chromeStyle = chromeStyle
         self.pendingAdoption = session
-        switch chromeStyle {
-        case .rail: railView = PlayerRailView()
-        case .showcase: railView = LiveShowcaseChromeView()
-        }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -413,6 +401,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         // Keep the rail's audio meta line current as the engine reports tracks.
         aether.$audioTracks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateRailContent() }
+            .store(in: &cancellables)
+        // And the Record button, the moment a recording is set or cancelled.
+        LiveTVDataStore.shared.$scheduledRecordings
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateRailContent() }
             .store(in: &cancellables)
@@ -634,43 +627,25 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         view.addSubview(progressBar)
         progressBar.translatesAutoresizingMaskIntoConstraints = false
 
-        switch chromeStyle {
-        case .rail:
-            if let rail = railView as? PlayerRailView {
-                // The Up Next slot becomes the channel list on live (same
-                // button, same action hook — see setChannelListAvailable).
-                rail.setChannelListAvailable(true)
-                rail.setInsightsAvailable(false)
-                rail.setLoading(false)
-            }
-            NSLayoutConstraint.activate([
-                railView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 90),
-                railView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -90),
-                railView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -84),
-                railView.heightAnchor.constraint(equalToConstant: PlayerRailView.railHeight),
-                // Programme progress bar — placed exactly where VOD puts its
-                // scrubber (132pt side insets, 34pt up from the rail bottom) so
-                // it looks identical; fades with the rail.
-                progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 132),
-                progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -132),
-                progressBar.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -34),
-            ])
-        case .showcase:
-            if let showcase = railView as? LiveShowcaseChromeView {
-                NSLayoutConstraint.activate([
-                    showcase.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                    showcase.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                    showcase.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                    showcase.heightAnchor.constraint(equalToConstant: LiveShowcaseChromeView.height),
-                    // The timeline runs through the chrome's own slot for it.
-                    progressBar.leadingAnchor.constraint(equalTo: showcase.timelineGuide.leadingAnchor),
-                    progressBar.trailingAnchor.constraint(equalTo: showcase.timelineGuide.trailingAnchor),
-                    progressBar.topAnchor.constraint(equalTo: showcase.timelineGuide.topAnchor),
-                ])
-                showcase.onMultiview = { [weak self] in self?.openMultiview() }
-                showcase.setMultiviewAvailable(onOpenMultiview != nil)
-            }
-        }
+        // The Up Next button is the channel list on live (see
+        // setChannelListAvailable).
+        railView.setChannelListAvailable(true)
+        railView.setInsightsAvailable(false)
+        railView.setLoading(false)
+        railView.onMultiview = { [weak self] in self?.openMultiview() }
+        railView.setMultiviewAvailable(onOpenMultiview != nil)
+        NSLayoutConstraint.activate([
+            railView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 90),
+            railView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -90),
+            railView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -84),
+            railView.heightAnchor.constraint(equalToConstant: PlayerRailView.railHeight),
+            // Programme progress bar — placed exactly where VOD puts its
+            // scrubber (132pt side insets, 34pt up from the rail bottom) so
+            // it looks identical; fades with the rail.
+            progressBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 132),
+            progressBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -132),
+            progressBar.bottomAnchor.constraint(equalTo: railView.bottomAnchor, constant: -34),
+        ])
 
         // Where the picture sits relative to live. Right-aligned just above the
         // track, which keeps it below the rail's button row.
@@ -736,7 +711,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             runtime = "\(formatter.string(from: current.startTime)) – \(formatter.string(from: current.endTime))"
         }
 
-        let isBehindLive = hasRewindWindow && behind >= LiveTimeshiftBadgeView.liveToleranceSeconds
+        // The engine's verdict, built for exactly this badge and chip: one
+        // segment behind the edge is as live as a client gets, with
+        // hysteresis so it does not flicker at rest.
+        let isBehindLive = hasRewindWindow && !shift.isAtLiveEdge
 
         // Programme progress bar: the show's air window, the playhead at the
         // picture on screen, and (when timeshifted) the buffered stretch up to
@@ -755,10 +733,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             progressBar.isHidden = true
         }
 
-        timeshiftBadge.update(behindLiveSeconds: behind, hasRewindWindow: hasRewindWindow,
-                              isPaused: isUserPaused)
-        railView.setTimeshift(behindLiveSeconds: behind, hasRewindWindow: hasRewindWindow,
-                              isPaused: isUserPaused)
+        timeshiftBadge.update(behindLiveSeconds: behind, isLive: !isBehindLive, isPaused: isUserPaused)
         railView.setGoLiveAvailable(isBehindLive)
         railView.setRecordState(
             available: store.canRecord(channel) && current != nil,
@@ -852,7 +827,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         UIView.animate(withDuration: visible ? 0.25 : 0.2, animations: {
             self.progressBar.alpha = visible ? 1 : 0
             self.progressBar.transform = visible ? .identity : CGAffineTransform(translationX: 0, y: 24)
-            self.timeshiftBadge.alpha = (visible && self.badgeShowsWithChrome) ? 1 : 0
+            self.timeshiftBadge.alpha = visible ? 1 : 0
             // The rail's own glass carries the bar when it is up.
             self.timelineScrim.alpha = visible ? 1 : 0
         }, completion: { _ in
@@ -863,12 +838,6 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             self.timeshiftBadge.isHidden = true
         })
         if !visible { timelineVisible = false }
-    }
-
-    /// The showcase chrome says LIVE / how far behind in its own pill, so the
-    /// separate badge only shows there while the chrome itself is down.
-    private var badgeShowsWithChrome: Bool {
-        chromeStyle == .rail || !railVisible
     }
 
     /// Bring the timeline up without the rail and without moving focus, then
@@ -936,8 +905,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             content: content,
             width: width,
             in: view,
-            aboveRail: railView.panelAnchor,
-            towards: railView.panelAnchor
+            aboveRail: railView,
+            towards: railView
         )
         panel.onDismiss = { [weak self] in
             guard let self else { return }

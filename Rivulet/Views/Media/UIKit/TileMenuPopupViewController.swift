@@ -77,8 +77,10 @@ enum TileLongPress {
 
     /// The collection-view cell that currently has focus, resolved from the
     /// engine's focused view (focus can sit on the cell or a subview).
+    /// Not `UIScreen.focusedView`: this app's focus is scene-based, and that
+    /// accessor raises an assertion (crashed Live TV Browse's `viewWillAppear`).
     static func focusedCell(in collectionView: UICollectionView) -> IndexPath? {
-        var view = UIScreen.main.focusedView
+        var view = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView
         while let current = view {
             if let cell = current as? UICollectionViewCell,
                let indexPath = collectionView.indexPath(for: cell) {

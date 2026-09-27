@@ -173,9 +173,12 @@ nonisolated struct PlexLiveTVProgram: Codable, Identifiable, Sendable {
         return nil
     }
 
-    /// Category from first genre
+    /// Every genre tag, comma-joined like XMLTV's categories, less the bare
+    /// provider codes some guides carry ("178"). The first tag alone was
+    /// often only the code, which hid the real label behind it.
     var category: String? {
-        Genre?.first?.tag
+        let tags = (Genre ?? []).map(\.tag).filter { $0.contains(where: \.isLetter) }
+        return tags.isEmpty ? nil : tags.joined(separator: ", ")
     }
 }
 

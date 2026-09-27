@@ -45,8 +45,15 @@ enum EPGTheme {
     static let timelineHeight: CGFloat = 54
     /// Height of the slim rounded boxes inside the timeline / date row.
     static let timelineBoxHeight: CGFloat = 34
-    /// Height of the fixed info bar (top layer) the grid scrolls beneath.
-    static let infoBarHeight: CGFloat = 300
+    /// The app's page margin (Home rows, detail chrome). The guide ignores the
+    /// safe area and sits this far in from the leading, trailing and top edges.
+    static let pageMargin: CGFloat = MediaRowMetrics.rowLeading
+    /// The corner player after Back: 16:9 in 16pt width steps, top-right at
+    /// the page margin. The info bar's poster shares its height.
+    static let miniPlayerSize = CGSize(width: 528, height: 297)
+    /// Height of the fixed info bar (top layer) the grid scrolls beneath: the
+    /// page margin, the poster / corner-player band, and a small gap.
+    static let infoBarHeight: CGFloat = pageMargin + miniPlayerSize.height + 11
     /// Height of the UIKit category pills between the info bar and time ruler.
     static let categoryBarHeight: CGFloat = 64
     /// Gap between the info bar and the time ruler.
@@ -95,8 +102,6 @@ struct EPGGuide: UIViewRepresentable {
     let categoryTitles: [String]
     let selectedCategory: String?
     let onCategorySelect: (String?) -> Void
-    /// When true the grid releases focus (e.g. an overlay is presented).
-    var menuActive: Bool = false
     var onFocus: (UnifiedChannel?, UnifiedProgram?) -> Void
     var onSelect: (UnifiedChannel, UnifiedProgram?) -> Void
     /// Fired when horizontal scroll (or focus) nears the loaded right edge, so
@@ -189,7 +194,6 @@ struct EPGGuide: UIViewRepresentable {
         context.coordinator.parent = self
         guard let cv = context.coordinator.collectionView,
               let layout = cv.collectionViewLayout as? EPGLayout else { return }
-        uiView.isUserInteractionEnabled = !menuActive
         uiView.configureCategories(
             titles: categoryTitles,
             selected: selectedCategory,
@@ -860,7 +864,7 @@ final class EPGContainerView: UIView {
         clockLabel.frame = CGRect(
             x: bounds.width - clockWidth,
             y: EPGTheme.infoBarHeight,
-            width: clockWidth - 60,
+            width: clockWidth - EPGTheme.pageMargin,
             height: EPGTheme.categoryBarHeight)
         collectionView?.frame = CGRect(x: 0, y: contentTopInset,
                                        width: bounds.width,
@@ -1093,7 +1097,7 @@ final class GuideCategoryPillCell: UICollectionViewCell {
     ) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
-        coordinator.addCoordinatedAnimations { self.applyAppearance(focused: focused) }
+        coordinator.animateFocusChange(gained: focused) { self.applyAppearance(focused: focused) }
     }
 
     private func applyAppearance(focused: Bool) {
@@ -1433,7 +1437,9 @@ final class ProgramCellView: UICollectionViewCell {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         let focused = (context.nextFocusedView == self)
-        coordinator.addCoordinatedAnimations({ self.applyFocus(focused) })
+        // Losing focus is instant: a coordinated unfocus leaves the old
+        // programme's white card fading behind the move (ghosting).
+        coordinator.animateFocusChange(gained: focused) { self.applyFocus(focused) }
     }
 
     private func applyFocus(_ focused: Bool) {
@@ -1736,7 +1742,7 @@ struct GuideInfoBar: View {
 
     /// Fixed poster height; width follows the image's own aspect ratio so a
     /// 2:3 poster shows 2:3 and a 16:9 fallback shows 16:9 (never cropped).
-    private let posterHeight: CGFloat = 252
+    private let posterHeight: CGFloat = EPGTheme.miniPlayerSize.height
 
     private var content: some View {
         HStack(alignment: .top, spacing: 30) {
@@ -1770,7 +1776,7 @@ struct GuideInfoBar: View {
         }
         .padding(.leading, EPGTheme.cellSpacing)
         .padding(.trailing, 48)
-        .padding(.top, 39)
+        .padding(.top, EPGTheme.pageMargin)
         .padding(.bottom, 9)
     }
 

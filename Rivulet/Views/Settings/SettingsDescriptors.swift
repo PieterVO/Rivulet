@@ -157,29 +157,21 @@ enum SettingsDescriptorStore {
             icon: "arrow.up.arrow.down",
             description: "Moves the Live TV section above your Media libraries in the sidebar for quicker access."
         ),
-        "classicTVMode": SettingDescriptor(
-            icon: "tv.fill",
-            description: "Hides player controls during live TV for a traditional television experience. Swipe up to show controls."
-        ),
         "combineSources": SettingDescriptor(
             icon: "square.stack.3d.down.right",
-            description: "Shows all Live TV sources in a single combined Channels view, or gives each source its own sidebar entry."
+            description: "Shows all Live TV sources together under one sidebar entry, or gives each source its own."
         ),
         "defaultLayout": SettingDescriptor(
             icon: "tv",
-            description: "Choose your default Live TV view: the channel grid, the TV guide, or Browse, with rows of what is on now and multiview like the Apple TV app."
+            description: "Choose your default Live TV view: the TV guide, or What's On, with rows of what is on now and multiview like the Apple TV app."
         ),
         "keepPlayingInGuide": SettingDescriptor(
             icon: "pip",
-            description: "When you go back from a live channel, it keeps playing with its sound in the corner of the guide or Browse. Select it again to return to full screen."
+            description: "When you go back from a live channel, it keeps playing with its sound in the corner of the Guide or What's On. Select it again to return to full screen."
         ),
         "confirmExitMultiview": SettingDescriptor(
             icon: "rectangle.split.2x2",
             description: "Shows a confirmation dialog before closing multiview mode to prevent accidentally ending multiple streams."
-        ),
-        "allowFourStreams": SettingDescriptor(
-            icon: "rectangle.split.2x2.fill",
-            description: "Enables 3 and 4 stream multiview layouts. Warning: 4 streams may cause instability on some devices."
         ),
 
         // MARK: Storage

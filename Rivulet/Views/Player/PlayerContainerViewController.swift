@@ -2081,7 +2081,7 @@ private final class ScrubberFocusProxyView: UIView {
     override var canBecomeFocused: Bool { isFocusEnabled }
 
     // Tap-vs-hold detection for the directional press — the same
-    // `DirectionalPressDetector` RemoteInputHandler uses, so both focus
+    // `DirectionalPressDetector` the content press path uses, so both focus
     // regimes behave identically by construction rather than by two hand
     // -rolled timers staying in sync.
     private let directionalDetector = DirectionalPressDetector()

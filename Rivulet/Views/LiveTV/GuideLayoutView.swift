@@ -7,7 +7,7 @@
 //
 //  UHF-style Live TV guide host. Three layers: the UIKit-backed EPG grid
 //  (bottom, virtualized, with its own pinned channel column + time ruler +
-//  now-line), the info bar on top, and the fullscreen / PiP player overlay.
+//  now-line), the info bar on top, and the corner player after Back.
 //  The grid is `EPGGuide` (see EPGGuideView.swift), ported from PlexGuide and
 //  fed by Rivulet's `LiveTVDataStore`.
 //
@@ -15,13 +15,6 @@
 import SwiftUI
 import Combine
 import UIKit
-
-/// Display mode for the Live TV player in the guide.
-enum LiveTVDisplayMode: Equatable {
-    case hidden      // No player visible
-    case fullscreen  // Player is fullscreen overlay
-    case pip         // Player is in PiP (small, top-right)
-}
 
 struct GuideLayoutView: View {
     /// Optional source ID to filter channels. nil = show all sources.
@@ -140,11 +133,6 @@ struct GuideLayoutView: View {
         return min(max(floor, loaded), ceiling)
     }
 
-    // Player state
-    @State private var activeChannel: UnifiedChannel?
-    @State private var playerSessionId = UUID()
-    @State private var displayMode: LiveTVDisplayMode = .hidden
-
     // Guide state
     @State private var timelineStart = Date()
     @State private var now = Date()
@@ -191,39 +179,36 @@ struct GuideLayoutView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
+                    // The info bar, category pills and channel column all start
+                    // `cellSpacing` into this, so they line up on the page margin.
                     guideContent
-                        .opacity(displayMode == .fullscreen ? 0 : 1)
-                        .disabled(displayMode == .fullscreen)
+                        .padding(.leading, EPGTheme.pageMargin - EPGTheme.cellSpacing)
                 }
 
                 // EPG failure banner — surfaced so an empty guide doesn't look
                 // like a Rivulet bug when the cause is a broken third-party EPG.
-                if !dataStore.epgIssues.isEmpty, displayMode != .fullscreen {
+                if !dataStore.epgIssues.isEmpty {
                     EPGIssueBanner(issues: dataStore.epgIssues)
-                        .padding(.horizontal, 40)
-                        .padding(.top, 16)
+                        .padding(.horizontal, EPGTheme.pageMargin)
+                        .padding(.top, EPGTheme.pageMargin)
                         .frame(maxWidth: .infinity, alignment: .top)
                         .allowsHitTesting(false)
                 }
 
-                // Player layer — present when a channel is active.
-                if let channel = activeChannel {
-                    liveTVPlayerLayer(channel: channel, screenSize: geo.size)
-                        .zIndex(displayMode == .fullscreen ? 100 : 10)
-                }
-
                 if let miniSession {
                     LiveMiniPlayerRepresentable(session: miniSession)
-                        .frame(width: 448, height: 252)
-                        .padding(.top, 40)
-                        .padding(.trailing, 60)
+                        .frame(width: EPGTheme.miniPlayerSize.width, height: EPGTheme.miniPlayerSize.height)
+                        .padding(.top, EPGTheme.pageMargin)
+                        .padding(.trailing, EPGTheme.pageMargin)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .allowsHitTesting(false)
                         .zIndex(20)
                 }
             }
         }
-        .ignoresSafeArea(edges: [.bottom, .trailing])
+        // Margins come from `EPGTheme.pageMargin`, like the rest of the app,
+        // not from the tvOS safe area (80pt leading, 60pt top).
+        .ignoresSafeArea()
         .onAppear(perform: setupStartTime)
         .task {
             if dataStore.channels.isEmpty { await dataStore.loadChannels() }
@@ -265,7 +250,6 @@ struct GuideLayoutView: View {
                     focusedChannel = nil
                     seedFocus()
                 },
-                menuActive: displayMode == .fullscreen,
                 onFocus: { channel, program in
                     focusedChannel = channel
                     focusedProgram = program
@@ -452,59 +436,6 @@ struct GuideLayoutView: View {
         Image(uiImage: image)
             .resizable()
             .scaledToFill()
-    }
-
-    // MARK: - Player layer (fullscreen + PiP)
-
-    private var pipScale: CGFloat { 0.28 }
-    private var pipMargin: CGFloat { 60 }
-
-    @ViewBuilder
-    private func liveTVPlayerLayer(channel: UnifiedChannel, screenSize: CGSize) -> some View {
-        let player = LiveTVPlayerView(
-            channel: channel,
-            onDismiss: {
-                displayMode = .hidden
-                activeChannel = nil
-                playerSessionId = UUID()
-            },
-            onEnterPIP: {
-                var transaction = Transaction()
-                transaction.animation = nil
-                withTransaction(transaction) {
-                    displayMode = .pip
-                }
-            },
-            isInteractive: displayMode == .fullscreen  // Disable focus capture in PiP mode
-        )
-        // Force a fresh player session when changing channels or after exit/reopen.
-        .id("\(playerSessionId.uuidString)-\(channel.id)")
-        .transaction { transaction in
-            transaction.animation = nil
-        }
-        .animation(nil, value: displayMode)
-
-        if displayMode == .pip {
-            // PiP: a small 16:9 box pinned top-right. Integral 16px width steps
-            // avoid fractional scaling artifacts (a thin bottom strip).
-            let pipWidth = max(16, floor((screenSize.width * pipScale) / 16.0) * 16.0)
-            let pipHeight = pipWidth * 9.0 / 16.0
-            player
-                .frame(width: pipWidth, height: pipHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 10)
-                .position(x: screenSize.width - pipMargin - pipWidth / 2,
-                          y: pipMargin + pipHeight / 2)
-                .allowsHitTesting(false)
-        } else {
-            // Fullscreen: fill the true screen and ignore the guide's safe-area
-            // inset. Sizing to the GeometryReader's (inset) size is what made the
-            // player render as a centered box instead of edge-to-edge.
-            player
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
-                .allowsHitTesting(true)
-        }
     }
 
     // MARK: - Selection
