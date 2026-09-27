@@ -577,7 +577,14 @@ enum InfoPopupContent {
             stack.addArrangedSubview(ver)
             stack.setCustomSpacing(14, after: ver)
             for feature in entry.features {
-                stack.addArrangedSubview(changelogBullet(feature))
+                if let heading = WhatsNewView.heading(feature) {
+                    if let last = stack.arrangedSubviews.last, last !== ver { stack.setCustomSpacing(22, after: last) }
+                    let head = label(heading, size: 25, weight: .bold, color: .white, lines: 0)
+                    stack.addArrangedSubview(head)
+                    stack.setCustomSpacing(10, after: head)
+                } else {
+                    stack.addArrangedSubview(changelogBullet(feature))
+                }
             }
         }
         return stack

@@ -113,16 +113,25 @@ struct WhatsNewView: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     }
 
-    private func featureRow(text: String, isFocused: Bool) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Circle()
-                .fill(.white.opacity(isFocused ? 0.9 : 0.5))
-                .frame(width: 8, height: 8)
-                .padding(.top, 13)
+    /// A changelog line starting with `## ` is a heading over the lines after
+    /// it: drawn bold with no dot. Returns its text, or nil for a bullet.
+    static func heading(_ line: String) -> String? {
+        line.hasPrefix("## ") ? String(line.dropFirst(3)) : nil
+    }
 
-            Text(text)
-                .font(.system(size: 24, weight: .medium))
-                .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.85))
+    private func featureRow(text: String, isFocused: Bool) -> some View {
+        let heading = Self.heading(text)
+        return HStack(alignment: .top, spacing: 14) {
+            if heading == nil {
+                Circle()
+                    .fill(.white.opacity(isFocused ? 0.9 : 0.5))
+                    .frame(width: 8, height: 8)
+                    .padding(.top, 13)
+            }
+
+            Text(heading ?? text)
+                .font(.system(size: heading == nil ? 24 : 26, weight: heading == nil ? .medium : .bold))
+                .foregroundStyle(.white.opacity(isFocused || heading != nil ? 1.0 : 0.85))
                 .fixedSize(horizontal: false, vertical: true)
                 .multilineTextAlignment(.leading)
 
@@ -141,6 +150,7 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.0.6 (88)", [
+            "## Lots of Live TV Improvements!",
             "Live TV opens on the new What's On page, with rows by what's on and by genre",
             "The Channels layout is gone; the Guide is still under Default Layout",
             "Watch up to four live channels at once in the new Multiview",
@@ -160,16 +170,17 @@ struct WhatsNewView: View {
             "IPTV channels that need headers from the playlist now play",
             "Dispatcharr sources now take an API key, which turns on recording",
             "Multiview now stops retrying a channel that won't play and says so",
-            "Content filtering now works with subtitles turned off",
-            "Pause content filtering for a title from the player's controls",
-            "Skipping now works on IR, CEC and click-only remotes, one skip per click",
             "Fixed Play and Pause doing nothing in Live TV",
             "Fixed the guide jumping hours ahead after going back from a channel",
             "Fixed a trail behind the selection when moving through the guide",
             "Fixed a crash when leaving Multiview",
+            "Fixed a short silence at the start of a channel on HomePod and AirPlay speakers",
+            "## Other Improvements",
+            "Content filtering now works with subtitles turned off",
+            "Pause content filtering for a title from the player's controls",
+            "Skipping now works on IR, CEC and click-only remotes, one skip per click",
             "Fixed Back leaving two screens at once from game controllers and keyboards",
             "Fixed Music reacting to remote buttons meant for a video",
-            "Fixed a short silence at the start of a channel on HomePod and AirPlay speakers",
         ]),
         ("1.0.6 (87)", [
             "New Watchlist tab in the sidebar shows everything you saved",
