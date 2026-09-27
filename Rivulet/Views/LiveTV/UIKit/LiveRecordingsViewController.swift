@@ -51,7 +51,6 @@ final class LiveRecordingsViewController: UIViewController {
         view.addSubview(titleLabel)
 
         tableView.backgroundColor = .clear
-        tableView.separatorStyle = .none
         tableView.dataSource = self
         tableView.delegate = self
         tableView.remembersLastFocusedIndexPath = true
