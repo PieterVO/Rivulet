@@ -17,8 +17,8 @@ final class PlexLiveTunerGroupTests: XCTestCase {
         key: String? = "159",
         friendlyName: String? = nil,
         device: String? = nil,
-        model: String? = nil,
-        make: String? = nil
+        make: String? = nil,
+        model: String? = nil
     ) -> PlexDVR {
         PlexDVR(
             key: key, uuid: nil, friendlyName: friendlyName, device: device,
