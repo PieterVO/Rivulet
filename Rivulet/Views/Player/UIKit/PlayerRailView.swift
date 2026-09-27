@@ -179,18 +179,23 @@ final class PlayerRailView: UIView {
         goLiveButton.onPress = { [weak self] in self?.onGoLive?() }
         recordButton.onPress = { [weak self] in self?.onRecord?() }
         insightsButton.isHidden = true
-        // Hidden until a host wires `onFilter` — the Live TV rail shares this
-        // view but has no content filter.
+        // Hidden until a host shows it — the Live TV rail shares this view but
+        // has no content filter.
         filterButton.isHidden = true
         // Live TV only, and only in the states that give them meaning.
         goLiveButton.isHidden = true
         recordButton.isHidden = true
     }
 
-    /// Reflect the content filter's on/off state in the toggle glyph
-    /// (outline = off, filled = on).
-    func setFilterEnabled(_ enabled: Bool) {
-        filterButton.setIcon(UIImage(systemName: enabled ? "hand.raised.fill" : "hand.raised"))
+    /// Show the content filter toggle (VOD, filtering on in Settings).
+    func setFilterAvailable(_ available: Bool) {
+        filterButton.isHidden = !available
+    }
+
+    /// Reflect whether the content filter is acting in the toggle glyph
+    /// (filled = filtering, outline = paused for this title).
+    func setFilterActive(_ active: Bool) {
+        filterButton.setIcon(UIImage(systemName: active ? "hand.raised.fill" : "hand.raised"))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
