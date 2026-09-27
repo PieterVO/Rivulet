@@ -875,11 +875,10 @@ class PlayerContainerViewController: UIViewController {
     /// IR remotes (learned remotes, One For All, Harmony, etc.) send UIPress events
     /// rather than GameController events. This ensures FF/RW works on all remote types.
     ///
-    /// These serve the CONTENT-focused case only. `applyChromeVisibility`
-    /// disables all four the instant controls-focus mode takes over, so they
-    /// never race `ScrubberFocusProxyView`'s own press handling for the same
-    /// press (a live recognizer on an ancestor of the focused view can cancel
-    /// a press before that view sees it, which dropped seeks intermittently).
+    /// These serve the CONTENT-focused case only. The delegate's
+    /// `shouldReceive press` keeps every press away from them while the rail
+    /// owns focus, so they never race `ScrubberFocusProxyView`'s own press
+    /// handling for the same press.
     ///
     /// Deliberately NOT built on `DirectionalPressDetector`: a
     /// `UILongPressGestureRecognizer` + `require(toFail:)` already gets the
@@ -914,6 +913,9 @@ class PlayerContainerViewController: UIViewController {
         leftTap.require(toFail: leftLong)
         rightTap.require(toFail: rightLong)
 
+        // Whether each press reaches these is decided per press in
+        // `gestureRecognizer(_:shouldReceive:)`.
+        [leftTap, rightTap, leftLong, rightLong].forEach { $0.delegate = self }
     }
 
     /// Whether the container's own Left/Right recognizers may act on a press.
@@ -1649,25 +1651,6 @@ class PlayerContainerViewController: UIViewController {
         scrubberProxy?.isFocusEnabled =
             (railVisible && !isLoading) || (proxyHasFocus && !isLoading && !ambient)
 
-        // The `setupDirectionalGestures()` recognizers (IR-remote-style
-        // Left/Right tap/hold) live on `view` for the content-focused case —
-        // nothing else claims arrow presses once chrome is fully hidden. Once
-        // controls-focus mode is active, ScrubberFocusProxyView's own
-        // pressesBegan/Ended is the sole handler for a focused proxy (native
-        // focus movement handles every other rail button), and their own
-        // `handleDPadLeft/RightTap` guards already no-op in that state — but a
-        // live UIGestureRecognizer on an ancestor of the focused view can
-        // intercept/cancel a press before it ever reaches that view's own
-        // pressesBegan (confirmed tvOS behavior, not just the no-op guard), so
-        // leaving them enabled races the proxy for the same press and
-        // intermittently drops the skip instead of firing it twice. Disabling
-        // them outright while controls-focus is active removes the race
-        // instead of relying on the no-op to paper over it.
-        let irArrowGesturesEnabled = containerOwnsDirectionalInput
-        [dPadLeftTapGesture, dPadRightTapGesture, dPadLeftLongPressGesture, dPadRightLongPressGesture].forEach {
-            $0?.isEnabled = irArrowGesturesEnabled
-        }
-
         // The skip pill lives independently of the rail: it stays up whenever a
         // marker is active (chrome shown OR hidden), so the user can jump forward
         // without first surfacing the controls. Hidden only while loading, during
@@ -2007,5 +1990,26 @@ extension PlayerContainerViewController: UIGestureRecognizerDelegate {
         let velocity = pan.velocity(in: view)
         guard velocity != .zero else { return false }
         return abs(velocity.x) > abs(velocity.y) * 2
+    }
+
+    /// The Left/Right tap/hold recognizers (`setupDirectionalGestures`) take a
+    /// press only while the container owns directional input. When the rail,
+    /// the scrubber proxy or a panel holds focus they must not even SEE the
+    /// press: a live recognizer on an ancestor of the focused view can cancel
+    /// the press before that view's own `pressesBegan` runs, which dropped
+    /// skips intermittently.
+    ///
+    /// Decided per press, not stored in `isEnabled`. The stored flag was
+    /// written in `applyChromeVisibility()`, and when the chrome auto-hid with
+    /// the scrubber proxy focused (the rail's default landing) it was written
+    /// while the proxy still held focus, before focus moved to the video. So it
+    /// stayed false for as long as the chrome was hidden, and Left/Right did
+    /// nothing unless a GameController event also arrived.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
+        let arrows: [UIGestureRecognizer?] = [
+            dPadLeftTapGesture, dPadRightTapGesture, dPadLeftLongPressGesture, dPadRightLongPressGesture,
+        ]
+        guard arrows.contains(where: { $0 === gestureRecognizer }) else { return true }
+        return containerOwnsDirectionalInput
     }
 }
