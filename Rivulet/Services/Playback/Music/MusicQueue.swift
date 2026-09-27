@@ -51,6 +51,14 @@ final class MusicQueue: ObservableObject {
     /// Whether music is actively playing or paused (i.e., a session exists)
     var isActive: Bool { currentTrack != nil }
 
+    /// True while a video player is up. The system has ONE Now Playing entry
+    /// and one remote-command center, and both players register handlers on
+    /// it: a Control Center, iPhone Remote or HDMI-CEC play/pause during a film
+    /// also toggled the paused song underneath it, and this queue's progress
+    /// timer kept writing the song's position and a zero rate into the film's
+    /// entry, so the system scrubber showed the wrong time.
+    private(set) var videoOwnsNowPlaying = false
+
     // MARK: - Private State
 
     private let player = MusicPlayer()
@@ -64,6 +72,32 @@ final class MusicQueue: ObservableObject {
 
     private init() {
         bindPlayerState()
+        observeVideoPlayback()
+    }
+
+    /// See `videoOwnsNowPlaying`.
+    private func observeVideoPlayback() {
+        NotificationCenter.default.addObserver(
+            forName: .plexPlaybackStarted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.videoOwnsNowPlaying = true
+                // A film does not play over a song.
+                if self?.playbackState == .playing { self?.pause() }
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .plexPlaybackStopped,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.videoOwnsNowPlaying = false
+            }
+        }
     }
 
     // MARK: - Configuration
@@ -298,6 +332,13 @@ final class MusicQueue: ObservableObject {
                     playbackState = .idle
                     return
                 }
+                // A film started while this was resolving. Loading now would
+                // start the song over it and switch the audio session away from
+                // movie playback; leave it for the user to start again.
+                guard !videoOwnsNowPlaying else {
+                    playbackState = .idle
+                    return
+                }
                 player.load(url: url, headers: [:])
 
                 // Update Now Playing
@@ -327,7 +368,13 @@ final class MusicQueue: ObservableObject {
                 switch state {
                 case .idle: self.playbackState = .idle
                 case .loading: self.playbackState = .loading
-                case .playing: self.playbackState = .playing
+                case .playing:
+                    self.playbackState = .playing
+                    // Take back next/previous from the video player, which turns
+                    // them off while it owns the command center. A resume after a
+                    // film starts no new track, so claiming only on track change
+                    // left them dead.
+                    if !self.videoOwnsNowPlaying { self.nowPlayingBridge.claimRemoteCommands() }
                 case .paused: self.playbackState = .paused
                 case .ended: self.onTrackEnded()
                 }
@@ -374,12 +421,15 @@ final class MusicQueue: ObservableObject {
                     state: state
                 )
 
-                // Update Now Playing time
-                self.nowPlayingBridge.updateTime(
-                    currentTime: self.currentTime,
-                    duration: durationSec,
-                    isPlaying: self.playbackState == .playing
-                )
+                // Update Now Playing time, unless a video owns the entry
+                // (see `videoOwnsNowPlaying`).
+                if !self.videoOwnsNowPlaying {
+                    self.nowPlayingBridge.updateTime(
+                        currentTime: self.currentTime,
+                        duration: durationSec,
+                        isPlaying: self.playbackState == .playing
+                    )
+                }
             }
         }
     }

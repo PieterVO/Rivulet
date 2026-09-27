@@ -80,11 +80,24 @@ class PlayerContainerViewController: UIViewController {
     /// the player behind a fully opaque plate.
     private var isFadingOut = false
 
-    // Directional gesture recognizers for IR remote support
-    private var dPadLeftTapGesture: UITapGestureRecognizer?
-    private var dPadRightTapGesture: UITapGestureRecognizer?
-    private var dPadLeftLongPressGesture: UILongPressGestureRecognizer?
-    private var dPadRightLongPressGesture: UILongPressGestureRecognizer?
+    /// Focus stop for the content state (see `ContentFocusAnchorView`).
+    private var contentAnchor: ContentFocusAnchorView?
+    /// Touch twin for the content state's Up/Down (see `setupContentAnchor`).
+    private var contentSwipeBinding: DirectionalInputBinding?
+    /// Tap-vs-hold for a content-state Left/Right press, the same detector the
+    /// scrubber proxy uses, so both focus regimes behave identically.
+    private let contentPressDetector = DirectionalPressDetector()
+    /// The press type that began the detector's current press, so only that
+    /// press's release ends it.
+    private var contentDirectionalPressType: UIPress.PressType?
+    /// A content-state Select is waiting for its release (it acts on the UP,
+    /// like the SwiftUI tap gesture it replaces).
+    private var contentSelectPending = false
+    /// Set once an arrow press arrives with the clickpad physically down: this
+    /// remote reports its edge clicks as arrows, so a `.select` is never an
+    /// edge click (see `edgeClickDirection`). Static because the remote
+    /// outlives any one player.
+    private static var clickpadRingSeen = false
 
     private let inputCoordinator: PlaybackInputCoordinator
 
@@ -142,6 +155,10 @@ class PlayerContainerViewController: UIViewController {
             ])
             hosting.didMove(toParent: self)
         }
+
+        // Created here so it exists before any chrome binding runs; restacked
+        // just below the rail once the chrome is built (see below).
+        setupContentAnchor()
 
         // Captions sit directly above the video and BELOW every chrome layer
         // added afterwards, so the rail can never be drawn behind them. A plain
@@ -352,6 +369,14 @@ class PlayerContainerViewController: UIViewController {
             // make the scrubber the first landing.
             railView.scrubberFocusProxy = proxy
 
+            // The content anchor sits above the video, captions and full-frame
+            // scrims and below every control. Nothing full-screen may sit over
+            // a focus item (the engine's occlusion test is geometric), and the
+            // anchor must not sit over any control for the same reason.
+            if let contentAnchor {
+                view.insertSubview(contentAnchor, belowSubview: railView)
+            }
+
             rail = railView
             progressBar = bar
             scrubberProxy = proxy
@@ -365,10 +390,10 @@ class PlayerContainerViewController: UIViewController {
             bindChrome(to: vm)
         }
 
-        // Menu button is handled via pressesBegan (not gesture recognizer)
-        // to avoid double-firing issues
-        // Left/right arrows are handled by SwiftUI's onMoveCommand with RemoteHoldDetector
-        // (UIKit gesture recognizers don't receive events when SwiftUI has focus)
+        // Every press is handled in pressesBegan/Ended (see "Content-state
+        // presses"), not by gesture recognizers: a recognizer on this view did
+        // not reliably see arrow presses while SwiftUI held focus, and once a
+        // UIKit view holds focus it races that view's own press handling.
 
         // Pan gesture for swipe-to-scrub on Siri Remote touchpad
         setupPanGesture()
@@ -376,10 +401,6 @@ class PlayerContainerViewController: UIViewController {
         // Bare-tap on the Siri Remote touch surface surfaces the timeline
         // overlay briefly (matches Plex's tvOS client behavior).
         setupTouchSurfaceTapGesture()
-
-        // Directional gestures for IR remote support (learned remotes, universal remotes)
-        // These fire UIPress events with leftArrow/rightArrow, NOT GameController events
-        setupDirectionalGestures()
 
         // Observe viewModel's shouldDismiss property for programmatic dismissal
         viewModel?.$shouldDismiss
@@ -418,6 +439,10 @@ class PlayerContainerViewController: UIViewController {
         if let panel = activeRailPanel, panel.window != nil {
             return [panel]
         }
+        // The SwiftUI error overlay (its own default focus picks the button).
+        if viewModel?.playbackState.isFailed == true, let hostingController {
+            return [hostingController]
+        }
         // Chrome hidden + a skip marker up: the pill is the lone affordance, so
         // it owns focus and a single Select jumps forward. (Ownership is false
         // whenever the rail/panel is up, so this never fights the checks above.)
@@ -426,6 +451,11 @@ class PlayerContainerViewController: UIViewController {
         }
         if viewModel?.controlsFocusActive == true, let rail {
             return [rail]
+        }
+        // Everything else is the content state. Falls through to the hosting
+        // view only when the anchor is gated off, i.e. the error overlay.
+        if let contentAnchor, contentAnchor.canBecomeFocused {
+            return [contentAnchor]
         }
         return super.preferredFocusEnvironments
     }
@@ -624,9 +654,9 @@ class PlayerContainerViewController: UIViewController {
         }
     }
 
-    // MARK: - Button Interception (Menu and Select only)
-    // Left/right arrows are handled by UITapGestureRecognizer and UILongPressGestureRecognizer
-    // configured in setupDirectionalGestures()
+    // MARK: - Button Interception
+    // Menu, Play/Pause, and the content state's arrows and Select. See
+    // "Content-state presses" below.
 
     /// Track if we're currently consuming presses
     private var isHandlingMenuPress = false
@@ -668,19 +698,34 @@ class PlayerContainerViewController: UIViewController {
             if press.type == .select {
                 if let vm = viewModel, vm.isScrubbing {
                     isHandlingSelectPress = true
-                    inputCoordinator.handle(action: .scrubCommit, source: .irPress)
+                    // A 1st-gen Siri Remote edge click while shuttling bumps the
+                    // speed, as an arrow press does on later remotes; a centre
+                    // click commits.
+                    if vm.scrubSpeed != 0, contentOwnsPress(.select), let forward = edgeClickDirection() {
+                        inputCoordinator.handle(action: .scrubNudge(forward: forward), source: .irPress)
+                    } else {
+                        inputCoordinator.handle(action: .scrubCommit, source: .irPress)
+                    }
                     return
                 }
+                if contentOwnsPress(.select) {
+                    beginContentSelect()
+                }
+                return
             }
             if press.type == .playPause {
                 // Always honored, whatever holds focus — rail buttons, the
-                // scrubber stop, or an open panel. SwiftUI's
-                // .onPlayPauseCommand only fires while focus is in the
-                // SwiftUI hierarchy, so the UIKit chrome dead-zoned the
-                // button without this. Same coordinator action as the
-                // SwiftUI path: commits an active scrub, else toggles.
+                // scrubber stop, the content anchor, or an open panel. Commits
+                // an active scrub, else toggles.
                 isHandlingPlayPausePress = true
                 inputCoordinator.handle(action: .playPause, source: .irPress)
+                return
+            }
+            if Self.isArrow(press.type) {
+                if RemoteInputHandler.isClickpadDown { Self.clickpadRingSeen = true }
+                if contentOwnsPress(press.type) {
+                    beginContentArrow(press.type)
+                }
                 return
             }
         }
@@ -707,6 +752,10 @@ class PlayerContainerViewController: UIViewController {
                 isHandlingPlayPausePress = false
                 return
             }
+            if press.type == .select || Self.isArrow(press.type) {
+                endContentPress(press.type)
+                return
+            }
         }
         super.pressesEnded(presses, with: event)
     }
@@ -725,8 +774,224 @@ class PlayerContainerViewController: UIViewController {
                 isHandlingPlayPausePress = false
                 return
             }
+            if press.type == .select || Self.isArrow(press.type) {
+                cancelContentPress(press.type)
+                return
+            }
         }
         super.pressesCancelled(presses, with: event)
+    }
+
+    override func pressesChanged(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // Same types, same rule as the other phases: arrows and Select stop here.
+        if presses.contains(where: { $0.type == .select || Self.isArrow($0.type) }) { return }
+        super.pressesChanged(presses, with: event)
+    }
+
+    // MARK: - Content-state presses
+    //
+    // The ONE handler for directional and Select presses whenever no chrome
+    // control owns them: focus on the content anchor (chrome hidden, or up but
+    // not entered), on the skip pill (Left/Right seek behind it), or nowhere.
+    //
+    // It used to be four: SwiftUI's .onTapGesture/.onMoveCommand on a focused
+    // SwiftUI layer, tap/long-press recognizers on this view, and
+    // GameController copies of the same clicks in RemoteInputHandler.
+    //  - An older note here recorded that "UIKit gesture recognizers don't
+    //    receive events when SwiftUI has focus", and SwiftUI held focus in
+    //    exactly this state. That fits every report of a remote with no
+    //    GameController copy of its presses (IR, HDMI-CEC, a clicks-only Siri
+    //    Remote) failing to skip until the scrubber, a UIKit view, had focus:
+    //    #212, #232, #305.
+    //  - The GameController copies were a second opinion on the same click,
+    //    classified by the app instead of by tvOS and reconciled only by timing
+    //    windows, so one click could land as no skip, one, or two.
+    //
+    // Arrow and Select presses never travel past this controller, owned or not.
+    // The player is full screen: the presenter behind it (Home, the preview
+    // carousel) must not page or change state on presses meant for the player.
+
+    private static func isArrow(_ type: UIPress.PressType) -> Bool {
+        switch type {
+        case .upArrow, .downArrow, .leftArrow, .rightArrow: return true
+        default: return false
+        }
+    }
+
+    /// Whether a directional or Select press that reached this controller
+    /// belongs to the content-state grammar.
+    private func contentOwnsPress(_ type: UIPress.PressType) -> Bool {
+        guard let vm = viewModel,
+              vm.postVideoState == .hidden,
+              !vm.playbackState.isFailed
+        else { return false }
+        // A presented rail panel owns its own content's presses.
+        if let panel = activeRailPanel, panel.window != nil { return false }
+        guard let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem else { return true }
+        // Rail buttons and the scrubber proxy: the focus engine (or the proxy's
+        // own press handling) already acted on this press.
+        guard let focusedView = focused as? UIView else { return false }
+        if focusedView === contentAnchor { return true }
+        if focusedView === skipPill {
+            // Only Left/Right seek behind the pill. Its Up/Down are its own
+            // (chrome hidden) or the focus engine's (chrome up), and an Up that
+            // reaches here is usually the SAME press that just moved focus from
+            // the rail onto the pill (the engine moves focus before the press
+            // is delivered); treating it as content Up bounced focus straight
+            // back to the scrubber, so the pill was unreachable by click.
+            return type == .leftArrow || type == .rightArrow
+        }
+        return false
+    }
+
+    private func setupContentAnchor() {
+        let anchor = ContentFocusAnchorView()
+        // The player opens in the content state; enabled before the first focus
+        // pass so it is the initial landing (applyChromeVisibility owns it after).
+        anchor.isFocusEnabled = true
+        anchor.frame = view.bounds
+        anchor.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if let hostingView = hostingController?.view {
+            view.insertSubview(anchor, aboveSubview: hostingView)
+        } else {
+            view.addSubview(anchor)
+        }
+        contentAnchor = anchor
+
+        // Up/Down's touch twin. A focused SwiftUI layer got these as move
+        // commands from touch swipes for free; a UIKit view gets them only as
+        // indirect touches, and the iPhone Remote sends no arrow presses at all.
+        // The anchor is full screen, so the engine never has a vertical move to
+        // make from it and claiming the swipe steals nothing. Left/Right swipes
+        // stay with the swipe-to-scrub pan.
+        // Not while the clickpad is down: a click jolts the reported touch
+        // position into a fake swipe (see the pan's gate), and a vertical ring
+        // click already arrives as its own arrow press.
+        contentSwipeBinding = DirectionalInputBinding(
+            gatedSwipesOn: anchor,
+            directions: [.up, .down],
+            shouldHandle: { [weak self] direction in
+                guard let self, !RemoteInputHandler.isClickpadDown else { return false }
+                return self.contentOwnsPress(direction == .up ? .upArrow : .downArrow)
+            },
+            onSwipe: { [weak self] direction in self?.handleContentVertical(up: direction == .up) }
+        )
+
+        contentPressDetector.onTap = { [weak self] forward in
+            // Shift+arrow on a keyboard jumps, as it did on the GameController path.
+            let action: PlaybackInputAction = RemoteInputHandler.isShiftHeld
+                ? .jumpSeek(forward: forward) : .stepSeek(forward: forward)
+            self?.inputCoordinator.handle(action: action, source: .irPress)
+        }
+        contentPressDetector.onHold = { [weak self] forward in
+            self?.inputCoordinator.handle(action: .scrubNudge(forward: forward), source: .irPress)
+        }
+    }
+
+    private func beginContentArrow(_ type: UIPress.PressType) {
+        switch type {
+        case .upArrow:
+            handleContentVertical(up: true)
+        case .downArrow:
+            handleContentVertical(up: false)
+        case .leftArrow, .rightArrow:
+            beginContentDirectional(forward: type == .rightArrow, pressType: type)
+        default:
+            break
+        }
+    }
+
+    /// Left/Right: a quick release skips (`tapSeekSeconds`), a hold starts the
+    /// FF/RW shuttle, and any press while already shuttling bumps or redirects
+    /// it at once (ShuttleGrammar) with no tap-vs-hold wait.
+    private func beginContentDirectional(forward: Bool, pressType: UIPress.PressType) {
+        guard let vm = viewModel else { return }
+        if vm.isScrubbing && vm.scrubSpeed != 0 {
+            inputCoordinator.handle(action: .scrubNudge(forward: forward), source: .irPress)
+            return
+        }
+        contentDirectionalPressType = pressType
+        contentPressDetector.begin(forward: forward)
+    }
+
+    /// Up/Down: while scrubbing, Up snaps to the next chapter in the direction
+    /// of travel and Down cancels. Otherwise both surface the controls with
+    /// focus already on the scrubber (the rail's preferred focus puts the
+    /// scrubber proxy first), so Up from the scrubber then reaches the buttons.
+    private func handleContentVertical(up: Bool) {
+        guard let vm = viewModel else { return }
+        vm.hidePausedPoster()
+        if vm.isScrubbing {
+            if up {
+                vm.chapterSnap()
+            } else {
+                inputCoordinator.handle(action: .scrubCancel, source: .irPress)
+            }
+            return
+        }
+        if !vm.showControls {
+            vm.showControlsTemporarily()
+        }
+        vm.enterControlsFocus()
+    }
+
+    /// Select acts on its release, like the tap gesture it replaces: acting on
+    /// the down can move focus mid-press (hiding the chrome hands focus to the
+    /// skip pill when a marker is up), and the release would then land on
+    /// whatever took focus.
+    private func beginContentSelect() {
+        if let forward = edgeClickDirection() {
+            contentDirectionalPressType = .select
+            contentPressDetector.begin(forward: forward)
+        } else {
+            contentSelectPending = true
+        }
+    }
+
+    /// A 1st-generation Siri Remote reports EVERY click as `.select`, so its
+    /// "click the right edge to skip" can only be recovered from where the
+    /// finger rested before the click (tracked by RemoteInputHandler). Later
+    /// remotes report edge clicks as arrow presses, which is authoritative;
+    /// once one has been seen, a `.select` is only ever a centre click. The
+    /// clickpad must be physically down, so a Select from anything else (IR,
+    /// CEC, a keyboard's Return, a gamepad's A) never reads a stale touch.
+    private func edgeClickDirection() -> Bool? {
+        guard !Self.clickpadRingSeen, RemoteInputHandler.isClickpadDown else { return nil }
+        return RemoteInputHandler.active?.clickpadEdge
+    }
+
+    private func endContentPress(_ type: UIPress.PressType) {
+        if type == .select, contentSelectPending {
+            contentSelectPending = false
+            toggleControlsFromContent()
+            return
+        }
+        if type == contentDirectionalPressType {
+            contentDirectionalPressType = nil
+            contentPressDetector.end()
+        }
+    }
+
+    private func cancelContentPress(_ type: UIPress.PressType) {
+        if type == .select { contentSelectPending = false }
+        if type == contentDirectionalPressType {
+            contentDirectionalPressType = nil
+            contentPressDetector.cancel()
+        }
+    }
+
+    /// Select with nothing else focused shows or hides the controls. It never
+    /// toggles playback (that is the play/pause button, and Select on the
+    /// focused scrubber).
+    private func toggleControlsFromContent() {
+        guard let vm = viewModel, !vm.playbackState.isFailed else { return }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if vm.showControls {
+                vm.showControls = false
+            } else {
+                vm.showControlsTemporarily()
+            }
+        }
     }
 
     /// Handle Menu button press with priority:
@@ -867,128 +1132,6 @@ class PlayerContainerViewController: UIViewController {
         else { return }
 
         vm.showControlsTemporarily()
-    }
-
-    // MARK: - Directional Gestures (IR Remote Support)
-
-    /// Sets up gesture recognizers for left/right arrow key presses.
-    /// IR remotes (learned remotes, One For All, Harmony, etc.) send UIPress events
-    /// rather than GameController events. This ensures FF/RW works on all remote types.
-    ///
-    /// These serve the CONTENT-focused case only. The delegate's
-    /// `shouldReceive press` keeps every press away from them while the rail
-    /// owns focus, so they never race `ScrubberFocusProxyView`'s own press
-    /// handling for the same press.
-    ///
-    /// Deliberately NOT built on `DirectionalPressDetector`: a
-    /// `UILongPressGestureRecognizer` + `require(toFail:)` already gets the
-    /// same tap-vs-hold split from native UIKit gesture state, so there is no
-    /// hand-rolled timer here to consolidate.
-    private func setupDirectionalGestures() {
-        // Tap gestures for short press (skip 10 seconds)
-        let leftTap = UITapGestureRecognizer(target: self, action: #selector(handleDPadLeftTap))
-        leftTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.leftArrow.rawValue)]
-        view.addGestureRecognizer(leftTap)
-        dPadLeftTapGesture = leftTap
-
-        let rightTap = UITapGestureRecognizer(target: self, action: #selector(handleDPadRightTap))
-        rightTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.rightArrow.rawValue)]
-        view.addGestureRecognizer(rightTap)
-        dPadRightTapGesture = rightTap
-
-        // Long press gestures for hold (start scrubbing)
-        let leftLong = UILongPressGestureRecognizer(target: self, action: #selector(handleDPadLeftLongPress(_:)))
-        leftLong.allowedPressTypes = [NSNumber(value: UIPress.PressType.leftArrow.rawValue)]
-        leftLong.minimumPressDuration = InputConfig.holdThreshold
-        view.addGestureRecognizer(leftLong)
-        dPadLeftLongPressGesture = leftLong
-
-        let rightLong = UILongPressGestureRecognizer(target: self, action: #selector(handleDPadRightLongPress(_:)))
-        rightLong.allowedPressTypes = [NSNumber(value: UIPress.PressType.rightArrow.rawValue)]
-        rightLong.minimumPressDuration = InputConfig.holdThreshold
-        view.addGestureRecognizer(rightLong)
-        dPadRightLongPressGesture = rightLong
-
-        // Long press should prevent tap from firing
-        leftTap.require(toFail: leftLong)
-        rightTap.require(toFail: rightLong)
-
-        // Whether each press reaches these is decided per press in
-        // `gestureRecognizer(_:shouldReceive:)`.
-        [leftTap, rightTap, leftLong, rightLong].forEach { $0.delegate = self }
-    }
-
-    /// Whether the container's own Left/Right recognizers may act on a press.
-    ///
-    /// A presented rail panel (Info, Up Next, Insights) owns Left/Right for its
-    /// own content, and these recognizers live on an ANCESTOR of it. A live
-    /// recognizer on an ancestor intercepts the press before the panel's focused
-    /// view ever sees it, so leaving them armed both seeks behind the user's back
-    /// and eats the panel's own navigation. `controlsFocusActive` does NOT cover
-    /// this case: a panel can be open while it reads false, which is why a click
-    /// with the Info popup up was still skipping.
-    ///
-    /// Liveness is `window != nil`, not nil-ness: `activeRailPanel` outlives the
-    /// 0.15s dismiss fade, and the same test is used in
-    /// `preferredFocusEnvironments`.
-    private var containerOwnsDirectionalInput: Bool {
-        guard let vm = viewModel else { return false }
-        if activeRailPanel?.window != nil { return false }
-        guard vm.postVideoState == .hidden else { return false }
-        // Rail up: the scrubber proxy owns skip while it holds focus, and every
-        // other rail button needs Left/Right to MOVE FOCUS rather than seek.
-        if vm.controlsFocusActive { return false }
-        return scrubberProxy?.isFocused != true
-    }
-
-    @objc private func handleDPadLeftTap() {
-        guard containerOwnsDirectionalInput else { return }
-        inputCoordinator.handle(action: .stepSeek(forward: false), source: .irPress)
-    }
-
-    @objc private func handleDPadRightTap() {
-        guard containerOwnsDirectionalInput else { return }
-        inputCoordinator.handle(action: .stepSeek(forward: true), source: .irPress)
-    }
-
-    @objc private func handleDPadLeftLongPress(_ gesture: UILongPressGestureRecognizer) {
-        guard let vm = viewModel else { return }
-        guard containerOwnsDirectionalInput else { return }
-
-        switch gesture.state {
-        case .began:
-            inputCoordinator.handle(action: .scrubNudge(forward: false), source: .irPress)
-
-        case .changed:
-            // Continue scrubbing - speed increases are handled by clicking again
-            break
-
-        case .ended, .cancelled:
-            break
-
-        default:
-            break
-        }
-    }
-
-    @objc private func handleDPadRightLongPress(_ gesture: UILongPressGestureRecognizer) {
-        guard let vm = viewModel else { return }
-        guard containerOwnsDirectionalInput else { return }
-
-        switch gesture.state {
-        case .began:
-            inputCoordinator.handle(action: .scrubNudge(forward: true), source: .irPress)
-
-        case .changed:
-            // Continue scrubbing - speed increases are handled by clicking again
-            break
-
-        case .ended, .cancelled:
-            break
-
-        default:
-            break
-        }
     }
 
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
@@ -1229,8 +1372,17 @@ class PlayerContainerViewController: UIViewController {
         vm.$postVideoState
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
-                self?.applyChromeVisibility()
-                self?.applyPostVideoState(state)
+                // Order follows focus: mount the page BEFORE the chrome gives up
+                // focus, and restore the chrome (re-enabling the content anchor)
+                // BEFORE the page is removed, so each focus update runs while its
+                // target can take focus.
+                if state != .hidden {
+                    self?.applyPostVideoState(state)
+                    self?.applyChromeVisibility()
+                } else {
+                    self?.applyChromeVisibility()
+                    self?.applyPostVideoState(state)
+                }
             }
             .store(in: &cancellables)
 
@@ -1665,6 +1817,44 @@ class PlayerContainerViewController: UIViewController {
         scrubberProxy?.isFocusEnabled =
             (railVisible && !isLoading) || (proxyHasFocus && !isLoading && !ambient)
 
+        // The content anchor holds focus whenever nothing else should: not
+        // while the rail owns it, not while the skip pill does, not over
+        // post-video, and not in the error state, where it is also HIDDEN so
+        // its full-screen frame cannot occlude the SwiftUI error buttons below
+        // it. Unlike the SwiftUI layer it replaces, this gate is synchronous.
+        let failed = vm.playbackState.isFailed
+        let anchorEnabled = vm.postVideoState == .hidden
+            && !failed
+            && !vm.controlsFocusActive
+            && !vm.skipPillOwnsFocus
+        // Focus must move when the anchor gives it up, and when it comes back
+        // from the error state (focus is on an error button that is about to
+        // disappear). The request is made AFTER the alpha writes below, like
+        // the pill's: the pill and the rail only accept focus once their model
+        // alpha is 1, and a request made before that lands nowhere.
+        var anchorNeedsFocusUpdate = false
+        if failed {
+            // Handed off one beat later, once SwiftUI has mounted the overlay
+            // (see `handOffFocusToErrorOverlay`); until then the anchor keeps
+            // focus, so the request is made from an environment that holds it.
+            scheduleErrorOverlayHandoff()
+        } else {
+            anchorNeedsFocusUpdate = (contentAnchor?.isFocused == true && !anchorEnabled)
+                || contentAnchor?.isHidden == true
+            contentAnchor?.isFocusEnabled = anchorEnabled
+            contentAnchor?.isHidden = false
+        }
+        if vm.postVideoState != .hidden || failed {
+            // A press or hold in flight must not complete against a state that
+            // no longer takes content presses (a tap landing as a skip behind
+            // post-video). Keyed on those states, NOT on `anchorEnabled`: the
+            // skip pill takes content presses while the anchor is gated off, and
+            // this runs on every clock tick.
+            contentPressDetector.cancel()
+            contentDirectionalPressType = nil
+            contentSelectPending = false
+        }
+
         // The skip pill lives independently of the rail: it stays up whenever a
         // marker is active (chrome shown OR hidden), so the user can jump forward
         // without first surfacing the controls. Hidden only while loading, during
@@ -1718,7 +1908,13 @@ class PlayerContainerViewController: UIViewController {
         let captionLiftChanged = captionOverlay.map { $0.controlsVisible != chromeVisible } ?? false
         captionOverlay?.controlsVisible = chromeVisible
         guard targetsChanged || railAmbientChanged || ownershipChanged
-                || pillOffsetChanged || captionLiftChanged else { return }
+                || pillOffsetChanged || captionLiftChanged else {
+            if anchorNeedsFocusUpdate {
+                setNeedsFocusUpdate()
+                updateFocusIfNeeded()
+            }
+            return
+        }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
             self.rail?.setAmbient(ambient, keepTitle: keepRailTitle)
@@ -1726,11 +1922,40 @@ class PlayerContainerViewController: UIViewController {
             if captionLiftChanged { self.captionOverlay?.layoutIfNeeded() }
         }
         // Model alpha is now 1 for a visible pill, so the engine will accept it
-        // as a focus target. Re-resolve toward/away from the pill exactly once.
-        if ownershipChanged {
+        // as a focus target. Re-resolve toward/away from the pill (or off the
+        // anchor) exactly once.
+        if ownershipChanged || anchorNeedsFocusUpdate {
             setNeedsFocusUpdate()
             updateFocusIfNeeded()
         }
+    }
+
+    /// Set while a handoff to the error overlay is waiting to run.
+    private var errorOverlayHandoffPending = false
+
+    private func scheduleErrorOverlayHandoff() {
+        guard let contentAnchor, !contentAnchor.isHidden, !errorOverlayHandoffPending else { return }
+        errorOverlayHandoffPending = true
+        // The overlay makes its own focus claim 0.05s after it appears for the
+        // same reason (the engine takes a beat to register a new SwiftUI focus
+        // container); this runs just after it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.handOffFocusToErrorOverlay()
+        }
+    }
+
+    /// Hide the anchor and move focus into the SwiftUI hierarchy, where the
+    /// error overlay's default focus picks its button. Done while the anchor
+    /// still holds focus, because a request from an environment that does not
+    /// contain focus is ignored, and SwiftUI's own claim cannot pull focus out
+    /// of a UIKit view outside its hosting view.
+    private func handOffFocusToErrorOverlay() {
+        errorOverlayHandoffPending = false
+        guard viewModel?.playbackState.isFailed == true, let contentAnchor else { return }
+        contentAnchor.isFocusEnabled = false
+        contentAnchor.isHidden = true
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
     }
 
     /// Sync the pill's title (including any live countdown suffix) and
@@ -1773,9 +1998,8 @@ class PlayerContainerViewController: UIViewController {
 
         // `controlsFocusActive` means "the rail owns focus", and it is the SOLE
         // suppressor of seek input (the GameController path's `emit` gate and
-        // `containerOwnsDirectionalInput` both key on it). But it was only ever
-        // SET from `surfaceControlsAndFocusScrubber()`, reachable only from the
-        // content layer's Up/Down. The rail is focusable whenever chrome is up
+        // the content anchor's focus gate both key on it). But it was once only
+        // SET from the content layer's Up/Down (`handleContentVertical` now). The rail is focusable whenever chrome is up
         // (`scrubberProxy.isFocusEnabled = railVisible …`), so raising it any
         // other way — Select → .playPause → showControlsTemporarily() — left
         // focus sitting in the rail with the flag false, and every Left/Right
@@ -1938,6 +2162,37 @@ private final class ScrubberFocusProxyView: UIView {
     }
 }
 
+/// Invisible, full-screen focus stop for the content state: chrome hidden, or
+/// up but not yet entered. It replaces the focusable SwiftUI layer that used to
+/// hold focus here.
+///
+/// It handles no presses itself. They bubble to the container, whose
+/// "Content-state presses" section is the single owner of that grammar, the
+/// same way the rail's buttons already let Menu and Play/Pause bubble.
+///
+/// Full screen on purpose: the focus engine never finds a candidate beyond
+/// its edges, so no directional press or swipe from here moves focus on its
+/// own. That is the same geometry the SwiftUI layer had, and what every
+/// Up/Down/Left/Right rule in the container assumes. Stacked above the video,
+/// captions and full-frame scrims (so nothing full-screen occludes it) and
+/// below the rail and every other control (so it occludes none of them). It is
+/// hidden in the error state, where the SwiftUI error buttons below it need
+/// focus.
+private final class ContentFocusAnchorView: UIView {
+
+    /// Focus gate, set by `PlayerContainerViewController.applyChromeVisibility()`.
+    var isFocusEnabled = false
+
+    override var canBecomeFocused: Bool { isFocusEnabled }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 /// 2a left-readability scrim: horizontal black gradient behind the card
 /// (rgba(0,0,0,.8) → .2 @46% → transparent @66%).
 final class ChromeScrimView: UIView {
@@ -1996,6 +2251,13 @@ extension PlayerContainerViewController: UIGestureRecognizerDelegate {
 
         guard panCanDriveScrub else { return false }
 
+        // Never while the clickpad is physically down. A click disturbs touch
+        // sensing, and the jump in reported position reads as a fast swipe: the
+        // pan began mid-click and put the player into swipe-scrub, so the
+        // click's own Left/Right then nudged an uncommitted scrub cursor
+        // instead of skipping, and nothing moved until the user pressed Select.
+        guard !RemoteInputHandler.isClickpadDown else { return false }
+
         // Decide on VELOCITY, not translation. This is called the instant the
         // pan clears its slop threshold, when translation is still near zero
         // and its direction is noise; velocity is already well-defined. Require
@@ -2004,26 +2266,5 @@ extension PlayerContainerViewController: UIGestureRecognizerDelegate {
         let velocity = pan.velocity(in: view)
         guard velocity != .zero else { return false }
         return abs(velocity.x) > abs(velocity.y) * 2
-    }
-
-    /// The Left/Right tap/hold recognizers (`setupDirectionalGestures`) take a
-    /// press only while the container owns directional input. When the rail,
-    /// the scrubber proxy or a panel holds focus they must not even SEE the
-    /// press: a live recognizer on an ancestor of the focused view can cancel
-    /// the press before that view's own `pressesBegan` runs, which dropped
-    /// skips intermittently.
-    ///
-    /// Decided per press, not stored in `isEnabled`. The stored flag was
-    /// written in `applyChromeVisibility()`, and when the chrome auto-hid with
-    /// the scrubber proxy focused (the rail's default landing) it was written
-    /// while the proxy still held focus, before focus moved to the video. So it
-    /// stayed false for as long as the chrome was hidden, and Left/Right did
-    /// nothing unless a GameController event also arrived.
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive press: UIPress) -> Bool {
-        let arrows: [UIGestureRecognizer?] = [
-            dPadLeftTapGesture, dPadRightTapGesture, dPadLeftLongPressGesture, dPadRightLongPressGesture,
-        ]
-        guard arrows.contains(where: { $0 === gestureRecognizer }) else { return true }
-        return containerOwnsDirectionalInput
     }
 }
