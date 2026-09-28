@@ -48,7 +48,10 @@ struct SettingsRowItem {
         /// A chevron row that runs `prepare` (e.g. stash the tapped item) then
         /// pushes `target`. For per-item detail pages (Live TV source → detail).
         case navigationAction(SettingsPage, value: (() -> String)?, prepare: () -> Void)
-        case toggle(get: () -> Bool, set: (Bool) -> Void)
+        /// `didChange` runs after the flip, with the page, for a toggle that
+        /// follows up with a question (Suggestions: erase what was learned?).
+        case toggle(get: () -> Bool, set: (Bool) -> Void,
+                    didChange: ((Bool, UIViewController) -> Void)? = nil)
         case cycle(value: () -> String, next: () -> Void)
         /// Handler receives the presenting VC so it can present a modal /
         /// confirmation (sign-in, clear-cache alert, etc.).
@@ -126,7 +129,7 @@ struct SettingsRowItem {
         switch kind {
         case .navigationValue(_, let value): return value()
         case .navigationAction(_, let value, _): return value?()
-        case .toggle(let get, _): return get() ? "On" : "Off"
+        case .toggle(let get, _, _): return get() ? "On" : "Off"
         case .cycle(let value, _): return value()
         case .info(let value): return value()
         case .selectable(_, let value, _): return value()
@@ -161,6 +164,7 @@ enum SettingsContent {
         case .cache:       return cache
         case .iptv:        return iptv
         case .liveTVSourceDetail: return liveTVSourceDetail
+        case .liveTVFavorites: return liveTVFavorites
         case .addLiveTVSource:  return addLiveTVSource
         case .addOwnServer:     return addOwnServer
         case .addPlaylistURL:   return addPlaylistURL
@@ -258,16 +262,21 @@ enum SettingsContent {
             toggle("discoveryRows", "Discovery Rows", key: "showLibraryRecommendations", default: true),
             toggle("recentRows", "Recent Rows", key: "showLibraryRecentRows", default: true),
 
-            // The look of Live TV lives here; what it plays stays on the Live TV
-            // page. Same ids and keys as before the move, so the description
-            // panel entries carry over untouched.
             .header("Live TV"),
+        ] + liveTVLookRows
+        return rows
+    }
+
+    /// How Live TV looks and where it sits, on both Appearance and the Live TV
+    /// page: someone after the guide or What's On looks under Live TV. Same
+    /// keys in both places, and each page reads them when it opens.
+    private static var liveTVLookRows: [SettingsRowItem] {
+        [
             toggle("liveTVAboveLibraries", "Above Libraries", key: "liveTVAboveLibraries", default: false),
             SettingsRowItem(id: "defaultLayout", title: "Default Layout",
                             kind: .cycle(value: { (LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.fallback.rawValue)) ?? .fallback).description },
                                          next: { cycleLiveTVLayout() }))
         ]
-        return rows
     }
 
     // MARK: Playback
@@ -375,11 +384,50 @@ enum SettingsContent {
     private static var liveTV: [SettingsRowItem] {
         [
             SettingsRowItem(id: "liveTVSources", title: "Live TV Sources", kind: .navigation(.iptv)),
+            SettingsRowItem(id: "liveTVFavorites", title: "Favorites", kind: .navigation(.liveTVFavorites)),
+        ] + liveTVLookRows + [
             toggle("combineSources", "Combine Sources", key: "combineLiveTVSources", default: true),
             toggle("keepPlayingInGuide", "Keep Playing in Guide", key: "liveTVKeepPlayingInGuide", default: true),
-            toggle("liveTVSuggestions", "Suggestions", key: LiveTVDataStore.suggestionsKey, default: true),
+            SettingsRowItem(id: "liveTVSuggestions", title: "Suggestions", kind: .toggle(
+                get: { SettingsStore.bool(LiveTVDataStore.suggestionsKey, default: true) },
+                set: { SettingsStore.setBool(LiveTVDataStore.suggestionsKey, $0) },
+                didChange: { isOn, vc in
+                    guard !isOn else { return }
+                    vc.present(ConfirmationPopupViewController(
+                        title: "Erase What For You Learned?",
+                        message: "Suggestions are off. Erase what Rivulet learned from what you watch, or keep it for if you turn them back on.",
+                        confirmTitle: "Erase", cancelTitle: "Keep", destructive: true,
+                        onConfirm: { LiveTVDataStore.shared.forgetViewings() }), animated: true)
+                })),
             toggle("confirmExitMultiview", "Confirm Exit Multiview", key: "confirmExitMultiview", default: true)
         ]
+    }
+
+    /// Rivulet's favourite channels in order: hold Select to move one, Select
+    /// to remove it. The row goes at once, so a move never passes a channel
+    /// that is no longer a favourite.
+    private static var liveTVFavorites: [SettingsRowItem] {
+        let store = LiveTVDataStore.shared
+        let byId = Dictionary(store.channels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let favorites = store.favoriteIds.compactMap { byId[$0] }
+        guard !favorites.isEmpty else {
+            return [SettingsRowItem(id: "noLiveTVFavorites", title: "No Favorites Yet", kind: .info(value: { "" }))]
+        }
+        // The same channel can come from two sources, so name the source
+        // when there is more than one.
+        let sourceNames = Set(favorites.map(\.sourceId)).count > 1
+            ? Dictionary(store.sources.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+            : [:]
+        return favorites.map { channel in
+            let title = [channel.channelNumber.map(String.init), channel.name, sourceNames[channel.sourceId].map { "· \($0)" }]
+                .compactMap { $0 }
+                .joined(separator: " ")
+            return SettingsRowItem(id: "fav_\(channel.id)", title: title, kind: .toggle(
+                get: { store.isFavorite(channel) },
+                set: { _ in store.toggleFavorite(channel) },
+                didChange: { _, vc in (vc as? SettingsPageViewController)?.reloadRows() }),
+                onReorder: { up in store.moveFavorite(channel.id, up: up) })
+        }
     }
 
     private static func cycleLiveTVLayout() {
@@ -686,6 +734,12 @@ enum SettingsContent {
             // failure text must not survive leaving the flow.
             resetAddSourceFlow()
             reload()
+        case .liveTVFavorites where LiveTVDataStore.shared.channels.isEmpty:
+            // Settings can open before Live TV has loaded its channels.
+            Task { @MainActor in
+                await LiveTVDataStore.shared.loadChannels()
+                reload()
+            }
         default:
             break
         }

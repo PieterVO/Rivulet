@@ -26,6 +26,7 @@ enum SettingsDescriptorStore {
         // so they cannot have their own entry. Fall back on the row KIND, which
         // is what the panel wants to explain anyway.
         if id.hasPrefix("homeRow_") { return descriptors["homeRowItem"] }
+        if id.hasPrefix("fav_") { return descriptors["liveTVFavoriteRow"] }
         return nil
     }
 
@@ -164,6 +165,18 @@ enum SettingsDescriptorStore {
         "defaultLayout": SettingDescriptor(
             icon: "tv",
             description: "Choose your default Live TV view: the TV guide, or What's On, with rows of what is on now and multiview like the Apple TV app."
+        ),
+        "liveTVFavorites": SettingDescriptor(
+            icon: "star.fill",
+            description: "Set the order of your favorite channels, from every source. To add one, hold Select on a channel in What's On or the guide."
+        ),
+        "liveTVFavoriteRow": SettingDescriptor(
+            icon: "star.fill",
+            description: "Hold Select to move this channel, then press Select to drop it. Turn it off to remove it. Favorites you set in Plex come after these, in Plex's order."
+        ),
+        "noLiveTVFavorites": SettingDescriptor(
+            icon: "star",
+            description: "Hold Select on a channel in What's On or the guide and choose Add to Favorites. Favorites from every source share one list."
         ),
         "liveTVSuggestions": SettingDescriptor(
             icon: "sparkles",
@@ -389,6 +402,7 @@ enum SettingsDescriptorStore {
         case .contentFilter: return ("hand.raised.fill", .systemOrange)
         case .contentFilterStrength: return ("dial.medium.fill", .systemOrange)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .systemBlue)
+        case .liveTVFavorites: return ("star.fill", .systemYellow)
         case .addLiveTVSource: return ("plus.circle.fill", .systemBlue)
         case .addOwnServer: return ("server.rack", .systemBlue)
         case .addPlaylistURL: return ("list.bullet.rectangle", .systemGreen)

@@ -258,10 +258,11 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         case .navigationAction(let target, _, let prepare):
             prepare()
             onPush?(target)
-        case .toggle(let get, let set):
+        case .toggle(let get, let set, let didChange):
             set(!get())
             (collectionView.cellForItem(at: indexPath) as? SettingsCell)?.updateValue(get() ? "On" : "Off")
             refreshDimmedRows()
+            didChange?(get(), self)
         case .cycle(let value, let next):
             next()
             (collectionView.cellForItem(at: indexPath) as? SettingsCell)?.updateValue(value())

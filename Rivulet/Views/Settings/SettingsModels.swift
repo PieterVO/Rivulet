@@ -49,7 +49,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case appearance, playback, music, liveTV, servers, about
     case plex, iptv, libraries, cache
     case homeRows
-    case liveTVSourceDetail
+    case liveTVSourceDetail, liveTVFavorites
     case addLiveTVSource, addOwnServer, addPlaylistURL
     case displaySizePicker, autoplayCountdownPicker, skipIntervalPicker
     case contentFilter, contentFilterStrength
@@ -66,6 +66,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .plex: return "Plex Server"
         case .iptv: return "Live TV Sources"
         case .liveTVSourceDetail: return "Source Details"
+        case .liveTVFavorites: return "Favorites"
         case .addLiveTVSource: return "Add a Source"
         case .addOwnServer: return "My Own Server"
         case .addPlaylistURL: return "Playlist URL"

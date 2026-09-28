@@ -117,6 +117,8 @@ final class MultiStreamViewModel: ObservableObject {
 
     private var cancellables: [UUID: Set<AnyCancellable>] = [:]
     private var autoRecoveryTasks: [UUID: Task<Void, Never>] = [:]
+    /// Each tile's pending For You credit (see `LiveTVDataStore.beganWatching`).
+    private var watchCreditTasks: [UUID: Task<Void, Never>] = [:]
     private var stalledStateSince: [UUID: Date] = [:]
     private var recoveryAttempts: [UUID: Int] = [:]
     private var recoveringSlots: Set<UUID> = []
@@ -286,6 +288,7 @@ final class MultiStreamViewModel: ObservableObject {
                 guard let loadedIndex = streams.firstIndex(where: { $0.id == slot.id }) else { return }
                 slot.setMuted(isMuted)
                 slot.play()
+                watchCreditTasks[slot.id] = LiveTVDataStore.shared.beganWatching(channel)
                 recoveryAttempts[slot.id] = 0
                 stalledStateSince[slot.id] = nil
 
@@ -567,6 +570,7 @@ final class MultiStreamViewModel: ObservableObject {
                 guard streams.contains(where: { $0.id == newSlot.id }) else { return }
                 newSlot.setMuted(isMuted)
                 newSlot.play()
+                watchCreditTasks[newSlot.id] = LiveTVDataStore.shared.beganWatching(channel)
             } catch {
                 print("MultiStream: Failed to load replacement '\(channel.name)': \(error)")
 
@@ -848,6 +852,7 @@ final class MultiStreamViewModel: ObservableObject {
 
     private func cleanupTracking(for slotId: UUID) {
         cancelAutoRecovery(for: slotId)
+        watchCreditTasks.removeValue(forKey: slotId)?.cancel()
         stalledStateSince.removeValue(forKey: slotId)
         recoveryAttempts.removeValue(forKey: slotId)
         recoveringSlots.remove(slotId)

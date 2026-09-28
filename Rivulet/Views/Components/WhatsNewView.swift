@@ -149,6 +149,14 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.6 (90)", [
+            "Favorite any Live TV channel: hold Select on it in What's On or the guide",
+            "Favorites from every source share one list, in the order you choose",
+            "Reorder your favorites in the Live TV settings",
+            "Channels watched in Multiview now count toward Recently Watched and For You",
+            "Turning off Suggestions asks whether to erase what it learned",
+            "Default Layout and Above Libraries are now in the Live TV settings too",
+        ]),
         ("1.0.6 (89)", [
             "Dispatcharr channels play smoothly now, with sound in sync on HomePod",
             "What's On has a Recently Watched row to jump back into a channel",

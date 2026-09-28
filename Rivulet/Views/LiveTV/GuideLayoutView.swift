@@ -33,10 +33,11 @@ struct GuideLayoutView: View {
         return dataStore.channels
     }
 
-    /// Tab title for the source's own favourites list. Not a `groupTitle` — a
-    /// favourite keeps its tuner group too, and this tab sorts by the order the
-    /// user arranged rather than by channel number.
-    static let favouritesTab = "Plex Favorites"
+    /// Tab title for favourites: Rivulet's, from any source, then the source's
+    /// own (Plex account favourites). Not a `groupTitle`: a favourite keeps
+    /// its tuner group too, and this tab sorts by the order the user arranged
+    /// rather than by channel number.
+    static let favouritesTab = "Favorites"
 
     /// Tabs that lead the bar regardless of the alphabet, in this order. A list
     /// the user curated outranks a source's own grouping — burying "Favourites"
@@ -53,9 +54,8 @@ struct GuideLayoutView: View {
                 .filter { !$0.isEmpty }
         )
         var available = groups
-        // Offered only when the source actually reported favourites, so a
-        // server without them shows no empty tab.
-        if sourceChannels.contains(where: \.isFavourite) {
+        // Offered only when there are favourites, so no empty tab.
+        if !dataStore.favorites(in: sourceChannels).isEmpty {
             available.insert(Self.favouritesTab)
         }
         let pinned = Self.pinnedGroups.filter(available.contains)
@@ -71,14 +71,11 @@ struct GuideLayoutView: View {
         // leave no way to pick another tab.
         guard let group = selectedGroup, groupTitles.contains(group) else { return sourceChannels }
 
-        // Favourites is a view over the flag, not a group match, and it keeps
-        // the source's arrangement instead of the merged channel-number sort
-        // every other tab inherits. Unranked favourites fall to the end rather
-        // than to the front, which is what an unset rank of 0 would do.
+        // Favourites is a view over the flags, not a group match, and it keeps
+        // the user's arrangement instead of the merged channel-number sort
+        // every other tab inherits.
         if group == Self.favouritesTab {
-            return sourceChannels
-                .filter(\.isFavourite)
-                .sorted { ($0.favouriteRank ?? .max) < ($1.favouriteRank ?? .max) }
+            return dataStore.favorites(in: sourceChannels)
         }
 
         return sourceChannels.filter {

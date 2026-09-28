@@ -560,18 +560,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// Unwinds everything `startPlayback()` set up, leaving the VC's chrome
     /// (rail, overlay host, observers) intact. Used both by dismissal and by
     /// an in-place channel switch, so the two can never drift apart.
-    /// The channel is playing: it heads Recently Watched now, and For You
-    /// learns from it after a minute, so channel surfing teaches nothing.
     private func didStartPlaying() {
-        let store = LiveTVDataStore.shared
-        store.noteWatched(channel)
         watchCreditTask?.cancel()
-        let channel = channel
-        watchCreditTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(60))
-            guard !Task.isCancelled else { return }
-            store.recordViewing(channel)
-        }
+        watchCreditTask = LiveTVDataStore.shared.beganWatching(channel)
     }
 
     private func teardownPlaybackSession() {

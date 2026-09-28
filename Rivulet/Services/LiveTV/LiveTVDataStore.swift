@@ -49,8 +49,8 @@ class LiveTVDataStore: ObservableObject {
     static let suggestionsKey = "liveTVSuggestions"
     var suggestionsEnabled: Bool { userDefaults.object(forKey: Self.suggestionsKey) as? Bool ?? true }
 
-    /// Favorite channel IDs
-    @Published var favoriteIds: Set<String> = [] {
+    /// Channels favorited in Rivulet, from any source, in the viewer's order.
+    @Published private(set) var favoriteIds: [String] = [] {
         didSet {
             saveFavorites()
         }
@@ -171,11 +171,6 @@ class LiveTVDataStore: ObservableObject {
     }
 
     // MARK: - Computed Properties
-
-    /// Channels filtered to favorites only
-    var favoriteChannels: [UnifiedChannel] {
-        channels.filter { favoriteIds.contains($0.id) }
-    }
 
     /// Channels grouped by category/group
     var channelsByGroup: [String: [UnifiedChannel]] {
@@ -1076,10 +1071,10 @@ class LiveTVDataStore: ObservableObject {
     // MARK: - Favorites
 
     func toggleFavorite(_ channel: UnifiedChannel) {
-        if favoriteIds.contains(channel.id) {
-            favoriteIds.remove(channel.id)
+        if let index = favoriteIds.firstIndex(of: channel.id) {
+            favoriteIds.remove(at: index)
         } else {
-            favoriteIds.insert(channel.id)
+            favoriteIds.append(channel.id)
         }
     }
 
@@ -1087,20 +1082,63 @@ class LiveTVDataStore: ObservableObject {
         favoriteIds.contains(channel.id)
     }
 
+    /// Moves a favorite one place earlier or later.
+    func moveFavorite(_ channelId: String, up: Bool) {
+        guard let index = favoriteIds.firstIndex(of: channelId) else { return }
+        let target = up ? index - 1 : index + 1
+        guard favoriteIds.indices.contains(target) else { return }
+        favoriteIds.swapAt(index, target)
+    }
+
+    /// The favorites among `channels`, in order.
+    func favorites(in channels: [UnifiedChannel]) -> [UnifiedChannel] {
+        Self.favorites(in: channels, order: favoriteIds)
+    }
+
+    /// Rivulet's favorites in the viewer's order, then any the source marks
+    /// (Plex account favorites) in the source's order.
+    static func favorites(in channels: [UnifiedChannel], order: [String]) -> [UnifiedChannel] {
+        let position = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return channels
+            .filter { position[$0.id] != nil || $0.isFavourite }
+            .sorted { lhs, rhs in
+                (position[lhs.id] ?? .max, lhs.favouriteRank ?? .max, lhs.channelNumber ?? .max)
+                    < (position[rhs.id] ?? .max, rhs.favouriteRank ?? .max, rhs.channelNumber ?? .max)
+            }
+    }
+
     private func loadFavorites() {
         if let saved = userDefaults.array(forKey: favoritesKey) as? [String] {
-            favoriteIds = Set(saved)
+            favoriteIds = saved
         }
     }
 
     private func saveFavorites() {
-        userDefaults.set(Array(favoriteIds), forKey: favoritesKey)
+        userDefaults.set(favoriteIds, forKey: favoritesKey)
     }
 
     // MARK: - Recently watched
 
-    /// Moves `channel` to the front of the recently watched list.
-    func noteWatched(_ channel: UnifiedChannel) {
+    /// `channel` started playing, full screen or in multiview: it heads
+    /// Recently Watched now, and For You learns from it once it has played a
+    /// minute, so channel surfing teaches nothing. Cancel the returned task
+    /// when it stops playing.
+    func beganWatching(_ channel: UnifiedChannel) -> Task<Void, Never> {
+        noteWatched(channel)
+        return Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard !Task.isCancelled else { return }
+            self?.recordViewing(channel)
+        }
+    }
+
+    /// Erases what For You has learned. Recently Watched is untouched.
+    func forgetViewings() {
+        viewings = []
+        userDefaults.removeObject(forKey: viewingsKey)
+    }
+
+    private func noteWatched(_ channel: UnifiedChannel) {
         var ids = recentChannelIds.filter { $0 != channel.id }
         ids.insert(channel.id, at: 0)
         recentChannelIds = Array(ids.prefix(12))
@@ -1108,7 +1146,7 @@ class LiveTVDataStore: ObservableObject {
     }
 
     /// Learns from `channel`'s programme right now, when suggestions are on.
-    func recordViewing(_ channel: UnifiedChannel) {
+    private func recordViewing(_ channel: UnifiedChannel) {
         guard suggestionsEnabled else { return }
         let program = getCurrentProgram(for: channel).flatMap { $0.id.contains(":placeholder:") ? nil : $0 }
         viewings.append(LiveViewing(

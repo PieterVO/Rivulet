@@ -7,8 +7,8 @@
 //
 //  The long-press menu for a programme in the guide (issue #318): what the
 //  programme is (title, time, channel, description) and what can be done with
-//  it — watch the channel, record the airing or the series, cancel a
-//  recording. Built on the canonical tile menu, so it looks and behaves like
+//  it — watch the channel, favourite it, record the airing or the series,
+//  cancel a recording. Built on the canonical tile menu, so it looks and behaves like
 //  every other long-press menu in the app.
 //
 
@@ -88,6 +88,14 @@ enum LiveProgramMenu {
             watch.append(TileMenuAction(title: "Watch in Multiview", systemImage: "rectangle.split.2x2") {
                 onMultiview(channel)
             })
+        }
+        // A channel favourited only in Plex stays one; that list is Plex's.
+        if store.isFavorite(channel) || !channel.isFavourite {
+            let isFavorite = store.isFavorite(channel)
+            watch.append(TileMenuAction(
+                title: isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                systemImage: isFavorite ? "star.slash" : "star"
+            ) { store.toggleFavorite(channel) })
         }
 
         if let program, !program.id.contains(":placeholder:"),

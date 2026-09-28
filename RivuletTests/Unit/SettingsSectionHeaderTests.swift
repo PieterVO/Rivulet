@@ -95,13 +95,15 @@ final class SettingsSectionHeaderTests: XCTestCase {
         XCTAssertNil(SettingsDescriptorStore.descriptor(for: "hideTriviaSpoilers"))
     }
 
-    func test_liveTVAppearanceRows_moved_notDuplicated() {
-        let moved = ["liveTVAboveLibraries", "defaultLayout"]
+    /// Where Live TV sits and how it opens show on both pages: people look
+    /// for them under Live TV as well as Appearance.
+    func test_liveTVAppearanceRows_onBothPages() {
+        let shared = ["liveTVAboveLibraries", "defaultLayout"]
         let appearanceIDs = appearance.map(\.id)
         let liveTVIDs = SettingsContent.rows(for: .liveTV).map(\.id)
-        for id in moved {
-            XCTAssertTrue(appearanceIDs.contains(id), "\(id) should live on Appearance")
-            XCTAssertFalse(liveTVIDs.contains(id), "\(id) should have left the Live TV page")
+        for id in shared {
+            XCTAssertTrue(appearanceIDs.contains(id), "\(id) should be on Appearance")
+            XCTAssertTrue(liveTVIDs.contains(id), "\(id) should be on the Live TV page")
             XCTAssertNotNil(SettingsDescriptorStore.descriptor(for: id),
                             "\(id) lost its description panel entry")
         }
