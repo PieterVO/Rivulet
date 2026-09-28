@@ -58,14 +58,32 @@ final class PlexLiveURLTests: XCTestCase {
     // MARK: - needsDeinterlacing
 
     @MainActor
-    func test_needsDeinterlacing_onlyAnExplicitProgressiveOptsOut() throws {
+    func test_needsDeinterlacing_onlyAReportedInterlaceForcesIt() throws {
         let base = "http://pms:32400/livetv/sessions/abc/0/index.m3u8"
-        let absent = try XCTUnwrap(URL(string: base))
         let interlaced = try XCTUnwrap(URL(string: base + "?rivuletLiveScanType=interlaced"))
         let progressive = try XCTUnwrap(URL(string: base + "?rivuletLiveScanType=Progressive"))
+        // A Dispatcharr channel carries no scan type. Forcing it onto the
+        // software path made 4K60 stutter and put HomePod audio ~3s late.
+        let dispatcharr = try XCTUnwrap(URL(string: "http://192.168.1.140:9191/proxy/ts/stream/abc"))
 
-        XCTAssertTrue(AetherPlayer.needsDeinterlacing(absent))
         XCTAssertTrue(AetherPlayer.needsDeinterlacing(interlaced))
         XCTAssertFalse(AetherPlayer.needsDeinterlacing(progressive))
+        XCTAssertFalse(AetherPlayer.needsDeinterlacing(dispatcharr))
+    }
+
+    // MARK: - resolveStreamURL
+
+    /// A failed tune used to hand back the untuned guide-entry URL. PMS answers
+    /// that with 400 every time, and each 400 drove another tune.
+    func test_failedTuneResolvesToNothing() async throws {
+        let server = "http://127.0.0.1:9"  // nothing listens, so the tune fails at once
+        let guideEntry = try XCTUnwrap(URL(string: server + "/video/:/transcode/universal/start.m3u8"
+            + "?path=/tv.plex.providers.epg.xmltv:34/metadata/58&session=a"))
+        let channel = UnifiedChannel(id: "58", sourceType: .plex, sourceId: "plex:" + server,
+                                     name: "Test", streamURL: guideEntry)
+        let provider = PlexLiveTVProvider(serverURL: server, authToken: "t", serverName: "Test")
+
+        let resolved = await provider.resolveStreamURL(for: channel)
+        XCTAssertNil(resolved)
     }
 }

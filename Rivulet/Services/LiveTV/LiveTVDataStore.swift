@@ -39,6 +39,16 @@ class LiveTVDataStore: ObservableObject {
     /// bound just stops an endless right-scroll from firing pointless fetches.
     private let epgMaxHoursAhead = 72
 
+    /// Channels played lately, newest first: What's On's Recently Watched row.
+    @Published private(set) var recentChannelIds: [String] = []
+
+    /// What For You learns from, oldest first. See `LiveSuggestions`.
+    private(set) var viewings: [LiveViewing] = []
+
+    /// The Live TV setting that turns For You and its learning on and off.
+    static let suggestionsKey = "liveTVSuggestions"
+    var suggestionsEnabled: Bool { userDefaults.object(forKey: Self.suggestionsKey) as? Bool ?? true }
+
     /// Favorite channel IDs
     @Published var favoriteIds: Set<String> = [] {
         didSet {
@@ -98,6 +108,8 @@ class LiveTVDataStore: ObservableObject {
 
     private let userDefaults = UserDefaults.standard
     private let favoritesKey = "liveTVFavoriteChannelIds"
+    private let recentsKey = "liveTVRecentChannelIds"
+    private let viewingsKey = "liveTVViewings"
     private let sourcesKey = "liveTVSourceConfigurations"
 
     // MARK: - Source Configuration (Persistable)
@@ -192,6 +204,9 @@ class LiveTVDataStore: ObservableObject {
 
     private init() {
         loadFavorites()
+        recentChannelIds = userDefaults.stringArray(forKey: recentsKey) ?? []
+        viewings = userDefaults.data(forKey: viewingsKey)
+            .flatMap { try? JSONDecoder().decode([LiveViewing].self, from: $0) } ?? []
         loadSavedSources()
         observeAppLifecycle()
     }
@@ -1080,6 +1095,30 @@ class LiveTVDataStore: ObservableObject {
 
     private func saveFavorites() {
         userDefaults.set(Array(favoriteIds), forKey: favoritesKey)
+    }
+
+    // MARK: - Recently watched
+
+    /// Moves `channel` to the front of the recently watched list.
+    func noteWatched(_ channel: UnifiedChannel) {
+        var ids = recentChannelIds.filter { $0 != channel.id }
+        ids.insert(channel.id, at: 0)
+        recentChannelIds = Array(ids.prefix(12))
+        userDefaults.set(recentChannelIds, forKey: recentsKey)
+    }
+
+    /// Learns from `channel`'s programme right now, when suggestions are on.
+    func recordViewing(_ channel: UnifiedChannel) {
+        guard suggestionsEnabled else { return }
+        let program = getCurrentProgram(for: channel).flatMap { $0.id.contains(":placeholder:") ? nil : $0 }
+        viewings.append(LiveViewing(
+            channelId: channel.id, at: Date(), title: program?.title,
+            labels: LiveGenre.specificLabels(of: program).sorted(),
+            genre: LiveGenre.of(channel, airing: program, guide: epg[channel.id] ?? [])?.rawValue))
+        viewings = Array(viewings.suffix(300))
+        if let data = try? JSONEncoder().encode(viewings) {
+            userDefaults.set(data, forKey: viewingsKey)
+        }
     }
 
     // MARK: - Stream URL

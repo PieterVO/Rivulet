@@ -33,7 +33,8 @@ actor DispatcharrService {
 
     // MARK: - Initialization
 
-    init(baseURL: URL, apiToken: String? = nil, channelProfile: String? = nil) {
+    init(baseURL: URL, apiToken: String? = nil, channelProfile: String? = nil,
+         session: URLSession? = nil) {
         self.baseURL = baseURL
         self.apiToken = apiToken
         self.channelProfile = Self.normalizedProfile(channelProfile)
@@ -42,7 +43,7 @@ actor DispatcharrService {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120  // EPG files can be large
-        self.session = URLSession(configuration: config)
+        self.session = session ?? URLSession(configuration: config)
     }
 
     /// Create a DispatcharrService from a URL string, cleaning up the URL if needed
@@ -181,6 +182,45 @@ actor DispatcharrService {
         let data = try await fetchEPG()
         let parser = XMLTVParser()
         return try await parser.parse(data: data)
+    }
+
+    /// Signs in as a Dispatcharr user and returns that user's API key, so
+    /// nobody types a 54-character key on a TV remote. The password is used
+    /// for this exchange only and never stored.
+    ///
+    /// A key is created only when the account has none: Dispatcharr's
+    /// generate REPLACES the user's key, which would break every other app
+    /// already using it.
+    func fetchAPIKey(username: String, password: String) async throws -> String {
+        struct Tokens: Decodable { let access: String }
+        struct Key: Decodable { let key: String? }
+
+        var login = URLRequest(url: baseURL.appendingPathComponent("api/accounts/token", isDirectory: true))
+        login.httpMethod = "POST"
+        login.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        login.httpBody = try JSONEncoder().encode(["username": username, "password": password])
+        let (tokenData, tokenResponse) = try await session.data(for: login)
+        try validateResponse(tokenResponse)
+        let access = try JSONDecoder().decode(Tokens.self, from: tokenData).access
+
+        func keyRequest(_ path: String, method: String) -> URLRequest {
+            var request = URLRequest(url: baseURL.appendingPathComponent(path, isDirectory: true))
+            request.httpMethod = method
+            request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
+            return request
+        }
+        let (data, response) = try await session.data(for: keyRequest("api/accounts/api-keys", method: "GET"))
+        try validateResponse(response)
+        if let key = try JSONDecoder().decode(Key.self, from: data).key, !key.isEmpty {
+            return key
+        }
+        let (newData, newResponse) = try await session.data(
+            for: keyRequest("api/accounts/api-keys/generate", method: "POST"))
+        try validateResponse(newResponse)
+        guard let key = try JSONDecoder().decode(Key.self, from: newData).key, !key.isEmpty else {
+            throw DispatcharrError.invalidResponse
+        }
+        return key
     }
 
     // MARK: - Private Methods

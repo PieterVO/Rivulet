@@ -72,8 +72,15 @@ final class LiveMultiviewViewController: UIViewController {
         static let rowHeight: CGFloat = 250
     }
 
-    init(adopting session: LiveTVSessionHandoff?, adding channel: UnifiedChannel?) {
+    /// The Live TV tab's source, or nil when sources are combined. Add More
+    /// offers only what that tab shows: two sources can carry the same lineup
+    /// (Plex Live TV on a Dispatcharr tuner, plus Dispatcharr itself), and
+    /// unscoped, every such channel was offered twice.
+    private let sourceIdFilter: String?
+
+    init(adopting session: LiveTVSessionHandoff?, adding channel: UnifiedChannel?, sourceIdFilter: String?) {
         viewModel = MultiStreamViewModel(adopting: session, adding: channel)
+        self.sourceIdFilter = sourceIdFilter
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
     }
@@ -720,7 +727,7 @@ final class LiveMultiviewViewController: UIViewController {
             return 3
         }
         let ranked = store.channels
-            .filter { !active.contains($0.id) }
+            .filter { !active.contains($0.id) && (sourceIdFilter == nil || $0.sourceId == sourceIdFilter) }
             .map { (channel: $0, tier: tier($0)) }
             .sorted { a, b in
                 if a.tier != b.tier { return a.tier < b.tier }

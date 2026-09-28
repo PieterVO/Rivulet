@@ -34,6 +34,7 @@ final class TextEntryViewController: UIViewController {
     private let hint: String?
     private let suggestions: [Suggestion]
     private let keyboard: UIKeyboardType
+    private let isSecure: Bool
 
     /// Final text, on Done / keyboard submit only. Never called on cancel.
     private let onCommit: (String) -> Void
@@ -50,6 +51,7 @@ final class TextEntryViewController: UIViewController {
          hint: String? = nil,
          suggestions: [Suggestion] = [],
          keyboardType: UIKeyboardType = .default,
+         isSecure: Bool = false,
          onCommit: @escaping (String) -> Void,
          onCancel: (() -> Void)? = nil) {
         self.titleText = title
@@ -58,6 +60,7 @@ final class TextEntryViewController: UIViewController {
         self.hint = hint
         self.suggestions = suggestions
         self.keyboard = keyboardType
+        self.isSecure = isSecure
         self.onCommit = onCommit
         self.onCancel = onCancel
         super.init(nibName: nil, bundle: nil)
@@ -99,7 +102,9 @@ final class TextEntryViewController: UIViewController {
         textField.textColor = .white
         textField.keyboardType = keyboard
         textField.autocorrectionType = .no
-        textField.autocapitalizationType = (keyboard == .URL) ? .none : .sentences
+        // Only prose gets a capital: not an address, a username, or a password.
+        textField.autocapitalizationType = (keyboard == .default) ? .sentences : .none
+        textField.isSecureTextEntry = isSecure
         textField.clearButtonMode = .whileEditing
         textField.returnKeyType = .done
         textField.delegate = self

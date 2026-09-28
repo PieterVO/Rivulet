@@ -226,12 +226,10 @@ final class MultiStreamViewModel: ObservableObject {
         slot.currentProgram = LiveTVDataStore.shared.getCurrentProgram(for: channel)
 
         streams.append(slot)
-        let slotIndex = streams.count - 1
 
         // Subscribe to playback state changes
-        subscribeToSlot(at: slotIndex)
+        subscribeToSlot(at: streams.count - 1)
         ensureHealthMonitorRunning()
-        stalledStateSince[slot.id] = Date()
         recoveryAttempts[slot.id] = 0
 
         // Reset custom layout if only one stream
@@ -241,7 +239,18 @@ final class MultiStreamViewModel: ObservableObject {
 
         // Start playback (resolve = Plex tune step for cloud-EPG/DVB channels)
         let loadStartTime = Date()
-        if let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) {
+        let resolved = await LiveTVDataStore.shared.resolveStreamURL(for: channel)
+        // A slow tune can outlive its tile (closed, or multiview dismissed).
+        // Release what it tuned instead of playing it where nobody sees it.
+        guard !intentionallyStoppedSlots.contains(slot.id),
+              let slotIndex = streams.firstIndex(where: { $0.id == slot.id }) else {
+            if let resolved { PlexLiveTimelineKeepalive.release(resolved) }
+            return
+        }
+        // The stall clock starts after the tune. Started before it, a tune
+        // slower than the loading threshold drew a second, concurrent tune.
+        stalledStateSince[slot.id] = Date()
+        if let url = resolved {
 
             // Determine stream type for logging
             let streamType: String = {
@@ -273,6 +282,8 @@ final class MultiStreamViewModel: ObservableObject {
 
             do {
                 try await slot.load(url: url, headers: LiveTVClientIdentity.streamHeaders(for: channel))
+                // Closing the tile during the load already stopped it.
+                guard let loadedIndex = streams.firstIndex(where: { $0.id == slot.id }) else { return }
                 slot.setMuted(isMuted)
                 slot.play()
                 recoveryAttempts[slot.id] = 0
@@ -281,7 +292,7 @@ final class MultiStreamViewModel: ObservableObject {
                 let loadDuration = Date().timeIntervalSince(loadStartTime)
 
                 // Focus the newly added stream
-                setFocus(to: slotIndex)
+                setFocus(to: loadedIndex)
 
                 // Log successful playback start with timing (GitHub #64 - DVB diagnostics)
                 let successBreadcrumb = Breadcrumb(level: .info, category: "livetv_playback")
@@ -499,6 +510,7 @@ final class MultiStreamViewModel: ObservableObject {
 
         let oldSlot = streams[index]
         markSlotAsIntentionallyStopped(oldSlot.id)
+        defer { intentionallyStoppedSlots.remove(oldSlot.id) }
 
         // Stop and cleanup old player
         oldSlot.stop()
@@ -520,7 +532,6 @@ final class MultiStreamViewModel: ObservableObject {
 
         // Subscribe to state changes
         subscribeToSlot(at: index)
-        stalledStateSince[newSlot.id] = Date()
         recoveryAttempts[newSlot.id] = 0
 
         // Update focus layout if the replaced stream was the main one
@@ -529,7 +540,16 @@ final class MultiStreamViewModel: ObservableObject {
         }
 
         // Start playback (resolve = Plex tune step for cloud-EPG/DVB channels)
-        if let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) {
+        let resolved = await LiveTVDataStore.shared.resolveStreamURL(for: channel)
+        // Same as addChannel: a tile gone during the tune releases its tune,
+        // and the stall clock waits for the tune to finish.
+        guard !intentionallyStoppedSlots.contains(newSlot.id),
+              streams.contains(where: { $0.id == newSlot.id }) else {
+            if let resolved { PlexLiveTimelineKeepalive.release(resolved) }
+            return
+        }
+        stalledStateSince[newSlot.id] = Date()
+        if let url = resolved {
             // Log stream replacement attempt for debugging
             let breadcrumb = Breadcrumb(level: .info, category: "livetv_playback")
             breadcrumb.message = "Replacing Live TV stream"
@@ -544,6 +564,7 @@ final class MultiStreamViewModel: ObservableObject {
 
             do {
                 try await newSlot.load(url: url, headers: LiveTVClientIdentity.streamHeaders(for: channel))
+                guard streams.contains(where: { $0.id == newSlot.id }) else { return }
                 newSlot.setMuted(isMuted)
                 newSlot.play()
             } catch {
@@ -579,8 +600,6 @@ final class MultiStreamViewModel: ObservableObject {
             event.fingerprint = ["livetv", "no_stream_url", "replace"]
             SentryBridge.capture(event: event)
         }
-
-        intentionallyStoppedSlots.remove(oldSlot.id)
     }
 
     // MARK: - Playback Controls
@@ -760,7 +779,10 @@ final class MultiStreamViewModel: ObservableObject {
         // (every slot gone) or dropped another tile (indices shifted), and an
         // index taken before it crashed or wrote to the wrong tile.
         guard !Task.isCancelled, !intentionallyStoppedSlots.contains(slotId),
-              let slotIndex = streams.firstIndex(where: { $0.id == slotId }) else { return nil }
+              let slotIndex = streams.firstIndex(where: { $0.id == slotId }) else {
+            if let resolved { PlexLiveTimelineKeepalive.release(resolved) }
+            return nil
+        }
         guard let url = resolved else { return "no-url" }
 
         stalledStateSince[slotId] = Date()

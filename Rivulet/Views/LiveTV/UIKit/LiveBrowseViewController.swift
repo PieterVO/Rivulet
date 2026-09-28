@@ -430,6 +430,27 @@ final class LiveBrowseViewController: UIViewController {
             list.map { .channel($0, program: store.getCurrentProgram(for: $0), section: section) }
         }
 
+        // Channels played lately, newest first, to go straight back to one.
+        let recent = store.recentChannelIds.compactMap { channelsById[$0] }
+        if !recent.isEmpty {
+            shelves.append(Shelf(id: "recent", title: "Recently Watched", items: onNow(recent, section: "recent")))
+        }
+
+        // Like what this viewer watches at this hour, from what is on now.
+        // Recently Watched already covers going back, so its channels are left out.
+        if store.suggestionsEnabled {
+            let recentIds = Set(store.recentChannelIds)
+            let candidates = channels.filter { !recentIds.contains($0.id) }.map { channel in
+                let program = store.getCurrentProgram(for: channel)
+                return (channel: channel, program: program,
+                        genre: LiveGenre.of(channel, airing: program, guide: store.epg[channel.id] ?? []))
+            }
+            let picks = LiveSuggestions.rank(candidates, history: store.viewings, now: now).prefix(20)
+            if picks.count >= 3 {
+                shelves.append(Shelf(id: "foryou", title: "For You", items: onNow(Array(picks), section: "foryou")))
+            }
+        }
+
         // What is being recorded or about to be.
         let recordings = store.scheduledRecordings
             .filter { ($0.status == .scheduled || $0.status == .recording) && $0.endTime > now }
@@ -622,7 +643,8 @@ final class LiveBrowseViewController: UIViewController {
     }
 
     private func presentMultiview(adopting session: LiveTVSessionHandoff?, adding channel: UnifiedChannel?) {
-        let multiview = LiveMultiviewViewController(adopting: session, adding: channel)
+        let multiview = LiveMultiviewViewController(adopting: session, adding: channel,
+                                                    sourceIdFilter: sourceIdFilter)
         multiview.onWatchFullScreen = { [weak self] session in
             self?.play(adopting: session)
         }

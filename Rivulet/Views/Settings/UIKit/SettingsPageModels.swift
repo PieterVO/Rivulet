@@ -67,9 +67,10 @@ struct SettingsRowItem {
         /// called with the final text on commit only — a Menu cancel leaves the
         /// value untouched. Reads/writes draft or persisted state through the
         /// closures, mirroring how `.toggle` rows read/write `SettingsStore`.
+        /// `isSecure` masks the text while typing and shows "Set" on the row.
         case textEntry(value: () -> String, placeholder: String, hint: String?,
                        suggestions: [(label: String, value: String)],
-                       keyboardType: UIKeyboardType, set: (String) -> Void)
+                       keyboardType: UIKeyboardType, isSecure: Bool = false, set: (String) -> Void)
     }
 
     let id: String
@@ -131,9 +132,10 @@ struct SettingsRowItem {
         case .selectable(_, let value, _): return value()
         // Show the current value; fall back to the placeholder (or "Not set")
         // when empty.
-        case .textEntry(let value, let placeholder, _, _, _, _):
+        case .textEntry(let value, let placeholder, _, _, _, let isSecure, _):
             let current = value()
-            return current.isEmpty ? (placeholder.isEmpty ? "Not set" : placeholder) : current
+            if current.isEmpty { return placeholder.isEmpty ? "Not set" : placeholder }
+            return isSecure ? "Set" : current
         case .navigation, .action, .option: return nil
         }
     }
@@ -375,6 +377,7 @@ enum SettingsContent {
             SettingsRowItem(id: "liveTVSources", title: "Live TV Sources", kind: .navigation(.iptv)),
             toggle("combineSources", "Combine Sources", key: "combineLiveTVSources", default: true),
             toggle("keepPlayingInGuide", "Keep Playing in Guide", key: "liveTVKeepPlayingInGuide", default: true),
+            toggle("liveTVSuggestions", "Suggestions", key: LiveTVDataStore.suggestionsKey, default: true),
             toggle("confirmExitMultiview", "Confirm Exit Multiview", key: "confirmExitMultiview", default: true)
         ]
     }

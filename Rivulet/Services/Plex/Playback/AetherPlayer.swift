@@ -790,10 +790,11 @@ final class AetherPlayer: PlayerProtocol {
                 // live demux sessions: bwdif deinterlaces genuinely interlaced
                 // frames and passes true progressive through untouched.
                 //
-                // ...but only where the channel actually needs it. A 720p or
-                // 1080p50 broadcast has no fields to weave and should not pay for
-                // the software decode. PMS reports the scan type on the tune, so
-                // the answer is known before the load — see `needsDeinterlacing`.
+                // ...but only where the channel is known to need it. PMS reports
+                // the scan type on the tune, so the answer is known before the
+                // load (see `needsDeinterlacing`). Every other source is left to
+                // the engine's own check, which reads the SPS for exactly this
+                // mis-signalling (#150).
                 // The engine ignores this on the native-HLS shortcut, which never
                 // enters the demux dispatch.
                 preferredDecodePath: (role == .fullscreen && !nativeRemoteHLS && Self.needsDeinterlacing(url))
@@ -917,16 +918,17 @@ final class AetherPlayer: PlayerProtocol {
     /// from the tune response — the same carry-on-the-URL trick the keepalive's
     /// ratingKey uses, so nothing has to be threaded through LiveTVDataStore.
     ///
-    /// **Absence means yes.** Only an explicit "progressive" from the server
-    /// opts out. A missing or unrecognised value keeps the previous behaviour,
-    /// because a needless software decode costs some CPU while a missed
-    /// deinterlace is combing the user can see — and broadcast H.264 is known
-    /// to mis-signal progressive, which is why we do not read the codec's own
-    /// field order here.
+    /// **Absence means no.** A missing scan type used to force the software
+    /// path, which put every Dispatcharr and playlist channel (none carries
+    /// one) on it. Measured on an Apple TV 4K (2nd gen) with a 4K60 HEVC
+    /// channel: the layer dropped about 14 frames a second, the decoder fell
+    /// further behind every second, and a HomePod played the sound about 3s
+    /// late. The engine's own dispatch catches mis-signalled interlaced H.264
+    /// from the SPS (#150), so only Plex's explicit answer overrides it.
     static func needsDeinterlacing(_ url: URL) -> Bool {
         guard let scan = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "rivuletLiveScanType" })?.value?
-            .lowercased() else { return true }
+            .lowercased() else { return false }
         return scan != "progressive"
     }
 

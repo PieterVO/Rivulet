@@ -30,7 +30,8 @@ import UIKit
 final class AddSourceDraft {
     var serverURL = ""
     var displayName = ""
-    var apiToken = ""
+    var username = ""
+    var password = ""
     var channelProfile = ""
     var m3uURL = ""
     var epgURL = ""
@@ -205,10 +206,15 @@ extension SettingsContent {
                             kind: .textEntry(value: { draft.displayName }, placeholder: "Live TV",
                                              hint: nil, suggestions: [], keyboardType: .default,
                                              set: { draft.displayName = $0 })),
-            SettingsRowItem(id: "apiTokenField", title: "API Key",
-                            kind: .textEntry(value: { draft.apiToken }, placeholder: "Optional",
-                                             hint: nil, suggestions: [], keyboardType: .default,
-                                             set: { draft.apiToken = $0 })),
+            SettingsRowItem(id: "usernameField", title: "Username",
+                            kind: .textEntry(value: { draft.username }, placeholder: "Optional",
+                                             hint: nil, suggestions: [], keyboardType: .asciiCapable,
+                                             set: { draft.username = $0; draft.status = .idle })),
+            SettingsRowItem(id: "passwordField", title: "Password",
+                            kind: .textEntry(value: { draft.password }, placeholder: "Optional",
+                                             hint: nil, suggestions: [], keyboardType: .asciiCapable,
+                                             isSecure: true,
+                                             set: { draft.password = $0; draft.status = .idle })),
             SettingsRowItem(id: "channelProfileField", title: "Channel Profile",
                             kind: .textEntry(value: { draft.channelProfile }, placeholder: "Optional",
                                              hint: nil, suggestions: [], keyboardType: .default,
@@ -263,7 +269,12 @@ extension SettingsContent {
             return
         }
         let cleaned = sanitizeURL(draft.serverURL)
-        let token = draft.apiToken.isEmpty ? nil : draft.apiToken
+        let username = draft.username.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard username.isEmpty == draft.password.isEmpty else {
+            draft.status = .failed("Enter both your username and password, or neither.")
+            page?.reloadRows()
+            return
+        }
 
         // A profile typed into the field wins, but if the user instead pasted a
         // full endpoint such as .../output/m3u/Kids we adopt the profile from the
@@ -273,8 +284,7 @@ extension SettingsContent {
         let profile = DispatcharrService.normalizedProfile(draft.channelProfile) ?? split.channelProfile
 
         guard let url = URL(string: split.baseURL),
-              let service = DispatcharrService.create(from: cleaned, apiToken: token,
-                                                      channelProfile: profile) else {
+              let service = DispatcharrService.create(from: cleaned, channelProfile: profile) else {
             draft.status = .failed("Couldn't reach that server. Check the address and port.")
             page?.reloadRows()
             return
@@ -296,16 +306,17 @@ extension SettingsContent {
                     page?.reloadRows()
                     return
                 }
-                // The playlist needs no key, so a wrong one would otherwise
-                // only show up the first time a recording fails. Check it now.
-                // Only a rejection counts: a server that is not Dispatcharr
-                // has no such endpoint, and its playlist already loaded.
-                if token != nil {
+                // Watching needs no sign-in; recording does. The sign-in is
+                // traded for the user's API key here and the password dropped.
+                var token: String?
+                if !username.isEmpty {
                     do {
-                        _ = try await service.fetchChannelSummaries()
-                    } catch DispatcharrError.unauthorized {
-                        throw DispatcharrError.unauthorized
-                    } catch {}
+                        token = try await service.fetchAPIKey(username: username, password: draft.password)
+                    } catch {
+                        draft.status = .failed(signInFailureCopy(for: error))
+                        page?.reloadRows()
+                        return
+                    }
                 }
                 let store = LiveTVDataStore.shared
                 await store.addDispatcharrSource(
@@ -427,7 +438,7 @@ extension SettingsContent {
     private static func failureCopy(for error: Error) -> String {
         if let dispatcharr = error as? DispatcharrError {
             switch dispatcharr {
-            case .unauthorized: return "That server rejected the API key."
+            case .unauthorized: return "That server refused Rivulet."
             case .invalidResponse, .notFound, .serverError, .httpError:
                 return "Couldn't reach that server. Check the address and port."
             }
@@ -437,8 +448,23 @@ extension SettingsContent {
         }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorUserAuthenticationRequired {
-            return "That server rejected the API key."
+            return "That server refused Rivulet."
         }
         return "Couldn't reach that server. Check the address and port."
+    }
+
+    /// The channels already loaded, so the server is reachable: what failed is
+    /// the sign-in itself.
+    private static func signInFailureCopy(for error: Error) -> String {
+        switch error as? DispatcharrError {
+        case .unauthorized:
+            return "Dispatcharr didn't accept that username and password."
+        case .notFound:
+            return "That server has no Dispatcharr sign-in. Clear the username and password."
+        case .httpError(429):
+            return "Too many sign-in attempts. Wait a minute and try again."
+        default:
+            return "Couldn't sign in to Dispatcharr. Try again."
+        }
     }
 }

@@ -438,104 +438,28 @@ actor PlexLiveTVProvider: LiveTVProvider {
         }
 
         // epgPath = /tv.plex.providers.epg.cloud:157/metadata/<channelId>
+        // `base` itself is never playable from here on: the transcoder answers
+        // a guide-entry path with 400, every time.
         let parts = epgPath.split(separator: "/")
         guard parts.count >= 3,
               let dvrKey = parts[0].split(separator: ":").last.map(String.init) else {
-            return base
+            return nil
         }
         let channelId = String(parts[2])
 
+        let tune: PlexLiveTVTuneResult
         do {
-            let tune = try await networkManager.tuneLiveTVChannel(
-                serverURL: serverURL,
-                authToken: authToken,
-                dvrKey: dvrKey,
-                channelIdentifier: channelId
-            )
-            let transcodeSessionId = UUID().uuidString
-
-            // Ask the transcoder to DECIDE (server-authoritative). directPlay=1
-            // requests the raw session playlist — original streams intact,
-            // DVB teletext and mp2 included, no transcoder. Anything short of
-            // an explicit grant falls to the consensus start.m3u8 leg (the
-            // flow every working third-party client ships).
-            var directPlayKey: String?
-            var decisionOutcome = "decision_unavailable"
-            do {
-                let decision = try await networkManager.requestLiveTranscodeDecision(
+            // Unstructured, so a caller that leaves (Back, a channel switch)
+            // doesn't hang up on PMS mid-tune. PMS finishes the tune anyway and
+            // holds its grab, and only the response names the session to release.
+            tune = try await Task {
+                try await networkManager.tuneLiveTVChannel(
                     serverURL: serverURL,
                     authToken: authToken,
-                    sessionPath: tune.sessionPath,
-                    sessionIdentifier: tune.sessionIdentifier,
-                    transcodeSessionId: transcodeSessionId,
-                    directPlay: true
+                    dvrKey: dvrKey,
+                    channelIdentifier: channelId
                 )
-                if decision.mdeDecisionCode == 1000, let key = decision.directPlayPartKey {
-                    directPlayKey = key
-                    decisionOutcome = "direct_play"
-                } else {
-                    decisionOutcome = "direct_stream(\(decision.generalDecisionCode.map(String.init) ?? "?"))"
-                }
-            } catch {
-                // Decision failing is not fatal — start.m3u8 with the tuned
-                // path is self-sufficient. Keep the reason for diagnostics.
-                decisionOutcome = "decision_failed"
-            }
-
-            let breadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
-            breadcrumb.message = "Tuned live channel to /livetv/sessions"
-            breadcrumb.data = [
-                "channel_name": channel.name,
-                "channel_id": channel.id,
-                "dvr_key": dvrKey,
-                "session_uuid": String(tune.sessionUUID.prefix(8)),
-                "playback_route": decisionOutcome
-            ]
-            SentryBridge.addBreadcrumb(breadcrumb)
-
-            if let directPlayKey {
-                // Raw session HLS. The part key already carries offset and
-                // X-Plex-Incomplete-Segments; add auth + the session identity
-                // (the keepalive parses both back out of the URL).
-                if var dp = URLComponents(string: "\(serverURL)\(directPlayKey)") {
-                    var items = dp.queryItems ?? []
-                    items.append(URLQueryItem(name: "X-Plex-Session-Identifier", value: tune.sessionIdentifier))
-                    if let ratingKey = tune.ratingKey {
-                        items.append(URLQueryItem(name: "rivuletLiveRatingKey", value: ratingKey))
-                    }
-                    if let scan = tune.videoScanType {
-                        items.append(URLQueryItem(name: "rivuletLiveScanType", value: scan))
-                    }
-                    items.append(URLQueryItem(name: "X-Plex-Token", value: authToken))
-                    dp.queryItems = items
-                    // Reassigning queryItems re-serialises whatever the part key
-                    // carried, so it goes through the same '+' rule as every
-                    // other live URL.
-                    if let url = PlexLiveTVChannel.finalizedLiveURL(dp) { return url }
-                }
-            }
-
-            // Consensus leg: start.m3u8 on the tuned session path, same query
-            // set as the decision so PMS links them to one session.
-            var start = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8")
-            var items = PlexLiveTVChannel.universalLiveQueryItems(
-                sessionPath: tune.sessionPath,
-                sessionIdentifier: tune.sessionIdentifier,
-                transcodeSessionId: transcodeSessionId,
-                directPlay: false,
-                authToken: authToken
-            )
-            if let ratingKey = tune.ratingKey {
-                items.append(URLQueryItem(name: "rivuletLiveRatingKey", value: ratingKey))
-            }
-            // Carried on the URL rather than threaded through LiveTVDataStore,
-            // matching how the ratingKey above already reaches the keepalive.
-            // `AetherPlayer.needsDeinterlacing` reads it back.
-            if let scan = tune.videoScanType {
-                items.append(URLQueryItem(name: "rivuletLiveScanType", value: scan))
-            }
-            start?.queryItems = items
-            return start.flatMap { PlexLiveTVChannel.finalizedLiveURL($0) } ?? base
+            }.value
         } catch {
             SentryBridge.capture(error: error) { scope in
                 scope.setTag(value: "plex_livetv", key: "component")
@@ -543,9 +467,105 @@ actor PlexLiveTVProvider: LiveTVProvider {
                 scope.setExtra(value: dvrKey, key: "dvr_key")
                 scope.setExtra(value: "tune_failed", key: "operation")
             }
-            // Fall back to the untuned URL — some PMS setups accept it.
-            return base
+            return nil
         }
+
+        let transcodeSessionId = UUID().uuidString
+
+        // Ask the transcoder to DECIDE (server-authoritative). directPlay=1
+        // requests the raw session playlist — original streams intact,
+        // DVB teletext and mp2 included, no transcoder. Anything short of
+        // an explicit grant falls to the consensus start.m3u8 leg (the
+        // flow every working third-party client ships).
+        var directPlayKey: String?
+        var decisionOutcome = "decision_unavailable"
+        do {
+            let decision = try await networkManager.requestLiveTranscodeDecision(
+                serverURL: serverURL,
+                authToken: authToken,
+                sessionPath: tune.sessionPath,
+                sessionIdentifier: tune.sessionIdentifier,
+                transcodeSessionId: transcodeSessionId,
+                directPlay: true
+            )
+            if decision.mdeDecisionCode == 1000, let key = decision.directPlayPartKey {
+                directPlayKey = key
+                decisionOutcome = "direct_play"
+            } else {
+                decisionOutcome = "direct_stream(\(decision.generalDecisionCode.map(String.init) ?? "?"))"
+            }
+        } catch {
+            // Decision failing is not fatal — start.m3u8 with the tuned
+            // path is self-sufficient. Keep the reason for diagnostics.
+            decisionOutcome = "decision_failed"
+        }
+
+        let breadcrumb = Breadcrumb(level: .info, category: "plex_livetv")
+        breadcrumb.message = "Tuned live channel to /livetv/sessions"
+        breadcrumb.data = [
+            "channel_name": channel.name,
+            "channel_id": channel.id,
+            "dvr_key": dvrKey,
+            "session_uuid": String(tune.sessionUUID.prefix(8)),
+            "playback_route": decisionOutcome
+        ]
+        SentryBridge.addBreadcrumb(breadcrumb)
+
+        let url = directPlayKey.flatMap { directPlayURL(partKey: $0, tune: tune) }
+            ?? startURL(tune: tune, transcodeSessionId: transcodeSessionId)
+        guard let url else { return nil }
+        if Task.isCancelled {
+            await PlexLiveTimelineKeepalive.release(url)
+            return nil
+        }
+        return url
+    }
+
+    /// Raw session HLS. The part key already carries offset and
+    /// X-Plex-Incomplete-Segments; add auth + the session identity
+    /// (the keepalive parses both back out of the URL).
+    private func directPlayURL(partKey: String, tune: PlexLiveTVTuneResult) -> URL? {
+        guard var dp = URLComponents(string: "\(serverURL)\(partKey)") else { return nil }
+        var items = dp.queryItems ?? []
+        items.append(URLQueryItem(name: "X-Plex-Session-Identifier", value: tune.sessionIdentifier))
+        if let ratingKey = tune.ratingKey {
+            items.append(URLQueryItem(name: "rivuletLiveRatingKey", value: ratingKey))
+        }
+        if let scan = tune.videoScanType {
+            items.append(URLQueryItem(name: "rivuletLiveScanType", value: scan))
+        }
+        items.append(URLQueryItem(name: "X-Plex-Token", value: authToken))
+        dp.queryItems = items
+        // Reassigning queryItems re-serialises whatever the part key
+        // carried, so it goes through the same '+' rule as every
+        // other live URL.
+        return PlexLiveTVChannel.finalizedLiveURL(dp)
+    }
+
+    /// Consensus leg: start.m3u8 on the tuned session path, same query
+    /// set as the decision so PMS links them to one session.
+    private func startURL(tune: PlexLiveTVTuneResult, transcodeSessionId: String) -> URL? {
+        guard var start = URLComponents(string: "\(serverURL)/video/:/transcode/universal/start.m3u8") else {
+            return nil
+        }
+        var items = PlexLiveTVChannel.universalLiveQueryItems(
+            sessionPath: tune.sessionPath,
+            sessionIdentifier: tune.sessionIdentifier,
+            transcodeSessionId: transcodeSessionId,
+            directPlay: false,
+            authToken: authToken
+        )
+        if let ratingKey = tune.ratingKey {
+            items.append(URLQueryItem(name: "rivuletLiveRatingKey", value: ratingKey))
+        }
+        // Carried on the URL rather than threaded through LiveTVDataStore,
+        // matching how the ratingKey above already reaches the keepalive.
+        // `AetherPlayer.needsDeinterlacing` reads it back.
+        if let scan = tune.videoScanType {
+            items.append(URLQueryItem(name: "rivuletLiveScanType", value: scan))
+        }
+        start.queryItems = items
+        return PlexLiveTVChannel.finalizedLiveURL(start)
     }
 
     // MARK: - Private Methods

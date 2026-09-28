@@ -165,6 +165,10 @@ enum SettingsDescriptorStore {
             icon: "tv",
             description: "Choose your default Live TV view: the TV guide, or What's On, with rows of what is on now and multiview like the Apple TV app."
         ),
+        "liveTVSuggestions": SettingDescriptor(
+            icon: "sparkles",
+            description: "What's On learns what you watch and suggests what is on now that is like it, in a For You row. It learns on this Apple TV only. Turn it off to hide the row and stop learning."
+        ),
         "keepPlayingInGuide": SettingDescriptor(
             icon: "pip",
             description: "When you go back from a live channel, it keeps playing with its sound in the corner of the Guide or What's On. Select it again to return to full screen."
@@ -257,9 +261,13 @@ enum SettingsDescriptorStore {
             icon: "textformat",
             description: "What this source is called in the sidebar and the guide."
         ),
-        "apiTokenField": SettingDescriptor(
+        "usernameField": SettingDescriptor(
+            icon: "person",
+            description: "Dispatcharr only. Sign in with your Dispatcharr user so Rivulet can schedule recordings and series from the guide. Leave it empty to just watch."
+        ),
+        "passwordField": SettingDescriptor(
             icon: "key",
-            description: "For Dispatcharr, an API key from your Dispatcharr user lets Rivulet schedule recordings and series from the guide. Leave it empty to just watch. Other servers rarely need one."
+            description: "Used once, to fetch your Dispatcharr API key. Rivulet keeps the key, not the password."
         ),
         "channelProfileField": SettingDescriptor(
             icon: "line.3.horizontal.decrease.circle",

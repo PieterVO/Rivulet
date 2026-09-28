@@ -74,6 +74,14 @@ final class PlexLiveTimelineKeepalive {
         }
     }
 
+    /// Releases a session nobody will play: a tune that finished after the
+    /// player or tile that asked for it had gone. No-op for any other URL.
+    static func release(_ url: URL) {
+        let keepalive = PlexLiveTimelineKeepalive()
+        keepalive.start(url: url)
+        keepalive.stop()
+    }
+
     /// Final "stopped" report + heartbeat teardown. Releases the tuner
     /// server-side without waiting for the 300s timeout.
     func stop() {

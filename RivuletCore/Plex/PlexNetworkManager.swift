@@ -63,6 +63,20 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
 
+    /// For a request PMS holds open on purpose. `session` caps every request
+    /// at 60s; here the per-request timeout is the only limit.
+    private lazy var longHoldSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForResource = Self.liveTuneTimeout
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    /// PMS answers a tune only once the grab has started, and waits up to
+    /// 300s for a tuner (its own log says so). On a busy Dispatcharr tunes took
+    /// 30 to 176s. A client that hangs up earlier doesn't stop the tune: PMS
+    /// finishes it anyway and holds the grab with nobody to release it.
+    static let liveTuneTimeout: TimeInterval = 300
+
     // Not private: callers inject a manager (see PlexProvider.init), so tests
     // subclass this to stub responses. App code still uses `.shared`.
     override init() {
@@ -237,18 +251,19 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     func requestData(
         _ url: URL,
         method: String = "GET",
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        timeout: TimeInterval? = nil
     ) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = defaultTimeout
+        request.timeoutInterval = timeout ?? defaultTimeout
 
         for (key, value) in headers {
             request.addValue(value, forHTTPHeaderField: key)
         }
 
         let netStart = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await (timeout == nil ? session : longHoldSession).data(for: request)
         let netMs = Int((ProcessInfo.processInfo.systemUptime - netStart) * 1000)
         if netMs > 750 {
             StartupTimer.mark("SLOW net \(netMs)ms \(url.path) (\(data.count)B)")
@@ -2331,7 +2346,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         var headers = plexHeaders(authToken: authToken)
         headers["Accept"] = "application/json"
 
-        let data = try await requestData(url, method: "POST", headers: headers)
+        let data = try await requestData(url, method: "POST", headers: headers,
+                                         timeout: Self.liveTuneTimeout)
 
         // The response shape varies between PMS versions and EPG providers:
         // XML <Video> can surface in JSON as "Video" OR "Metadata", and the

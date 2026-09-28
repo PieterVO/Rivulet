@@ -92,6 +92,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// can be cancelled on dismissal — otherwise a slow Plex tune could finish
     /// after teardown and spin a new player/keep-alive on an off-screen VC.
     private var streamLoadTask: Task<Void, Never>?
+    private var watchCreditTask: Task<Void, Never>?
 
     /// Measures time-to-first-frame for the in-flight join, split into handshake
     /// / engine load / holdback fill. One per load attempt; a fallback retry
@@ -415,6 +416,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             // takes over the picture. No resolve, no tune, no load.
             loadingSpinner.stopAnimating()
             if !aether.intendsToPlay { aether.play() }
+            didStartPlaying()
             updateRailContent()
             return
         }
@@ -423,13 +425,17 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             // Resolve performs the Plex tune step for cloud-EPG/DVB channels;
             // other sources pass straight through.
             joinTelemetry = LiveJoinTelemetry()
-            guard let url = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else {
+            let resolved = await LiveTVDataStore.shared.resolveStreamURL(for: channel)
+            if Task.isCancelled {
+                if let resolved { PlexLiveTimelineKeepalive.release(resolved) }
+                finishJoinTelemetry { $0.abandoned() }
+                return
+            }
+            guard let url = resolved else {
                 finishJoinTelemetry { $0.failed(reason: "resolve_failed") }
-                if Task.isCancelled { return }
                 dismissPlayer()
                 return
             }
-            if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
             // Raw tuned-session HLS must go through the engine demuxer:
             // AVPlayer's native HLS path can't decode broadcast mp2 audio
             // or the DVB/teletext subtitles that direct play preserves.
@@ -447,6 +453,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
                 joinTelemetry?.loadFinished()
                 aether.play()
+                didStartPlaying()
             } catch {
                 if Task.isCancelled { finishJoinTelemetry { $0.abandoned() }; return }
                 finishJoinTelemetry { $0.failed(reason: "engine_load_failed") }
@@ -553,10 +560,26 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// Unwinds everything `startPlayback()` set up, leaving the VC's chrome
     /// (rail, overlay host, observers) intact. Used both by dismissal and by
     /// an in-place channel switch, so the two can never drift apart.
+    /// The channel is playing: it heads Recently Watched now, and For You
+    /// learns from it after a minute, so channel surfing teaches nothing.
+    private func didStartPlaying() {
+        let store = LiveTVDataStore.shared
+        store.noteWatched(channel)
+        watchCreditTask?.cancel()
+        let channel = channel
+        watchCreditTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(60))
+            guard !Task.isCancelled else { return }
+            store.recordViewing(channel)
+        }
+    }
+
     private func teardownPlaybackSession() {
         endScrub()
         streamLoadTask?.cancel()
         streamLoadTask = nil
+        watchCreditTask?.cancel()
+        watchCreditTask = nil
         // Backing out before first frame still ends the transaction. An
         // unfinished one would otherwise hang until the SDK times it out and
         // land as a bogus outlier.
@@ -1844,8 +1867,12 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         loadingSpinner.startAnimating()
         streamLoadTask = Task { @MainActor in
             defer { isFallbackInFlight = false }
-            guard let freshURL = await LiveTVDataStore.shared.resolveStreamURL(for: channel) else { return }
-            if Task.isCancelled { return }
+            let resolved = await LiveTVDataStore.shared.resolveStreamURL(for: channel)
+            if Task.isCancelled {
+                if let resolved { PlexLiveTimelineKeepalive.release(resolved) }
+                return
+            }
+            guard let freshURL = resolved else { dismissPlayer(); return }
             startLiveSessionKeepAlive(for: freshURL)
 
             if stage == 1 {
@@ -1870,6 +1897,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                                                      forceEngineDemux: !isPlaylist)
                     if Task.isCancelled { return }
                     aetherPlayer?.play()
+                    didStartPlaying()
                 } catch {
                     if Task.isCancelled { return }
                     advanceFallback()

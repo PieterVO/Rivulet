@@ -89,15 +89,26 @@ enum LiveGenre: String, CaseIterable {
     }
 
     /// A programme's own labels, less the ones that only name a genre or a
-    /// format: two football games share "football", not "sports event".
+    /// format: two football games share "football", not "sports event". A
+    /// sport named in the title counts too, because most guide entries carry
+    /// no category at all (57% on a Dispatcharr guide), and "NFL Football"
+    /// and "College Football" are both football.
     static func specificLabels(of program: UnifiedProgram?) -> Set<String> {
-        guard let category = program?.category else { return [] }
+        guard let program else { return [] }
         let generic: Set<String> = Set(allCases.map { $0.rawValue.lowercased() })
             .union(["sport", "sports event", "sports non-event", "series", "special", "news", "movie"])
-        return Set(category.split(separator: ",").compactMap { part in
+        var labels = Set((program.category ?? "").split(separator: ",").compactMap { part -> String? in
             let label = part.trimmingCharacters(in: .whitespaces).lowercased()
             guard !label.isEmpty, !generic.contains(label), label.contains(where: \.isLetter) else { return nil }
             return label
         })
+        let titleWords = program.title.lowercased().split { !$0.isLetter }.map(String.init)
+        labels.formUnion(titleWords.filter(sportsNamedInTitles.contains))
+        return labels
     }
+
+    private static let sportsNamedInTitles: Set<String> = [
+        "football", "basketball", "baseball", "softball", "hockey", "soccer", "golf", "tennis",
+        "boxing", "wrestling", "racing", "volleyball", "rugby", "cricket", "lacrosse",
+    ]
 }

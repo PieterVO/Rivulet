@@ -149,6 +149,16 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.6 (89)", [
+            "Dispatcharr channels play smoothly now, with sound in sync on HomePod",
+            "What's On has a Recently Watched row to jump back into a channel",
+            "A new For You row suggests what's on now, based on what you watch",
+            "Turn For You off with Suggestions in the Live TV settings",
+            "Add Dispatcharr with your username and password instead of an API key",
+            "Plex Live TV waits for slow channels to start instead of giving up",
+            "Leaving a Plex channel before it starts now frees its tuner",
+            "Multiview's Add More no longer shows the same channel twice",
+        ]),
         ("1.0.6 (88)", [
             "## Lots of Live TV Improvements!",
             "Live TV opens on the new What's On page, with rows by what's on and by genre",
