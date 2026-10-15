@@ -87,7 +87,8 @@ extension LiveTVDataStore {
     func whatsOnShelves(sourceIdFilter: String?, now: Date = Date()) -> [LiveShelf] {
         LiveShelves.build(LiveShelves.Input(
             channels: channels, epg: epg, recentChannelIds: recentChannelIds, favoriteIds: favoriteIds,
-            unfavoritedIds: unfavoritedIds, viewings: viewings, suggestionsEnabled: suggestionsEnabled,
+            unfavoritedIds: unfavoritedIds, eventSlotIds: eventSlotIds, viewings: viewings,
+            suggestionsEnabled: suggestionsEnabled,
             scheduledRecordings: scheduledRecordings), sourceIdFilter: sourceIdFilter, now: now)
     }
 }
@@ -100,6 +101,7 @@ enum LiveShelves {
         var recentChannelIds: [String] = []
         var favoriteIds: [String] = []
         var unfavoritedIds: Set<String> = []
+        var eventSlotIds: Set<String> = []
         var viewings: [LiveViewing] = []
         var suggestionsEnabled = true
         var scheduledRecordings: [LiveTVScheduledRecording] = []
@@ -115,9 +117,13 @@ enum LiveShelves {
         }
 
         let all = sourceIdFilter.map { id in input.channels.filter { $0.sourceId == id } } ?? input.channels
-        // An empty event slot has nothing to show; Favorites and Recently
-        // Watched still list it, since the viewer chose it.
-        let channels = all.filter { current($0)?.isEmptySlot != true }
+        // An event slot with no game on ("No game scheduled", or a gap in its
+        // guide between games) has nothing to show.
+        func offAir(_ channel: UnifiedChannel) -> Bool {
+            guard let program = current(channel) else { return input.eventSlotIds.contains(channel.id) }
+            return program.isEmptySlot
+        }
+        let channels = all.filter { !offAir($0) }
         let channelsById = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var shelves: [LiveShelf] = []
 
@@ -131,13 +137,24 @@ enum LiveShelves {
                 return .upcoming(next(channel) ?? block, on: channel, section: section)
             }
         }
+        // Favorites and Recently Watched: an off-air slot shows its next game
+        // if the guide has one, else nothing.
+        func chosen(_ list: [UnifiedChannel], section: String) -> [LiveCardItem] {
+            list.compactMap { channel in
+                guard offAir(channel) else { return onNow([channel], section: section).first }
+                let games = (epg[channel.id] ?? []).filter { $0.startTime > now && !$0.isEmptySlot }
+                guard let game = games.first else { return nil }
+                return .upcoming(game.isPregameBlock ? games.dropFirst().first ?? game : game,
+                                 on: channel, section: section)
+            }
+        }
         // Channels showing something now, not holding a slot for a later game.
         let airing = channels.filter { current($0)?.isPregameBlock != true }
 
         // Channels played lately, newest first, to go straight back to one.
-        let recent = input.recentChannelIds.compactMap { channelsById[$0] }
+        let recent = chosen(input.recentChannelIds.compactMap { channelsById[$0] }, section: "recent")
         if !recent.isEmpty {
-            shelves.append(LiveShelf(id: "recent", title: "Recently Watched", items: onNow(recent, section: "recent")))
+            shelves.append(LiveShelf(id: "recent", title: "Recently Watched", items: recent))
         }
 
         // Like what this viewer watches at this hour, from what is on now.
@@ -168,10 +185,10 @@ enum LiveShelves {
             shelves.append(LiveShelf(id: "recordings", title: "Recordings", items: recordings))
         }
 
-        let favourites = LiveTVDataStore.favorites(in: all, order: input.favoriteIds,
-                                                  unfavorited: input.unfavoritedIds)
+        let favourites = chosen(LiveTVDataStore.favorites(in: all, order: input.favoriteIds,
+                                                         unfavorited: input.unfavoritedIds), section: "favorites")
         if !favourites.isEmpty {
-            shelves.append(LiveShelf(id: "favorites", title: "Favorites", items: onNow(favourites, section: "favorites")))
+            shelves.append(LiveShelf(id: "favorites", title: "Favorites", items: favourites))
         }
 
         if !airing.isEmpty {
@@ -182,7 +199,7 @@ enum LiveShelves {
         // ninety minutes: what this viewer watches when each one starts
         // first, then soonest first.
         let horizon = now.addingTimeInterval(90 * 60)
-        let upcoming = channels.compactMap { channel -> LiveSuggestions.Candidate? in
+        let upcoming = all.compactMap { channel -> LiveSuggestions.Candidate? in
             guard let next = next(channel),
                   !next.id.contains(":placeholder:"), !next.isEmptySlot,
                   next.startTime > now, next.startTime <= horizon else { return nil }

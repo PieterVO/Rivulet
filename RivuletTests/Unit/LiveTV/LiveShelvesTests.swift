@@ -63,8 +63,8 @@ final class LiveShelvesTests: XCTestCase {
         XCTAssertEqual(items["recent"]?.map(\.id), ["recent|film"])
         XCTAssertEqual(items["recent"]?.first?.setToRecord, true)
         XCTAssertEqual(items["recordings"]?.map(\.id), ["rec|r1"])
-        // Favorites keep a chosen empty slot; On Now drops it and the pregame block.
-        XCTAssertEqual(items["favorites"]?.map(\.id), ["favorites|empty", "favorites|news"])
+        // An empty slot with no game ahead leaves Favorites; On Now drops it and the pregame block.
+        XCTAssertEqual(items["favorites"]?.map(\.id), ["favorites|news"])
         XCTAssertEqual(items["now"]?.map(\.id), ["now|news", "now|film"])
         // Starting Soon: next programmes inside 90 minutes, soonest first.
         XCTAssertEqual(items["soon"]?.map { $0.program?.title }, ["Team A at Team B", "Weather"])
@@ -73,6 +73,27 @@ final class LiveShelvesTests: XCTestCase {
         XCTAssertEqual(game.kind, .upcoming)
         XCTAssertEqual(game.id, "group|Sports|game:900.0")
         XCTAssertEqual(game.program?.title, "Team A at Team B")
+    }
+
+    func test_offAirEventSlot() {
+        // Known event slots between games: "sun" has its next game in the guide, "dead" has nothing loaded.
+        let channels = [channel("sun", group: "NFL", number: 1), channel("dead", group: "NFL", number: 2),
+                        channel("news", group: "News", number: 3)]
+        let epg = [
+            "sun": [program("sun", "UPCOMING: A @ B", from: 3600, to: 7200),
+                    program("sun", "Live: A @ B", from: 7200, to: 18000)],
+            "news": [program("news", "News", from: -60, to: 3600)],
+        ]
+        let shelves = LiveShelves.build(LiveShelves.Input(
+            channels: channels, epg: epg, recentChannelIds: ["dead", "sun"], favoriteIds: ["sun", "dead", "news"],
+            eventSlotIds: ["sun", "dead"], suggestionsEnabled: false), sourceIdFilter: nil, now: now)
+        let items = Dictionary(uniqueKeysWithValues: shelves.map { ($0.id, $0.items) })
+
+        XCTAssertEqual(items["now"]?.map(\.id), ["now|news"])
+        XCTAssertEqual(items["recent"]?.map(\.id), ["recent|sun:7200.0"])
+        XCTAssertEqual(items["recent"]?.first?.kind, .upcoming)
+        XCTAssertEqual(items["favorites"]?.map(\.id), ["favorites|sun:7200.0", "favorites|news"])
+        XCTAssertNil(items["group|NFL"])
     }
 
     func test_sourceFilter() {

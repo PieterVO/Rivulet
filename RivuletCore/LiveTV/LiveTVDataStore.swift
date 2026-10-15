@@ -22,7 +22,14 @@ class LiveTVDataStore: ObservableObject {
     @Published var channels: [UnifiedChannel] = []
 
     /// Current EPG data (channelId -> programs)
-    @Published var epg: [String: [UnifiedProgram]] = [:]
+    @Published var epg: [String: [UnifiedProgram]] = [:] {
+        didSet { rememberEventSlots() }
+    }
+
+    /// Channels whose guide has carried an event slot (a pregame block or "No
+    /// game scheduled"), so a guide gap on one means no game is on. Kept
+    /// because midweek the loaded window holds no such block.
+    private(set) var eventSlotIds: Set<String> = []
 
     /// End of the currently loaded EPG window. The guide extends past this as
     /// the user scrolls toward the right edge (see `extendEPG`). nil until the
@@ -119,6 +126,7 @@ class LiveTVDataStore: ObservableObject {
     private let favoritesKey = "liveTVFavoriteChannelIds"
     private let unfavoritedKey = "liveTVUnfavoritedChannelIds"
     private let recentsKey = "liveTVRecentChannelIds"
+    private let eventSlotsKey = "liveTVEventSlotChannelIds"
     private let viewingsKey = "liveTVViewings"
     private let sourcesKey = "liveTVSourceConfigurations"
 
@@ -192,6 +200,7 @@ class LiveTVDataStore: ObservableObject {
     private init() {
         loadFavorites()
         recentChannelIds = userDefaults.stringArray(forKey: recentsKey) ?? []
+        eventSlotIds = Set(userDefaults.stringArray(forKey: eventSlotsKey) ?? [])
         viewings = userDefaults.data(forKey: viewingsKey)
             .flatMap { try? JSONDecoder().decode([LiveViewing].self, from: $0) } ?? []
         loadSavedSources()
@@ -1288,6 +1297,15 @@ class LiveTVDataStore: ObservableObject {
         return channels
             .filter { position[$0.id] != nil || ($0.isFavourite && !unfavorited.contains($0.id)) }
             .sorted { key($0) < key($1) }
+    }
+
+    private func rememberEventSlots() {
+        let seen = epg.compactMap { id, programs in
+            programs.contains { $0.isPregameBlock || $0.isEmptySlot } ? id : nil
+        }
+        guard !eventSlotIds.isSuperset(of: seen) else { return }
+        eventSlotIds.formUnion(seen)
+        userDefaults.set(Array(eventSlotIds), forKey: eventSlotsKey)
     }
 
     private func loadFavorites() {
