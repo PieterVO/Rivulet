@@ -507,6 +507,9 @@ struct GuideLayoutView: View {
         vc.onOpenMultiview = { session in
             presentMultiview(adopting: session, adding: nil, fromPlayer: true)
         }
+        vc.onWatchWithScores = { [weak vc] in
+            vc?.openMultiview { presentMultiview(adopting: $0, adding: nil, fromPlayer: true, scores: true) }
+        }
         vc.onDismiss = { lastChannel in
             // The viewer may have changed channels in the player; land on the
             // one that was on screen, at the programme airing now.
@@ -523,7 +526,7 @@ struct GuideLayoutView: View {
     /// `fromPlayer`: the full-screen player just closed without animation, and
     /// multiview takes over its picture (see `entersFromFullScreen`).
     private func presentMultiview(adopting session: LiveTVSessionHandoff?, adding channel: UnifiedChannel?,
-                                  fromPlayer: Bool = false) {
+                                  fromPlayer: Bool = false, scores: Bool = false) {
         guard let top = LiveProgramMenu.topViewController() else {
             session?.stop()
             return
@@ -531,6 +534,7 @@ struct GuideLayoutView: View {
         let multiview = LiveMultiviewViewController(adopting: session, adding: channel,
                                                     sourceIdFilter: sourceIdFilter)
         multiview.entersFromFullScreen = fromPlayer
+        multiview.startsWithScores = scores
         multiview.onWatchFullScreen = { session in
             guard let top = LiveProgramMenu.topViewController() else {
                 session.stop()

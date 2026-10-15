@@ -298,6 +298,22 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// tile. The host presents multiview once this player has closed.
     var onOpenMultiview: ((LiveTVSessionHandoff) -> Void)?
 
+    /// The Scores pane's closing "Watch with Scores" card; hidden while nil.
+    var onWatchWithScores: (() -> Void)?
+
+    /// The scoreboard game the programme on screen shows, kept by `updateRailContent`.
+    private(set) var matchedGame: (league: League, game: ScoreGame)?
+    private var scoresObservation: AnyCancellable?
+
+    /// The rail's panes, for Down reopening the last one used.
+    enum LivePane { case info, scores, channels }
+    private var lastPane = LivePane.info
+
+    /// Down's pane: the last one used while it is still offered, else Info.
+    static func paneForDown(last: LivePane, available: Set<LivePane>) -> LivePane {
+        available.contains(last) ? last : .info
+    }
+
     init(channel: UnifiedChannel, adopting session: LiveTVSessionHandoff? = nil) {
         self.channel = session?.channel ?? channel
         self.pendingAdoption = session
@@ -565,9 +581,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         super.dismiss(animated: animated, completion: completion)
     }
 
-    /// Carry the running channel into multiview as its first tile.
-    private func openMultiview() {
-        guard let onOpenMultiview, let session = detachSession() else { return }
+    /// Carry the running channel into multiview as its first tile. `open`
+    /// replaces `onOpenMultiview` (the host's "Watch with Scores").
+    func openMultiview(with open: ((LiveTVSessionHandoff) -> Void)? = nil) {
+        guard let onOpenMultiview = open ?? onOpenMultiview, let session = detachSession() else { return }
         // No dismiss animation: multiview opens with this picture full screen
         // and shrinks it into its tile, so the screen behind never shows.
         LiveHandoffCover.show(under: self)
@@ -800,16 +817,22 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         railView.onAudio = { [weak self] in self?.presentAudioPanel() }
         railView.onInfo = { [weak self] in self?.presentInfoPanel() }
         railView.onUpNext = { [weak self] in self?.presentChannelListPanel() }
+        railView.onScores = { [weak self] in self?.presentScoresPanel() }
         // Moving across the pills while a pane is open switches its tab.
         railView.onPillFocused = { [weak self] pill in
             guard let self, self.activePanel?.isPane == true, pill !== self.openPanePill else { return }
             if pill === self.railView.infoButton { self.presentInfoPanel() }
+            if pill === self.railView.scoresButton { self.presentScoresPanel() }
             if pill === self.railView.upNextButton { self.presentChannelListPanel() }
         }
         railView.onGoLive = { [weak self] in self?.goLive() }
         railView.onRecord = { [weak self] in self?.presentRecordPanel() }
 
         updateRailContent()
+        // A scores fetch landing can bring the Scores pill up.
+        scoresObservation = ScoreboardPoller.shared.$boards
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateRailContent() }
 
         // The guide's "current programme" rolls over on its own clock.
         programInfoTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -879,6 +902,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             available: store.canRecord(channel) && current != nil,
             isRecording: current.map { store.activeRecording(for: $0) != nil } ?? false
         )
+        updateScoresMatch(current)
 
 
         NowPlayingService.shared.updateLive(
@@ -886,6 +910,18 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             channelName: channel.name,
             isPlaying: !isUserPaused
         )
+    }
+
+    /// Matches the programme on screen to a game, fetching scores when it might be one.
+    private func updateScoresMatch(_ program: UnifiedProgram?) {
+        let poller = ScoreboardPoller.shared
+        if let program, GameMatcher.mightBeGame(program) {
+            Task { await poller.refreshIfStale(maxAge: 300) }
+            matchedGame = GameMatcher.game(for: program, channel: channel, in: poller.boards)
+        } else {
+            matchedGame = nil
+        }
+        railView.setScoresAvailable(matchedGame != nil)
     }
 
     private func showRail() {
@@ -1082,6 +1118,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             riders: [progressBar, timeshiftBadge], replacing: openPane)
         railView.setSelectedPill(pill)
         openPanePill = pill
+        switch pill {
+        case railView.scoresButton: lastPane = .scores
+        case railView.upNextButton: lastPane = .channels
+        default: lastPane = .info
+        }
         panel.onDismiss = { [weak self, weak panel] in
             guard let self, self.activePanel === panel else { return }
             self.activePanel = nil
@@ -1784,6 +1825,34 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         presentPane(content: card, pill: railView.infoButton)
     }
 
+    /// Today's scores, opened on the league of the game on screen.
+    private func presentScoresPanel() {
+        guard let matchedGame else { return }
+        let store = LiveTVDataStore.shared
+        let channels = store.channels
+        // One guide lookup per channel, shared by every card.
+        let current = Dictionary(channels.map { ($0.id, store.getCurrentProgram(for: $0)) },
+                                 uniquingKeysWith: { first, _ in first })
+        let watchWithScores = onWatchWithScores.map { action in
+            { [weak self] in
+                self?.activePanel?.dismissPanel()
+                action()
+            }
+        }
+        let pane = LiveScoresPaneView(
+            league: matchedGame.league,
+            currentGameID: matchedGame.game.id,
+            channelAiring: { game in
+                GameMatcher.channel(airing: game, channels: channels, current: { current[$0.id] ?? nil })
+            },
+            onSelect: { [weak self] selected in
+                self?.activePanel?.dismissPanel()
+                self?.switchChannel(to: selected)
+            },
+            onWatchWithScores: watchWithScores)
+        presentPane(content: pane, pill: railView.scoresButton)
+    }
+
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -1970,10 +2039,20 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             if let tool = railView.firstToolButton { railView.setFocusLanding(tool) }
             showRail()
         case .down:
-            // And Down opens the Info pane.
-            railView.setFocusLanding(railView.infoButton)
+            // And Down reopens the last pane used, Info at first.
+            var available: Set<LivePane> = [.info]
+            if matchedGame != nil { available.insert(.scores) }
+            if !LiveTVDataStore.shared.channels.isEmpty { available.insert(.channels) }
+            let pane = Self.paneForDown(last: lastPane, available: available)
+            let pills: [LivePane: PlayerInfoPillButton] = [
+                .info: railView.infoButton, .scores: railView.scoresButton, .channels: railView.upNextButton]
+            if let pill = pills[pane] { railView.setFocusLanding(pill) }
             showRail()
-            presentInfoPanel()
+            switch pane {
+            case .info: presentInfoPanel()
+            case .scores: presentScoresPanel()
+            case .channels: presentChannelListPanel()
+            }
         }
     }
 

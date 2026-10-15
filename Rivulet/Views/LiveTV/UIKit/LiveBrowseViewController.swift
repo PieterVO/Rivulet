@@ -566,6 +566,9 @@ final class LiveBrowseViewController: UIViewController {
         player.onOpenMultiview = { [weak self] session in
             self?.presentMultiview(adopting: session, adding: nil, fromPlayer: true)
         }
+        player.onWatchWithScores = { [weak self, weak player] in
+            player?.openMultiview { self?.presentMultiview(adopting: $0, adding: nil, fromPlayer: true, scores: true) }
+        }
         isCoveredByModal = true
         present(player, animated: animated)
     }
@@ -578,10 +581,11 @@ final class LiveBrowseViewController: UIViewController {
     /// `fromPlayer`: the full-screen player just closed without animation, and
     /// multiview takes over its picture (see `entersFromFullScreen`).
     private func presentMultiview(adopting session: LiveTVSessionHandoff?, adding channel: UnifiedChannel?,
-                                  fromPlayer: Bool = false) {
+                                  fromPlayer: Bool = false, scores: Bool = false) {
         let multiview = LiveMultiviewViewController(adopting: session, adding: channel,
                                                     sourceIdFilter: sourceIdFilter)
         multiview.entersFromFullScreen = fromPlayer
+        multiview.startsWithScores = scores
         multiview.onWatchFullScreen = { [weak self] session in
             self?.play(adopting: session, animated: false)
         }

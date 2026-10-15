@@ -40,6 +40,8 @@ final class LiveMultiviewViewController: UIViewController {
     /// adopted channel starts full screen and shrinks into its tile while the
     /// rest of the screen fades in, so the player seems to become multiview.
     var entersFromFullScreen = false
+    /// Opened from the player's "Watch with Scores": start in the scores layout.
+    var startsWithScores = false
 
     private let viewModel: MultiStreamViewModel
     private var mode: Mode = .edit
@@ -54,6 +56,10 @@ final class LiveMultiviewViewController: UIViewController {
         icon: nil, accessibilityLabel: "Focus Layout", diameter: 62)
     private let gridLayoutButton = TransportControlButton(
         icon: nil, accessibilityLabel: "Grid Layout", diameter: 62)
+    private let scoresLayoutButton = TransportControlButton(
+        icon: nil, accessibilityLabel: "Scores Layout", diameter: 62)
+    /// The scores layout's right column; exists only while that layout shows.
+    private var scoresList: LiveScoresPaneView?
 
     private let addMoreLabel = UILabel()
     private var addMoreCollection: UICollectionView!
@@ -137,10 +143,12 @@ final class LiveMultiviewViewController: UIViewController {
         layoutButtons.spacing = 24
         layoutButtons.addArrangedSubview(focusLayoutButton)
         layoutButtons.addArrangedSubview(gridLayoutButton)
+        layoutButtons.addArrangedSubview(scoresLayoutButton)
         layoutButtons.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(layoutButtons)
         focusLayoutButton.onPress = { [weak self] in self?.useFocusLayout() }
         gridLayoutButton.onPress = { [weak self] in self?.viewModel.resetLayout() }
+        scoresLayoutButton.onPress = { [weak self] in self?.viewModel.useScoresLayout() }
 
         addMoreLabel.text = "Add More"
         addMoreLabel.font = .systemFont(ofSize: 32, weight: .semibold)
@@ -194,6 +202,16 @@ final class LiveMultiviewViewController: UIViewController {
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
             .sink { [weak self] _, _ in self?.reloadAddMore() }
             .store(in: &cancellables)
+        // New scores can make the one channel a game, offering the scores layout.
+        ScoreboardPoller.shared.$boards
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateLayoutButtons() }
+            .store(in: &cancellables)
+        if let channel = viewModel.streams.first?.channel,
+           let program = store.getCurrentProgram(for: channel), GameMatcher.mightBeGame(program) {
+            Task { await ScoreboardPoller.shared.refreshIfStale(maxAge: 300) }
+        }
+        if startsWithScores { viewModel.useScoresLayout() }
 
         if entersFromFullScreen { enteringChrome.forEach { $0.alpha = 0 } }
     }
@@ -235,7 +253,7 @@ final class LiveMultiviewViewController: UIViewController {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         guard let next = context.nextFocusedView else { return }
-        if next === pendingFocus { pendingFocus = nil }
+        if let pendingFocus, next.isDescendant(of: pendingFocus) { self.pendingFocus = nil }
         if let tile = orderedTiles.first(where: { next.isDescendant(of: $0) }) {
             lastFocusedTile = tile
         }
@@ -397,7 +415,7 @@ final class LiveMultiviewViewController: UIViewController {
             watchHint.isHidden = viewModel.streams.isEmpty
             addMoreLabel.isHidden = false
             addMoreCollection.isHidden = false
-            layoutButtons.isHidden = viewModel.streamCount < 2
+            layoutButtons.isHidden = !showsLayoutButtons
         } else {
             editHint.isHidden = false
         }
@@ -521,14 +539,14 @@ final class LiveMultiviewViewController: UIViewController {
         }
 
         if mode == .edit {
-            layoutButtons.isHidden = streams.count < 2
             layoutButtons.alpha = 1
             // Nothing to watch yet: Up has nowhere to go.
             watchHint.isHidden = streams.isEmpty
         }
-        updateLayoutButtonIcons()
+        updateLayoutButtons()
         reloadAddMore()
         relayout(animated: true)
+        updateScoresListGame()
 
         // A channel just added from Add More takes focus, so it can be moved
         // or made the one with sound straight away.
@@ -604,7 +622,7 @@ final class LiveMultiviewViewController: UIViewController {
         default: return  // Still joining: nothing to carry over yet.
         }
         let others: [UIView] = tiles.values.filter { $0 !== tile } + placeholderViews
-            + enteringChrome + [editHint]
+            + enteringChrome + [editHint] + [scoresList].compactMap { $0 }
         let restore = others.map { ($0, $0.alpha) }
         view.bringSubviewToFront(tile)
         UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseInOut], animations: {
@@ -631,12 +649,60 @@ final class LiveMultiviewViewController: UIViewController {
         if let target { viewModel.setFocusedLayout(on: target.id) }
     }
 
-    private func updateLayoutButtonIcons() {
-        let focused = viewModel.isFocusLayout
+    /// Focus needs two channels; Scores needs one channel showing a game.
+    private var showsLayoutButtons: Bool {
+        viewModel.streamCount > 1 || viewModel.canUseScoresLayout
+    }
+
+    private func updateLayoutButtons() {
+        let layout = viewModel.layoutMode
         let many = viewModel.streamCount > 2
-        focusLayoutButton.setIcon(UIImage(systemName: focused ? "rectangle.righthalf.inset.filled" : "sidebar.right"))
+        focusLayoutButton.setIcon(UIImage(systemName: viewModel.isFocusLayout ? "rectangle.righthalf.inset.filled" : "sidebar.right"))
         let grid = many ? "rectangle.split.2x2" : "rectangle.split.2x1"
-        gridLayoutButton.setIcon(UIImage(systemName: focused ? grid : grid + ".fill"))
+        gridLayoutButton.setIcon(UIImage(systemName: layout == .grid ? grid + ".fill" : grid))
+        let isScores = if case .scores = layout { true } else { false }
+        scoresLayoutButton.setIcon(UIImage(systemName: isScores ? "sportscourt.fill" : "sportscourt"))
+        focusLayoutButton.isHidden = viewModel.streamCount < 2
+        scoresLayoutButton.isHidden = !viewModel.canUseScoresLayout
+        // Watch mode hides the row itself.
+        if mode == .edit { layoutButtons.isHidden = !showsLayoutButtons }
+    }
+
+    // MARK: - Scores
+
+    /// Re-runs the match after the main tile changes channel, so the list
+    /// leads with (and highlights) the game now on screen.
+    private func updateScoresListGame() {
+        guard let list = scoresList, let match = viewModel.scoresMatch,
+              match.game.id != list.currentGameID else { return }
+        let hadFocus = (UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView)?.isDescendant(of: list) ?? false
+        list.setCurrentGame(match.game.id, league: match.league)
+        if hadFocus {
+            pendingFocus = list
+            setNeedsFocusUpdate()
+            updateFocusIfNeeded()
+        }
+    }
+
+    private func makeScoresList() -> LiveScoresPaneView {
+        let match = viewModel.scoresMatch
+        let store = LiveTVDataStore.shared
+        return LiveScoresPaneView(
+            league: match?.league ?? .nfl,
+            currentGameID: match?.game.id,
+            axis: .vertical,
+            channelAiring: { game in
+                GameMatcher.channel(airing: game, channels: store.channels,
+                                    current: { store.getCurrentProgram(for: $0) })
+            },
+            onSelect: { [weak self] channel in self?.switchMain(to: channel) },
+            onWatchWithScores: nil)
+    }
+
+    /// Select on a list card: the main tile re-tunes to the channel airing that game.
+    private func switchMain(to channel: UnifiedChannel) {
+        guard let slot = viewModel.streams.first, slot.channel.id != channel.id else { return }
+        Task { await viewModel.replaceStream(at: 0, with: channel) }
     }
 
     // MARK: - Layout
@@ -646,13 +712,14 @@ final class LiveMultiviewViewController: UIViewController {
         let mainId: UUID?
         let mode: Mode
         let placeholder: Bool
+        let scores: Bool
         let size: CGSize
         let fullScreen: Bool
     }
 
     private func relayout(animated: Bool) {
         guard isViewLoaded, view.bounds.width > 0 else { return }
-        updateLayoutButtonIcons()
+        updateLayoutButtons()
 
         let streams = viewModel.streams
         let bounds = view.bounds
@@ -664,22 +731,39 @@ final class LiveMultiviewViewController: UIViewController {
                      height: Metrics.editTilesHeight)
             : bounds.insetBy(dx: 48, dy: 84)
 
+        var scores = false
+        if case .scores = viewModel.layoutMode, streams.count == 1 { scores = true }
         var mainId: UUID?
         if case .focus(let id) = viewModel.layoutMode, streams.count > 1 { mainId = id }
         // Editing one channel shows it big beside an empty slot, as a prompt
         // to add another.
-        let wantsPlaceholder = !fullScreen && editing && viewModel.canAddStream
+        let wantsPlaceholder = !fullScreen && !scores && editing && viewModel.canAddStream
             && (mainId != nil || streams.count == 1)
         if editing, streams.count == 1 { mainId = streams[0].id }
 
-        let key = LayoutKey(ids: streams.map(\.id), mainId: mainId, mode: mode,
-                            placeholder: wantsPlaceholder, size: bounds.size, fullScreen: fullScreen)
+        let key = LayoutKey(ids: streams.map(\.id), mainId: mainId, mode: mode, placeholder: wantsPlaceholder,
+                            scores: scores, size: bounds.size, fullScreen: fullScreen)
         guard key != lastLayoutKey else { return }
         lastLayoutKey = key
 
         let mainIndex = mainId.flatMap { id in streams.firstIndex(where: { $0.id == id }) }
-        let plan = Self.plan(count: streams.count, mainIndex: mainIndex,
+        var plan = Self.plan(count: streams.count, mainIndex: mainIndex,
                              placeholder: wantsPlaceholder, in: rect, gap: Metrics.gap)
+        let scoresFrames = scores ? Self.scoresPlan(in: rect, gap: Metrics.gap) : nil
+        if let scoresFrames, !fullScreen { plan.tiles = [scoresFrames.main] }
+
+        // The list holds the poller's subscription, so it lives only while the layout shows.
+        if scores, scoresList == nil {
+            let list = makeScoresList()
+            list.alpha = 0
+            list.frame = scoresFrames?.list ?? .zero
+            view.insertSubview(list, belowSubview: watchHint)
+            scoresList = list
+        } else if !scores, let list = scoresList {
+            scoresList = nil
+            UIView.animate(withDuration: 0.25, animations: { list.alpha = 0 },
+                           completion: { _ in list.removeFromSuperview() })
+        }
 
         // Placeholders are plain views, rebuilt each pass.
         placeholderViews.forEach { $0.removeFromSuperview() }
@@ -715,6 +799,10 @@ final class LiveMultiviewViewController: UIViewController {
                 tile.alpha = 1
             }
             self.placeholderViews.forEach { $0.alpha = 1 }
+            if let list = self.scoresList, let frame = scoresFrames?.list {
+                list.frame = frame
+                list.alpha = fullScreen ? 0 : 1
+            }
         }
         if animated {
             UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.9,
@@ -812,6 +900,20 @@ final class LiveMultiviewViewController: UIViewController {
             }
         }
         return plan
+    }
+
+    /// The scores layout: a 16:9 main tile in the left two thirds (centred
+    /// vertically), the list filling the column to its right.
+    static func scoresPlan(in rect: CGRect, gap: CGFloat) -> (main: CGRect, list: CGRect) {
+        var w = (rect.width - gap) * 2 / 3
+        var h = w * 9 / 16
+        if h > rect.height {
+            h = rect.height
+            w = h * 16 / 9
+        }
+        let main = CGRect(x: rect.minX, y: rect.midY - h / 2, width: w, height: h)
+        let list = CGRect(x: main.maxX + gap, y: rect.minY, width: rect.maxX - main.maxX - gap, height: rect.height)
+        return (main, list)
     }
 
     /// The largest 16:9 rectangle centred in `rect`.

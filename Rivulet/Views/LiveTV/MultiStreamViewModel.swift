@@ -18,6 +18,8 @@ final class MultiStreamViewModel: ObservableObject {
     enum LayoutMode: Equatable {
         case grid
         case focus(mainId: UUID)
+        /// One stream beside a scores list; only while that stream shows a game.
+        case scores(mainId: UUID)
     }
 
     // MARK: - Stream Slot Model
@@ -99,6 +101,8 @@ final class MultiStreamViewModel: ObservableObject {
         didSet {
             guard streams.count != oldValue.count else { return }
             let count = streams.count
+            let settled = Self.settled(layoutMode, streamCount: count)
+            if settled != layoutMode { layoutMode = settled }
             // Crashes and hangs carry how many tiles were running, so four
             // streams (open to everyone, no longer an opt-in) can be watched.
             SentryBridge.configureScope { scope in
@@ -163,6 +167,27 @@ final class MultiStreamViewModel: ObservableObject {
     var isFocusLayout: Bool {
         if case .focus = layoutMode { return true }
         return false
+    }
+
+    /// The game the one open stream shows, which is what offers the scores layout.
+    var scoresMatch: (league: League, game: ScoreGame)? {
+        let store = LiveTVDataStore.shared
+        return Self.scoresMatch(channels: streams.map(\.channel), boards: ScoreboardPoller.shared.boards,
+                                program: { store.getCurrentProgram(for: $0) })
+    }
+
+    var canUseScoresLayout: Bool { scoresMatch != nil }
+
+    static func scoresMatch(channels: [UnifiedChannel], boards: [League: Scoreboard],
+                            program: (UnifiedChannel) -> UnifiedProgram?) -> (league: League, game: ScoreGame)? {
+        guard channels.count == 1, let current = program(channels[0]) else { return nil }
+        return GameMatcher.game(for: current, channel: channels[0], in: boards)
+    }
+
+    /// The scores layout holds exactly one stream; any other count drops to the grid.
+    static func settled(_ mode: LayoutMode, streamCount: Int) -> LayoutMode {
+        if case .scores = mode, streamCount != 1 { return .grid }
+        return mode
     }
 
     // MARK: - Initialization
@@ -476,8 +501,13 @@ final class MultiStreamViewModel: ObservableObject {
     }
 
     func resetLayout() {
-        guard case .focus = layoutMode else { return }
+        guard layoutMode != .grid else { return }
         layoutMode = .grid
+    }
+
+    func useScoresLayout() {
+        guard canUseScoresLayout, let slot = streams.first else { return }
+        layoutMode = .scores(mainId: slot.id)
     }
 
     /// Replaces the stream at the given index with a new channel
@@ -540,8 +570,10 @@ final class MultiStreamViewModel: ObservableObject {
         recoveryAttempts[newSlot.id] = 0
 
         // Update focus layout if the replaced stream was the main one
-        if case .focus(let mainId) = layoutMode, mainId == oldSlot.id {
-            layoutMode = .focus(mainId: newSlot.id)
+        switch layoutMode {
+        case .focus(let mainId) where mainId == oldSlot.id: layoutMode = .focus(mainId: newSlot.id)
+        case .scores(let mainId) where mainId == oldSlot.id: layoutMode = .scores(mainId: newSlot.id)
+        default: break
         }
 
         // Start playback (resolve = Plex tune step for cloud-EPG/DVB channels)

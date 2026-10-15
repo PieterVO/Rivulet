@@ -69,6 +69,8 @@ final class PlayerRailView: UIView {
     // its sub-tabs, right of it, are reached without crossing another pill.
     let infoButton = PlayerInfoPillButton(title: "Info")
     let chaptersButton = PlayerInfoPillButton(title: "Chapters")
+    /// Live TV only: shown while the programme on screen is a game.
+    let scoresButton = PlayerInfoPillButton(title: "Scores")
     /// "Up Next" on VOD, "Channels" on Live TV.
     let upNextButton = PlayerInfoPillButton(title: "Up Next")
     let insightsButton = PlayerInfoPillButton(title: "Insights")
@@ -79,6 +81,7 @@ final class PlayerRailView: UIView {
     var onAudio: (() -> Void)?
     var onInfo: (() -> Void)?
     var onChapters: (() -> Void)?
+    var onScores: (() -> Void)?
     var onDetails: (() -> Void)?
     /// A pill gained focus. While a pane is open this switches its tab, as AVKit's do.
     var onPillFocused: ((PlayerInfoPillButton) -> Void)?
@@ -128,7 +131,7 @@ final class PlayerRailView: UIView {
         pillRow.axis = .horizontal
         pillRow.spacing = Metrics.pillGap
         pillRow.alignment = .center
-        [infoButton, chaptersButton, upNextButton, detailsButton, insightsButton].forEach {
+        [infoButton, scoresButton, chaptersButton, upNextButton, detailsButton, insightsButton].forEach {
             pillRow.addArrangedSubview($0)
         }
         insightsTabRow.axis = .horizontal
@@ -165,6 +168,7 @@ final class PlayerRailView: UIView {
         audioButton.onPress = { [weak self] in self?.onAudio?() }
         infoButton.onPress = { [weak self] in self?.onInfo?() }
         chaptersButton.onPress = { [weak self] in self?.onChapters?() }
+        scoresButton.onPress = { [weak self] in self?.onScores?() }
         detailsButton.onPress = { [weak self] in self?.onDetails?() }
         insightsButton.onPress = { [weak self] in self?.onInsights?() }
         upNextButton.onPress = { [weak self] in self?.onUpNext?() }
@@ -176,6 +180,7 @@ final class PlayerRailView: UIView {
         insightsButton.isHidden = true
         upNextButton.isHidden = true
         chaptersButton.isHidden = true
+        scoresButton.isHidden = true
         detailsButton.isHidden = true
         // Hidden until a host shows it — the Live TV rail shares this view but
         // has no content filter.
@@ -301,6 +306,13 @@ final class PlayerRailView: UIView {
         guard goLiveButton.isHidden == available else { return }
         goLiveButton.isHidden = !available
         if !available, lastFocusedButton === goLiveButton { lastFocusedButton = nil }
+    }
+
+    /// Live TV: the Scores pill, while the programme on screen matches a game.
+    func setScoresAvailable(_ available: Bool) {
+        guard scoresButton.isHidden == available else { return }
+        scoresButton.isHidden = !available
+        if !available, lastFocusedButton === scoresButton { lastFocusedButton = nil }
     }
 
     /// Live TV: the record button, filled while the current programme is set
