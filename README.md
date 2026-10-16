@@ -4,8 +4,9 @@
 
 # Rivulet
 
-**A native tvOS video app for Plex and Live TV.**
-Built for simplicity.
+**Built for simplicity.**
+
+A native Apple TV app for Plex, Jellyfin, and Live TV.
 
 <a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
   <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store">
@@ -18,6 +19,7 @@ Built for simplicity.
 <br><br>
 
 ![tvOS 26+](https://img.shields.io/badge/tvOS-26+-000000?logo=apple)
+![iOS 26+](https://img.shields.io/badge/iOS-26+-000000?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white)
 ![License](https://img.shields.io/badge/license-PolyForm_NC_1.0.0-blue)
 ![Not for sale](https://img.shields.io/badge/⚠_not_for_sale-Noncommercial_only-red)
@@ -28,67 +30,126 @@ Built for simplicity.
 
 <div align="center">
 
-<img src="Screenshots/AppStore/01_home-hero.png" alt="Home" width="100%">
+<img src="Screenshots/tvOS/01-home.jpg" alt="Home" width="100%">
 
 </div>
 
 <div align="center">
 
-<img src="Screenshots/AppStore/02_home-rows.png" alt="Home rows" width="49%">
-<img src="Screenshots/AppStore/06_sidebar.png" alt="Sidebar" width="49%">
-<img src="Screenshots/AppStore/03_detail-sintel.png" alt="Media detail" width="49%">
-<img src="Screenshots/AppStore/04_detail-expanded.png" alt="Expanded detail" width="49%">
+<img src="Screenshots/tvOS/02-detail.jpg" alt="Movie detail" width="49%">
+<img src="Screenshots/tvOS/07-music-album.jpg" alt="Music album" width="49%">
 
 </div>
 
 ---
 
+Rivulet is an Apple TV app first. Every feature is designed for the Siri Remote and the big screen before anything else. There is also an iPhone and iPad app that gets regular updates and support, built on the same Plex and Live TV code.
+
 ## Why this exists
 
 This project has fairly *opinionated* designs and logic, with a few focal points:
 
-- **Simplicity** — What is the best design to get me to the media I want to watch.
-- **Live TV** — Plex's live TV is, to put it nicely, sub-par. I've spent too long trying to get it to work well for me (kudos if you don't have this problem). I don't want live TV in a separate app, so this solves my problems. You might could use this just for live tv. Go for it.
-- **HomePod Integration** — The Plex app has never worked well when setting HomePod as the default audio output on my Apple TV. It hurts to have a HomePod sitting there collecting dust while my sub-par tv speakers play sound. This app helps the hurt.
-- **Direct Play** — No server transcoding. The bar I'm chasing is Infuse. This was frustratingly built because Apple's frameworks can't direct play most video containers, and the third-party players that handle the trickier formats can't use Apple's HomePod controls.
-- **Apple TV+ Inspired** — The UI takes heavy inspiration from Apple's own TV app. Clean, focused, and native-feeling.
+- **Simplicity**: what is the best design to get me to the media I want to watch.
+- **Live TV**: Plex's live TV is, to put it nicely, sub-par. I've spent too long trying to get it to work well for me (kudos if you don't have this problem). I don't want live TV in a separate app, so this solves my problems.
+- **HomePod Integration**: the Plex app has never worked well when setting HomePod as the default audio output on my Apple TV. It hurts to have a HomePod sitting there collecting dust while my sub-par TV speakers play sound. This app helps the hurt.
+- **Direct Play**: no server transcoding. The bar I'm chasing is Infuse. This was frustratingly built because Apple's frameworks can't direct play most video containers, and the third-party players that handle the trickier formats can't use Apple's HomePod controls.
+- **Apple TV+ Inspired**: the UI takes heavy inspiration from Apple's own TV app. Clean, focused, and native-feeling.
 
-## Features
+## Live TV
 
-### Video Player
+Some people could use Rivulet just for Live TV, and that's fine by me.
 
-Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEngine): FFmpeg demuxing, remuxed to HLS-fMP4, handed to Apple's frameworks. Direct play is the primary path. A Plex server transcode is only the fallback when a file has no direct-play URL, or when startup fails.
+- **What's On**: what's airing now, what starts soon, and a For You row that learns what you watch.
+- **Guide**: a full channel guide for every source.
+- **Multiview**: watch up to four channels at once. Promote one to the big tile while the rest keep playing muted.
+- **Scores**: live scores for NFL, college football, NBA, MLB, and NHL right in the player. Pick a game and Rivulet tunes to the channel airing it. Multiview has a scores layout too: the game on one side, the scoreboard on the other.
+- **Favorites** from every source in one list, in the order you choose, plus Recently Watched.
+- **Sources**: Dispatcharr, Plex Live TV (HDHomeRun and DVB tuners), and any M3U/XMLTV playlist.
 
-- **Video** — H.264 and HEVC through VideoToolbox. AV1, VP9, MPEG-2, VC-1, and MPEG-4 Part 2 fall back to software decode.
-- **HDR** — HDR10, HDR10+, HLG, and Dolby Vision. DV profiles 5 and 8.1 play with full Dolby Vision. Profile 7 plays as its HDR10 base layer.
-- **Audio** — AAC, AC3, E-AC3 (including Atmos / JOC), TrueHD, DTS, DTS-HD MA, FLAC, ALAC, MP3, and PCM.
-- **Subtitles** — Text (SRT, ASS/SSA) and bitmap (PGS, DVB).
+<div align="center">
 
-### Live TV
+<img src="Screenshots/tvOS/03-whats-on.jpg" alt="What's On" width="49%">
+<img src="Screenshots/tvOS/04-multiview.jpg" alt="Multiview" width="49%">
 
-- Dispatcharr and generic M3U/XMLTV sources
-- Plex Live TV
-- Channel guide, favorites, and recently watched
-- Multi-stream mode: watch several channels at once in a grid, or promote one to focus while the others play muted
+</div>
 
 Dispatcharr and Plex Live TV are tested regularly. Generic M3U/XMLTV is wired up but less battle-tested. Feedback welcome.
 
-### Discover and Watchlist
+## Insights
 
-Browse trending and upcoming titles, add to your Plex watchlist, and see at a glance what you already own on your server.
+Pause on a scene and wonder where you've seen that actor before? Open Insights from the player.
 
-### Insights
+- **Cast**: who is on screen, with a bio and their filmography. Jump straight to anything else they're in.
+- **Trivia**: behind-the-scenes facts sorted into production, casting, adaptation, references, lore, goofs, and music, plus a Top 10 of the best ones.
+- Works on movies and TV episodes.
 
-While something is playing, pull up Insights for cast and trivia on what's on screen. Work in progress, so coverage and accuracy will keep improving.
+Insights is still growing. Coverage and accuracy improve with every release.
 
-### Music
+<div align="center">
+
+<img src="Screenshots/tvOS/05-insights-trivia.jpg" alt="Insights trivia" width="49%">
+<img src="Screenshots/tvOS/06-insights-cast.jpg" alt="Insights cast" width="49%">
+
+</div>
+
+## Media servers
+
+|                                  | Plex | Jellyfin |
+|----------------------------------|:----:|:--------:|
+| Movie and TV libraries           |  ✓   |    ✓     |
+| Continue Watching and Up Next    |  ✓   |    ✓     |
+| Collections                      |  ✓   |    ✓     |
+| Skip intro and credits           |  ✓   |    ✓     |
+| Watched state sync               |  ✓   |    ✓     |
+| Photo libraries                  |  ✓   |    ✓     |
+| Music                            |  ✓   |          |
+| Live TV and DVR tuners           |  ✓   |          |
+| Watchlist and Discover           |  ✓   |          |
+| Managed users and profiles       |  ✓   |          |
+| iPhone and iPad app              |  ✓   |          |
+
+Jellyfin support is new (server 10.10 or later). Bug reports welcome. M3U and Dispatcharr Live TV work with either server.
+
+## Video player
+
+Playback runs on [AetherEngine](https://github.com/superuser404notfound/AetherEngine): FFmpeg demuxing, remuxed to HLS-fMP4, handed to Apple's frameworks. Direct play is the primary path. A server transcode is only the fallback when a file has no direct-play URL, or when startup fails.
+
+- **Video**: H.264 and HEVC through VideoToolbox. AV1, VP9, MPEG-2, VC-1, and MPEG-4 Part 2 fall back to software decode.
+- **HDR**: HDR10, HDR10+, HLG, and Dolby Vision. DV profiles 5 and 8.1 play with full Dolby Vision. Profile 7 plays as its HDR10 base layer.
+- **Audio**: AAC, AC3, E-AC3 (including Atmos / JOC), TrueHD, DTS, DTS-HD MA, FLAC, ALAC, MP3, and PCM.
+- **Subtitles**: text (SRT, ASS/SSA) and bitmap (PGS, DVB). ASS/SSA keeps its original styling.
+- **Stream quality**: direct play by default, or pick a transcode quality when bandwidth is tight.
+- **Content filtering** (work in progress): mute language and skip scenes on your device, from the title's subtitles or an imported EDL list. The file is never touched.
+
+## Music
 
 - Album, artist, and playlist browsing, modeled on Apple's Music app for tvOS.
-- Lyrics display (synced when the source provides timestamps, static otherwise).
-- Real-time audio visualizer on the Now Playing screen.
-- System Now Playing controls. HomePod, AirPods, Siri Remote, Control Center all work.
+- Lyrics, synced when the source provides timestamps.
+- System Now Playing controls. HomePod, AirPods, Siri Remote, and Control Center all work.
 
-Chasing Plexamp on the features side. Long way to go.
+## More
+
+- **Discover and Watchlist**: browse trending and upcoming titles, add them to your Plex watchlist, and see at a glance what you already own.
+- **Top Shelf and Siri**: Continue Watching on the Apple TV home screen, and Siri to play or search your library.
+- **Smart artwork**: title logos are placed with Apple's Vision framework so they stay clear of faces and busy parts of the image.
+
+## iPhone and iPad
+
+The iOS app follows the Apple TV app. It shares the same Plex and Live TV code, so a fix on one platform fixes both.
+
+- Home, library, search, and detail pages built for touch
+- Live TV
+- Downloads for offline viewing
+- Picture in Picture
+
+<div align="center">
+
+<img src="Screenshots/iOS/01-home.jpg" alt="iPhone home" width="24%">
+<img src="Screenshots/iOS/02-movie.jpg" alt="iPhone movie detail" width="24%">
+<img src="Screenshots/iOS/03-show.jpg" alt="iPhone show detail" width="24%">
+<img src="Screenshots/iOS/04-library.jpg" alt="iPhone library" width="24%">
+
+</div>
 
 ---
 
@@ -101,56 +162,20 @@ Chasing Plexamp on the features side. Long way to go.
 
 ---
 
-## Requirements
-
-- Apple TV running tvOS 26 or later
-- Xcode 26+ for building
-- Plex Media Server (for Plex features)
-- M3U/XMLTV source or Dispatcharr (for Live TV)
-
 ## Building
 
+Requires Xcode 27. Copy the secrets template once (placeholder values are fine), then open the project:
+
 ```bash
-git clone https://github.com/l984-451/Rivulet.git
-cd Rivulet
-
-# One-time: both app targets read Secrets.swift and will not compile without it.
-# The placeholder values are fine for a local build.
 cp RivuletCore/Config/Secrets.swift.template RivuletCore/Config/Secrets.swift
-
 open Rivulet.xcodeproj
-
-# Or from the command line
-xcodebuild -scheme Rivulet -destination 'generic/platform=tvOS' build
-
-# The iOS/iPadOS app has its own scheme
-xcodebuild -scheme "Rivulet iOS" -destination 'generic/platform=iOS' build
 ```
 
-## Repository layout
-
-```
-Rivulet/           The tvOS app — all primary surfaces are UIKit
-RivuletiOS/        The iOS/iPadOS app (early) — SwiftUI, touch-first
-RivuletCore/       Code compiled into both apps: the Plex client and models,
-                   auth, IPTV parsers, TMDB, watch-progress policy, security,
-                   diagnostics
-TopShelfExtension/ Apple TV home-screen Top Shelf
-RivuletTests/      Unit tests (run with the Rivulet scheme)
-```
-
-Two rules keep the platforms from taxing each other, and both are enforced or
-documented in `.swiftlint.yml` and `CLAUDE.md`:
-
-- **One client per service.** Anything that encodes how Plex, TMDB, or an IPTV
-  source actually behaves lives in `RivuletCore/`, once. The platform folders
-  hold UI and per-platform state only — a bug fixed in shared code is fixed for
-  both apps by construction.
-- **No `#if os(...)` in shared code** (lint-enforced). Where platforms genuinely
-  differ, the app injects the difference at launch instead of branching in the
-  shared file.
+`Rivulet` is the tvOS scheme and `Rivulet iOS` is the iPhone and iPad scheme. `Rivulet/` holds the tvOS app, `RivuletiOS/` the iOS app, and `RivuletCore/` the code both share. See `CLAUDE.md` for the architecture.
 
 ## Contributing
+
+Found a bug? [Open an issue](../../issues/new/choose) and pick the platform (tvOS or iOS). If the same bug shows up on both, open one issue per platform so each fix is tracked on its own.
 
 I welcome all contributions from any level of developer. I welcome contributions from LLMs too as long as they are checked and tested.
 
@@ -172,17 +197,19 @@ Third-party components retain their original licenses. FFmpeg is included under 
 
 ## Acknowledgments
 
-- [AetherEngine](https://github.com/superuser404notfound/AetherEngine) — the playback engine
-- [FFmpeg](https://ffmpeg.org/) — demuxing, decoding, and remuxing
-- [libdovi](https://github.com/quietvoid/dovi_tool) — Dolby Vision RPU handling
-- [Plex](https://plex.tv/) — media server platform
-- [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) — IPTV management
-- [TMDB](https://www.themoviedb.org/) — artwork and metadata for Discover
+- [AetherEngine](https://github.com/superuser404notfound/AetherEngine): the playback engine
+- [FFmpeg](https://ffmpeg.org/): demuxing, decoding, and remuxing
+- [libdovi](https://github.com/quietvoid/dovi_tool): Dolby Vision RPU handling
+- [libass](https://github.com/libass/libass): ASS/SSA subtitle rendering
+- [Plex](https://plex.tv/): media server platform
+- [Jellyfin](https://jellyfin.org/): open source media server
+- [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr): IPTV management
+- [TMDB](https://www.themoviedb.org/): artwork and metadata for Discover
 
 ---
 
 <div align="center">
 
-Rivulet is not affiliated with or endorsed by Plex, Inc.
+Rivulet is not affiliated with or endorsed by Plex, Inc. or the Jellyfin project.
 
 </div>

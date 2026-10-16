@@ -10,6 +10,17 @@ body:
         - label: I have searched for existing issues
           required: true
 
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: One platform per issue. If the same bug happens on both, open a separate issue for each so each fix is tracked.
+      options:
+        - tvOS (Apple TV)
+        - iOS / iPadOS
+    validations:
+      required: true
+
   - type: textarea
     id: steps
     attributes:
@@ -25,35 +36,35 @@ body:
     id: version
     attributes:
       label: Version
-      description: App version and build number (e.g. 1.0.0 18)
-      placeholder: "1.0.0 18"
+      description: App version and build number (e.g. 1.1.0 96)
+      placeholder: "1.1.0 96"
     validations:
       required: true
 
   - type: input
-    id: appletv-model
+    id: device-model
     attributes:
-      label: Apple TV model
-      description: Found in Settings → General → About (e.g. Apple TV 4K (3rd generation), Apple TV HD)
+      label: Device
+      description: Apple TV model from Settings → General → About, or your iPhone / iPad model
       placeholder: "Apple TV 4K (3rd generation)"
     validations:
       required: true
 
   - type: input
-    id: tvos-version
+    id: os-version
     attributes:
-      label: tvOS version
-      description: Found in Settings → General → About (e.g. 18.2)
-      placeholder: "18.2"
+      label: tvOS / iOS version
+      description: Found in Settings → General → About
+      placeholder: "26.1"
     validations:
       required: true
 
   - type: input
-    id: plex-server-version
+    id: server-version
     attributes:
-      label: Plex Media Server version
-      description: Found in Plex Web → Settings → General (e.g. 1.41.3.9314). Enter "N/A" if the bug is unrelated to a Plex server.
-      placeholder: "1.41.3.9314"
+      label: Media server and version
+      description: Plex Media Server version from Plex Web → Settings → General, or your Jellyfin version. Enter "N/A" if the bug is unrelated to a server.
+      placeholder: "Plex 1.43.4"
     validations:
       required: true
 
