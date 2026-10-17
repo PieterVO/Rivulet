@@ -1667,7 +1667,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         useDolbyVision: Bool = true,
         forceVideoTranscode: Bool = false,
         allowAudioDirectStream: Bool = true,
-        step: QualityStep? = nil
+        step: QualityStep? = nil,
+        clientRendersTextSubtitles: Bool = false
     ) -> (url: URL, headers: [String: String])? {
         // Request an HLS remux that keeps the HEVC/Dolby Vision bitstream intact
         // tvOS requires fMP4/CMAF segments for Dolby Vision profiles 5/8
@@ -1714,7 +1715,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // IMPORTANT: exclude flac here so Plex transcodes audio to AAC/AC3/EAC3 for DV HLS
             // segmentContainer=mp4 forces CMAF/fMP4 segments instead of TS (required for DV on tvOS)
             "add-transcode-target(type=videoProfile&context=streaming&protocol=hls&container=mp4&segmentContainer=mp4&videoCodec=h264,hevc&audioCodec=aac,ac3,eac3&replace=true)",
-            "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
+            // Text subtitles either ride the HLS as WebVTT or, when the client
+            // draws them, come from `transcodeSubtitlesURL` as one ASS document.
+            clientRendersTextSubtitles
+                ? "add-transcode-target(type=subtitleProfile&context=all&protocol=http&container=ass&subtitleCodec=ass&replace=true)"
+                : "add-transcode-target(type=subtitleProfile&context=streaming&protocol=hls&container=webvtt&subtitleCodec=webvtt)",
             "add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)",
 
             // Limitations - tells server about codec/format restrictions
@@ -1789,6 +1794,11 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // Keyframe playlist improves seeking accuracy in HLS streams
             URLQueryItem(name: "includeKeyframePlaylist", value: "1")
         ]
+
+        if clientRendersTextSubtitles {
+            // Without it PMS burns styled ASS in; image formats still burn.
+            items.append(URLQueryItem(name: "advancedSubtitles", value: "text"))
+        }
 
         if let cap {
             // On relay this is the 480p rung stock Plex converts relay items to. Without
@@ -1903,6 +1913,29 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         } catch {
             print("[Plex] Decision request failed: \(error.localizedDescription)")
         }
+    }
+
+    /// The selected text subtitle of a `start.m3u8` transcode as one ASS document.
+    /// Same query, so PMS attaches it to the running session instead of starting one.
+    static func transcodeSubtitlesURL(forHLS url: URL) -> URL? {
+        let start = "start.m3u8"
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.percentEncodedPath.hasSuffix("/" + start) else { return nil }
+        components.percentEncodedPath = components.percentEncodedPath.dropLast(start.count) + "subtitles"
+        return components.url
+    }
+
+    /// For a response PMS keeps open for a whole playback and that can idle for
+    /// minutes while the transcode is throttled.
+    private lazy var openEndedSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 24 * 3600
+        configuration.timeoutIntervalForResource = 24 * 3600
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    func openEndedBytes(for request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        try await openEndedSession.bytes(for: request)
     }
 
     /// Stop a Plex transcode session. Call this when stopping playback to free server resources

@@ -533,6 +533,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var streamPreparationTask: Task<Void, Never>?
     /// Plex transcode session ID, extracted from HLS stream URL for cleanup on stop
     private var plexSessionId: String?
+    /// The Plex stream whose transcode subtitle feeds the caption overlay (hls route).
+    private var transcodeSubtitleTrackId: Int?
+    private var transcodeSubtitleTask: Task<Void, Never>?
+    private var transcodeSubtitleTimeObserver: Any?
+    private var lastTranscodeSubtitleRestart = Date.distantPast
     /// Playback startup/fallback plan for Rivulet direct-play-first policy.
     private(set) var playbackPlan: PlaybackPlan?
     /// The route actually serving playback right now.
@@ -781,10 +786,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// published `isFilterMuting`. Called from both time observers.
     private func applyContentFilter(at time: TimeInterval) {
         // Feed the currently on-screen dialogue so language cues mute in sync.
-        // Cues resolve on the sourceTime axis, honoring the subtitle delay. The
-        // HLS route has no app-side cue source, so it contributes nothing here;
-        // there, language muting comes from the subtitle file the filter reads
-        // itself (see `contentFilterItem()`).
+        // Cues resolve on the sourceTime axis, honoring the subtitle delay. On
+        // the HLS route only a shown text track feeds this; otherwise language
+        // muting comes from the subtitle file the filter reads itself (see
+        // `contentFilterItem()`).
         readSubtitleImages(at: time)
         contentFilter.activeSubtitlesDidChange(texts: activeSubtitleTextForFilter())
         // The delay stepper only moves what's on screen on the aether route.
@@ -887,7 +892,84 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Cue-axis time the video shows at `hostTime`, for the libass layer's
     /// display link. nil when there is no Aether presentation timebase.
     func subtitleSourceTime(atHostTime hostTime: CFTimeInterval) -> Double? {
-        aetherPlayer?.sourceTime(atHostTime: hostTime)
+        if let aetherPlayer { return aetherPlayer.sourceTime(atHostTime: hostTime) }
+        // hls route: the AVPlayer item's clock is media time, as the transcode's cues are.
+        guard transcodeSubtitleTrackId != nil, let timebase = player?.currentItem?.timebase else { return nil }
+        let host = CMTime(seconds: hostTime, preferredTimescale: 1_000_000_000)
+        let seconds = CMSyncConvertTime(host, from: CMClockGetHostTimeClock(), to: timebase).seconds
+        return seconds.isFinite ? seconds : nil
+    }
+
+    // MARK: - hls route text subtitles
+
+    /// Starts reading the transcode's text subtitle into the caption overlay, or
+    /// clears it when the session carries none. Cues of the same track survive a
+    /// reload: their times are media time.
+    private func startTranscodeSubtitles() {
+        stopTranscodeSubtitleReader()
+        let trackId = currentSubtitleTrackId
+        let track = trackId.flatMap { id in plexSubtitleTracksFromMetadata().first { $0.id == id } }
+        guard aetherPlayer == nil, case .plex = source, case .hls = activeRoute,
+              let track, ContentFilterSources.isTextSubtitle(codec: track.codec),
+              let hlsURL = streamURL, let url = PlexNetworkManager.transcodeSubtitlesURL(forHLS: hlsURL) else {
+            clearTranscodeSubtitles()
+            return
+        }
+        if transcodeSubtitleTrackId != track.id {
+            clearTranscodeSubtitles()
+            transcodeSubtitleTrackId = track.id
+        }
+        var request = URLRequest(url: url)
+        for (key, value) in streamHeaders { request.setValue(value, forHTTPHeaderField: key) }
+        if let player {
+            transcodeSubtitleTimeObserver = player.addPeriodicTimeObserver(
+                forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main
+            ) { [weak self] time in
+                MainActor.assumeIsolated { self?.aetherSubtitleModel.sourceTime = time.seconds }
+            }
+        }
+        let sessionId = plexSessionId
+        transcodeSubtitleTask = Task { [weak self] in
+            let gotHeader = await TranscodeSubtitleStream.read(request, onHeader: { header in
+                guard let self else { return }
+                if self.assTrack?.trackId != track.id || self.assTrack?.header != header {
+                    self.assTrack = ASSTrackSource(trackId: track.id, header: header, fonts: [])
+                }
+            }, onEvent: { event in
+                // ponytail: one update per line re-walks the list in the libass feed; batch if long files show it.
+                self?.appendTranscodeCue(AetherSubtitleCue(id: 0, startTime: event.start, endTime: event.end,
+                                                           body: .assEvents(event.line)))
+            })
+            guard let self, !Task.isCancelled else { return }
+            // PMS closes the stream when a seek past the transcoded range restarts
+            // its transcoder, and asking again then starts a second session over the
+            // first. Restarting the transcode at the playhead brings a fresh stream.
+            guard gotHeader, self.plexSessionId == sessionId, self.duration - self.playheadForReload > 30,
+                  Date().timeIntervalSince(self.lastTranscodeSubtitleRestart) > 15 else { return }
+            self.lastTranscodeSubtitleRestart = Date()
+            self.reloadTranscodeForTrackChange()
+        }
+    }
+
+    private func appendTranscodeCue(_ cue: AetherSubtitleCue) {
+        var cues = aetherSubtitleModel.cues
+        // A reloaded transcode resends lines from its own start, so it can land mid-list.
+        cues.insert(cue, at: cues.lastIndex { $0.startTime <= cue.startTime }.map { $0 + 1 } ?? 0)
+        aetherSubtitleModel.update(cues: cues)
+    }
+
+    private func stopTranscodeSubtitleReader() {
+        transcodeSubtitleTask?.cancel()
+        transcodeSubtitleTask = nil
+        if let transcodeSubtitleTimeObserver, let player { player.removeTimeObserver(transcodeSubtitleTimeObserver) }
+        transcodeSubtitleTimeObserver = nil
+    }
+
+    private func clearTranscodeSubtitles() {
+        guard transcodeSubtitleTrackId != nil else { return }
+        transcodeSubtitleTrackId = nil
+        aetherSubtitleModel.update(cues: [])
+        assTrack = nil
     }
 
     private func activeSubtitleTextForFilter() -> [String] {
@@ -1343,6 +1425,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                         let dur = item.duration.seconds
                         if dur.isFinite { self.duration = dur }
                         self.updateTrackLists()
+                        self.startTranscodeSubtitles()
                     case .failed:
                         let message = item.error?.localizedDescription ?? "Playback failed"
                         print("[Player] AVPlayerItem status: FAILED — \(message)")
@@ -1443,6 +1526,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Tear down AVPlayer observers.
     private func teardownAVPlayerObservers() {
+        stopTranscodeSubtitleReader()
         rateObservation?.invalidate()
         rateObservation = nil
         timeControlObservation?.invalidate()
@@ -1739,7 +1823,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             useDolbyVision: metadata.hasDolbyVision,
             forceVideoTranscode: forceVideoTranscode,
             allowAudioDirectStream: allowAudioDirectStreamDecision(reason: "rivulet_hls_fallback_build"),
-            step: activeStreamPlan.step
+            step: activeStreamPlan.step,
+            clientRendersTextSubtitles: true
         ) else {
             return nil
         }
@@ -2949,6 +3034,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func releaseAVPlayer() {
         guard player != nil else { return }
         teardownAVPlayerObservers()
+        clearTranscodeSubtitles()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
@@ -4673,7 +4759,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         let changed = id != currentSubtitleTrackId
         currentSubtitleTrackId = id
         syncSilentSubtitleRead()
-        if changed, reloadsTranscode, aetherPlayer == nil { reloadTranscodeForTrackChange() }
+        if changed, reloadsTranscode, aetherPlayer == nil {
+            // The old track's captions go now, not when the reloaded transcode is ready.
+            stopTranscodeSubtitleReader()
+            clearTranscodeSubtitles()
+            reloadTranscodeForTrackChange()
+        }
     }
 
     private func plexAudioTracksFromMetadata() -> [MediaTrack] {
