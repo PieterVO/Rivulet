@@ -26,8 +26,9 @@ final class GameMatcherTests: XCTestCase {
     }
 
     private func program(_ title: String, from: TimeInterval = 0, to: TimeInterval = 3.5 * 3600,
-                         category: String? = nil) -> UnifiedProgram {
-        UnifiedProgram(id: title, channelId: "c", title: title, startTime: kickoff.addingTimeInterval(from),
+                         category: String? = nil, description: String? = nil) -> UnifiedProgram {
+        UnifiedProgram(id: title, channelId: "c", title: title, description: description,
+                       startTime: kickoff.addingTimeInterval(from),
                        endTime: kickoff.addingTimeInterval(to), category: category)
     }
 
@@ -107,6 +108,31 @@ final class GameMatcherTests: XCTestCase {
         XCTAssertEqual(channel?.id, "live")
         XCTAssertNil(GameMatcher.channel(airing: game(team("DAL", "Dallas", "Cowboys"), falcons),
                                          channels: [replay, live, other]) { current[$0.id] })
+    }
+
+    /// Dispatcharr's Gracenote guide, 2026-10-17: generic title, matchup in the description.
+    func test_descriptionLeadSentence() {
+        let osu = team("OSU", "Ohio State", "Buckeyes", short: "Ohio State")
+        let indiana = team("IU", "Indiana", "Hoosiers", short: "Indiana")
+        let rutgers = team("RUTG", "Rutgers", "Scarlet Knights", short: "Rutgers")
+        let maryland = team("MD", "Maryland", "Terrapins", short: "Maryland")
+        let games = [game(osu, indiana, id: "osu"), game(rutgers, maryland, id: "md")]
+        let boards: [League: Scoreboard] = [.collegeFootball: board(.collegeFootball, games)]
+
+        let fox = program("Live: College Football", description: "No. 5 Indiana Hoosiers host No. 4 Ohio State "
+            + "Buckeyes in a top-five Big Ten conference showdown. The Hoosiers and Buckeyes are both 3-0.")
+        XCTAssertEqual(GameMatcher.game(for: fox, channel: nil, in: boards)?.game.id, "osu")
+
+        // The recap sentence names the Buckeyes and Hoosiers; only the lead counts.
+        let btn = program("Live: College Football", description: "Maryland Terrapins host Rutgers Scarlet Knights "
+            + "in Week 7 at SECU Stadium. The Terrapins lost 45-16 to the Buckeyes, while the Scarlet Knights "
+            + "suffered a 47-15 loss to the Hoosiers.")
+        XCTAssertEqual(GameMatcher.game(for: btn, channel: nil, in: boards)?.game.id, "md")
+        XCTAssertFalse(GameMatcher.matches(btn, games[0]))
+
+        let scoreboardShow = program("Live: College Football Scoreboard",
+                                     description: "Presenting up-to-the-minute scores and highlights.")
+        XCTAssertNil(GameMatcher.game(for: scoreboardShow, channel: nil, in: boards))
     }
 
     func test_mightBeGame() {

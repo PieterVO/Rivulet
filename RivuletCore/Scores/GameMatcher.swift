@@ -6,8 +6,9 @@
 //  Rivulet
 //
 //  Which scoreboard game a guide programme is showing, and which channel is
-//  airing a game. A programme matches when its title names both teams and
-//  the game starts within four hours of the programme's slot.
+//  airing a game. A programme matches when its title (or, failing that, the
+//  description's first sentence) names both teams and the game starts within
+//  four hours of the programme's slot.
 //
 
 import Foundation
@@ -49,9 +50,21 @@ enum GameMatcher {
     static func matches(_ program: UnifiedProgram, _ game: ScoreGame) -> Bool {
         guard game.start >= program.startTime.addingTimeInterval(-slack),
               game.start <= program.endTime.addingTimeInterval(slack) else { return false }
-        let title = program.displayTitle
-        let text = normalized(title)
-        let words = Set(title.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        return namesBoth(game, in: program.displayTitle)
+            || program.description.map { namesBoth(game, in: leadSentence($0)) } == true
+    }
+
+    /// Gracenote guides title every game "Live: College Football" and name the
+    /// matchup only in the description's opening sentence; later sentences recap
+    /// other teams, so only the first counts.
+    static func leadSentence(_ description: String) -> String {
+        let text = description.replacing(/\b(No|St|Jr|Mt)\.\s/) { "\($0.1) " }
+        return text.split(separator: /[.!?]\s/, maxSplits: 1).first.map(String.init) ?? text
+    }
+
+    private static func namesBoth(_ game: ScoreGame, in s: String) -> Bool {
+        let text = normalized(s)
+        let words = Set(s.split { !$0.isLetter && !$0.isNumber }.map(String.init))
         return names(game.away, in: text, words: words) && names(game.home, in: text, words: words)
     }
 
