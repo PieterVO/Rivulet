@@ -1829,10 +1829,6 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private func presentScoresPanel() {
         guard let matchedGame else { return }
         let store = LiveTVDataStore.shared
-        let channels = store.channels
-        // One guide lookup per channel, shared by every card.
-        let current = Dictionary(channels.map { ($0.id, store.getCurrentProgram(for: $0)) },
-                                 uniquingKeysWith: { first, _ in first })
         let watchWithScores = onWatchWithScores.map { action in
             { [weak self] in
                 self?.activePanel?.dismissPanel()
@@ -1842,8 +1838,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         let pane = LiveScoresPaneView(
             league: matchedGame.league,
             currentGameID: matchedGame.game.id,
-            channelAiring: { game in
-                GameMatcher.channel(airing: game, channels: channels, current: { current[$0.id] ?? nil })
+            channelsAiring: { games in
+                GameMatcher.channels(airing: games, channels: store.channels,
+                                     current: { store.getCurrentProgram(for: $0) })
             },
             onSelect: { [weak self] selected in
                 self?.activePanel?.dismissPanel()

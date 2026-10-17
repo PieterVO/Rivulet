@@ -691,9 +691,9 @@ final class LiveMultiviewViewController: UIViewController {
             league: match?.league ?? .nfl,
             currentGameID: match?.game.id,
             axis: .vertical,
-            channelAiring: { game in
-                GameMatcher.channel(airing: game, channels: store.channels,
-                                    current: { store.getCurrentProgram(for: $0) })
+            channelsAiring: { games in
+                GameMatcher.channels(airing: games, channels: store.channels,
+                                     current: { store.getCurrentProgram(for: $0) })
             },
             onSelect: { [weak self] channel in self?.switchMain(to: channel) },
             onWatchWithScores: nil)

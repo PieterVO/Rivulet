@@ -135,6 +135,19 @@ final class GameMatcherTests: XCTestCase {
         XCTAssertNil(GameMatcher.game(for: scoreboardShow, channel: nil, in: boards))
     }
 
+    func test_channelsAiringBoard() {
+        let live = UnifiedChannel(id: "live", sourceType: .genericM3U, sourceId: "s", name: "FOX 6")
+        let news = UnifiedChannel(id: "news", sourceType: .genericM3U, sourceId: "s", name: "CNN")
+        let current: [String: UnifiedProgram] = [
+            "live": program("Live: NFL Football", description: "The Atlanta Falcons host the Chicago Bears."),
+            "news": program("CNN News Central", description: "Chicago Bears at Atlanta Falcons preview."),
+        ]
+        let cowboys = game(team("DAL", "Dallas", "Cowboys"), falcons, id: "dal")
+        let airing = GameMatcher.channels(airing: [bearsFalcons, cowboys], channels: [live, news]) { current[$0.id] }
+        // News that mentions the game is not airing it.
+        XCTAssertEqual(airing, ["g": live])
+    }
+
     func test_mightBeGame() {
         XCTAssertTrue(GameMatcher.mightBeGame(program("Bears at Falcons")))
         XCTAssertTrue(GameMatcher.mightBeGame(program("Live: SportsCenter")))

@@ -27,7 +27,7 @@ final class LiveScoresPaneView: UIView {
 
     private(set) var currentGameID: String?
     private let axis: NSLayoutConstraint.Axis
-    private let channelAiring: (ScoreGame) -> UnifiedChannel?
+    private let channelsAiring: ([ScoreGame]) -> [String: UnifiedChannel]
     private let onSelect: (UnifiedChannel) -> Void
     private let onWatchWithScores: (() -> Void)?
 
@@ -46,13 +46,13 @@ final class LiveScoresPaneView: UIView {
     private var observers = Set<AnyCancellable>()
 
     init(league: League, currentGameID: String?, axis: NSLayoutConstraint.Axis = .horizontal,
-         channelAiring: @escaping (ScoreGame) -> UnifiedChannel?,
+         channelsAiring: @escaping ([ScoreGame]) -> [String: UnifiedChannel],
          onSelect: @escaping (UnifiedChannel) -> Void,
          onWatchWithScores: (() -> Void)?) {
         self.league = league
         self.currentGameID = currentGameID
         self.axis = axis
-        self.channelAiring = channelAiring
+        self.channelsAiring = channelsAiring
         self.onSelect = onSelect
         self.onWatchWithScores = onWatchWithScores
         super.init(frame: .zero)
@@ -194,8 +194,9 @@ final class LiveScoresPaneView: UIView {
     private func buildCards() {
         cards.forEach { $0.removeFromSuperview() }
         let games = Self.ordered(ScoreboardPoller.shared.boards[league]?.games ?? [], currentID: currentGameID)
+        let airing = channelsAiring(games)
         cards = games.map { game in
-            let channel = channelAiring(game)
+            let channel = airing[game.id]
             let card = ScoresPaneCardView(game: game, isCurrent: game.id == currentGameID, isAiring: channel != nil)
             if let channel { card.onPress = { [weak self] in self?.onSelect(channel) } }
             return card
@@ -280,7 +281,7 @@ final class LiveScoresPaneView: UIView {
 }
 
 /// One game: both teams' logo, abbreviation and score (from kickoff), the
-/// status line and a LIVE marker. Dimmed when no channel airs it. Also the
+/// status line, and a LIVE marker when a channel airs it live. Also the
 /// closing "Watch with Scores" card.
 private final class ScoresPaneCardView: UIView {
 
@@ -293,6 +294,7 @@ private final class ScoresPaneCardView: UIView {
     private(set) var gameID: String?
     var onPress: (() -> Void)?
     private let isCurrent: Bool
+    private let isAiring: Bool
     private let plate = UIView()
     private var rows: [(logo: UIImageView, abbr: UILabel, score: UILabel)] = []
     private let detail = UILabel()
@@ -302,10 +304,10 @@ private final class ScoresPaneCardView: UIView {
 
     init(game: ScoreGame, isCurrent: Bool, isAiring: Bool) {
         self.isCurrent = isCurrent
+        self.isAiring = isAiring
         gameID = game.id
         super.init(frame: .zero)
         setUpPlate()
-        alpha = isAiring ? 1 : 0.4
 
         var previous: UIView?
         for _ in 0..<2 {
@@ -365,6 +367,7 @@ private final class ScoresPaneCardView: UIView {
     /// The closing card that opens multiview's scores layout.
     init(watchWithScores: Void) {
         isCurrent = false
+        isAiring = false
         super.init(frame: .zero)
         setUpPlate()
         let icon = UIImageView(image: UIImage(systemName: "rectangle.split.2x1"))
@@ -419,7 +422,7 @@ private final class ScoresPaneCardView: UIView {
             row.score.text = game.state == .pre ? nil : team.score.map(String.init)
         }
         detail.text = game.detail
-        liveBadge.isHidden = game.state != .in
+        liveBadge.isHidden = !(isAiring && game.state == .in)
         let urls = [game.away.logo, game.home.logo]
         guard urls != logoURLs else { return }
         logoURLs = urls

@@ -28,8 +28,9 @@ enum GameMatcher {
     static func game(for program: UnifiedProgram, channel: UnifiedChannel?,
                      in boards: [League: Scoreboard]) -> (league: League, game: ScoreGame)? {
         let hint = leagueHint(program, channel: channel)
+        let guide = GuideText(program)
         let found = League.allCases.flatMap { league in
-            (boards[league]?.games ?? []).filter { matches(program, $0) }.map { (league: league, game: $0) }
+            (boards[league]?.games ?? []).filter { guide.matches($0) }.map { (league: league, game: $0) }
         }
         return found.min { a, b in
             if (a.league == hint) != (b.league == hint) { return a.league == hint }
@@ -41,17 +42,48 @@ enum GameMatcher {
     /// The channel airing `game` now, preferring a live airing over a replay.
     static func channel(airing game: ScoreGame, channels: [UnifiedChannel],
                         current: (UnifiedChannel) -> UnifiedProgram?) -> UnifiedChannel? {
-        let airing = channels.compactMap { channel in
-            current(channel).flatMap { matches($0, game) ? (channel, $0) : nil }
+        self.channels(airing: [game], channels: channels, current: current)[game.id]
+    }
+
+    /// The channel airing each game, by game id. Reads each channel's guide once,
+    /// so a whole board costs one pass over the lineup, not one per game.
+    static func channels(airing games: [ScoreGame], channels: [UnifiedChannel],
+                         current: (UnifiedChannel) -> UnifiedProgram?) -> [String: UnifiedChannel] {
+        let guides = channels.compactMap { channel in
+            current(channel).flatMap { mightBeGame($0) ? (channel, $0.isLiveAiring, GuideText($0)) : nil }
         }
-        return (airing.first { $0.1.isLiveAiring } ?? airing.first)?.0
+        var result: [String: UnifiedChannel] = [:]
+        for game in games {
+            let airing = guides.filter { $0.2.matches(game) }
+            if let pick = airing.first(where: { $0.1 }) ?? airing.first { result[game.id] = pick.0 }
+        }
+        return result
     }
 
     static func matches(_ program: UnifiedProgram, _ game: ScoreGame) -> Bool {
-        guard game.start >= program.startTime.addingTimeInterval(-slack),
-              game.start <= program.endTime.addingTimeInterval(slack) else { return false }
-        return namesBoth(game, in: program.displayTitle)
-            || program.description.map { namesBoth(game, in: leadSentence($0)) } == true
+        GuideText(program).matches(game)
+    }
+
+    /// A programme's searchable lines (title, then the description's lead), built once.
+    private struct GuideText {
+        let start: Date
+        let end: Date
+        let lines: [(text: String, words: Set<String>)]
+
+        init(_ program: UnifiedProgram) {
+            start = program.startTime
+            end = program.endTime
+            lines = ([program.displayTitle] + (program.description.map { [leadSentence($0)] } ?? [])).map {
+                (normalized($0), Set($0.split { !$0.isLetter && !$0.isNumber }.map(String.init)))
+            }
+        }
+
+        func matches(_ game: ScoreGame) -> Bool {
+            guard game.start >= start.addingTimeInterval(-slack),
+                  game.start <= end.addingTimeInterval(slack) else { return false }
+            return lines.contains { names(game.away, in: $0.text, words: $0.words)
+                && names(game.home, in: $0.text, words: $0.words) }
+        }
     }
 
     /// Gracenote guides title every game "Live: College Football" and name the
@@ -60,12 +92,6 @@ enum GameMatcher {
     static func leadSentence(_ description: String) -> String {
         let text = description.replacing(/\b(No|St|Jr|Mt)\.\s/) { "\($0.1) " }
         return text.split(separator: /[.!?]\s/, maxSplits: 1).first.map(String.init) ?? text
-    }
-
-    private static func namesBoth(_ game: ScoreGame, in s: String) -> Bool {
-        let text = normalized(s)
-        let words = Set(s.split { !$0.isLetter && !$0.isNumber }.map(String.init))
-        return names(game.away, in: text, words: words) && names(game.home, in: text, words: words)
     }
 
     private static func names(_ team: ScoreTeam, in text: String, words: Set<String>) -> Bool {
