@@ -675,9 +675,12 @@ final class LiveMultiviewViewController: UIViewController {
     private func updateScoresListGame() {
         guard let list = scoresList, let match = viewModel.scoresMatch,
               match.game.id != list.currentGameID else { return }
-        let hadFocus = (UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView)?.isDescendant(of: list) ?? false
+        let focusInList = { (UIFocusSystem.focusSystem(for: self.view)?.focusedItem as? UIView)?.isDescendant(of: list) ?? false }
+        let hadFocus = focusInList()
         list.setCurrentGame(match.game.id, league: match.league)
-        if hadFocus {
+        // Cards move in place, so focus normally stays on the picked game; only a
+        // league change rebuilds them and needs focus put back.
+        if hadFocus, !focusInList() {
             pendingFocus = list
             setNeedsFocusUpdate()
             updateFocusIfNeeded()

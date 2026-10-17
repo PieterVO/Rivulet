@@ -38,6 +38,18 @@ final class LiveScoresPaneTests: XCTestCase {
         XCTAssertEqual(Pane.ordered(games, currentID: nil).map(\.id), ["a", "b", "f"])
     }
 
+    func test_order_watchedGamesFollowCurrent_latestFirst() {
+        let games = [game("live", .in), game("older", .post), game("prev", .in, at: 60), game("mine", .in)]
+        XCTAssertEqual(Pane.ordered(games, currentID: "mine", watchedIDs: ["mine", "prev", "older"]).map(\.id),
+                       ["mine", "prev", "older", "live"])
+    }
+
+    func test_noteWatched_movesToFront_capsAtSix() {
+        (1...7).forEach { Pane.noteWatched("g\($0)") }
+        Pane.noteWatched("g3")
+        XCTAssertEqual(Pane.watchedGameIDs, ["g3", "g7", "g6", "g5", "g4", "g2"])
+    }
+
     func test_leagues_onlyThoseWithGames_inLeagueOrder() {
         let boards: [League: Scoreboard] = [.nhl: board(.nhl, games: [game("x", .pre)]),
                                             .nba: board(.nba, games: []),

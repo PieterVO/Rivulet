@@ -298,7 +298,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// tile. The host presents multiview once this player has closed.
     var onOpenMultiview: ((LiveTVSessionHandoff) -> Void)?
 
-    /// The Scores pane's closing "Watch with Scores" card; hidden while nil.
+    /// The Scores pane's leading "Watch with Scores" card; hidden while nil.
     var onWatchWithScores: (() -> Void)?
 
     /// The scoreboard game the programme on screen shows, kept by `updateRailContent`.
@@ -920,6 +920,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         if let program, GameMatcher.mightBeGame(program) {
             Task { await poller.refreshIfStale(maxAge: 300) }
             matchedGame = GameMatcher.game(for: program, channel: channel, in: poller.boards)
+            LiveScoresPaneView.noteWatched(matchedGame?.game.id)
         } else {
             matchedGame = nil
         }

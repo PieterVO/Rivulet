@@ -54,6 +54,7 @@ final class LiveScoresPaneView: UIView {
          onWatchWithScores: (() -> Void)?) {
         self.league = league
         self.currentGameID = currentGameID
+        Self.noteWatched(currentGameID)
         self.axis = axis
         self.channelsAiring = channelsAiring
         self.onSelect = onSelect
@@ -66,9 +67,17 @@ final class LiveScoresPaneView: UIView {
         statusLabel.font = .systemFont(ofSize: 21, weight: .medium)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         applyChromeTextShadow([statusLabel])
+        // Only the bottom corners meet the glass; rounded tops cut into the first card's focus.
         scrollView.clipsToBounds = true
-        scrollView.layer.cornerRadius = Metrics.radius
+        scrollView.layer.cornerRadius = axis == .horizontal ? Metrics.radius - 10 : Metrics.radius
+        scrollView.layer.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
         scrollView.layer.cornerCurve = .continuous
+        if axis == .vertical {
+            // The tab strip scrolls to the pane's edges; keep it inside the glass's corners.
+            layer.cornerRadius = Metrics.radius
+            layer.cornerCurve = .continuous
+            clipsToBounds = true
+        }
         stack.axis = axis
         stack.spacing = Metrics.gap
         scrollView.addSubview(stack)
@@ -118,7 +127,7 @@ final class LiveScoresPaneView: UIView {
             // Room above and below the tabs for their focus growth.
             let tabPad: CGFloat = 10
             scrollView.showsVerticalScrollIndicator = false
-            scrollView.contentInset = UIEdgeInsets(top: 16, left: 0, bottom: 16, right: 0)
+            scrollView.contentInset = UIEdgeInsets(top: 16, left: Metrics.sideInset, bottom: 16, right: Metrics.sideInset)
             stack.alignment = .fill
             tabScroll.showsHorizontalScrollIndicator = false
             tabScroll.clipsToBounds = true
@@ -142,8 +151,6 @@ final class LiveScoresPaneView: UIView {
                 scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
                 stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor,
                                              constant: -Metrics.sideInset * 2),
-                stack.leadingAnchor.constraint(equalTo: scrollView.frameLayoutGuide.leadingAnchor,
-                                               constant: Metrics.sideInset),
                 tabGuide.topAnchor.constraint(equalTo: tabScroll.bottomAnchor),
             ])
         }
@@ -162,17 +169,33 @@ final class LiveScoresPaneView: UIView {
         League.allCases.filter { boards[$0]?.games.isEmpty == false }
     }
 
-    /// The game on screen first, then live, upcoming and final, each by start.
-    static func ordered(_ games: [ScoreGame], currentID: String?) -> [ScoreGame] {
-        func rank(_ game: ScoreGame) -> Int {
-            if game.id == currentID { return 0 }
+    /// The game on screen first, then games watched earlier (latest first), then
+    /// live, upcoming and final, each by start.
+    static func ordered(_ games: [ScoreGame], currentID: String?, watchedIDs: [String] = []) -> [ScoreGame] {
+        func rank(_ game: ScoreGame) -> (Int, Int) {
+            if game.id == currentID { return (0, 0) }
+            if let index = watchedIDs.firstIndex(of: game.id) { return (1, index) }
             switch game.state {
-            case .in: return 1
-            case .pre: return 2
-            case .post: return 3
+            case .in: return (2, 0)
+            case .pre: return (3, 0)
+            case .post: return (4, 0)
             }
         }
-        return games.sorted { (rank($0), $0.start) < (rank($1), $1.start) }
+        return games.sorted {
+            let (a, b) = (rank($0), rank($1))
+            return (a.0, a.1, $0.start) < (b.0, b.1, $1.start)
+        }
+    }
+
+    /// Games watched this session, latest first, shared by the player pane and
+    /// multiview's column: someone switching games usually switches back.
+    private(set) static var watchedGameIDs: [String] = []
+
+    static func noteWatched(_ id: String?) {
+        guard let id else { return }
+        watchedGameIDs.removeAll { $0 == id }
+        watchedGameIDs.insert(id, at: 0)
+        watchedGameIDs = Array(watchedGameIDs.prefix(6))
     }
 
     /// "Scores paused" while polls fail, "Updated N min ago" on the worker's stale copy.
@@ -196,6 +219,13 @@ final class LiveScoresPaneView: UIView {
         }
     }
 
+    /// Where focus enters the cards: the game on screen, else the first game (never
+    /// the Watch with Scores card before them).
+    private var entryCard: ScoresPaneCardView? {
+        cards.first { $0.gameID != nil && $0.gameID == currentGameID }
+            ?? cards.first { $0.gameID != nil } ?? cards.first
+    }
+
     private var selectedTab: UIView? {
         leagues.firstIndex(of: league).map { tabRow.arrangedSubviews[$0] }
     }
@@ -208,43 +238,60 @@ final class LiveScoresPaneView: UIView {
         cards.forEach { $0.removeFromSuperview() }
         cards = []
         scrollView.contentOffset = axis == .horizontal
-            ? CGPoint(x: -Metrics.sideInset, y: 0) : CGPoint(x: 0, y: -scrollView.contentInset.top)
+            ? CGPoint(x: -Metrics.sideInset, y: 0) : CGPoint(x: -Metrics.sideInset, y: -scrollView.contentInset.top)
         spinner.startAnimating()
-        let games = Self.ordered(ScoreboardPoller.shared.boards[league]?.games ?? [], currentID: currentGameID)
+        let games = Self.ordered(ScoreboardPoller.shared.boards[league]?.games ?? [], currentID: currentGameID,
+                                 watchedIDs: Self.watchedGameIDs)
         let airing = channelsAiring(games)
         var remaining = games[...]
+        // Far left, where it is seen; focus still enters on the first game (`entryCard`).
+        if let onWatchWithScores {
+            let card = ScoresPaneCardView(watchWithScores: ())
+            card.onPress = onWatchWithScores
+            cards.append(card)
+            stack.addArrangedSubview(card)
+        }
         func appendChunk() {
             guard generation == buildGeneration else { return }
             for game in remaining.prefix(6) {
                 let channel = airing[game.id]
-                let card = ScoresPaneCardView(game: game, isCurrent: game.id == currentGameID, isAiring: channel != nil)
+                let card = ScoresPaneCardView(game: game, isAiring: channel != nil)
                 if let channel { card.onPress = { [weak self] in self?.onSelect(channel) } }
                 cards.append(card)
                 stack.addArrangedSubview(card)
             }
             remaining = remaining.dropFirst(6)
             spinner.stopAnimating()
-            tabGuide.preferredFocusEnvironments = cards.first.map { [$0] } ?? []
-            if !remaining.isEmpty {
-                DispatchQueue.main.async(execute: appendChunk)
-            } else if let onWatchWithScores {
-                let card = ScoresPaneCardView(watchWithScores: ())
-                card.onPress = onWatchWithScores
-                cards.append(card)
-                stack.addArrangedSubview(card)
-            }
+            tabGuide.preferredFocusEnvironments = entryCard.map { [$0] } ?? []
+            if !remaining.isEmpty { DispatchQueue.main.async(execute: appendChunk) }
         }
         DispatchQueue.main.async(execute: appendChunk)
     }
 
-    /// Highlights a new current game (multiview's main tile changed channel) and puts it first.
+    /// Puts a new current game first (multiview's main tile changed channel).
     func setCurrentGame(_ id: String?, league: League) {
         guard id != currentGameID || league != self.league else { return }
         currentGameID = id
-        self.league = league
-        buildTabs()
-        buildCards()
-        updateStatus()
+        Self.noteWatched(id)
+        guard league == self.league, let picked = cards.first(where: { $0.gameID != nil && $0.gameID == id }) else {
+            self.league = league
+            buildTabs()
+            buildCards()
+            updateStatus()
+            return
+        }
+        // A game already in view stays put; otherwise the cards move rather than
+        // rebuild, so the focused card survives and focus stays on it.
+        guard !scrollView.bounds.contains(picked.frame) else { return }
+        let games = ScoreboardPoller.shared.boards[league]?.games ?? []
+        let order = Self.ordered(games, currentID: id, watchedIDs: Self.watchedGameIDs).map(\.id)
+        let rank = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let lead = cards.prefix { $0.gameID == nil }
+        let sorted = cards.dropFirst(lead.count).sorted { (rank[$0.gameID ?? ""] ?? .max) < (rank[$1.gameID ?? ""] ?? .max) }
+        cards = Array(lead) + sorted
+        for (index, card) in cards.enumerated() where stack.arrangedSubviews.firstIndex(of: card) != index {
+            stack.insertArrangedSubview(card, at: index)
+        }
     }
 
     /// New scores land in the cards already on screen; the order holds while open.
@@ -284,14 +331,14 @@ final class LiveScoresPaneView: UIView {
     // MARK: - Focus
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        cards.first.map { [$0] } ?? []
+        entryCard.map { [$0] } ?? []
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         guard let next = context.nextFocusedView else { return }
         if let index = tabRow.arrangedSubviews.firstIndex(of: next) {
-            tabGuide.preferredFocusEnvironments = cards.first.map { [$0] } ?? []
+            tabGuide.preferredFocusEnvironments = entryCard.map { [$0] } ?? []
             guard leagues[index] != league else { return }
             league = leagues[index]
             for case let (i, tab as PlayerInfoPillButton) in tabRow.arrangedSubviews.enumerated() {
@@ -307,7 +354,7 @@ final class LiveScoresPaneView: UIView {
 
 /// One game: both teams' logo, abbreviation and score (from kickoff), the
 /// status line, and a LIVE marker when a channel airs it live. Also the
-/// closing "Watch with Scores" card.
+/// leading "Watch with Scores" card.
 private final class ScoresPaneCardView: UIView {
 
     private enum Metrics {
@@ -318,7 +365,6 @@ private final class ScoresPaneCardView: UIView {
 
     private(set) var gameID: String?
     var onPress: (() -> Void)?
-    private let isCurrent: Bool
     private let isAiring: Bool
     private let plate = UIView()
     private var rows: [(logo: UIImageView, abbr: UILabel, score: UILabel)] = []
@@ -327,8 +373,7 @@ private final class ScoresPaneCardView: UIView {
     private var logoURLs: [URL?] = []
     private var imageTasks: [Task<Void, Never>] = []
 
-    init(game: ScoreGame, isCurrent: Bool, isAiring: Bool) {
-        self.isCurrent = isCurrent
+    init(game: ScoreGame, isAiring: Bool) {
         self.isAiring = isAiring
         gameID = game.id
         super.init(frame: .zero)
@@ -389,9 +434,8 @@ private final class ScoresPaneCardView: UIView {
         configure(game)
     }
 
-    /// The closing card that opens multiview's scores layout.
+    /// The leading card that opens multiview's scores layout.
     init(watchWithScores: Void) {
-        isCurrent = false
         isAiring = false
         super.init(frame: .zero)
         setUpPlate()
@@ -426,7 +470,7 @@ private final class ScoresPaneCardView: UIView {
         plate.backgroundColor = UIColor.white.withAlphaComponent(0.12)
         plate.layer.cornerRadius = 24
         plate.layer.cornerCurve = .continuous
-        plate.alpha = isCurrent ? 0.5 : 0
+        plate.alpha = 0
         plate.isUserInteractionEnabled = false
         addSubview(plate)
         plate.translatesAutoresizingMaskIntoConstraints = false
@@ -476,7 +520,7 @@ private final class ScoresPaneCardView: UIView {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
         coordinator.animateFocusChange(gained: focused) {
-            self.plate.alpha = focused ? 1 : (self.isCurrent ? 0.5 : 0)
+            self.plate.alpha = focused ? 1 : 0
             self.transform = focused ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity
         }
     }
