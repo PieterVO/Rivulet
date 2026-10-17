@@ -304,6 +304,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// The scoreboard game the programme on screen shows, kept by `updateRailContent`.
     private(set) var matchedGame: (league: League, game: ScoreGame)?
     private var scoresObservation: AnyCancellable?
+    /// Built once and reused: a board is up to ~60 cards, too slow to rebuild on every visit.
+    private var scoresPane: LiveScoresPaneView?
 
     /// The rail's panes, for Down reopening the last one used.
     enum LivePane { case info, scores, channels }
@@ -1828,6 +1830,13 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// Today's scores, opened on the league of the game on screen.
     private func presentScoresPanel() {
         guard let matchedGame else { return }
+        if let pane = scoresPane {
+            if pane.currentGameID != matchedGame.game.id {
+                pane.setCurrentGame(matchedGame.game.id, league: matchedGame.league)
+            }
+            presentPane(content: pane, pill: railView.scoresButton)
+            return
+        }
         let store = LiveTVDataStore.shared
         let watchWithScores = onWatchWithScores.map { action in
             { [weak self] in
@@ -1847,6 +1856,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 self?.switchChannel(to: selected)
             },
             onWatchWithScores: watchWithScores)
+        scoresPane = pane
         presentPane(content: pane, pill: railView.scoresButton)
     }
 

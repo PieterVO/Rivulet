@@ -42,6 +42,9 @@ final class LiveScoresPaneView: UIView {
     private var leagues: [League] = []
     private var league: League
     private var cards: [ScoresPaneCardView] = []
+    /// Shown until the first cards are in; a board builds a few cards per run-loop turn.
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private var buildGeneration = 0
     private var subscription: ScoreboardPoller.Subscription?
     private var observers = Set<AnyCancellable>()
 
@@ -72,6 +75,10 @@ final class LiveScoresPaneView: UIView {
 
         [glass, tabRow, statusLabel, scrollView, stack].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         [glass, statusLabel, scrollView].forEach { addSubview($0) }
+        spinner.color = .white
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(spinner)
         addLayoutGuide(tabGuide)
         NSLayoutConstraint.activate([
             glass.topAnchor.constraint(equalTo: topAnchor),
@@ -87,6 +94,8 @@ final class LiveScoresPaneView: UIView {
             tabGuide.leadingAnchor.constraint(equalTo: leadingAnchor),
             tabGuide.trailingAnchor.constraint(equalTo: trailingAnchor),
             tabGuide.bottomAnchor.constraint(equalTo: scrollView.topAnchor),
+            spinner.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
         ])
         if axis == .horizontal {
             scrollView.showsHorizontalScrollIndicator = false
@@ -191,25 +200,41 @@ final class LiveScoresPaneView: UIView {
         leagues.firstIndex(of: league).map { tabRow.arrangedSubviews[$0] }
     }
 
+    /// Builds the cards a few per run-loop turn, behind the spinner, so opening the
+    /// pane or switching leagues never stalls on a ~60-card board.
     private func buildCards() {
+        buildGeneration += 1
+        let generation = buildGeneration
         cards.forEach { $0.removeFromSuperview() }
-        let games = Self.ordered(ScoreboardPoller.shared.boards[league]?.games ?? [], currentID: currentGameID)
-        let airing = channelsAiring(games)
-        cards = games.map { game in
-            let channel = airing[game.id]
-            let card = ScoresPaneCardView(game: game, isCurrent: game.id == currentGameID, isAiring: channel != nil)
-            if let channel { card.onPress = { [weak self] in self?.onSelect(channel) } }
-            return card
-        }
-        if let onWatchWithScores {
-            let card = ScoresPaneCardView(watchWithScores: ())
-            card.onPress = onWatchWithScores
-            cards.append(card)
-        }
-        cards.forEach { stack.addArrangedSubview($0) }
+        cards = []
         scrollView.contentOffset = axis == .horizontal
             ? CGPoint(x: -Metrics.sideInset, y: 0) : CGPoint(x: 0, y: -scrollView.contentInset.top)
-        tabGuide.preferredFocusEnvironments = cards.first.map { [$0] } ?? []
+        spinner.startAnimating()
+        let games = Self.ordered(ScoreboardPoller.shared.boards[league]?.games ?? [], currentID: currentGameID)
+        let airing = channelsAiring(games)
+        var remaining = games[...]
+        func appendChunk() {
+            guard generation == buildGeneration else { return }
+            for game in remaining.prefix(6) {
+                let channel = airing[game.id]
+                let card = ScoresPaneCardView(game: game, isCurrent: game.id == currentGameID, isAiring: channel != nil)
+                if let channel { card.onPress = { [weak self] in self?.onSelect(channel) } }
+                cards.append(card)
+                stack.addArrangedSubview(card)
+            }
+            remaining = remaining.dropFirst(6)
+            spinner.stopAnimating()
+            tabGuide.preferredFocusEnvironments = cards.first.map { [$0] } ?? []
+            if !remaining.isEmpty {
+                DispatchQueue.main.async(execute: appendChunk)
+            } else if let onWatchWithScores {
+                let card = ScoresPaneCardView(watchWithScores: ())
+                card.onPress = onWatchWithScores
+                cards.append(card)
+                stack.addArrangedSubview(card)
+            }
+        }
+        DispatchQueue.main.async(execute: appendChunk)
     }
 
     /// Highlights a new current game (multiview's main tile changed channel) and puts it first.
