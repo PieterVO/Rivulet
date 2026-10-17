@@ -5,14 +5,15 @@
 //  ASSOverlayView.swift
 //  Rivulet
 //
-//  Draws an ASS/SSA track through libass: one layer over the picture rect,
-//  re-rendered each display frame while a track is set. Lives inside
-//  CaptionOverlayView, which decides whether a track renders here or as
-//  plain captions.
+//  Draws an ASS/SSA track through libass: up to four region layers over the
+//  picture rect. libass renders ahead of the playhead on its own queue
+//  (ASSRenderQueue); the display tick only picks the unit for the frame on
+//  screen. Lives inside CaptionOverlayView, which decides whether a track
+//  renders here or as plain captions.
 //
 //  Events come from the model's FULL cue list, not the active set: libass
 //  schedules them itself, and a `\fad` or `\move` needs the whole event.
-//  Each line is handed over once. The engine re-decodes the window after a
+//  Each cue is handed over once. The engine re-decodes the window after a
 //  seek and re-emits the same lines, and libass's own ReadOrder dedupe is off
 //  (see LibassRenderer).
 //
@@ -56,11 +57,16 @@ final class ASSOverlayView: UIView {
 
     private let model: SubtitleModel
     private var renderer: LibassRenderer?
+    private var fedIDs = Set<Int>()
     private var fedKeys = Set<String>()
+    private var configuration: [Double] = []
     private var displayLink: CADisplayLink?
-    private var renderInFlight = false
-    private var generation = 0
-    private let imageLayer = CALayer()
+    private var schedule = ASSRenderQueue()
+    private var shownUnitID: Int?
+    private var lastPlayheadMs: Double?
+    /// Recent libass + composite cost per frame, in ms.
+    private var renderCostMs = 0.0
+    private let regionLayers = (0..<ASSCompositor.maxRegions).map { _ in CALayer() }
     private var cancellables = Set<AnyCancellable>()
 
     init(model: SubtitleModel) {
@@ -68,8 +74,10 @@ final class ASSOverlayView: UIView {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         backgroundColor = .clear
-        imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
-        layer.addSublayer(imageLayer)
+        for region in regionLayers {
+            region.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+            layer.addSublayer(region)
+        }
         model.$cues
             .sink { [weak self] cues in self?.feed(cues) }
             .store(in: &cancellables)
@@ -93,10 +101,11 @@ final class ASSOverlayView: UIView {
     private var scale: CGFloat { max(1, traitCollection.displayScale) }
 
     private func rebuildRenderer() {
-        generation += 1
         renderer = track.flatMap { LibassRenderer(header: $0.header, fonts: $0.fonts) }
+        fedIDs.removeAll()
         fedKeys.removeAll()
-        imageLayer.contents = nil
+        configuration = []
+        resetSchedule()
         configureRenderer()
         feed(model.cues)
         updateDisplayLink()
@@ -104,18 +113,35 @@ final class ASSOverlayView: UIView {
 
     private func configureRenderer() {
         guard let renderer else { return }
-        // ponytail: renders at the display's pixel scale (2x on a 4K TV); drop to 1x if Task 8 shows dense frames over budget.
-        renderer.configure(frameWidth: Int((bounds.width * scale).rounded()),
-                           frameHeight: Int((bounds.height * scale).rounded()),
-                           storageWidth: Int(storageSize.width.rounded()),
-                           storageHeight: Int(storageSize.height.rounded()),
+        let next = [(bounds.width * scale).rounded(), (bounds.height * scale).rounded(),
+                    storageSize.width.rounded(), storageSize.height.rounded(), linePosition]
+        guard next != configuration else { return }
+        configuration = next
+        // ponytail: renders at the display's pixel scale (2x on a 4K TV); drop to 1x if dense frames fall behind on device.
+        renderer.configure(frameWidth: Int(next[0]), frameHeight: Int(next[1]),
+                           storageWidth: Int(next[2]), storageHeight: Int(next[3]),
                            linePosition: linePosition)
+        // Keeps the old image up until the new geometry's first frame lands.
+        resetSchedule(blank: false)
+    }
+
+    /// Drops every rendered unit and every job in flight.
+    private func resetSchedule(blank: Bool = true) {
+        schedule.reset()
+        renderer?.cancelJobs(before: schedule.generation)
+        if blank { show(nil) }
     }
 
     private func feed(_ cues: [AetherSubtitleCue]) {
         guard let renderer else { return }
         var events: [LibassRenderer.Event] = []
         for cue in cues {
+            // The engine stamps a cue's id once per session and keeps it across
+            // end trims and re-decodes. Id 0 is also what an unstamped source
+            // sends, so it falls through to the line key.
+            if cue.id != 0 {
+                guard fedIDs.insert(cue.id).inserted else { continue }
+            }
             guard case .assEvents(let body) = cue.body else { continue }
             let startMs = Int64((cue.startTime * 1000).rounded())
             let durationMs = Int64(((cue.endTime - cue.startTime) * 1000).rounded())
@@ -128,7 +154,10 @@ final class ASSOverlayView: UIView {
                 events.append(.init(line: String(line), startMs: startMs, durationMs: durationMs))
             }
         }
-        if !events.isEmpty { renderer.add(events) }
+        guard !events.isEmpty else { return }
+        renderer.add(events)
+        schedule.eventsAdded(events.map { Double($0.startMs)..<Double($0.startMs + max($0.durationMs, 1)) })
+        renderer.cancelJobs(before: schedule.generation)
     }
 
     // MARK: Display link
@@ -143,37 +172,57 @@ final class ASSOverlayView: UIView {
         } else if !wanted {
             displayLink?.invalidate()
             displayLink = nil
-            renderInFlight = false
+            lastPlayheadMs = nil
+            resetSchedule()
         }
     }
 
+    /// No libass work here: picks the unit for the frame on screen and starts
+    /// the next render batch when the queue runs low.
     fileprivate func tick(_ link: CADisplayLink) {
-        // A render still running means libass is behind the display; skip
-        // this frame rather than queue work that lands late.
-        guard let renderer, !renderInFlight else { return }
+        guard let renderer else { return }
         let shown = sourceClock?(link.targetTimestamp) ?? model.sourceTime
-        let ms = Int64(((shown - model.delaySeconds) * 1000).rounded())
-        renderInFlight = true
-        let generation = self.generation
-        Task { [weak self] in
-            let output = await renderer.render(atMs: ms)
-            guard let self else { return }
-            self.renderInFlight = false
-            guard generation == self.generation else { return }
-            self.apply(output)
+        let playhead = (shown - model.delaySeconds) * 1000
+        let playing = lastPlayheadMs.map { $0 != playhead } ?? false
+        lastPlayheadMs = playhead
+        // One unit per display frame, or fewer when libass can't keep that pace.
+        let stepMs = max(max(link.targetTimestamp - link.timestamp, 1.0 / 120) * 1000, renderCostMs * 2)
+
+        if let job = schedule.nextJob(playheadMs: playhead, stepMs: stepMs, playing: playing) {
+            renderer.cancelJobs(before: job.generation)
+            Task { [weak self] in
+                let t0 = CACurrentMediaTime()
+                let outputs = await renderer.render(job)
+                let dt = (CACurrentMediaTime() - t0) * 1000
+                guard let self, self.renderer === renderer else { return }
+                if !outputs.isEmpty { self.renderCostMs += (dt / Double(outputs.count) - self.renderCostMs) * 0.2 }
+                self.schedule.complete(job, outputs: outputs)
+            }
+        }
+        // Until a seek's first frame lands nothing covers the playhead; keep
+        // what is on screen rather than blink.
+        if let unit = schedule.unit(at: playhead), unit.id != shownUnitID {
+            show(unit.frame)
+            shownUnitID = unit.id
         }
     }
 
-    private func apply(_ output: LibassRenderer.Output) {
-        guard case .changed(let frame) = output else { return }
-        guard let frame else {
-            imageLayer.contents = nil
-            return
+    private func show(_ frame: LibassRenderer.Frame?) {
+        shownUnitID = nil
+        let regions = frame?.regions ?? []
+        for (index, layer) in regionLayers.enumerated() {
+            guard index < regions.count else {
+                layer.contents = nil
+                layer.isHidden = true
+                continue
+            }
+            let region = regions[index]
+            layer.contentsScale = scale
+            layer.frame = CGRect(x: region.rect.minX / scale, y: region.rect.minY / scale,
+                                 width: region.rect.width / scale, height: region.rect.height / scale)
+            layer.contents = region.image
+            layer.isHidden = false
         }
-        imageLayer.contentsScale = scale
-        imageLayer.frame = CGRect(x: frame.rect.minX / scale, y: frame.rect.minY / scale,
-                                  width: frame.rect.width / scale, height: frame.rect.height / scale)
-        imageLayer.contents = frame.image
     }
 }
 
@@ -185,3 +234,4 @@ private final class DisplayLinkTarget: NSObject {
 
     @objc func tick(_ link: CADisplayLink) { owner?.tick(link) }
 }
+

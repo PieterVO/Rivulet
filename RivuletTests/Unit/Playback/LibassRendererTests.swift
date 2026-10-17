@@ -91,7 +91,7 @@ final class LibassRendererTests: XCTestCase {
         func rect(_ line: String, _ position: Double) throws -> CGRect {
             let renderer = try makeRenderer(linePosition: position)
             renderer.add([.init(line: line, startMs: 0, durationMs: 5000)])
-            return try XCTUnwrap(frame(renderer.renderNow(atMs: 1000))).rect
+            return try XCTUnwrap(frame(renderer.renderNow(atMs: 1000))).bounds
         }
         let low = try rect(dialogue, 0), high = try rect(dialogue, 20)
         let lift = low.minY - high.minY
@@ -103,6 +103,47 @@ final class LibassRendererTests: XCTestCase {
         let renderer = try makeRenderer()
         renderer.add([.init(line: "1,0,Default,,0,0,0,,日本語のテスト", startMs: 0, durationMs: 5000)])
         let rendered = try XCTUnwrap(frame(renderer.renderNow(atMs: 1000)))
-        XCTAssertGreaterThan(rendered.rect.width, 100)
+        XCTAssertGreaterThan(rendered.bounds.width, 100)
     }
+
+    // MARK: Render-ahead jobs
+
+    private func changedCount(_ outputs: [LibassRenderer.Output]) -> Int {
+        outputs.filter { if case .changed = $0 { return true } else { return false } }.count
+    }
+
+    func test_staticLine_isOneImageForTheWholeJob() throws {
+        let renderer = try makeRenderer()
+        renderer.add([.init(line: "1,0,Default,,0,0,0,,Hello", startMs: 0, durationMs: 5000)])
+        let job = ASSRenderJob(fromMs: 1000, stepMs: 1000 / 24, count: 12, force: true, generation: 0)
+        XCTAssertEqual(changedCount(renderer.renderNow(job)), 1)
+    }
+
+    func test_movingSign_changesEveryFrame() throws {
+        let renderer = try makeRenderer()
+        renderer.add([.init(line: "1,0,Default,,0,0,0,,{\\move(100,100,1800,100)}Sign", startMs: 0, durationMs: 5000)])
+        let job = ASSRenderJob(fromMs: 1000, stepMs: 1000 / 24, count: 12, force: true, generation: 0)
+        XCTAssertEqual(changedCount(renderer.renderNow(job)), 12)
+    }
+
+    func test_forcedFirstFrame_rendersEvenWhenLibassSeesNoChange() throws {
+        let renderer = try makeRenderer()
+        renderer.add([.init(line: "1,0,Default,,0,0,0,,Hello", startMs: 0, durationMs: 5000)])
+        _ = renderer.renderNow(atMs: 1000)
+        let job = ASSRenderJob(fromMs: 1500, stepMs: 40, count: 1, force: true, generation: 0)
+        XCTAssertEqual(changedCount(renderer.renderNow(job)), 1)
+    }
+
+    func test_cancelledJob_stopsRendering() throws {
+        let renderer = try makeRenderer()
+        renderer.add([.init(line: "1,0,Default,,0,0,0,,Hello", startMs: 0, durationMs: 5000)])
+        renderer.cancelJobs(before: 2)
+        let job = ASSRenderJob(fromMs: 1000, stepMs: 40, count: 12, force: true, generation: 1)
+        XCTAssertTrue(renderer.renderNow(job).isEmpty)
+    }
+}
+
+extension LibassRenderer.Frame {
+    /// Union of the region rects.
+    var bounds: CGRect { regions.map(\.rect).reduce(CGRect.null) { $0.union($1) } }
 }

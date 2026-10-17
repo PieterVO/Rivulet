@@ -12,6 +12,7 @@
 import CoreGraphics
 import Foundation
 import Libass
+import Synchronization
 
 nonisolated final class LibassRenderer: @unchecked Sendable {
 
@@ -28,11 +29,14 @@ nonisolated final class LibassRenderer: @unchecked Sendable {
         let durationMs: Int64
     }
 
-    /// The rendered subtitles as one image, `rect` in frame pixels.
-    /// CGImage is immutable, so crossing back to the main actor is safe.
+    /// The rendered subtitles as up to four region images, rects in frame
+    /// pixels. CGImage is immutable, so crossing back to the main actor is safe.
     struct Frame: @unchecked Sendable {
-        let image: CGImage
-        let rect: CGRect
+        struct Region {
+            let image: CGImage
+            let rect: CGRect
+        }
+        let regions: [Region]
     }
 
     enum Output: @unchecked Sendable {
@@ -64,6 +68,7 @@ nonisolated final class LibassRenderer: @unchecked Sendable {
     private let track: UnsafeMutablePointer<ASS_Track>
     private var configuration = Configuration()
     private var renderCalls = 0
+    private let currentGeneration = Atomic<Int>(0)
     /// The time last handed to libass, and whether anything changed since.
     /// A paused frame repeats its time on every display tick, and
     /// `ass_render_frame` lays out every active event before it can report
@@ -147,20 +152,40 @@ nonisolated final class LibassRenderer: @unchecked Sendable {
         }
     }
 
-    /// Renders on the libass queue and resumes the caller with the result.
+    /// Renders a job's frames on the libass queue and resumes the caller with them.
     /// A continuation, never a completion closure: a closure formed on the
     /// main actor inherits its isolation under this target's default
     /// MainActor isolation, and running it on `queue` trips the executor check.
-    func render(atMs ms: Int64) async -> Output {
+    func render(_ job: ASSRenderJob) async -> [Output] {
         await withCheckedContinuation { continuation in
-            queue.async { [self] in continuation.resume(returning: renderLocked(atMs: ms)) }
+            queue.async { [self] in continuation.resume(returning: renderLocked(job)) }
         }
+    }
+
+    /// Jobs older than `generation` stop at their next frame instead of
+    /// rendering frames nobody will show.
+    func cancelJobs(before generation: Int) {
+        currentGeneration.store(generation, ordering: .relaxed)
+    }
+
+    /// Synchronous job render for tests.
+    func renderNow(_ job: ASSRenderJob) -> [Output] {
+        queue.sync { renderLocked(job) }
+    }
+
+    private func renderLocked(_ job: ASSRenderJob) -> [Output] {
+        var outputs: [Output] = []
+        for index in 0..<job.count {
+            guard job.generation >= currentGeneration.load(ordering: .relaxed) else { break }
+            outputs.append(renderLocked(atMs: job.sampleMs(index), force: job.force && index == 0))
+        }
+        return outputs
     }
 
     /// Synchronous render for tests. Never call on the main thread in
     /// production: a dense frame costs milliseconds.
-    func renderNow(atMs ms: Int64) -> Output {
-        queue.sync { renderLocked(atMs: ms) }
+    func renderNow(atMs ms: Int64, force: Bool = false) -> Output {
+        queue.sync { renderLocked(atMs: ms, force: force) }
     }
 
     func eventCount() -> Int {
@@ -172,15 +197,16 @@ nonisolated final class LibassRenderer: @unchecked Sendable {
         queue.sync { renderCalls }
     }
 
-    private func renderLocked(atMs ms: Int64) -> Output {
+    /// `force` returns the frame even when libass reports no change.
+    private func renderLocked(atMs ms: Int64, force: Bool) -> Output {
         guard configuration.frameWidth > 0, configuration.frameHeight > 0 else { return .unchanged }
-        guard needsRender || ms != lastRenderedMs else { return .unchanged }
+        guard force || needsRender || ms != lastRenderedMs else { return .unchanged }
         lastRenderedMs = ms
         needsRender = false
         var change: Int32 = 0
         renderCalls += 1
         let images = ass_render_frame(renderer, track, ms, &change)
-        guard change != 0 else { return .unchanged }
+        guard change != 0 || force else { return .unchanged }
 
         var bitmaps: [ASSCompositor.Bitmap] = []
         var node = images
@@ -194,6 +220,7 @@ nonisolated final class LibassRenderer: @unchecked Sendable {
             }
             node = image.next
         }
-        return .changed(ASSCompositor.composite(bitmaps).map { Frame(image: $0.image, rect: $0.rect) })
+        let regions = ASSCompositor.composite(bitmaps).map { Frame.Region(image: $0.image, rect: $0.rect) }
+        return .changed(regions.isEmpty ? nil : Frame(regions: regions))
     }
 }
