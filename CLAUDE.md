@@ -440,8 +440,9 @@ Key components:
   plain subview above the video and below the chrome by both
   `PlayerContainerViewController` and `LiveTVAetherPlayerViewController`. Cues come
   from the engine's publishers via `SubtitleModel`; Live TV's remote-HLS direct path
-  feeds the SAME view from `AVPlayerItemLegibleOutput`. One renderer, two sources.
-  Do not add a third view, and do not mount it through a `UIHostingController`: that
+  feeds the SAME view from `AVPlayerItemLegibleOutput`, and the VOD `hls` route
+  from Plex's subtitles endpoint (below). One renderer, three sources.
+  Do not add a second view, and do not mount it through a `UIHostingController`: that
   applies the tvOS title-safe inset to the content, so every caption margin is
   measured against the wrong box.
 - **ASS/SSA renders through libass**, inside `CaptionOverlayView` as `ASSOverlayView`
@@ -457,21 +458,49 @@ Key components:
     `\an`/`\pos`, dropping drawings. libass's selective style override is NOT a
     substitute: it never touches inline tags and skips positioned events.
   - **libass's ReadOrder dedupe is off** (`ass_set_check_readorder(track, 0)`):
-    real files hardcode ReadOrder 0. `ASSOverlayView` dedupes on
-    start, duration and line instead.
+    real files hardcode ReadOrder 0. `ASSOverlayView` dedupes on the engine's
+    cue id (stamped once per session, kept across re-decodes); id 0 falls back
+    to start plus line.
   - **Rail and Height stepper lift dialogue through `ass_set_line_position`**,
     which libass applies to non-positioned events only.
+  - **libass renders ahead; the display tick never calls it.** `ASSRenderQueue`
+    keeps ~500 ms of units (image + start/end) rendered on the libass queue: a
+    new unit per display frame while libass reports a change, the last one
+    extended while it doesn't. The tick picks the unit for `targetTimestamp`.
+    Rendering inside the tick is what made tracked signs judder and trail
+    (discussion 244); Infuse renders ahead the same way. Only a seek (playhead
+    outside the queue by more than its window) resets it; falling slightly
+    behind renders on from the playhead, or every tick resets into one stale
+    frame and nothing shows for seconds (caught on device). The step widens to
+    twice the measured cost when libass can't keep a frame's pace.
+  - **Images composite into at most 4 regions**, one layer each
+    (`ASSCompositor`), never one buffer over the union: a top sign plus bottom
+    dialogue was ~30 MB per frame at 4K. Measured on a 2nd-gen Apple TV 4K
+    (optimized build): ~4.5 ms per frame at 3840x2160. A Debug build is ~12x
+    slower; never judge subtitle performance on Debug.
   - **Bumping libass**: run LibassBuild's `build.sh`, tag `<libass>-<rev>` (pinned
     `0.17.5-2` today) and never move a published tag, because SwiftPM records each
     tag's revision and refuses one that changes. The module map stays in
     `Headers/Libass/`: at the `Headers` root it collides with LibDovi's in the
     shared `include/` directory.
-- **The `hls` route has no app-side captions at all.** `SubtitleManager`,
-  `SubtitleClockSyncController` and the SwiftUI `SubtitleOverlayView` were RPlayer's
-  sidecar pipeline; `390ebec` removed RPlayer's VOD branches and took the last caller
-  of `SubtitleManager.load` with it, leaving a permanently empty track feeding a view
-  that rendered nothing. All deleted. On that route subtitles come from the server
-  (burn-in, or the WebVTT rendition the client profile requests).
+- **On the Plex `hls` route, text subtitles are drawn by the same libass layer.**
+  `buildHLSDirectPlayURL(clientRendersTextSubtitles: true)` asks for an ASS
+  subtitle target and adds `advancedSubtitles=text` (without it PMS still burns
+  ASS in); `TranscodeSubtitleStream` reads `/video/:/transcode/universal/subtitles`
+  and feeds `SubtitleModel` on AVPlayer's item clock. Measured on PMS 1.43.4:
+  - The endpoint takes the running session's exact `start.m3u8` query; with no
+    session it answers 400. `subtitleStreamID` there is ignored: the part's
+    selection (`PUT /library/parts/<id>`) decides.
+  - It is one chunked response (mislabelled `text/vtt`) held open for the whole
+    playback, advancing only as video segments are fetched, so it needs the
+    long-timeout session (`openEndedBytes`). Cue times are absolute media time.
+  - Embedded ASS keeps its header and styles; font attachments do not come
+    through. SRT arrives converted. PGS/VobSub still burn in.
+  - A seek past the transcoded range closes the stream, and requesting it again
+    starts a second session that kills the video, so the player restarts the
+    transcode at the playhead instead (one extra rebuffer).
+  RPlayer's old sidecar pipeline (`SubtitleManager`, `SubtitleOverlayView`) is
+  deleted; do not revive it. Jellyfin's transcode still uses server subtitles.
 - `SubtitleParser.swift` survived that cull and is NOT dead, but nothing in it
   renders: it serves the content filter. `VTTParser` reads `text/mcf+vtt` lists
   (`ContentFilterParsers`), and all three parsers (VTT, SRT, ASS) read a title's
