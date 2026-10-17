@@ -49,6 +49,9 @@ actor AppAttestClient {
     /// triggers exactly one attestation, not N.
     private var enrollment: Task<String?, Never>?
 
+    /// The last assertion started; the next one waits for it.
+    private var assertionTail: Task<Void, Never>?
+
     /// After a hard failure, stop hammering Apple / the Worker for a while.
     private var backoffUntil: Date?
     private static let backoff: TimeInterval = 60
@@ -102,15 +105,23 @@ actor AppAttestClient {
 
         do {
             let digest = Data(SHA256.hash(data: clientData))
-            let assertion = try await service.generateAssertion(keyId, clientDataHash: digest)
+            // One assertion at a time: a burst of concurrent calls on one key
+            // (five scoreboards at once) failed some and went out unsigned.
+            let previous = assertionTail
+            let task = Task { [service] in
+                await previous?.value
+                return try await service.generateAssertion(keyId, clientDataHash: digest)
+            }
+            assertionTail = Task { _ = try? await task.value }
+            let assertion = try await task.value
             r.setValue(keyId, forHTTPHeaderField: "X-Rivulet-Key-Id")
             r.setValue(assertion.base64EncodedString(), forHTTPHeaderField: "X-Rivulet-Assertion")
             return r
         } catch {
-            // A key the Secure Enclave no longer recognises (restored backup,
-            // reinstall) is dead. Drop it so the next call re-enrolls.
             log.error("assertion failed: \(error.localizedDescription, privacy: .public)")
-            invalidateKey()
+            // Only a key the Secure Enclave no longer recognises (restored
+            // backup, reinstall) is dead; any other failure keeps it.
+            if (error as? DCError)?.code == .invalidKey { invalidateKey(ifCurrent: keyId) }
             return request
         }
     }
