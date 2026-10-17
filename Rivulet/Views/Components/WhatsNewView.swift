@@ -150,12 +150,13 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (97)", [
-            "Search and download subtitles from the player's Subtitles menu.",
-            "New Autoplay Limit setting stops autoplay after a few episodes in a row.",
-            "Up Next is now a glass card beside the credits, which keep playing full size.",
-            "New Scores in the Live TV player: today's games, select one to watch it.",
-            "New Scores layout in Multiview keeps scores beside the game.",
-            "Live TV game channels between games no longer show as on now.",
+            "New scores for Live TV games. Very pleased with this. Access them from a sports match in the \"Scores\" button below the scrubber.",
+            "New scores layout in Multiview when viewing a sports match.",
+            "Up Next is now a dismissable glass card.",
+            "Search and download subtitles from the menu.",
+            "Added autoplay limit (passout protection).",
+            "App attestation bug fix.",
+            "Fixed: text subtitles on transcoded playback keep original style.",
         ]),
         ("1.1.0 (96)", [
             "Lots of improvements for Music libraries! Really happy about it.",
