@@ -62,6 +62,7 @@ final class LiveScoresPaneView: UIView {
         tabRow.spacing = 16
         statusLabel.font = .systemFont(ofSize: 21, weight: .medium)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        applyChromeTextShadow([statusLabel])
         scrollView.clipsToBounds = true
         scrollView.layer.cornerRadius = Metrics.radius
         scrollView.layer.cornerCurve = .continuous
@@ -316,6 +317,7 @@ private final class ScoresPaneCardView: UIView {
             let score = UILabel()
             score.font = .monospacedDigitSystemFont(ofSize: 34, weight: .bold)
             score.textColor = .white
+            applyChromeTextShadow([abbr, score])
             [logo, abbr, score].forEach {
                 addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
@@ -344,6 +346,7 @@ private final class ScoresPaneCardView: UIView {
         liveBadge.clipsToBounds = true
         detail.font = .systemFont(ofSize: 21, weight: .medium)
         detail.textColor = UIColor.white.withAlphaComponent(0.6)
+        applyChromeTextShadow([detail])
         let status = UIStackView(arrangedSubviews: [liveBadge, detail])
         status.spacing = 10
         status.alignment = .center
@@ -371,6 +374,7 @@ private final class ScoresPaneCardView: UIView {
         title.text = "Watch with Scores"
         title.font = .systemFont(ofSize: 25, weight: .semibold)
         title.textColor = .white
+        applyChromeTextShadow([title])
         [icon, title].forEach {
             addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false

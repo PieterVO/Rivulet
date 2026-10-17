@@ -73,6 +73,7 @@ final class PostVideoOverlayView: UIView {
         headerSubtitleLabel.font = .systemFont(ofSize: 22)
         headerSubtitleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         headerSubtitleLabel.numberOfLines = 2
+        applyChromeTextShadow([headerLabel, headerSubtitleLabel])
 
         let headerText = UIStackView(arrangedSubviews: [headerLabel, headerSubtitleLabel])
         headerText.axis = .vertical
@@ -249,6 +250,7 @@ final class NextEpisodeCardView: UIView {
 
         durationLabel.font = .systemFont(ofSize: 20)
         durationLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        applyChromeTextShadow([showLabel, numberLabel, titleLabel, summaryLabel, durationLabel])
 
         let titleRow = UIStackView(arrangedSubviews: [numberLabel, titleLabel])
         titleRow.axis = .horizontal

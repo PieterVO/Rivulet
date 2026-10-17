@@ -28,6 +28,16 @@ func makePaneGlass(cornerRadius: CGFloat) -> UIView {
     return glass
 }
 
+/// AVKit's label shadow (black 0.2, radius 30): lifts white text off bright video behind glass.
+func applyChromeTextShadow(_ labels: [UILabel]) {
+    for label in labels {
+        label.layer.shadowColor = UIColor.black.cgColor
+        label.layer.shadowOpacity = 0.2
+        label.layer.shadowRadius = 30
+        label.layer.shadowOffset = .zero
+    }
+}
+
 // MARK: - PlayerInfoCardView
 
 /// AVKit's Info tab: a 250pt glass card with the poster, title, a two-line

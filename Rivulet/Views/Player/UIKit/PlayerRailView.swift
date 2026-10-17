@@ -112,12 +112,7 @@ final class PlayerRailView: UIView {
         subtitleLabel.textColor = .white
         titleLabel.font = .systemFont(ofSize: 57, weight: .bold)
         titleLabel.textColor = .white
-        for label in [subtitleLabel, titleLabel] {
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.2
-            label.layer.shadowRadius = 30
-            label.layer.shadowOffset = .zero
-        }
+        applyChromeTextShadow([subtitleLabel, titleLabel])
 
         // Up from the video lands on the leftmost tool, so the rarely used ones
         // (Content Filter, then Quality) sit right of Subtitles/Audio.
