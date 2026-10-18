@@ -60,6 +60,8 @@ final class DeepLinkHandler: ObservableObject {
     func handle(_ link: RivuletLink) -> Task<Void, Never>? {
         // Signed out there is nothing to wait for: holding it would fire at the next sign-in.
         guard isSignedIn() else { return nil }
+        // Any app can open a link, and the key is interpolated into a server path.
+        guard link.ratingKey.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
         heldLink = link
         return deliverHeldLink()
     }

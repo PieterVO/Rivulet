@@ -93,6 +93,14 @@ class PlexAuthManager: ObservableObject {
     private let userThumbKey = "plexUserThumb"
     private let serverURLKey = "selectedServerURL"
     private let serverNameKey = "selectedServerName"
+    /// The selected server's machineIdentifier; a probe of the saved URL must answer with it.
+    private let serverMachineIDKey = "selectedServerMachineID"
+
+    /// Rank a local plex.direct (TLS) connection above local plain HTTP. The
+    /// host sets this before first use: iOS does, a stationary Apple TV keeps
+    /// the cheaper HTTP on its home LAN.
+    nonisolated(unsafe) static var prefersSecureLocalConnections = false
+
     /// Sentinel set after a successful auth. Used to detect fresh installs —
     /// UserDefaults is wiped on app uninstall but Keychain persists, so if this
     /// flag is missing while the Keychain still has tokens, the Keychain data
@@ -128,6 +136,7 @@ class PlexAuthManager: ObservableObject {
             KeychainHelper.delete(keychainTokenKey)
             KeychainHelper.delete(keychainServerTokenKey)
             PlexProfileSession.delete()
+            KeychainHelper.deleteAllPins()
             state = .idle
             return
         }
@@ -160,7 +169,8 @@ class PlexAuthManager: ObservableObject {
                 userDefaults.removeObject(forKey: serverURLKey)
             }
 
-            if let url = selectedServerURL, !Self.isPlayableDirectURL(url) {
+            if let url = selectedServerURL,
+               !Self.isPlayableDirectURL(url) || (Self.prefersSecureLocalConnections && url.hasPrefix("http://")) {
                 Task { await upgradeConnectionIfBetterExists(from: url) }
             }
         }
@@ -183,6 +193,7 @@ class PlexAuthManager: ObservableObject {
         print("🔐 PlexAuthManager: Upgrading connection \(url) -> \(best)")
         selectedServerURL = best
         userDefaults.set(best, forKey: serverURLKey)
+        userDefaults.set(server.machineIdentifier, forKey: serverMachineIDKey)
     }
 
     /// Migrate tokens from UserDefaults to Keychain (one-time, for existing users)
@@ -260,6 +271,7 @@ class PlexAuthManager: ObservableObject {
                 selectedServerURL = workingURL
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
                 userDefaults.set(server.name, forKey: serverNameKey)
+                userDefaults.set(server.machineIdentifier, forKey: serverMachineIDKey)
 
                 // For shared servers, use server-specific accessToken; for owned, use user's authToken
                 await adoptAccountServerToken(server.accessToken ?? authToken, serverChanged: serverChanged)
@@ -308,8 +320,8 @@ class PlexAuthManager: ObservableObject {
     /// - Remote: plex.direct URLs from the API
     /// - Relay: strictly last resort
     private func findBestConnection(for server: PlexDevice, reuseLastGood: Bool = true) async -> String? {
-        // For shared servers (not owned by user), use server-specific accessToken
-        let tokenToUse = server.accessToken
+        // Probes carry no token; a candidate counts only when it answers as this server.
+        let expectedID = server.machineIdentifier
 
         // FAST PATH — last-known-good URL, but only when it plausibly belongs
         // to THIS server (matching a connection's host:port or embedding the
@@ -317,7 +329,7 @@ class PlexAuthManager: ObservableObject {
         // flow against reusing another server's URL.
         if reuseLastGood, let lastGood = selectedServerURL, urlBelongs(lastGood, to: server) {
             print("🔐 PlexAuthManager: Trying last-known-good URL first: \(lastGood)")
-            if await testConnection(lastGood, serverToken: tokenToUse) {
+            if await testConnection(lastGood, expecting: expectedID) != nil {
                 print("🔐 PlexAuthManager: ✅ Last-known-good works — skipping the probe ladder")
                 return lastGood
             }
@@ -342,12 +354,12 @@ class PlexAuthManager: ObservableObject {
         let directConnections = sortedConnections.filter { !$0.relay }
         for connection in directConnections {
             chains.append { [weak self] in
-                await self?.probePlayable(connection, tokenToUse: tokenToUse)
+                await self?.probePlayable(connection, expecting: expectedID)
             }
         }
         for connection in directConnections {
             chains.append { [weak self] in
-                await self?.probeRawHTTPS(connection, tokenToUse: tokenToUse)
+                await self?.probeRawHTTPS(connection, expecting: expectedID)
             }
         }
 
@@ -357,7 +369,7 @@ class PlexAuthManager: ObservableObject {
             chains.append { [weak self] in
                 guard let self else { return nil }
                 print("🔐 PlexAuthManager: Trying relay as fallback: \(relayConnection.uri)")
-                if await self.testConnection(relayConnection.uri, serverToken: tokenToUse) {
+                if await self.testConnection(relayConnection.uri, expecting: expectedID) != nil {
                     return relayConnection.uri
                 }
                 return nil
@@ -420,8 +432,8 @@ class PlexAuthManager: ObservableObject {
     /// address when local, which works whenever Secure connections is
     /// Preferred. For an http connection, a plex.direct URL built from the
     /// hash in the server's certificate.
-    private func probePlayable(_ connection: PlexConnection, tokenToUse: String?) async -> String? {
-        if await testConnection(connection.uri, serverToken: tokenToUse) {
+    private func probePlayable(_ connection: PlexConnection, expecting expectedID: String?) async -> String? {
+        if await testConnection(connection.uri, expecting: expectedID) != nil {
             return connection.uri
         }
         print("🔐 PlexAuthManager: ❌ Connection failed: \(connection.uri)")
@@ -431,36 +443,37 @@ class PlexAuthManager: ObservableObject {
             guard connection.local else { return nil }
             let rawHTTP = "http://\(host):\(connection.port)"
             print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTP)")
-            return await testConnection(rawHTTP, serverToken: tokenToUse) ? rawHTTP : nil
+            return await testConnection(rawHTTP, expecting: expectedID) != nil ? rawHTTP : nil
         }
 
-        let (_, certHash) = await testConnectionWithCertExtraction(
-            "https://\(host):\(connection.port)", serverToken: tokenToUse
-        )
-        guard let hash = certHash else { return nil }
+        let (_, certHash) = await testConnectionWithCertExtraction("https://\(host):\(connection.port)")
+        // The presented certificate is unauthenticated: use its hash only when
+        // plex.tv issued it to one of the account's servers.
+        guard let hash = certHash,
+              PlexCertificateDelegate.isKnownCertificateHash(hash, forAddress: connection.address) else { return nil }
         let plexDirectURI = buildPlexDirectURL(
             address: connection.address,
             port: connection.port,
             subdomainHash: hash
         )
-        if await testConnection(plexDirectURI, serverToken: tokenToUse) {
+        if await testConnection(plexDirectURI, expecting: expectedID) != nil {
             return plexDirectURI
         }
         print("🔐 PlexAuthManager: ❌ plex.direct failed: \(plexDirectURI)")
         return nil
     }
 
-    /// Tier-two probe: HTTPS to the raw address. It passes only because
-    /// PlexCertificateDelegate trusts the mismatched cert; FFmpeg, AVPlayer
-    /// and the HLS preflight have no such override, so this URL browses and
-    /// plays nothing (GitHub #314). It exists for servers that require secure
-    /// connections behind a router that blocks plex.direct, where browsing
-    /// beats no connection at all.
-    private func probeRawHTTPS(_ connection: PlexConnection, tokenToUse: String?) async -> String? {
+    /// Tier-two probe: HTTPS to the raw address. It passes when the server
+    /// presents its plex.tv-issued certificate (see `trustsServer`); the HLS
+    /// preflight and AVPlayer still refuse the mismatched name, so this URL
+    /// browses but the hls route cannot play it (GitHub #314). It exists for
+    /// servers that require secure connections behind a router that blocks
+    /// plex.direct, where browsing beats no connection at all.
+    private func probeRawHTTPS(_ connection: PlexConnection, expecting expectedID: String?) async -> String? {
         let host = connection.IPv6 ? "[\(connection.address)]" : connection.address
         let rawHTTPS = "https://\(host):\(connection.port)"
         print("🔐 PlexAuthManager: Trying raw-address fallback: \(rawHTTPS)")
-        return await testConnection(rawHTTPS, serverToken: tokenToUse) ? rawHTTPS : nil
+        return await testConnection(rawHTTPS, expecting: expectedID) != nil ? rawHTTPS : nil
     }
 
     /// Whether a persisted URL plausibly belongs to `server`: its host:port
@@ -496,8 +509,8 @@ class PlexAuthManager: ObservableObject {
         // Prefer local connections
         if connection.local {
             score += 500
-            // For local: prefer HTTP (avoids certificate issues)
-            if connection.protocolType == "http" { score += 50 }
+            // For local: prefer HTTP (avoids certificate issues), unless the host prefers TLS
+            if (connection.protocolType == "http") != Self.prefersSecureLocalConnections { score += 50 }
         } else {
             // For remote: prefer HTTPS (required by ATS)
             if connection.protocolType == "https" { score += 100 }
@@ -561,49 +574,73 @@ class PlexAuthManager: ObservableObject {
         return !isIPLiteral
     }
 
-    /// Test if a connection URL is reachable
-    /// - Parameters:
-    ///   - urlString: The connection URL to test
-    ///   - serverToken: Server-specific access token (for shared servers), falls back to user's authToken
-    private func testConnection(_ urlString: String, serverToken: String? = nil) async -> Bool {
-        guard let token = serverToken ?? authToken,
-              let url = URL(string: "\(urlString)/identity") else {
-            return false
-        }
+    /// Probes `urlString/identity` WITHOUT a token and returns the server's
+    /// machineIdentifier, or nil when unreachable or (given `expectedID`) a
+    /// different server. PMS answers /identity unauthenticated, so the token
+    /// never reaches a host that has not proved which server it is.
+    private func testConnection(_ urlString: String, expecting expectedID: String?) async -> String? {
+        guard let url = URL(string: "\(urlString)/identity") else { return nil }
 
         do {
-            // Quick connectivity test with short timeout
             var request = URLRequest(url: url)
             request.timeoutInterval = 5.0
             request.addValue("application/json", forHTTPHeaderField: "Accept")
-            request.addValue(token, forHTTPHeaderField: "X-Plex-Token")
 
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 5.0
             config.timeoutIntervalForResource = 5.0
 
-            // Use a delegate that trusts self-signed certs for Plex
             let session = URLSession(configuration: config, delegate: PlexCertificateDelegate(), delegateQueue: nil)
             defer { session.invalidateAndCancel() }
 
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
 
-            if let httpResponse = response as? HTTPURLResponse {
-                let ok = (200...299).contains(httpResponse.statusCode)
-                if !ok {
-                    Self.addConnectionTestBreadcrumb(
-                        urlString: urlString, outcome: "http_\(httpResponse.statusCode)")
-                }
-                return ok
+            guard let httpResponse = response as? HTTPURLResponse else { return nil }
+            guard (200...299).contains(httpResponse.statusCode) else {
+                Self.addConnectionTestBreadcrumb(urlString: urlString, outcome: "http_\(httpResponse.statusCode)")
+                return nil
             }
-            return false
+            guard let identity = Self.machineIdentifier(fromIdentity: data) else {
+                Self.addConnectionTestBreadcrumb(urlString: urlString, outcome: "not_plex")
+                return nil
+            }
+            if let expectedID, identity != expectedID {
+                Self.addConnectionTestBreadcrumb(urlString: urlString, outcome: "wrong_server")
+                return nil
+            }
+            return identity
         } catch {
             print("🔐 PlexAuthManager: Connection test error: \(error.localizedDescription)")
             let nsError = error as NSError
             Self.addConnectionTestBreadcrumb(
                 urlString: urlString, outcome: "\(nsError.domain)#\(nsError.code)")
-            return false
+            return nil
         }
+    }
+
+    /// False only on an explicit 401/403 from a server already proven to be the right one.
+    private func serverAcceptsToken(_ token: String?, at urlString: String) async -> Bool {
+        guard let token, let url = URL(string: "\(urlString)/") else { return true }
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.setValue(token, forHTTPHeaderField: "X-Plex-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        guard let (_, response) = try? await PlexCertificateDelegate.session.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode else { return true }
+        return status != 401 && status != 403
+    }
+
+    /// `MediaContainer.machineIdentifier` from an /identity body (JSON, or XML from older servers).
+    nonisolated static func machineIdentifier(fromIdentity data: Data) -> String? {
+        struct Identity: Decodable {
+            struct Container: Decodable { let machineIdentifier: String? }
+            let MediaContainer: Container
+        }
+        if let id = (try? JSONDecoder().decode(Identity.self, from: data))?.MediaContainer.machineIdentifier {
+            return id.isEmpty ? nil : id
+        }
+        guard let text = String(data: data, encoding: .utf8),
+              let range = text.range(of: #"machineIdentifier="([^"]+)""#, options: .regularExpression) else { return nil }
+        return String(text[range].dropFirst("machineIdentifier=\"".count).dropLast())
     }
 
     /// One breadcrumb per failed connection probe (mirrored as a log), so the
@@ -622,17 +659,13 @@ class PlexAuthManager: ObservableObject {
 
     /// Test connection and extract plex.direct hash from certificate if it fails
     /// Returns (success, extractedHash) where extractedHash is the plex.direct hash from the cert
-    private func testConnectionWithCertExtraction(_ urlString: String, serverToken: String? = nil) async -> (Bool, String?) {
-        guard let token = serverToken ?? authToken,
-              let url = URL(string: "\(urlString)/identity") else {
-            return (false, nil)
-        }
+    private func testConnectionWithCertExtraction(_ urlString: String) async -> (Bool, String?) {
+        guard let url = URL(string: "\(urlString)/identity") else { return (false, nil) }
 
         do {
             var request = URLRequest(url: url)
             request.timeoutInterval = 5.0
             request.addValue("application/json", forHTTPHeaderField: "Accept")
-            request.addValue(token, forHTTPHeaderField: "X-Plex-Token")
 
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 5.0
@@ -690,6 +723,10 @@ class PlexAuthManager: ObservableObject {
         pollingTask?.cancel()
         pollingTask = nil
 
+        // A token left valid at plex.tv would outlive the sign-out.
+        if let token = authToken {
+            Task { await networkManager.revokeToken(token) }
+        }
         authToken = nil
         username = nil
         userThumbURL = nil
@@ -703,6 +740,7 @@ class PlexAuthManager: ObservableObject {
         KeychainHelper.delete(keychainTokenKey)
         KeychainHelper.delete(keychainServerTokenKey)
         PlexProfileSession.delete()
+        PlexCertificateDelegate.forgetCertificateHashes()
 
         // Clear non-sensitive data from UserDefaults
         userDefaults.removeObject(forKey: PlexProfileSession.contentUserIDKey)
@@ -711,6 +749,7 @@ class PlexAuthManager: ObservableObject {
         userDefaults.removeObject(forKey: userThumbKey)
         userDefaults.removeObject(forKey: serverURLKey)
         userDefaults.removeObject(forKey: serverNameKey)
+        userDefaults.removeObject(forKey: serverMachineIDKey)
         userDefaults.removeObject(forKey: hasPersistedSessionKey)
 
         // Clear any legacy tokens that might still exist
@@ -899,7 +938,13 @@ class PlexAuthManager: ObservableObject {
         // Test current connection using the saved server token
         guard let currentURL = selectedServerURL else { return }
 
-        if await testConnection(currentURL, serverToken: selectedServerToken) {
+        let savedID = userDefaults.string(forKey: serverMachineIDKey)
+        // The probe carries no token, so ask once with it: a token the server
+        // stopped accepting is refreshed by the rediscovery below.
+        if let identity = await testConnection(currentURL, expecting: savedID),
+           await serverAcceptsToken(selectedServerToken, at: currentURL) {
+            // Builds before the identity check saved no id; the URL they trusted names it.
+            if savedID == nil { userDefaults.set(identity, forKey: serverMachineIDKey) }
             isConnected = true
             connectionError = nil
 
@@ -937,6 +982,7 @@ class PlexAuthManager: ObservableObject {
                         selectedServerURL = workingURL
                         userDefaults.set(selectedServerURL, forKey: serverURLKey)
                         userDefaults.set(currentServer.name, forKey: serverNameKey)
+                        userDefaults.set(currentServer.machineIdentifier, forKey: serverMachineIDKey)
 
                         // Same server at a new address: a profile's own token still holds.
                         await adoptAccountServerToken(currentServer.accessToken ?? authToken, serverChanged: false)
@@ -1111,19 +1157,90 @@ extension PlexAuthManager {
 
 // MARK: - Certificate Delegate for Connection Testing
 
-/// URLSession delegate that trusts self-signed certificates for Plex servers
+/// URLSession delegate applying the Plex server certificate rule.
 nonisolated final class PlexCertificateDelegate: NSObject, URLSessionDelegate {
     /// For Plex server requests made outside `PlexNetworkManager`.
     static let session = URLSession(
         configuration: .default, delegate: PlexCertificateDelegate(), delegateQueue: nil)
 
-    /// Origins whose certificate is accepted without system trust: IPv4 literals,
-    /// plex.direct names, and the default Plex port. Playback asks the same
-    /// question, so a URL that browses also plays (#314, #337).
-    static func trustsUnverifiedCertificate(for space: URLProtectionSpace) -> Bool {
-        let host = space.host
-        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
-        return isIPAddress || host.hasSuffix(".plex.direct") || space.port == 32400
+    private static let hashesKey = "plexDirectCertificateHashesByAddress"
+    private static let hashLock = NSLock()
+    /// Server address -> the plex.direct certificate hash plex.tv lists for it.
+    nonisolated(unsafe) private static var hashesByAddress: [String: Set<String>] =
+        ((UserDefaults.standard.dictionary(forKey: hashesKey) as? [String: [String]]) ?? [:]).mapValues(Set.init)
+
+    /// Records, for the account's OWN servers, which certificate hash each
+    /// advertised address presents. Learned only from plex.tv's resource list
+    /// (system-trusted TLS); a shared server's owner holds their own key, so
+    /// their hashes are never trusted for an address.
+    static func registerCertificateHashes(from servers: [PlexDevice]) {
+        var found: [String: Set<String>] = [:]
+        for server in servers where server.owned == true {
+            let connections = server.connections ?? []
+            // The server presents the same certificate at every address it lists,
+            // including custom ones (a Docker host's LAN IP) whose URI is not plex.direct.
+            let hashes = Set(connections.compactMap { plexDirectHash(in: $0.uri) })
+            guard !hashes.isEmpty else { continue }
+            for connection in connections {
+                found[normalizedAddress(connection.address), default: []].formUnion(hashes)
+            }
+        }
+        hashLock.lock()
+        let merged = hashesByAddress.merging(found) { $0.union($1) }
+        let changed = merged != hashesByAddress
+        hashesByAddress = merged
+        hashLock.unlock()
+        if changed { UserDefaults.standard.set(merged.mapValues { Array($0) }, forKey: hashesKey) }
+    }
+
+    static func forgetCertificateHashes() {
+        hashLock.lock(); hashesByAddress = [:]; hashLock.unlock()
+        UserDefaults.standard.removeObject(forKey: hashesKey)
+    }
+
+    /// Whether plex.tv listed `hash` for one of the account's own servers at `address`.
+    static func isKnownCertificateHash(_ hash: String, forAddress address: String) -> Bool {
+        hashLock.lock(); defer { hashLock.unlock() }
+        return hashesByAddress[normalizedAddress(address)]?.contains(hash.lowercased()) == true
+    }
+
+    private static func normalizedAddress(_ address: String) -> String {
+        address.trimmingCharacters(in: CharacterSet(charactersIn: "[]")).lowercased()
+    }
+
+    /// The `<hash>` of a `https://<ip>.<hash>.plex.direct:<port>` URI.
+    static func plexDirectHash(in uri: String) -> String? {
+        guard let host = URL(string: uri)?.host?.lowercased(), host.hasSuffix(".plex.direct") else { return nil }
+        let labels = host.split(separator: ".")
+        guard labels.count >= 3 else { return nil }
+        let hash = labels[labels.count - 3]
+        return hash.count == 32 && hash.allSatisfy(\.isHexDigit) ? String(hash) : nil
+    }
+
+    /// The certificate rule shared by the API sessions and the players: the
+    /// system's own answer, or else, for a raw IP address only, the valid
+    /// plex.tv-issued certificate of the account's own server at that address
+    /// (#314, #337). A DNS name never gets the fallback.
+    static func trustsServer(_ space: URLProtectionSpace) -> Bool {
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust else { return false }
+        if SecTrustEvaluateWithError(trust, nil) { return true }
+        let address = normalizedAddress(space.host)
+        guard isIPLiteral(address) else { return false }
+        hashLock.lock()
+        let hashes = hashesByAddress[address] ?? []
+        hashLock.unlock()
+        for hash in hashes {
+            // The certificate is *.<hash>.plex.direct; any single label matches it.
+            SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, "server.\(hash).plex.direct" as CFString))
+            if SecTrustEvaluateWithError(trust, nil) { return true }
+        }
+        return false
+    }
+
+    static func isIPLiteral(_ host: String) -> Bool {
+        var v4 = in_addr(), v6 = in6_addr()
+        return inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1
     }
 
     func urlSession(
@@ -1131,16 +1248,24 @@ nonisolated final class PlexCertificateDelegate: NSObject, URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
+        Self.answer(challenge, completionHandler: completionHandler)
+    }
+
+    /// One disposition for every Plex session delegate.
+    static func answer(
+        _ challenge: URLAuthenticationChallenge,
+        completionHandler: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let serverTrust = space.serverTrust else {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-
-        if Self.trustsUnverifiedCertificate(for: challenge.protectionSpace) {
-            let credential = URLCredential(trust: serverTrust)
-            completionHandler(.useCredential, credential)
+        if trustsServer(space) {
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
         } else {
+            // Fails with the system's certificate error, which callers read.
             completionHandler(.performDefaultHandling, nil)
         }
     }

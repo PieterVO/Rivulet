@@ -1541,7 +1541,8 @@ class PlayerContainerViewController: UIViewController {
             .combineLatest(vm.contentFilter.$isPaused, vm.$contentFilterNotice, vm.contentFilter.$hasSceneSkips)
             .receive(on: DispatchQueue.main)
             .sink { [weak rail] enabled, paused, notice, skips in
-                rail?.setFilterAvailable(enabled)
+                // A restricted profile cannot pause the filter its owner set.
+                rail?.setFilterAvailable(enabled && !PlexUserProfileManager.shared.isRestrictedProfile)
                 rail?.setFilterActive(!paused && (notice == nil || skips))
             }
             .store(in: &cancellables)

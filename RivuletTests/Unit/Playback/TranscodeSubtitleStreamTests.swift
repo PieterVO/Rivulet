@@ -18,6 +18,12 @@ final class TranscodeSubtitleStreamTests: XCTestCase {
         XCTAssertNil(TranscodeSubtitleStream.event(fromDialogue: "Dialogue: 0,0:00:01.00,Default"))
     }
 
+    func test_nonFiniteOrHugeTimestamp_isNil() {
+        for bad in ["nan:00:00.00", "inf:00:00.00", "1e300:00:00.00", "-1:00:00.00"] {
+            XCTAssertNil(TranscodeSubtitleStream.event(fromDialogue: "Dialogue: 0,\(bad),0:00:05.00,Default,,0,0,0,,x"), bad)
+        }
+    }
+
     func test_subtitlesURL_keepsQueryAndSwapsEndpoint() throws {
         let hls = try XCTUnwrap(URL(string:
             "http://10.0.0.2:32400/video/:/transcode/universal/start.m3u8?session=abc&offset=600&X-Plex-Client-Profile-Extra=a%2Bb"))

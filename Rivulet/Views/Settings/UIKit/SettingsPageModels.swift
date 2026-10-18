@@ -167,7 +167,17 @@ enum SettingsContent {
                          jellyfin: JellyfinDataStore.shared.account?.serverName ?? "Jellyfin")
     }
 
+    /// Rows a restricted (managed) Plex profile does not get: other servers,
+    /// sources, sign-out, and the parental controls themselves.
+    static let ownerOnlyRowIDs: Set<String> = ["cat_servers", "liveTVSources", "cat_contentFilter", "profilePickerOnLaunch"]
+
     static func rows(for page: SettingsPage) -> [SettingsRowItem] {
+        let rows = allRows(for: page)
+        guard PlexUserProfileManager.shared.isRestrictedProfile else { return rows }
+        return rows.filter { !ownerOnlyRowIDs.contains($0.id) }
+    }
+
+    private static func allRows(for page: SettingsPage) -> [SettingsRowItem] {
         switch page {
         case .root:        return root
         case .appearance:  return appearance

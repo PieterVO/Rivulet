@@ -57,7 +57,9 @@ workflows:
             --create
 
       - name: Add certificates to keychain
-        script: keychain add-certificates
+        script: |
+          keychain add-certificates
+          rm -f "$CM_BUILD_DIR/cert_key.pem"
 
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
@@ -116,7 +118,7 @@ workflows:
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
             --config Release \
-            --archive-flags="-destination 'generic/platform=tvOS'"
+            --archive-flags="-destination 'generic/platform=tvOS' -onlyUsePackageVersionsFromResolvedFile"
 
       - name: Upload dSYMs to Sentry
         ignore_failure: true
@@ -125,7 +127,7 @@ workflows:
             echo "No SENTRY_AUTH_TOKEN set, skipping dSYM upload."
             exit 0
           fi
-          which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
+          which sentry-cli >/dev/null 2>&1 || brew install getsentry/tools/sentry-cli
           sentry-cli debug-files upload \
             --auth-token "$SENTRY_AUTH_TOKEN" \
             --org "$SENTRY_ORG" \
@@ -225,7 +227,9 @@ workflows:
             --create
 
       - name: Add certificates to keychain
-        script: keychain add-certificates
+        script: |
+          keychain add-certificates
+          rm -f "$CM_BUILD_DIR/cert_key.pem"
 
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
@@ -272,7 +276,7 @@ workflows:
             --project "$XCODE_PROJECT" \
             --scheme "$XCODE_SCHEME" \
             --config Release \
-            --archive-flags="-destination 'generic/platform=iOS'"
+            --archive-flags="-destination 'generic/platform=iOS' -onlyUsePackageVersionsFromResolvedFile"
 
       # Without this the in-app frames on iOS crash and app-hang events resolve
       # as <unknown>, which is what made RIVULET-41 unreadable on tvOS.
@@ -283,7 +287,7 @@ workflows:
             echo "No SENTRY_AUTH_TOKEN set, skipping dSYM upload."
             exit 0
           fi
-          which sentry-cli >/dev/null 2>&1 || curl -sL https://sentry.io/get-cli/ | bash
+          which sentry-cli >/dev/null 2>&1 || brew install getsentry/tools/sentry-cli
           sentry-cli debug-files upload \
             --auth-token "$SENTRY_AUTH_TOKEN" \
             --org "$SENTRY_ORG" \

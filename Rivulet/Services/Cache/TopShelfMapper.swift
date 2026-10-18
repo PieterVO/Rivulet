@@ -78,8 +78,10 @@ enum TopShelfMapper {
     /// Returns "" when the path is nil/empty (extension treats empty as "fall back").
     private static func absoluteURL(_ path: String?, serverURL: String, token: String) -> String {
         guard let path, !path.isEmpty else { return "" }
-        var url = path.hasPrefix("http") ? path : "\(serverURL)\(path)"
-        if !url.contains("X-Plex-Token") {
+        let isAbsolute = path.hasPrefix("http")
+        var url = isAbsolute ? path : "\(serverURL)\(path)"
+        // An absolute URL on another host (a metadata CDN) must not receive the token.
+        if !url.contains("X-Plex-Token"), !isAbsolute || URL(string: path)?.host == URL(string: serverURL)?.host {
             url += url.contains("?") ? "&" : "?"
             url += "X-Plex-Token=\(token)"
         }

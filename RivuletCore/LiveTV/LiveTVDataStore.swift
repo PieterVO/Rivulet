@@ -10,6 +10,7 @@
 
 import Foundation
 import Combine
+import CryptoKit
 import UIKit
 
 @MainActor
@@ -94,6 +95,8 @@ class LiveTVDataStore: ObservableObject {
     private var providersGeneration = 0
     /// Plex sources saved but not built: no profile's token is installed yet.
     private var withheldPlexSources: [SourceConfiguration] = []
+    /// IPTV sources kept from a restricted profile; still saved, back on an unrestricted one.
+    private var withheldIPTVProviders: [String: any LiveTVProvider] = [:]
     private var channelLoad: (task: Task<Void, Never>, generation: Int)?
     private var epgLoad: (task: Task<Void, Never>, generation: Int, channelCount: Int, window: DateInterval)?
     private var backgroundPreloadTask: Task<Void, Never>?
@@ -133,12 +136,13 @@ class LiveTVDataStore: ObservableObject {
     // MARK: - Source Configuration (Persistable)
 
     struct SourceConfiguration: Codable {
-        let id: String
+        var id: String
         let type: String  // "dispatcharr", "m3u", "plex"
         let name: String
         let baseURL: String?
-        let m3uURL: String?
-        let epgURL: String?
+        /// Kept in the Keychain (`playlistURLKey`); here only if the Keychain refused it.
+        var m3uURL: String?
+        var epgURL: String?
         var apiToken: String?
 
         /// Dispatcharr channel profile, nil for every channel. Optional so that
@@ -198,6 +202,7 @@ class LiveTVDataStore: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        secureSavedM3USources()
         loadFavorites()
         recentChannelIds = userDefaults.stringArray(forKey: recentsKey) ?? []
         eventSlotIds = Set(userDefaults.stringArray(forKey: eventSlotsKey) ?? [])
@@ -293,7 +298,7 @@ class LiveTVDataStore: ObservableObject {
 
     /// Add a generic M3U source
     func addM3USource(m3uURL: URL, epgURL: URL?, name: String) async {
-        let sourceId = "m3u:\(m3uURL.absoluteString)"
+        let sourceId = Self.m3uSourceId(for: m3uURL)
         let provider = IPTVProvider(
             m3uURL: m3uURL,
             epgURL: epgURL,
@@ -323,7 +328,10 @@ class LiveTVDataStore: ObservableObject {
     func removeSource(id: String) async {
         providers.removeValue(forKey: id)
         withheldPlexSources.removeAll { $0.id == id }
+        withheldIPTVProviders.removeValue(forKey: id)
         KeychainHelper.delete(Self.apiTokenKey(sourceId: id))
+        KeychainHelper.delete(Self.playlistURLKey(sourceId: id))
+        KeychainHelper.delete(Self.guideURLKey(sourceId: id))
         saveSources()
         await updateSourceInfo()
 
@@ -363,8 +371,10 @@ class LiveTVDataStore: ObservableObject {
                 }
 
             case "m3u":
-                if let m3uString = config.m3uURL, let m3uURL = URL(string: m3uString) {
-                    let epgURL = config.epgURL.flatMap { URL(string: $0) }
+                if let m3uString = KeychainHelper.get(Self.playlistURLKey(sourceId: config.id)) ?? config.m3uURL,
+                   let m3uURL = URL(string: m3uString) {
+                    let epgURL = (KeychainHelper.get(Self.guideURLKey(sourceId: config.id)) ?? config.epgURL)
+                        .flatMap { URL(string: $0) }
                     let provider = IPTVProvider(
                         m3uURL: m3uURL,
                         epgURL: epgURL,
@@ -386,7 +396,27 @@ class LiveTVDataStore: ObservableObject {
             }
         }
 
+        applyProfileRestrictions()
         listSources()
+    }
+
+    /// Moves IPTV sources out of a restricted profile's reach, and back. True when that changed anything.
+    @discardableResult
+    private func applyProfileRestrictions() -> Bool {
+        if PlexUserProfileManager.shared.isRestrictedProfile {
+            let iptv = providers.filter { $0.value.sourceType != .plex }
+            guard !iptv.isEmpty else { return false }
+            for id in iptv.keys { providers.removeValue(forKey: id) }
+            withheldIPTVProviders.merge(iptv) { _, new in new }
+            let removed = Set(channels.lazy.filter { iptv.keys.contains($0.sourceId) }.map(\.id))
+            channels.removeAll { iptv.keys.contains($0.sourceId) }
+            for channelId in removed { epg.removeValue(forKey: channelId) }
+            return true
+        }
+        guard !withheldIPTVProviders.isEmpty else { return false }
+        providers.merge(withheldIPTVProviders) { current, _ in current }
+        withheldIPTVProviders = [:]
+        return true
     }
 
     /// Lists the sources now, so the sidebar's Live TV tab exists at once; the
@@ -416,6 +446,7 @@ class LiveTVDataStore: ObservableObject {
     /// installed: rebuild the Plex sources under it. IPTV sources hold no Plex
     /// token and are left alone.
     func plexContentTokenChanged() {
+        let restrictionsChanged = applyProfileRestrictions()
         var configs = withheldPlexSources
         for (id, provider) in providers {
             guard let plex = provider as? PlexLiveTVProvider else { continue }
@@ -423,7 +454,16 @@ class LiveTVDataStore: ObservableObject {
                                                baseURL: plex.serverURL, m3uURL: nil, epgURL: nil, apiToken: nil))
             providers.removeValue(forKey: id)
         }
-        guard !configs.isEmpty else { return }
+        guard !configs.isEmpty else {
+            if restrictionsChanged {
+                listSources()
+                Task {
+                    await loadChannels()
+                    await loadEPG()
+                }
+            }
+            return
+        }
 
         let ids = Set(configs.map(\.id))
         let removed = Set(channels.lazy.filter { ids.contains($0.sourceId) }.map(\.id))
@@ -452,7 +492,7 @@ class LiveTVDataStore: ObservableObject {
         // A source waiting for a profile to be entered is still saved.
         var configs = withheldPlexSources
 
-        for (id, provider) in providers {
+        for (id, provider) in providers.merging(withheldIPTVProviders, uniquingKeysWith: { current, _ in current }) {
             switch provider.sourceType {
             case .dispatcharr:
                 if let iptvProvider = provider as? IPTVProvider {
@@ -475,8 +515,10 @@ class LiveTVDataStore: ObservableObject {
                         type: "m3u",
                         name: provider.displayName,
                         baseURL: nil,
-                        m3uURL: iptvProvider.m3uURL?.absoluteString,
-                        epgURL: iptvProvider.epgURL?.absoluteString,
+                        m3uURL: Self.storeSecret(iptvProvider.m3uURL?.absoluteString,
+                                                 key: Self.playlistURLKey(sourceId: id)),
+                        epgURL: Self.storeSecret(iptvProvider.epgURL?.absoluteString,
+                                                 key: Self.guideURLKey(sourceId: id)),
                         apiToken: nil
                     ))
                 }
@@ -507,12 +549,79 @@ class LiveTVDataStore: ObservableObject {
     /// Puts `token` in the Keychain. Returns what the saved config must still
     /// hold: nil, unless the Keychain refused it and the key would be lost.
     private static func storeAPIToken(_ token: String?, sourceId: String) -> String? {
-        let key = apiTokenKey(sourceId: sourceId)
-        guard let token, !token.isEmpty else {
+        storeSecret(token, key: apiTokenKey(sourceId: sourceId))
+    }
+
+    /// Puts `value` in the Keychain. Returns what the saved config must still
+    /// hold: nil, unless the Keychain refused it and the value would be lost.
+    private static func storeSecret(_ value: String?, key: String) -> String? {
+        guard let value, !value.isEmpty else {
             KeychainHelper.delete(key)
             return nil
         }
-        return KeychainHelper.set(token, forKey: key) ? nil : token
+        return KeychainHelper.set(value, forKey: key) ? nil : value
+    }
+
+    /// Keychain accounts for an M3U source's playlist and guide URLs, which
+    /// often embed the provider's username and password.
+    static func playlistURLKey(sourceId: String) -> String { "liveTVSourceM3U_\(sourceId)" }
+    static func guideURLKey(sourceId: String) -> String { "liveTVSourceEPG_\(sourceId)" }
+
+    /// An M3U source's id, from a hash of its playlist URL so the URL never
+    /// becomes part of the channel ids saved in favorites and recents.
+    static func m3uSourceId(for url: URL) -> String {
+        "m3u:" + SHA256.hash(data: Data(url.absoluteString.utf8)).prefix(8)
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func secureSavedM3USources() {
+        guard let data = userDefaults.data(forKey: sourcesKey),
+              var configs = try? JSONDecoder().decode([SourceConfiguration].self, from: data),
+              Self.secureM3USources(&configs, defaults: userDefaults,
+                                    channelListKeys: [favoritesKey, unfavoritedKey, recentsKey, eventSlotsKey],
+                                    viewingsKey: viewingsKey),
+              let encoded = try? JSONEncoder().encode(configs) else { return }
+        userDefaults.set(encoded, forKey: sourcesKey)
+    }
+
+    /// Older builds keyed an M3U source by its full playlist URL and saved both
+    /// URLs in plain text. Re-keys such a source (renaming its channels in
+    /// every saved list, so favorites survive) and moves the URLs into the
+    /// Keychain. True when `configs` changed and must be written back.
+    static func secureM3USources(_ configs: inout [SourceConfiguration], defaults: UserDefaults,
+                                 channelListKeys: [String], viewingsKey: String) -> Bool {
+        var changed = false
+        for index in configs.indices where configs[index].type == "m3u" {
+            guard let m3u = configs[index].m3uURL, let url = URL(string: m3u) else { continue }
+            let oldId = configs[index].id
+            let newId = m3uSourceId(for: url)
+            if newId != oldId {
+                renameChannels(from: "m3u:\(oldId):", to: "m3u:\(newId):", defaults: defaults,
+                               channelListKeys: channelListKeys, viewingsKey: viewingsKey)
+                configs[index].id = newId
+            }
+            configs[index].m3uURL = storeSecret(m3u, key: playlistURLKey(sourceId: newId))
+            configs[index].epgURL = storeSecret(configs[index].epgURL, key: guideURLKey(sourceId: newId))
+            changed = true
+        }
+        return changed
+    }
+
+    private static func renameChannels(from oldPrefix: String, to newPrefix: String, defaults: UserDefaults,
+                                       channelListKeys: [String], viewingsKey: String) {
+        func rename(_ id: String) -> String {
+            id.hasPrefix(oldPrefix) ? newPrefix + id.dropFirst(oldPrefix.count) : id
+        }
+        for key in channelListKeys {
+            if let ids = defaults.stringArray(forKey: key) { defaults.set(ids.map(rename), forKey: key) }
+        }
+        if let data = defaults.data(forKey: viewingsKey),
+           let viewings = try? JSONDecoder().decode([LiveViewing].self, from: data) {
+            let renamed = viewings.map {
+                LiveViewing(channelId: rename($0.channelId), at: $0.at, title: $0.title, labels: $0.labels, genre: $0.genre)
+            }
+            if let encoded = try? JSONEncoder().encode(renamed) { defaults.set(encoded, forKey: viewingsKey) }
+        }
     }
 
     /// Moves API keys saved in plain text by older builds into the Keychain.

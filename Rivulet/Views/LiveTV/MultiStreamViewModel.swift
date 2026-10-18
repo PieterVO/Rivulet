@@ -299,7 +299,6 @@ final class MultiStreamViewModel: ObservableObject {
                 "stream_type": streamType,
                 "stream_url_scheme": url.scheme ?? "unknown",
                 "stream_url_host": url.host ?? "unknown",
-                "stream_url_path": url.path,
                 "is_plex_transcode": url.path.contains("/transcode/"),
                 "is_hls": url.pathExtension == "m3u8" || url.path.contains(".m3u8"),
                 "slot_index": slotIndex,
@@ -354,7 +353,6 @@ final class MultiStreamViewModel: ObservableObject {
                     // client profile) and drop every value.
                     scope.setExtra(value: SensitiveDataRedactor.safeURLString(url), key: "stream_url")
                     scope.setExtra(value: url.host ?? "unknown", key: "stream_host")
-                    scope.setExtra(value: url.path, key: "stream_path")
                     scope.setExtra(value: SensitiveDataRedactor.redact(url.query ?? ""), key: "stream_query_params")
                 }
 

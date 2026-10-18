@@ -179,7 +179,7 @@ final class AetherPlayer: PlayerProtocol {
         }
         // The engine otherwise uses system trust alone, so a server the API
         // session accepts would browse and never play (#337).
-        EngineTLS.serverTrustEvaluator = { PlexCertificateDelegate.trustsUnverifiedCertificate(for: $0) }
+        EngineTLS.serverTrustEvaluator = { PlexCertificateDelegate.trustsServer($0) }
         wireUpPublishers()
         observeAppLifecycle()
     }

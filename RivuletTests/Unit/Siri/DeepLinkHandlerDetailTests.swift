@@ -65,6 +65,14 @@ final class DeepLinkHandlerDetailTests: XCTestCase {
         return m
     }
 
+    func testKeyThatCouldReshapeTheServerPathIsDropped() {
+        let handler = makeHandler { key, _ in self.metadata(key) }
+        for key in ["../../:/scrobble?key=1", "5/children", "5%2F", "5&x=1"] {
+            XCTAssertNil(handler.handle(RivuletLink(.detail, ratingKey: key)))
+            XCTAssertNil(handler.heldLink, key)
+        }
+    }
+
     func testLinkBeforeShellReadyIsHeldThenDelivered() async {
         let handler = makeHandler { key, _ in self.metadata(key) }
         XCTAssertNil(handler.handle(RivuletLink(.detail, ratingKey: "5")))

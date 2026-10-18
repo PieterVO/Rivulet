@@ -51,11 +51,15 @@ enum LiveTVClientIdentity {
     ///
     /// Only a literal `|` is a delimiter. An encoded `%7C` is ordinary URL data
     /// (a signed token, an Xtream password) and is left in the URL untouched.
+    private nonisolated static let streamSchemes: Set<String> = ["http", "https", "rtsp", "rtsps", "rtp", "udp", "rtmp", "rtmps", "srt"]
+
     nonisolated static func parseStreamURL(_ rawString: String) -> (url: URL, headers: [String: String])? {
         let trimmed = rawString.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = trimmed.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
         guard let first = parts.first,
-              let url = URL(string: first.trimmingCharacters(in: .whitespaces)) else {
+              let url = URL(string: first.trimmingCharacters(in: .whitespaces)),
+              // A playlist names network streams only, never `file:` or FFmpeg's `concat:`/`subfile:`.
+              let scheme = url.scheme?.lowercased(), streamSchemes.contains(scheme) else {
             return nil
         }
 

@@ -27,9 +27,10 @@ enum TopShelfLogoResolver {
     /// metadata, or "" when the metadata has no clearLogo.
     static func logoURLString(from fullMetadata: PlexMetadata, serverURL: String, token: String) -> String {
         guard let path = fullMetadata.clearLogoPath, !path.isEmpty else { return "" }
-        let sep = path.hasPrefix("http") ? "" : serverURL
-        var url = "\(sep)\(path)"
-        if !url.contains("X-Plex-Token") {
+        let isAbsolute = path.hasPrefix("http")
+        var url = isAbsolute ? path : "\(serverURL)\(path)"
+        // An absolute URL on another host (a metadata CDN) must not receive the token.
+        if !url.contains("X-Plex-Token"), !isAbsolute || URL(string: path)?.host == URL(string: serverURL)?.host {
             url += url.contains("?") ? "&" : "?"
             url += "X-Plex-Token=\(token)"
         }

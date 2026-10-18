@@ -19,7 +19,9 @@ nonisolated enum TopShelfImageCompositor {
 
     /// A composite's file name, from what it is built from: an unchanged item keeps its file.
     static func fileName(ratingKey: String, backdropURL: String, logoURL: String) -> String {
-        "\(ratingKey)-\("\(version)|\(backdropURL)|\(logoURL)".sha256Hash().prefix(16)).jpg"
+        // The key comes from the server: anything but letters and digits could leave the folder.
+        let safeKey = ratingKey.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) } ? ratingKey : "item"
+        return "\(safeKey)-\("\(version)|\(ratingKey)|\(backdropURL)|\(logoURL)".sha256Hash().prefix(16)).jpg"
     }
 
     /// Analyses the backdrop to place the logo, so call off the main thread.

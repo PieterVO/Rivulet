@@ -143,6 +143,9 @@ final class ASSOverlayView: UIView {
                 guard fedIDs.insert(cue.id).inserted else { continue }
             }
             guard case .assEvents(let body) = cue.body else { continue }
+            // Cue times come from the file or server; out-of-range values trap Int64(_:).
+            guard cue.startTime.isFinite, cue.endTime.isFinite,
+                  abs(cue.startTime) < 1e7, abs(cue.endTime) < 1e7 else { continue }
             let startMs = Int64((cue.startTime * 1000).rounded())
             let durationMs = Int64(((cue.endTime - cue.startTime) * 1000).rounded())
             for line in body.split(separator: "\n") {

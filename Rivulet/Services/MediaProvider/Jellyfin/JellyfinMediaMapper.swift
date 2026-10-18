@@ -180,7 +180,7 @@ enum JellyfinMediaMapper {
             id: "\(index)",
             codec: s.codec ?? "unknown",
             profile: s.profile,
-            level: s.level.map { Int($0) },
+            level: s.level.flatMap { Int(exactly: $0.rounded()) },
             width: s.width,
             height: s.height,
             frameRate: s.realFrameRate ?? s.averageFrameRate,

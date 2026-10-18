@@ -517,12 +517,15 @@ Key components:
 **Playback States** (PlayerProtocol): `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
 
 **Playback trusts the same certificates as the Plex API session.** One rule,
-`PlexCertificateDelegate.trustsUnverifiedCertificate` (IPv4 literal, `*.plex.direct`,
-port 32400), is what `EngineTLS.serverTrustEvaluator` answers with in both
-`AetherPlayer` adapters. AVPlayer has no trust hook, so the tvOS `hls` route goes
+`PlexCertificateDelegate.trustsServer`: system trust, or else, for a raw IP only, the
+valid plex.tv-issued `*.<hash>.plex.direct` certificate that plex.tv lists for the
+account's OWN server at that address. Never a DNS name, never a shared server's hash.
+It is what `EngineTLS.serverTrustEvaluator` answers with in both `AetherPlayer` adapters.
+Connection probes hit `/identity` without a token and must get back the server's
+`machineIdentifier` before the token is sent anywhere. AVPlayer has no trust hook, so the tvOS `hls` route goes
 through `HLSTrustRelay` (a loopback relay) when system trust refuses the server.
 Never send a Plex server request through `URLSession.shared`: it browses fine on
-most servers and fails on the ones behind a raw-IP or private certificate (#314, #337).
+most servers and fails on the ones reached by raw IP (#314, #337).
 
 #### Routing policy (VOD)
 1. `ContentRouter.plan(...)` returns `PlaybackPlan { primary, fallbacks }`. Route cases: `.aether`, `.hls`.
@@ -531,7 +534,7 @@ most servers and fails on the ones behind a raw-IP or private certificate (#314,
 
 #### Live TV
 Two layouts: What's On (`LiveBrowseViewController`, the default) and the Guide (`GuideLayoutView`). Both play through `LiveTVAetherPlayerViewController` on the VOD glass rail. Multiview (`LiveMultiviewViewController`) runs **AetherPlayer** per slot (`MultiStreamViewModel` instantiates `AetherPlayer()`, each tile binds the engine surface), up to 4 concurrent slots. HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
-iOS reads the same `LiveTVDataStore` and saved sources and adds sources through the same `LiveTVSourceConnector`. Dispatcharr API keys live in the Keychain (`liveTVSourceToken_<sourceId>`); the saved source JSON keeps one only if the Keychain write fails, and older plain-text keys are migrated on load.
+iOS reads the same `LiveTVDataStore` and saved sources and adds sources through the same `LiveTVSourceConnector`. Dispatcharr API keys and M3U playlist/guide URLs (which often embed credentials) live in the Keychain (`liveTVSourceToken_`, `liveTVSourceM3U_`, `liveTVSourceEPG_` + source id); the saved source JSON keeps one only if the Keychain write fails. An M3U source id is a hash of its URL (`m3uSourceId`), never the URL itself; older URL-keyed sources are re-keyed on launch with their saved channel ids renamed.
 
 ### Content Filter (VOD)
 

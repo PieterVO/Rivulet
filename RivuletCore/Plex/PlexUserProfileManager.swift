@@ -30,7 +30,16 @@ class PlexUserProfileManager: ObservableObject {
     @Published var homeUsers: [PlexHomeUser] = []
 
     /// Currently selected user profile
-    @Published var selectedUser: PlexHomeUser?
+    @Published var selectedUser: PlexHomeUser? {
+        // Kept across launches: the home-user list loads seconds after launch, or not at all offline.
+        didSet { if let selectedUser { userDefaults.set(selectedUser.restricted, forKey: restrictedKey) } }
+    }
+
+    /// A managed (restricted) Plex profile. It sees Plex content only: other
+    /// servers, IPTV, sign-out, server and parental settings are the owner's.
+    var isRestrictedProfile: Bool {
+        selectedUser?.restricted ?? userDefaults.bool(forKey: restrictedKey)
+    }
 
     /// Loading state for user fetch
     @Published var isLoadingUsers = false
@@ -65,6 +74,7 @@ class PlexUserProfileManager: ObservableObject {
     private let selectedUserUUIDKey = "selectedPlexUserUUID"
     private let selectedUserNameKey = "selectedPlexUserName"
     private let showProfilePickerOnLaunchKey = "showPlexProfilePickerOnLaunch"
+    private let restrictedKey = "selectedPlexUserRestricted"
 
     // MARK: - Dependencies
 
@@ -265,12 +275,12 @@ class PlexUserProfileManager: ObservableObject {
 
     /// Reset profile state (call on sign out)
     func reset() {
-        // Clear all remembered PINs before clearing homeUsers
-        let userUUIDs = homeUsers.map { $0.uuid }
-        KeychainHelper.deleteAllPins(forUserUUIDs: userUUIDs)
+        // homeUsers can be empty (failed or deferred fetch), so clear by prefix.
+        KeychainHelper.deleteAllPins()
 
         homeUsers = []
         selectedUser = nil
+        userDefaults.removeObject(forKey: restrictedKey)
         usersError = nil
         usersWithRememberedPins = []
 

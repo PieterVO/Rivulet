@@ -14,6 +14,8 @@ struct RivuletiOSApp: App {
         // touches PlexAuthManager.shared (the session does) or builds a request.
         // The manager reads Keychain and UserDefaults in its init, and PlexAPI
         // values are baked into every header.
+        // A phone joins other people's networks; a LAN address there may be anyone.
+        PlexAuthManager.prefersSecureLocalConnections = true
         Self.migrateLegacyIOSSession()
         #if DEBUG
         IOSScreenshotMode.seedSession()

@@ -409,7 +409,7 @@ actor ImageCacheManager: NSObject {
 
             // Update metadata
             let entry = ImageCacheEntry(
-                url: url.absoluteString,
+                url: SensitiveDataRedactor.redact(url.absoluteString),  // written to Caches; no token on disk
                 cachedAt: Date(),
                 lastAccessedAt: Date(),
                 fileSize: Int64(data.count)
@@ -479,6 +479,15 @@ actor ImageCacheManager: NSObject {
 
         cacheMetadata = decoded
         metadataLoaded = true
+
+        // One-time scrub of tokens older builds wrote into the metadata file.
+        let tokenized = decoded.filter { $0.value.url.contains("Token=") && !$0.value.url.contains("Token=[redacted]") }
+        guard !tokenized.isEmpty else { return }
+        for (key, entry) in tokenized {
+            cacheMetadata[key] = ImageCacheEntry(url: SensitiveDataRedactor.redact(entry.url), cachedAt: entry.cachedAt,
+                                                 lastAccessedAt: entry.lastAccessedAt, fileSize: entry.fileSize)
+        }
+        saveMetadata()
     }
 
     private func saveMetadata() {
@@ -568,34 +577,12 @@ actor ImageCacheManager: NSObject {
 // MARK: - URLSessionDelegate (SSL Certificate Handling)
 
 extension ImageCacheManager: URLSessionDelegate {
-    /// Handle SSL certificate challenges for self-signed certificates (same as PlexNetworkManager)
+    /// The Plex server certificate rule (see `PlexCertificateDelegate.trustsServer`).
     nonisolated func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        let host = challenge.protectionSpace.host
-        let port = challenge.protectionSpace.port
-
-        // Trust self-signed certificates for:
-        // - IP addresses (local Plex servers)
-        // - plex.direct domains
-        // - Port 32400 (default Plex port)
-        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
-        let isPlexDirect = host.hasSuffix(".plex.direct")
-        let isPlexPort = port == 32400
-
-        if isIPAddress || isPlexDirect || isPlexPort {
-            let credential = URLCredential(trust: serverTrust)
-            completionHandler(.useCredential, credential)
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
+        PlexCertificateDelegate.answer(challenge, completionHandler: completionHandler)
     }
 }

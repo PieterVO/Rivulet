@@ -119,6 +119,7 @@ final class TopShelfImageCompositorTests: XCTestCase {
         XCTAssertEqual(name, TopShelfImageCompositor.fileName(ratingKey: "42", backdropURL: "a", logoURL: "b"))
         XCTAssertNotEqual(name, TopShelfImageCompositor.fileName(ratingKey: "42", backdropURL: "a2", logoURL: "b"))
         XCTAssertNotEqual(name, TopShelfImageCompositor.fileName(ratingKey: "42", backdropURL: "a", logoURL: "b2"))
+        XCTAssertFalse(TopShelfImageCompositor.fileName(ratingKey: "../../x", backdropURL: "a", logoURL: "b").contains("/"))
         // The fixed-rule files were "<ratingKey>.jpg": never a current name, so they are pruned.
         XCTAssertNotEqual(name, "42.jpg")
         XCTAssertTrue(name.hasPrefix("42-") && name.hasSuffix(".jpg"))

@@ -35,7 +35,18 @@ nonisolated enum SentryEventRedaction {
         if let exceptions = event.exceptions {
             for exception in exceptions {
                 exception.value = SensitiveDataRedactor.redactOptional(exception.value)
+                // capture(error:) puts error.description and userInfo (with the
+                // failing URL) on the mechanism.
+                if let mechanism = exception.mechanism {
+                    mechanism.desc = SensitiveDataRedactor.redactOptional(mechanism.desc)
+                    mechanism.data = mechanism.data?.mapValues(redactAny)
+                }
             }
+        }
+
+        // NSError userInfo lands in context["user info"], failing URL included.
+        if let context = event.context {
+            event.context = context.mapValues { $0.mapValues(redactAny) }
         }
 
         // SDK-populated failed-request context. No call site can reach this, so
@@ -44,7 +55,10 @@ nonisolated enum SentryEventRedaction {
             request.url = SensitiveDataRedactor.redactOptional(request.url)
             request.queryString = SensitiveDataRedactor.redactOptional(request.queryString)
             if let headers = request.headers {
-                request.headers = headers.mapValues { SensitiveDataRedactor.redact($0) }
+                request.headers = Dictionary(uniqueKeysWithValues: headers.map { name, value in
+                    (name, SensitiveDataRedactor.isSecretName(name) ? SensitiveDataRedactor.redactedValue
+                                                                     : SensitiveDataRedactor.redact(value))
+                })
             }
             // Cookies are credentials wholesale; never worth shipping.
             if request.cookies != nil {
@@ -84,6 +98,16 @@ nonisolated enum SentryEventRedaction {
         return event
     }
 
+    /// Auto HTTP spans keep the raw query (`http.query`) and path; `beforeSend`
+    /// never walks a transaction's spans.
+    static func redact(_ span: Span) -> Span {
+        span.spanDescription = SensitiveDataRedactor.redactOptional(span.spanDescription)
+        for (key, value) in span.data {
+            span.setData(value: redactAny(value), key: key)
+        }
+        return span
+    }
+
     /// The same scrub for structured logs, which `beforeSend` never sees.
     static func redact(_ log: SentryLog) -> SentryLog {
         log.body = SensitiveDataRedactor.redact(log.body)
@@ -105,6 +129,9 @@ nonisolated enum SentryEventRedaction {
             return SensitiveDataRedactor.safeURLString(url)
         case let array as [Any]:
             return array.map(redactAny)
+        case let error as NSError:
+            // userInfo's underlying error describes itself with the failing URL.
+            return SensitiveDataRedactor.redact(error.description)
         case let dictionary as [String: Any]:
             return dictionary.mapValues(redactAny)
         default:

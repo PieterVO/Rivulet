@@ -79,6 +79,9 @@ public enum SentryStartup {
             // request paths log what they need.
             options.enableCaptureFailedRequests = false
             options.enableSwizzling = true
+            options.beforeSendSpan = { SentryEventRedaction.redact($0) }
+            // Default is every host: no trace headers to Plex, IPTV or Jellyfin servers.
+            options.tracePropagationTargets = []
             // Logs skip beforeSend, so they get their own scrub.
             options.enableLogs = true
             options.beforeSendLog = { SentryEventRedaction.redact($0) }

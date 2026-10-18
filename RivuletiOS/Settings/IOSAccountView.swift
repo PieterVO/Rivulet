@@ -36,10 +36,13 @@ struct IOSAccountView: View {
                     } label: {
                         Label("Downloads", systemImage: "arrow.down.circle")
                     }
-                    NavigationLink {
-                        IOSLiveTVSettingsView()
-                    } label: {
-                        Label("Live TV", systemImage: "play.tv")
+                    // Sources and server choice are the owner's, not a restricted profile's.
+                    if !profiles.isRestrictedProfile {
+                        NavigationLink {
+                            IOSLiveTVSettingsView()
+                        } label: {
+                            Label("Live TV", systemImage: "play.tv")
+                        }
                     }
                 }
 
@@ -49,7 +52,7 @@ struct IOSAccountView: View {
                     NavigationLink("Licenses") { IOSLicensesView() }
                 }
 
-                if plex.isSignedIn {
+                if plex.isSignedIn, !profiles.isRestrictedProfile {
                     Section {
                         Button("Sign Out", role: .destructive) { confirmingSignOut = true }
                             .confirmationDialog("Sign out of Plex?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
@@ -96,13 +99,15 @@ struct IOSAccountView: View {
                     Label("Switch Profile", systemImage: "person.2")
                 }
             }
-            NavigationLink {
-                IOSServerPicker()
-            } label: {
-                LabeledContent {
-                    Text(plex.selectedServerName ?? "")
+            if !profiles.isRestrictedProfile {
+                NavigationLink {
+                    IOSServerPicker()
                 } label: {
-                    Label("Server", systemImage: "server.rack")
+                    LabeledContent {
+                        Text(plex.selectedServerName ?? "")
+                    } label: {
+                        Label("Server", systemImage: "server.rack")
+                    }
                 }
             }
         }

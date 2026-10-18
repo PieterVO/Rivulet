@@ -172,8 +172,7 @@ final class PlexThumbnailService {
             }
 
             do {
-                // Use custom URLSession that accepts self-signed certs
-                let session = createTrustingSession()
+                let session = PlexCertificateDelegate.session
                 var request = URLRequest(url: url)
                 request.setValue(authToken, forHTTPHeaderField: "X-Plex-Token")
 
@@ -216,13 +215,6 @@ final class PlexThumbnailService {
         return nil
     }
 
-    /// Creates a URLSession that trusts self-signed certificates
-    private func createTrustingSession() -> URLSession {
-        let config = URLSessionConfiguration.default
-        let delegate = TrustingSessionDelegate()
-        return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-    }
-
     /// Release the frames held for a part. Also drops any in-flight load, so a
     /// download that finishes after this call doesn't re-fill the cache.
     ///
@@ -242,22 +234,6 @@ final class PlexThumbnailService {
     }
 }
 
-// MARK: - SSL Trust Delegate
-
-private class TrustingSessionDelegate: NSObject, URLSessionDelegate {
-    func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           let serverTrust = challenge.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-}
 
 // MARK: - BIF Data Structure
 
@@ -314,7 +290,7 @@ nonisolated struct BIFData: Sendable {
 
         // Read frame index
         let indexStart = 64
-        let indexEnd = indexStart + Int(frameCount + 1) * 8  // +1 for end marker
+        let indexEnd = indexStart + (Int(frameCount) + 1) * 8  // +1 for end marker; Int math so 0xFFFFFFFF can't trap
 
         guard data.count >= indexEnd else { return nil }
 
@@ -338,6 +314,7 @@ nonisolated struct BIFData: Sendable {
         // Extract frame data
         var frames: [BIFFrame] = []
         var anyFrameDropped = false
+        var lastEnd = 0
         for i in 0..<frameInfos.count {
             let info = frameInfos[i]
             let nextOffset = (i + 1 < frameInfos.count) ? frameInfos[i + 1].offset : endOffset
@@ -345,11 +322,14 @@ nonisolated struct BIFData: Sendable {
             let start = Int(info.offset)
             let end = Int(nextOffset)
 
-            guard start < data.count, end <= data.count, start < end else {
+            // Frames must follow the index and each other, so a bad index can't
+            // make every entry copy most of the file.
+            guard start >= max(indexEnd, lastEnd), end <= data.count, start < end else {
                 anyFrameDropped = true
                 continue
             }
 
+            lastEnd = end
             let frameData = data.subdata(in: start..<end)
             frames.append(BIFFrame(timestamp: info.timestamp, imageData: frameData))
         }

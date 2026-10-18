@@ -76,7 +76,7 @@ actor M3UParser {
             request.timeoutInterval = timeout
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await BoundedDownload.data(for: request, limit: BoundedDownload.playlistLimit)
 
         if let httpResponse = response as? HTTPURLResponse,
            !(200...299).contains(httpResponse.statusCode) {

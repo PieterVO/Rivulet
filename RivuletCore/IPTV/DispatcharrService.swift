@@ -126,7 +126,8 @@ actor DispatcharrService {
         let url = m3uURL
         let request = authenticatedRequest(for: url)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await BoundedDownload.data(
+            for: request, limit: BoundedDownload.playlistLimit, configuration: session.configuration)
 
         try validateResponse(response)
 
@@ -139,7 +140,8 @@ actor DispatcharrService {
         let url = epgURL
         let request = authenticatedRequest(for: url)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await BoundedDownload.data(
+            for: request, limit: BoundedDownload.guideLimit, configuration: session.configuration)
 
         try validateResponse(response)
 

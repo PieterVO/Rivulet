@@ -29,6 +29,20 @@ final class BIFFilmstripTests: XCTestCase {
         return data
     }
 
+    func testOutOfRangeHeaderAndIndex_areRejected() {
+        var huge = makeBIF(frameCount: 2, intervalMs: 1000)
+        huge.replaceSubrange(12..<16, with: [0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertNil(BIFData(data: huge))
+
+        // Offsets pointing back before the previous frame are dropped, not copied.
+        var data = makeBIF(frameCount: 3, intervalMs: 1000)
+        let firstOffset = data.subdata(in: 68..<72)
+        data.replaceSubrange(84..<88, with: firstOffset) // frame 2 points at frame 0
+        let bif = BIFData(data: data)
+        XCTAssertNotNil(bif)
+        XCTAssertLessThan(bif?.frames.count ?? 0, 3)
+    }
+
     func testParseSyntheticBIF() {
         let bif = BIFData(data: makeBIF(frameCount: 5, intervalMs: 10_000))
         XCTAssertEqual(bif?.frameCount, 5)

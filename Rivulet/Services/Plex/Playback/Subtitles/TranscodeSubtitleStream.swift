@@ -42,7 +42,9 @@ enum TranscodeSubtitleStream {
         guard parts.count == 3, let h = Double(parts[0]), let m = Double(parts[1]), let s = Double(parts[2]) else {
             return nil
         }
-        return h * 3600 + m * 60 + s
+        let total = h * 3600 + m * 60 + s
+        // Server input: NaN or a huge value would trap the overlay's Int64 conversion.
+        return total.isFinite && total >= 0 && total < 1e7 ? total : nil
     }
 
     /// Reads until PMS closes the response. `onHeader` gets everything through
@@ -52,6 +54,7 @@ enum TranscodeSubtitleStream {
                      onHeader: (String) -> Void,
                      onEvent: (Event) -> Void) async -> Bool {
         var header: [String] = []
+        var headerBytes = 0
         var headerDone = false
         do {
             let (bytes, response) = try await PlexNetworkManager.shared.openEndedBytes(for: request)
@@ -62,6 +65,9 @@ enum TranscodeSubtitleStream {
                     continue
                 }
                 header.append(line)
+                headerBytes += line.utf8.count
+                // Script info, styles and any embedded fonts; past this the stream is not ASS.
+                guard headerBytes < 16 << 20 else { return false }
                 if line.hasPrefix("Format:"), header.contains("[Events]") {
                     headerDone = true
                     onHeader(header.joined(separator: "\n") + "\n")

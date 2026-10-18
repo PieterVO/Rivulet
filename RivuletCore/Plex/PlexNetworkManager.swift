@@ -362,6 +362,15 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return json["authToken"] as? String
     }
 
+    /// Revokes an account token at plex.tv, as Plex's own clients do on sign-out. Best effort.
+    func revokeToken(_ authToken: String) async {
+        guard let url = URL(string: "\(PlexAPI.baseUrl)/api/v2/users/signout") else { return }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.httpMethod = "DELETE"
+        plexHeaders(authToken: authToken).forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        _ = try? await session.data(for: request)
+    }
+
     // MARK: - Server Discovery
 
     /// Get list of available Plex servers for the authenticated user
@@ -381,7 +390,9 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         // Only Plex Media Servers. Each device's `machineIdentifier` is populated
         // at decode time from its `clientIdentifier` (the same value the old
         // pms/servers.xml fetch returned), so no separate round-trip is needed.
-        return devices.filter { $0.provides == "server" }
+        let servers = devices.filter { $0.provides == "server" }
+        PlexCertificateDelegate.registerCertificateHashes(from: servers)
+        return servers
     }
 
     // MARK: - Library Browsing
@@ -3201,19 +3212,7 @@ extension PlexNetworkManager: URLSessionDelegate {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-
-        if PlexCertificateDelegate.trustsUnverifiedCertificate(for: challenge.protectionSpace) {
-            let credential = URLCredential(trust: serverTrust)
-            completionHandler(.useCredential, credential)
-        } else {
-            // Use default handling for other hosts (like plex.tv)
-            completionHandler(.performDefaultHandling, nil)
-        }
+        PlexCertificateDelegate.answer(challenge, completionHandler: completionHandler)
     }
 }
 

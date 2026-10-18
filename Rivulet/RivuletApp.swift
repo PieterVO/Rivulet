@@ -37,6 +37,8 @@ struct RivuletApp: App {
             MusicQueue.shared.stop()
             MusicQueue.shared.clear()
             PlexDataStore.shared.reset()
+            // Older builds recorded token-bearing URLs in the cache metadata.
+            Task { await ImageCacheManager.shared.clearAll() }
         }
         JellyfinSession.onChanged = { JellyfinDataStore.shared.reload() }
         PlexUserProfileManager.onProfileChanged = {
@@ -44,8 +46,13 @@ struct RivuletApp: App {
             MusicQueue.shared.stop()
             MusicQueue.shared.clear()
             await PlexDataStore.shared.onProfileSwitched()
+            // A restricted profile does not see the Jellyfin server.
+            JellyfinDataStore.shared.reload()
         }
-        PlexUserProfileManager.onInitialProfileSelected = { LibrarySettingsManager.shared.onProfileSwitched() }
+        PlexUserProfileManager.onInitialProfileSelected = {
+            LibrarySettingsManager.shared.onProfileSwitched()
+            JellyfinDataStore.shared.reload()
+        }
 
         #if !DEBUG
         // Sentry start is DEFERRED off the launch window. Starting it in init()

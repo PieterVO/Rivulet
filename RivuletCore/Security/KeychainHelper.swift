@@ -98,10 +98,20 @@ enum KeychainHelper {
         getPin(forUserUUID: uuid) != nil
     }
 
-    /// Delete all stored PINs (for sign out)
-    static func deleteAllPins(forUserUUIDs uuids: [String]) {
-        for uuid in uuids {
-            deletePin(forUserUUID: uuid)
+    /// Deletes every stored PIN, including profiles no longer in the home-user list.
+    static func deleteAllPins() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let items = result as? [[String: Any]] else { return }
+        for account in items.compactMap({ $0[kSecAttrAccount as String] as? String })
+        where account.hasPrefix(pinKeyPrefix) {
+            delete(account)
         }
     }
 }

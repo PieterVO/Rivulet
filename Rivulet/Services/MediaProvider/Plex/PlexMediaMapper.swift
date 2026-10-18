@@ -110,10 +110,10 @@ enum PlexMediaMapper {
     /// object (adds parentsNeedToKnow + topics).
     static func contentAdvisory(from csm: PlexCommonSenseMedia) -> ContentAdvisory {
         let official = csm.officialAge
-        let age = official?.age.map { "\(Int($0.rounded()))+" }
+        let age = official?.age.flatMap { Int(exactly: $0.rounded()) }.map { "\($0)+" }
         let topics: [ContentAdvisory.Topic] = (csm.ParentalAdvisoryTopic ?? []).compactMap { t in
             guard let label = t.label, !label.isEmpty else { return nil }
-            return ContentAdvisory.Topic(label: label, rating: t.rating.map { Int($0.rounded()) }, isPositive: t.positive ?? false)
+            return ContentAdvisory.Topic(label: label, rating: t.rating.flatMap { Int(exactly: $0.rounded()) }, isPositive: t.positive ?? false)
         }
         return ContentAdvisory(
             ageRating: age,

@@ -37,42 +37,66 @@ nonisolated enum SensitiveDataRedactor {
     private static let secretQueryKeys = [
         "x-plex-token",
         "password",
+        "passwd",
+        "pass",
+        "pwd",
         "username",
         "token",
         "auth",
         "authorization",
         "api_key",
         "apikey",
+        "x-api-key",
         "access_token",
+        "refresh_token",
+        "mac",
+        "signature",
     ]
 
-    /// Matches `key=value` in a query string for any key in `secretQueryKeys`.
-    /// Value runs to the next `&`, `"`, whitespace, or end — NSError and Sentry
-    /// bodies embed URLs inside prose, so we can't assume a clean terminator.
-    private static let secretPattern: NSRegularExpression? = {
+    /// Ordered `(pattern, template)` scrubs. Quoted forms run first so the
+    /// `key=value` pass never sees a half-matched `accessToken="…"`.
+    private static let scrubs: [(NSRegularExpression, String)] = {
         let keys = secretQueryKeys
             .map { NSRegularExpression.escapedPattern(for: $0) }
             .joined(separator: "|")
-        return try? NSRegularExpression(
-            pattern: "(?<key>\(keys))=(?<value>[^&\\s\"'<>]*)",
-            options: [.caseInsensitive]
-        )
+        let secretName = "[A-Za-z_-]*(?:token|password|passwd|apikey|api_key|secret)"
+        let specs: [(String, String)] = [
+            // JSON: "accessToken":"…" (plex.tv /resources bodies).
+            ("\"(\(secretName))\"\\s*:\\s*\"[^\"]*\"", "\"$1\":\"\(redactedValue)\""),
+            // XML attribute: accessToken="…" or '…'.
+            ("\\b(\(secretName))\\s*=\\s*([\"'])[^\"']*\\2", "$1=$2\(redactedValue)$2"),
+            // Query string: X-Plex-Token=…
+            ("(\(keys))=[^&\\s\"'<>]+", "$1=\(redactedValue)"),
+            // Xtream path credentials: /live/<user>/<pass>/<id>.ts
+            ("/(live|movie|series|timeshift)/[^/?#\\s\"'<>]+/[^/?#\\s\"'<>]+/",
+             "/$1/\(redactedValue)/\(redactedValue)/"),
+            // Xtream short form: host/<user>/<pass>/<id>.ts
+            ("(://[^/\\s\"'<>]+)/[^/?#\\s\"'<>]+/[^/?#\\s\"'<>]+/(\\d+\\.(?:ts|m3u8|mp4|mkv|avi|flv))",
+             "$1/\(redactedValue)/\(redactedValue)/$2"),
+            // URL userinfo: scheme://user:pass@host
+            ("://[^/\\s:@\"'<>]+:[^/\\s@\"'<>]+@", "://\(redactedValue)@"),
+        ]
+        return specs.compactMap { pattern, template in
+            (try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])).map { ($0, template) }
+        }
     }()
 
-    /// Returns `text` with every credential-bearing query value replaced.
+    /// Returns `text` with every credential replaced.
     ///
     /// Key names are preserved (`X-Plex-Token=[redacted]`) so events stay
     /// diagnosable — we can still see WHICH parameters a failing request carried,
     /// just not their values.
     static func redact(_ text: String) -> String {
-        guard let secretPattern else { return text }
-        let range = NSRange(text.startIndex..., in: text)
-        return secretPattern.stringByReplacingMatches(
-            in: text,
-            options: [],
-            range: range,
-            withTemplate: "$1=\(redactedValue)"
-        )
+        scrubs.reduce(text) { text, scrub in
+            scrub.0.stringByReplacingMatches(
+                in: text, options: [], range: NSRange(text.startIndex..., in: text), withTemplate: scrub.1)
+        }
+    }
+
+    /// Whether a header or field NAME holds a secret (`X-Plex-Token`, `Authorization`).
+    static func isSecretName(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return secretQueryKeys.contains(lower) || ["token", "password", "secret", "api-key"].contains { lower.contains($0) }
     }
 
     /// Optional-preserving variant. Deliberately NOT an overload of `redact`:
@@ -95,7 +119,7 @@ nonisolated enum SensitiveDataRedactor {
         if let scheme = components.scheme { base += "\(scheme)://" }
         base += components.host ?? "unknown"
         if let port = components.port { base += ":\(port)" }
-        base += components.path
+        base = redact(base + components.path)
 
         guard let items = components.queryItems, !items.isEmpty else { return base }
         // Keep the shape of the query (which params were sent) without values.

@@ -40,6 +40,36 @@ final class LiveTVSourceStorageTests: XCTestCase {
         XCTAssertFalse(LiveTVDataStore.moveAPITokensToKeychain(&configs))
     }
 
+    func test_credentialedPlaylistMovesToKeychain_andFavoritesFollowTheNewId() throws {
+        let suite = "LiveTVSourceStorageTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let playlist = "http://iptv.example/get.php?username=me&password=hunter2&type=m3u_plus"
+        let oldId = "m3u:\(playlist)"
+        let newId = LiveTVDataStore.m3uSourceId(for: try XCTUnwrap(URL(string: playlist)))
+        defer {
+            KeychainHelper.delete(LiveTVDataStore.playlistURLKey(sourceId: newId))
+            KeychainHelper.delete(LiveTVDataStore.guideURLKey(sourceId: newId))
+        }
+        let oldChannel = "m3u:\(oldId):bbc1"
+        defaults.set([oldChannel, "plex:p:2"], forKey: "fav")
+        defaults.set(try JSONEncoder().encode([LiveViewing(channelId: oldChannel, at: .now, title: nil, labels: [], genre: nil)]),
+                     forKey: "views")
+        var configs = [Config(id: oldId, type: "m3u", name: "M", baseURL: nil, m3uURL: playlist,
+                              epgURL: "http://iptv.example/xmltv.php?username=me&password=hunter2", apiToken: nil)]
+
+        XCTAssertTrue(LiveTVDataStore.secureM3USources(&configs, defaults: defaults, channelListKeys: ["fav"], viewingsKey: "views"))
+
+        XCTAssertEqual(configs[0].id, newId)
+        XCTAssertEqual(KeychainHelper.get(LiveTVDataStore.playlistURLKey(sourceId: newId)), playlist)
+        XCTAssertNotNil(KeychainHelper.get(LiveTVDataStore.guideURLKey(sourceId: newId)))
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(configs), as: UTF8.self).contains("hunter2"))
+        XCTAssertEqual(defaults.stringArray(forKey: "fav"), ["m3u:\(newId):bbc1", "plex:p:2"])
+        let views = try JSONDecoder().decode([LiveViewing].self, from: try XCTUnwrap(defaults.data(forKey: "views")))
+        XCTAssertEqual(views.first?.channelId, "m3u:\(newId):bbc1")
+        XCTAssertFalse(LiveTVDataStore.secureM3USources(&configs, defaults: defaults, channelListKeys: ["fav"], viewingsKey: "views"))
+    }
+
     /// Saves from before channel profiles, and before the Keychain, still decode.
     func test_oldConfigJSONDecodes() throws {
         let json = #"[{"id":"dispatcharr:http://d","type":"dispatcharr","name":"D","baseURL":"http://d","apiToken":"k"}]"#

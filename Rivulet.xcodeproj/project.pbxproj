@@ -922,8 +922,8 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.1.0;
+				kind = exactVersion;
+				version = 9.17.1;
 			};
 		};
 		B2000020AAAA000000000001 /* XCRemoteSwiftPackageReference "AetherEngine" */ = {

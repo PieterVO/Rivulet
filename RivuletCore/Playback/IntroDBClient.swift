@@ -66,7 +66,7 @@ nonisolated struct IntroDBClient {
         guard let wire = try? JSONDecoder().decode(Wire.self, from: data) else { return [] }
 
         func marker(_ seg: Segment?, _ type: String) -> PlexMarker? {
-            guard let s = seg?.start_sec, let e = seg?.end_sec, e > s else { return nil }
+            guard let s = seg?.start_sec, let e = seg?.end_sec, e > s, s >= 0, e < 1e7 else { return nil }
             // Missing confidence is treated as agreed (older entries); a
             // present-but-low confidence is rejected.
             guard (seg?.confidence ?? 1) >= minConfidence else { return nil }

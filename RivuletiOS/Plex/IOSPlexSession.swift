@@ -335,6 +335,8 @@ final class IOSPlexSession: ObservableObject {
               var components = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else {
             return nil
         }
+        // An absolute path on another host (a metadata CDN) must not receive the token.
+        guard absolute.host == base.host else { return absolute }
         var queryItems = components.queryItems ?? []
         if !queryItems.contains(where: { $0.name == "X-Plex-Token" }) {
             queryItems.append(URLQueryItem(name: "X-Plex-Token", value: token))

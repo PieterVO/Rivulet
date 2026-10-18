@@ -41,7 +41,7 @@ final class JellyfinDataStore: ObservableObject {
         guard observesRefresh else { return }
         // Before the first sidebar render, so a Jellyfin-only launch never
         // flashes the signed-out welcome.
-        account = JellyfinSession.account
+        account = PlexUserProfileManager.shared.isRestrictedProfile ? nil : JellyfinSession.account
         // Watch-state changes (detail page, tile menus, playback) post this.
         refreshObserver = NotificationCenter.default.addObserver(
             forName: .plexDataNeedsRefresh, object: nil, queue: .main
@@ -93,7 +93,7 @@ final class JellyfinDataStore: ObservableObject {
         loadTask?.cancel()
         // Assigned only on change: Plex-only users reach here on every launch,
         // foreground and watch-state change, and each publish redraws Home.
-        update(\.account, JellyfinSession.account)
+        update(\.account, PlexUserProfileManager.shared.isRestrictedProfile ? nil : JellyfinSession.account)
         guard let account,
               let provider = MediaProviderRegistry.shared.provider(for: account.providerID) else {
             update(\.libraries, [])

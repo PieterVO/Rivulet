@@ -332,18 +332,80 @@ final class PlexAuthManagerTests: XCTestCase {
     }
 
     // The trust rule shared by the API session and the player (#337)
-    func testTrustsUnverifiedCertificate() {
-        func trusts(_ host: String, _ port: Int) -> Bool {
-            PlexCertificateDelegate.trustsUnverifiedCertificate(
-                for: URLProtectionSpace(host: host, port: port, protocol: "https", realm: nil,
-                                        authenticationMethod: NSURLAuthenticationMethodServerTrust))
+    func testTrustsServer_neverWithoutAServerTrust() {
+        // The old rule passed these on host or port alone.
+        for (host, port) in [("192.168.50.5", 32400), ("1-2-3-4.abc123.plex.direct", 8443), ("plex.example.com", 32400)] {
+            XCTAssertFalse(PlexCertificateDelegate.trustsServer(
+                URLProtectionSpace(host: host, port: port, protocol: "https", realm: nil,
+                                   authenticationMethod: NSURLAuthenticationMethodServerTrust)), host)
         }
-        XCTAssertTrue(trusts("192.168.50.5", 32400))
-        XCTAssertTrue(trusts("8.8.8.8", 443))
-        XCTAssertTrue(trusts("1-2-3-4.abc123.plex.direct", 8443))
-        XCTAssertTrue(trusts("plex.example.com", 32400))
-        XCTAssertFalse(trusts("plex.example.com", 443))
-        XCTAssertFalse(trusts("plex.direct.evil.com", 443))
+    }
+
+    func testPlexDirectHash_onlyFromPlexDirectURIs() {
+        let hash = "0123456789abcdef0123456789abcdef"
+        XCTAssertEqual(PlexCertificateDelegate.plexDirectHash(in: "https://192-168-1-2.\(hash).plex.direct:32400"), hash)
+        XCTAssertEqual(PlexCertificateDelegate.plexDirectHash(in: "https://192-168-1-2.\(hash.uppercased()).plex.direct"), hash)
+        XCTAssertNil(PlexCertificateDelegate.plexDirectHash(in: "https://192-168-1-2.\(hash).plex.direct.evil.com"))
+        XCTAssertNil(PlexCertificateDelegate.plexDirectHash(in: "https://192-168-1-2.abc123.plex.direct"))
+        XCTAssertNil(PlexCertificateDelegate.plexDirectHash(in: "http://192.168.1.2:32400"))
+    }
+
+    private func device(owned: Bool, address: String, hash: String) throws -> PlexDevice {
+        let json = """
+        {"name":"S","product":"Plex Media Server","productVersion":"1","clientIdentifier":"id","createdAt":"0",
+         "lastSeenAt":"0","provides":"server","owned":\(owned),
+         "connections":[{"protocol":"https","address":"\(address)","port":32400,
+           "uri":"https://\(address.replacingOccurrences(of: ".", with: "-")).\(hash).plex.direct:32400",
+           "local":true,"relay":false,"IPv6":false}]}
+        """
+        return try JSONDecoder().decode(PlexDevice.self, from: Data(json.utf8))
+    }
+
+    func testCertificateHashes_boundToOwnServersAddresses() throws {
+        let own = "fedcba9876543210fedcba9876543210", shared = "0123456789abcdef0123456789abcdef"
+        PlexCertificateDelegate.forgetCertificateHashes()
+        defer { PlexCertificateDelegate.forgetCertificateHashes() }
+        PlexCertificateDelegate.registerCertificateHashes(from: [
+            try device(owned: true, address: "10.0.0.2", hash: own),
+            try device(owned: false, address: "10.0.0.3", hash: shared),
+        ])
+        XCTAssertTrue(PlexCertificateDelegate.isKnownCertificateHash(own, forAddress: "10.0.0.2"))
+        // Another address, or a server someone else owns (and holds the key for), never counts.
+        XCTAssertFalse(PlexCertificateDelegate.isKnownCertificateHash(own, forAddress: "10.0.0.9"))
+        XCTAssertFalse(PlexCertificateDelegate.isKnownCertificateHash(shared, forAddress: "10.0.0.3"))
+        PlexCertificateDelegate.forgetCertificateHashes()
+        XCTAssertFalse(PlexCertificateDelegate.isKnownCertificateHash(own, forAddress: "10.0.0.2"))
+    }
+
+    func testCertificateHash_coversEveryAddressOfTheServer() throws {
+        let hash = "00112233445566778899aabbccddeeff"
+        let json = """
+        {"name":"S","product":"Plex Media Server","productVersion":"1","clientIdentifier":"id","createdAt":"0",
+         "lastSeenAt":"0","provides":"server","owned":true,"connections":[
+          {"protocol":"https","address":"172.17.0.2","port":32400,"uri":"https://172-17-0-2.\(hash).plex.direct:32400","local":true,"relay":false,"IPv6":false},
+          {"protocol":"https","address":"192.168.1.5","port":32400,"uri":"https://192.168.1.5:32400","local":true,"relay":false,"IPv6":false}]}
+        """
+        PlexCertificateDelegate.forgetCertificateHashes()
+        defer { PlexCertificateDelegate.forgetCertificateHashes() }
+        PlexCertificateDelegate.registerCertificateHashes(from: [try JSONDecoder().decode(PlexDevice.self, from: Data(json.utf8))])
+        // A custom LAN address (Docker host) serves the same certificate as the bridge address.
+        XCTAssertTrue(PlexCertificateDelegate.isKnownCertificateHash(hash, forAddress: "192.168.1.5"))
+    }
+
+    func testIPLiteral() {
+        XCTAssertTrue(PlexCertificateDelegate.isIPLiteral("192.168.1.2"))
+        XCTAssertTrue(PlexCertificateDelegate.isIPLiteral("fd00::1"))
+        XCTAssertFalse(PlexCertificateDelegate.isIPLiteral("plex.tv"))
+        XCTAssertFalse(PlexCertificateDelegate.isIPLiteral("1-2-3-4.abc.plex.direct"))
+        XCTAssertFalse(PlexCertificateDelegate.isIPLiteral("999.1.1.1"))
+    }
+
+    func testMachineIdentifier_fromIdentityJSONAndXML() {
+        let json = Data(#"{"MediaContainer":{"size":0,"claimed":true,"machineIdentifier":"48eb","version":"1.43.4"}}"#.utf8)
+        XCTAssertEqual(PlexAuthManager.machineIdentifier(fromIdentity: json), "48eb")
+        let xml = Data(#"<MediaContainer size="0" machineIdentifier="48eb" version="1.43"/>"#.utf8)
+        XCTAssertEqual(PlexAuthManager.machineIdentifier(fromIdentity: xml), "48eb")
+        XCTAssertNil(PlexAuthManager.machineIdentifier(fromIdentity: Data("<html>captive portal</html>".utf8)))
     }
 }
 
