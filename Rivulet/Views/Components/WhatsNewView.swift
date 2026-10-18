@@ -149,6 +149,11 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        // confirm build number at release
+        ("1.1.0 (98)", [
+            "Full Dolby Vision for Profile 7 FEL titles on Dolby Vision TVs.",
+            "Updated AetherEngine to 7.39.0",
+        ]),
         ("1.1.0 (97)", [
             "New scores for Live TV games. Very pleased with this. Access them from a sports match in the \"Scores\" button below the scrubber.",
             "New scores layout in Multiview when viewing a sports match.",

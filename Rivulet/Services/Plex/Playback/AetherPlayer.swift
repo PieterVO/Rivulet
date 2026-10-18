@@ -1083,7 +1083,7 @@ final class AetherPlayer: PlayerProtocol {
         // so the engine can also serve them as native WebVTT renditions if
         // that path is ever enabled; httpHeaders nil inherits the media's
         // own LoadOptions headers (same Plex auth).
-        let options = LoadOptions(
+        var options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
             matchContentEnabled: true,
@@ -1112,6 +1112,9 @@ final class AetherPlayer: PlayerProtocol {
             // way whichever surface plays it (VOD recordings/rips included).
             teletextPage: Self.regionTeletextPage()
         )
+        // Profile 7 FEL composes both layers (#345). The engine doesn't check the panel,
+        // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
+        options.preferDualLayerDolbyVision = AetherEngine.displayCapabilities.supportsDolbyVision
         // New content, so the previous item's aspect ratio describes nothing.
         // Reset HERE rather than when `currentItem` goes nil: the engine also
         // swaps its player for SAME-content reasons (audio track switch,
