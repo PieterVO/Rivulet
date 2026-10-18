@@ -152,6 +152,7 @@ struct WhatsNewView: View {
         // confirm build number at release
         ("1.1.0 (98)", [
             "Full Dolby Vision for Profile 7 FEL titles on Dolby Vision TVs.",
+            "Fixed the white edge on Continue Watching corners when a card is selected.",
             "Updated AetherEngine to 7.39.0",
         ]),
         ("1.1.0 (97)", [

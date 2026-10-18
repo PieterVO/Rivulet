@@ -34,7 +34,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
     private var artworkLoadTask: Task<Void, Never>?
     private var currentArtworkURL: URL?
 
-    private let cornerRadius: CGFloat = 24
+    // TVCardView resets its platter to the system 20pt on every focus change; a larger
+    // clip shows the platter past the corners (#343).
+    private let cornerRadius: CGFloat = 20
 
     fileprivate static let geometry = ContinueWatchingCardCompositor.Geometry(
         cardWidth: MediaRowMetrics.continueWatching.art.width)
@@ -91,6 +93,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         // Bottom info bar.
         infoBar.translatesAutoresizingMaskIntoConstraints = false
         card.contentView.addSubview(infoBar)
+        card.contentView.layer.borderColor = Self.restingRim
 
         let pad = ContinueWatchingCardCompositor.padding
         NSLayoutConstraint.activate([
@@ -129,7 +132,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
         coordinator.addCoordinatedAnimations({ self.infoBar.setFocused(nowFocused) }, completion: nil)
+        // Apple's floating view clears its rim while focused.
+        card.contentView.layer.borderColor = nowFocused ? UIColor.clear.cgColor : Self.restingRim
     }
+
+    private static let restingRim = UIColor(white: 1, alpha: 0.03).cgColor
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -140,7 +147,6 @@ final class ContinueWatchingCell: UICollectionViewCell {
         card.contentView.clipsToBounds = true
         // The rim Apple's floating view draws at rest (its highlightStyle is private).
         card.contentView.layer.borderWidth = 1
-        card.contentView.layer.borderColor = UIColor(white: 1, alpha: 0.03).cgColor
         CATransaction.commit()
     }
 
