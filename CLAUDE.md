@@ -1,22 +1,22 @@
 # Rivulet - Claude Context
 
-Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, Music, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells and Live TV slots.
+Rivulet is a tvOS media client for Plex, Jellyfin and IPTV (the iOS app is Plex and IPTV only). The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, Music, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells and Live TV slots.
 
 **UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it.
 
 **The rule covers enhancements, not just new surfaces.** A substantial addition to
 an existing SwiftUI file on a UIKit surface is a signal to port that file, not to
-extend it. The player's render layers count as a UIKit surface even though the
-overlays themselves are still SwiftUI: they are non-interactive, so they never
-fought the focus engine, which is the only reason they survived this long.
-The subtitle overlays are the worked example, and staying in SwiftUI cost three
-hacks UIKit does not need:
-- SwiftUI `Text` has no stroke, so the caption outline draws the whole string 8
+extend it. The player's render layers count as a UIKit surface: being
+non-interactive kept SwiftUI overlays there from fighting the focus engine, which
+is the only reason they survived as long as they did. The subtitle overlays were
+the worked example (ported to `CaptionOverlayView` in `2e5989c`), and staying in
+SwiftUI had cost three hacks UIKit does not need:
+- SwiftUI `Text` has no stroke, so the caption outline drew the whole string 8
   times at offsets. `NSAttributedString` with a negative `.strokeWidth` is one pass.
-- A text box cannot be measured without a layout pass, so cue placement estimates
-  half the box height and is wrong for multi-line cues. `boundingRect` is exact.
-- `LiveTVAetherPlayerViewController` wraps the overlay in a `UIHostingController`
-  and rebuilds its root view from five call sites, because nothing observes the
+- A text box cannot be measured without a layout pass, so cue placement estimated
+  half the box height and was wrong for multi-line cues. `boundingRect` is exact.
+- `LiveTVAetherPlayerViewController` wrapped the overlay in a `UIHostingController`
+  and rebuilt its root view from five call sites, because nothing observes the
   player from SwiftUI. A plain subview needs none of that.
 
 **A clean SwiftLint run does not mean you complied.** The
@@ -42,19 +42,22 @@ The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg 
 ## Project Structure
 
 Four code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
-targets (not a module — `internal` spans each target); `Rivulet/` is the tvOS
-app, `RivuletiOS/` the iOS app. See "Platform Boundary" below for what goes
-where.
+targets (not a module: `internal` spans each target); `Rivulet/` is the tvOS
+app, `RivuletiOS/` the iOS app, `TopShelfExtension/` the tvOS Top Shelf. See
+"Platform Boundary" below for what goes where.
 
 ```
 RivuletCore/            # Shared tvOS + iOS. The ONE Plex client (PlexNetworkManager,
 │                       #   PlexAuthManager, PlexUserProfileManager), Models/Plex,
-│                       #   TMDB, IntroDBClient, WatchProgressPolicy, IPTV parsers,
+│                       #   TMDB, WatchProgressPolicy, IPTV parsers,
 │                       #   Security (attest, keychain), Sentry startup, Secrets,
 │                       #   OpenSourceLicenses, Plex watchlist, LiveTV/ (the ONE
 │                       #   Live TV stack: LiveTVDataStore, Plex + IPTV providers,
 │                       #   LiveTVSourceConnector, LiveShelves), IPTV/ (parsers,
-│                       #   DispatcharrService). NO #if os(...), lint-enforced.
+│                       #   DispatcharrService), Playback/ (CaptionAppearance,
+│                       #   IntroDBClient), Streaming/ (quality decision, throughput,
+│                       #   version ranking), Scores/ (Live TV scoreboard).
+│                       #   NO #if os(...), lint-enforced.
 RivuletiOS/             # iOS/iPadOS app (SwiftUI). Shell/ (tabs, Account sheet,
 │                       #   navigation contract), Plex/ (IOSPlexSession + its
 │                       #   extensions, IOSPlexAdapters, Home/Library/Detail views;
@@ -65,12 +68,13 @@ RivuletiOS/             # iOS/iPadOS app (SwiftUI). Shell/ (tabs, Account sheet,
 │                       #   records + offline progress live in RivuletCore/Downloads).
 Rivulet/                # The tvOS app — everything below.
 ├── Models/
-│   ├── Plex/           # (moved to RivuletCore/Models/Plex)
 │   ├── Shared/         # RivuletLink (the one rivulet:// definition) and TopShelfItem,
 │   │                   #   both also compiled into the Top Shelf extension
 │   └── SwiftData/      # Persistent models (Channel, EPGProgram, PlexServer)
 ├── Services/
 │   ├── DeepLinkHandler.swift  # Opens a RivuletLink or Siri activity once the shell is ready
+│   ├── MediaProvider/  # The backend seam (MediaProvider, PhotoProvider, registries);
+│   │                   #   Plex/ and Jellyfin/ implement it (see "Media providers")
 │   ├── Plex/
 │   │   ├── (PlexDataStore, …; the Plex client lives in RivuletCore/Plex)
 │   │   └── Playback/   # AetherPlayer + routing/remux (see Docs/RIVULET_PLAYER.md),
@@ -78,7 +82,7 @@ Rivulet/                # The tvOS app — everything below.
 │   │       ├── Pipeline/     # ContentRouter (routing decisions)
 │   │       ├── ContentFilter/ # Local mute/skip filter (see "Content Filter (VOD)"),
 │   │       │                  #   SubtitleImageReader (reads image subtitles on device)
-│   │       └── Subtitles/    # CaptionAppearance (system caption settings), SubtitleCue,
+│   │       └── Subtitles/    # LibassRenderer + ASSCompositor (the libass layer), SubtitleCue,
 │   │                          #   VTT/SRT/ASS parsers (content-filter only; captions are not app-parsed)
 │   ├── LiveTV/         # LiveTVSessionHandoff (store + providers live in RivuletCore/LiveTV)
 │   ├── Insights/       # InsightsTriviaClient, InsightsShowIDResolver (in-player cast/trivia panel)
@@ -90,12 +94,12 @@ Rivulet/                # The tvOS app — everything below.
 │   │                   #   AVPlayerLayerView, TrackSelectionSheet, PlayerPresenter
 │   │   ├── Aether/     # AetherVideoSurfaceView, AetherSubtitleCue
 │   │   ├── Subtitles/  # SubtitleModel (cue store; publishes the active set)
-│   │   ├── UIKit/      # CaptionOverlayView (the only caption renderer),
-│   │   │               #   PlayerRailView, PlayerRailPanelView, PlayerProgressBarView,
-│   │   │               #   PlayerInfoPaneViews (AVKit info pane: Info card, card rows), UpNextRowState,
-│   │   │               #   pills (canonical player chrome, cloned from AVKit; DEBUG AVKitScrubProbe measures it),
-│   │   │               #   Insights* views (in-player cast/trivia pane; backed by Services/Insights + TMDB)
-│   │   └── PostVideo/  # Post-playback summary overlays
+│   │   └── UIKit/      # CaptionOverlayView (the only caption renderer) + ASSOverlayView,
+│   │                   #   PlayerRailView, PlayerRailPanelView, PlayerProgressBarView,
+│   │                   #   PlayerInfoPaneViews (AVKit info pane: Info card, card rows), UpNextRowState,
+│   │                   #   pills (canonical player chrome, cloned from AVKit; DEBUG AVKitScrubProbe measures it),
+│   │                   #   PostVideoOverlayView (post-playback / Up Next),
+│   │                   #   Insights* views (in-player cast/trivia pane; backed by Services/Insights + TMDB)
 │   ├── Media/          # PreviewContext, HeroBackdropSupport, FocusScrollMotion
 │   │   ├── UIKit/, PlexHome/UIKit/, MediaDetail/UIKit/, Person/UIKit/, Library/UIKit/, PreviewCarousel/UIKit/
 │   │   │              #   The canonical UIKit home/detail/library/person/carousel surfaces.
@@ -108,6 +112,7 @@ Rivulet/                # The tvOS app — everything below.
 │   │                   #   MusicNowPlayingViewController (+ MusicQueueStripView, MusicLyricsPaneView),
 │   │                   #   MusicChrome (the shared primitives), MusicLockupCell, MusicTrackRowCell,
 │   │                   #   MusicMenus, MusicPresenter. A measured clone of Apple Music on tvOS 26.
+│   ├── Photos/UIKit/   # PhotoLibraryViewController, PhotoGridViewController, PhotoViewerViewController
 │   ├── Discover/       # DiscoverViewModel (SwiftUI Discover* views removed; UIKit home renders Discover)
 │   ├── LiveTV/         # EPGGuideView + GuideLayoutView (56-style guide), LiveChannelsPaneView,
 │   │                   #   LiveTVAetherPlayerViewController (UIKit live rail), LiveTVContainerView,
@@ -311,7 +316,7 @@ focusless AND single-transport, or when a needed hand-off is press-only.
   `InputConfig.holdThreshold`, and `.indirect` swipe recognizers, funneled
   into one callback, so one transport cannot be adopted without the other.
   Adopters: `LiveTVPressCatcher`, `InfoPopupViewController`, Music's Now
-  Playing anchor.
+  Playing anchor, `PhotoViewerViewController`.
 - **A sometimes-focusable surface claiming swipes must gate in
   `gestureRecognizerShouldBegin`, never by bailing inside the handler.** A
   recognizer that begins has already cancelled the focus engine's move, so a
@@ -323,9 +328,10 @@ focusless AND single-transport, or when a needed hand-off is press-only.
   override → `DirectionalInputBinding(gatedSwipesOn:)`.** The press override
   is correct there (engine acts first, declined presses bubble); the gated
   swipes are its touch-remote twin. The gate must claim exactly the moves
-  the engine cannot perform — reuse the press override's own predicates
-  (`canEscapeUpward`, `containsFocus`, would-a-step-move). Adopters: the
-  Live TV guide (`EPGGuideView`) and the player's content anchor. The
+  the engine cannot perform, so reuse the press override's own predicate
+  (the player's `contentOwnsPress`, the alphabet strip's `containsFocus`).
+  Adopters: the Live TV guide (`EPGGuideView`), the player's content anchor,
+  the library alphabet strip (`LibraryAlphabetBarView`) and Music's scrubber. The
   player's info panes don't need it: a `UIFocusGuide` between the pills and
   the pane carries Up and Down.
 - **A focusless surface that hands some touches to another recognizer passes
@@ -372,8 +378,8 @@ focusless AND single-transport, or when a needed hand-off is press-only.
   item never reliably reached UIKit, which is why IR/CEC and clicks-only Siri
   Remotes could not skip: #212, #232, #305), and do not add a GameController
   listener for anything that also arrives as a `UIPress`:
-  `RemoteInputHandler.uikitOwnsPresses` limits the player's GameController path
-  to input with no `UIPress` (clickpad rotation, shoulders, X). Tap-vs-hold is
+  `RemoteInputHandler` (in `UniversalPlayerView.swift`) acts only on input
+  with no `UIPress` (clickpad rotation, shoulders, X). Tap-vs-hold is
   still duration-based (`DirectionalPressDetector`); how a held IR button
   arrives (#212) still wants InputProbe field data.
 - **The focus engine's occlusion test is geometric, not hit-test based.** Any
@@ -520,7 +526,7 @@ most servers and fails on the ones behind a raw-IP or private certificate (#314,
 
 #### Routing policy (VOD)
 1. `ContentRouter.plan(...)` returns `PlaybackPlan { primary, fallbacks }`. Route cases: `.aether`, `.hls`.
-2. `.aether` — whenever a direct-play URL is available (AetherEngine handles demux + remux + HDR internally; software-decodes AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). DV P7 plays as HDR10 base.
+2. `.aether` — whenever a direct-play URL is available (AetherEngine handles demux + remux + HDR internally; software-decodes AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). DV P7 FEL composes both layers on a DV panel, P7 MEL becomes 8.1 (see "HDR / DV").
 3. `.hls` — server-side transcode; primary when no direct-play URL exists, and the fallback after an Aether startup failure. `requiresVideoTranscode` codecs force a video transcode (not just remux) on this route.
 
 #### Live TV
@@ -700,6 +706,23 @@ write either number anywhere else.
 - Music (already at 80), Live TV (`liveLeading`, `EPGTheme.pageMargin`), Settings
   and the sidebar keep margins of their own.
 
+### Media providers (Plex, Jellyfin)
+
+Jellyfin is tvOS only. Both backends sit behind one seam,
+`Services/MediaProvider/MediaProvider.swift`, with `Plex/` and `Jellyfin/` below it.
+Views talk to the protocol. A non-Plex item plays through `ProviderPlayback+Prepare.swift`,
+which never names a backend.
+
+- **One GUI for both servers.** No Jellyfin-only surface. A Plex-only feature
+  is simply absent on a Jellyfin item.
+- **Never merge across servers.** Each server's libraries and Home rows show on
+  their own, labelled by server ("Plex - Movies", "Jellyfin - Continue Watching").
+  The user picks rows through the existing Home Rows setting.
+- **A new feature is a protocol requirement plus one implementation per provider.**
+  When a decision point names Jellyfin, generalize it onto the seam.
+- Server floor is 10.10 (`JellyfinSession.minimumVersion`), tested on 12.1. No
+  per-version code paths.
+
 ### Photos
 
 A photo library (Plex section type `photo`, Jellyfin `photos`, or `homevideos` holding at least
@@ -838,11 +861,12 @@ engine-fix paragraph crowds out the app's own notes.
 
 ### Adding Settings
 
-Settings is **UIKit** on tvOS (the iOS app's settings are a SwiftUI Form in the Account sheet, `RivuletiOS/Settings/`). A page is a list of `SettingsRow` values built in
+Settings is **UIKit** on tvOS (the iOS app's settings are a SwiftUI Form in the Account sheet, `RivuletiOS/Settings/`). A page is a list of `SettingsRowItem` values built in
 `Views/Settings/UIKit/SettingsPageModels.swift`; `SettingsPageViewController`
 renders each one through `SettingsCell`. Add a row by adding a case to the
-relevant page's builder, picking a `SettingsRow.Kind`:
+relevant page's builder, picking a `SettingsRowItem.Kind`:
 - `.navigation` / `.navigationValue` - pushes another page (chevron)
+- `.navigationAction` - runs `prepare` (stash the tapped item), then pushes a per-item page
 - `.toggle` - On/Off toggle
 - `.cycle` - cycles through options in place
 - `.action` - runs a handler (supports `destructive:`)
@@ -945,7 +969,7 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 
 **The Simulator does not fully mimic Apple TV**, especially for focus-engine behavior. Treat Simulator-only verification of tvOS focus/remote-input changes as provisional; say so rather than declaring it fixed.
 
-**`Docs/` is gitignored** (untracked on purpose, `c89b52d`), though some files under it are force-added and do ship — the `superpowers/` plans and specs, and `AETHER_ENGINE_STARTUP_NOTES.md`. What is *not* in the repo is `Docs/RIVULET_PLAYER.md` and `Docs/DESIGN_GUIDE.md`, both referenced throughout this file; they live only on the maintainer's machine. The `aether-update` and `rivulet-tvos-uikit` skills referenced above are also absent — `.claude/` is gitignored with nothing force-added. If a referenced doc or skill is missing in your environment, say so and proceed carefully rather than guessing its contents.
+**`Docs/` is gitignored** (untracked on purpose, `c89b52d`), though some files under it are force-added and do ship: the `superpowers/` plans, specs and handoff, `handoff/`, `release/screenshots/` (App Store art), and `AETHER_ENGINE_STARTUP_NOTES.md`. What is *not* in the repo is `Docs/RIVULET_PLAYER.md` and `Docs/DESIGN_GUIDE.md`, both referenced throughout this file; they live only on the maintainer's machine. The `aether-update` and `rivulet-tvos-uikit` skills referenced above are also absent — `.claude/` is gitignored with nothing force-added. If a referenced doc or skill is missing in your environment, say so and proceed carefully rather than guessing its contents.
 
 ## Key Files
 
@@ -985,6 +1009,8 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 | Watch progress rule | `RivuletCore/Models/Media/WatchProgressPolicy.swift` |
 | Plex star rating / favorite | `RivuletCore/Models/Plex/PlexUserRating.swift` |
 | Plex API | `RivuletCore/Plex/PlexNetworkManager.swift` |
+| Backend seam (Plex, Jellyfin) | `Services/MediaProvider/MediaProvider.swift` |
+| Jellyfin provider | `Services/MediaProvider/Jellyfin/JellyfinProvider.swift` |
 | Glass row styling | `Views/Components/GlassRowStyle.swift` |
 | Settings rows / pages | `Views/Settings/UIKit/SettingsPageModels.swift` |
 | Player canon docs | `Docs/RIVULET_PLAYER.md` |
@@ -1038,10 +1064,6 @@ SwiftUI surfaces only:
 - Use `.onExitCommand` for Menu button dismissal
 - For transparent overlays, add `.presentationBackground(.clear)` to the cover content
 
-### Video Not Shrinking/Positioning
-- Check `VideoFrameState` offset values (positive = padding from top-left with `.topLeading` anchor)
-- Ensure `videoFrameState` is being set to `.shrunk`
-
 ### Post-Video Not Triggering
 - Check if `hasTriggeredPostVideo` flag needs resetting
 - Verify credits marker detection in `checkMarkers(at:)`
@@ -1060,7 +1082,7 @@ VOD is served by AetherPlayer (`aether` route, the default) or AVPlayer (`hls` r
 
 ### HDR / DV
 - Aether drives `AVDisplayManager.preferredDisplayCriteria` itself (host `DisplayCriteriaManager` stands down on the aether route).
-- DV P5 / P8.1 play with Dolby Vision via dvh1+dvcC sample entries; DV P7 plays as HDR10 base (the localRemux P7→P8 conversion path was removed).
+- DV is engine-owned; the RPU stays in the samples and Apple's decoder applies it. P5 is a `dvh1` sample entry with `dvcC` and `CODECS="dvh1.05.LL"`. P8.1 / P8.4 are `hvc1` + `dvvC` with `SUPPLEMENTAL-CODECS="dvh1.08.LL/db1p"` (`/db4h` for 8.4), and the HDMI criteria request `dvh1`. The supplemental only rides the master playlist, which is served once the panel is in HDR, so real DV needs a DV TV plus Match Dynamic Range (or HDR/DV output locked). P7 FEL on a DV panel takes the engine's dual-layer route (#345): `AetherPlayer` sets `preferDualLayerDolbyVision` from `AetherEngine.displayCapabilities.supportsDolbyVision`, because the engine does not check the panel itself. That route is the software host, so it loses E-AC-3 Atmos objects and the AirPlay picture, and the engine refuses it over its real-time budget (UHD 30 fps plus a 1080p EL). P7 MEL, and FEL over budget, is converted live to single-layer 8.1 (libdovi, EL dropped) on a DV panel. Without DV on the TV, P7 plays the HDR10 base. P8.2 plays its SDR base. Without DV on the TV, 8.x plays its base layer. Rivulet sets neither `dolbyVisionHandling` nor `forceDolbyVisionOnNonDVDisplay`, so the engine defaults apply. Both FEL and P5 stills exist only because of package traits (see Quick Reference), so a bump that drops them silently turns FEL off. Routing lives in the engine's `CodecRoutePolicy.swift`.
 
 ## Plex Discover API
 
