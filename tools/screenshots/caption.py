@@ -5,6 +5,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 SHOTS, OUT = sys.argv[1], sys.argv[2]
 ORDER = [  # (shot, headline, background)
     ("01-home", "Your library,\nbeautifully at home", "#E3ECF7"),
+    ("06-livetv", "Live TV,\nright alongside", "#E1F0F2"),
     ("02-movie", "Every film,\nfront and center", "#F7E3E1"),
     ("03-show", "Pick up right\nwhere you left off", "#E4F2E7"),
     ("04-library", "Browse your whole\ncollection", "#F3EBDD"),

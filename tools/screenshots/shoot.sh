@@ -13,8 +13,17 @@ shot() {
   xcrun simctl io $UDID screenshot --type=png "$OUT/$name.png" >/dev/null 2>&1 && echo "$OUT/$name.png"
 }
 
+# Demo Live TV source, served to the simulator from this Mac.
+LIVE=$(mktemp -d); python3 ${0:A:h}/livetv.py $LIVE http://localhost:8765 || exit 1
+python3 -m http.server 8765 -d $LIVE >/dev/null 2>&1 & SERVE=$!
+trap "kill $SERVE" EXIT
+
 xcrun simctl status_bar $UDID override --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4
 shot 01-home -screenshotTab home
+# Guide times are real, so this one shot shows the real clock.
+xcrun simctl status_bar $UDID override --time "$(date +%H:%M)"
+shot 06-livetv -screenshotTab live-tv -screenshotLiveTV http://localhost:8765
+xcrun simctl status_bar $UDID override --time "9:41"
 shot 02-movie -screenshotOpen "Sintel"
 shot 03-show -screenshotOpen "Pioneer One"
 shot 04-library -screenshotOpen "Movies"
