@@ -230,6 +230,7 @@ actor DispatcharrService {
     func authenticatedRequest(for url: URL, method: String = "GET") -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.setValue(LiveTVClientIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         if let token = apiToken, let header = Self.authorizationHeader(for: token) {
             request.setValue(header.value, forHTTPHeaderField: header.field)
         }

@@ -73,7 +73,8 @@ struct SettingsRowItem {
         /// `isSecure` masks the text while typing and shows "Set" on the row.
         case textEntry(value: () -> String, placeholder: String, hint: String?,
                        suggestions: [(label: String, value: String)],
-                       keyboardType: UIKeyboardType, isSecure: Bool = false, set: (String) -> Void)
+                       keyboardType: UIKeyboardType, isSecure: Bool = false,
+                       contentType: UITextContentType? = nil, set: (String) -> Void)
     }
 
     let id: String
@@ -138,7 +139,7 @@ struct SettingsRowItem {
         case .selectable(_, let value, _): return value()
         // Show the current value; fall back to the placeholder (or "Not set")
         // when empty.
-        case .textEntry(let value, let placeholder, _, _, _, let isSecure, _):
+        case .textEntry(let value, let placeholder, _, _, _, let isSecure, _, _):
             let current = value()
             if current.isEmpty { return placeholder.isEmpty ? "Not set" : placeholder }
             return isSecure ? "Set" : current
@@ -194,6 +195,7 @@ enum SettingsContent {
         case .liveTVSourceDetail: return liveTVSourceDetail
         case .liveTVFavorites: return liveTVFavorites
         case .addLiveTVSource:  return addLiveTVSource
+        case .addXtream:        return addXtream
         case .addOwnServer:     return addOwnServer
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about

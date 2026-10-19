@@ -34,28 +34,35 @@ extension SettingsContent {
         }
 
         guard let draft = addSourceDraft else { return [] }
-        let rows: [SettingsRowItem] = [
-            SettingsRowItem(id: "jellyfinURL", title: "Server URL",
-                            kind: .textEntry(value: { draft.serverURL },
-                                             placeholder: "http://192.168.1.100:8096",
-                                             hint: nil, suggestions: [], keyboardType: .URL,
-                                             set: { draft.serverURL = $0; draft.status = .idle })),
-            SettingsRowItem(id: "jellyfinUsername", title: "Username",
-                            kind: .textEntry(value: { draft.username }, placeholder: "",
-                                             hint: nil, suggestions: [], keyboardType: .asciiCapable,
-                                             set: { draft.username = $0; draft.status = .idle })),
-            SettingsRowItem(id: "jellyfinPassword", title: "Password",
-                            kind: .textEntry(value: { draft.password }, placeholder: "",
-                                             hint: nil, suggestions: [], keyboardType: .asciiCapable,
-                                             isSecure: true,
-                                             set: { draft.password = $0; draft.status = .idle })),
+        return jellyfinSteps(draft).map(\.row) + [
             SettingsRowItem(id: "jellyfinSignIn",
                             title: draft.status == .checking ? "Signing In…" : "Sign In",
                             kind: .action(destructive: false, handler: { vc in
                                 signInJellyfin(draft, on: vc)
                             }))
         ]
-        return rows
+    }
+
+    /// Asked one at a time on arrival, like Apple Account sign-in.
+    static func jellyfinSteps(_ draft: AddSourceDraft) -> [EntryStep] {
+        [
+            EntryStep(id: "jellyfinURL", title: "Server Address",
+                      message: "Enter your Jellyfin server's address, with its port, "
+                          + "for example http://192.168.1.100:8096.",
+                      placeholder: "Required", keyboard: .URL, contentType: .URL, asked: true, required: true,
+                      value: { draft.serverURL }, set: { draft.serverURL = $0; draft.status = .idle }),
+            EntryStep(id: "jellyfinUsername", title: "Username",
+                      message: "Enter your Jellyfin username.",
+                      placeholder: "Required", keyboard: .asciiCapable, contentType: .username,
+                      asked: true, required: true,
+                      value: { draft.username }, set: { draft.username = $0; draft.status = .idle }),
+            // Not required: a Jellyfin user can have no password.
+            EntryStep(id: "jellyfinPassword", title: "Password",
+                      message: "Enter the password for this Jellyfin user. Leave it empty if the user has none.",
+                      placeholder: "None", keyboard: .asciiCapable, contentType: .password, isSecure: true,
+                      asked: true,
+                      value: { draft.password }, set: { draft.password = $0; draft.status = .idle })
+        ]
     }
 
     /// An empty password is allowed: Jellyfin users can have none.

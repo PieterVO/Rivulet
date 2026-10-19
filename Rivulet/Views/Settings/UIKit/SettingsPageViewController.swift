@@ -22,6 +22,8 @@ final class SettingsPageViewController: UIViewController {
     var onPush: ((SettingsPage) -> Void)?
     /// A picker option was chosen → container pops back to the parent.
     var onPop: (() -> Void)?
+    /// Pops this page and the one below it (a form opened from a picker).
+    var onPopTwo: (() -> Void)?
     /// A row gained focus → container updates the left description panel.
     var onFocusRow: ((String?) -> Void)?
 
@@ -186,6 +188,28 @@ final class SettingsPageViewController: UIViewController {
         hasAppeared = true
     }
 
+    private var hasNotifiedAppear = false
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !hasNotifiedAppear else { return }
+        hasNotifiedAppear = true
+        SettingsContent.pageDidAppear(page, on: self)
+    }
+
+    /// Row that takes focus on the next focus update, once.
+    private var preferredRowId: String?
+
+    /// Moves focus to a row. Only works while this page holds focus, so call it
+    /// after a presented page has dismissed.
+    func focusRow(id: String) {
+        preferredRowId = id
+        collectionView.remembersLastFocusedIndexPath = false
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        collectionView.remembersLastFocusedIndexPath = true
+        preferredRowId = nil
+    }
+
     /// Rebuild the row models for this page from current manager/UserDefaults
     /// state. Falls back to a single focusable placeholder for empty pages so
     /// focus always has a target (never a focusless page).
@@ -278,10 +302,11 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
             // The handler owns its own list refresh (it may switch synchronously
             // or present a PIN modal and reload on dismiss).
             handler(self)
-        case .textEntry(let value, let placeholder, let hint, let suggestions, let keyboardType, let isSecure, let set):
+        case .textEntry(let value, _, let hint, let suggestions, let keyboardType, let isSecure, let contentType, let set):
             let entry = TextEntryViewController(
-                title: item.title, initialText: value(), placeholder: placeholder,
-                hint: hint, suggestions: suggestions, keyboardType: keyboardType, isSecure: isSecure,
+                title: item.title, message: hint, initialText: value(),
+                suggestions: suggestions, keyboardType: keyboardType, isSecure: isSecure,
+                contentType: contentType,
                 onCommit: { [weak self] text in
                     set(text)
                     // Reload so the row shows the committed value. A Menu
@@ -292,6 +317,11 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         case .info:
             break
         }
+    }
+
+    func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
+        guard let id = preferredRowId, let index = rows.firstIndex(where: { $0.id == id }) else { return nil }
+        return IndexPath(item: index, section: 0)
     }
 
     func collectionView(_ collectionView: UICollectionView,

@@ -5,19 +5,17 @@
 //  TextEntryViewController.swift
 //  Rivulet
 //
-//  UIKit text entry for the settings pages. A centered frosted Liquid-Glass
-//  card holding a `UITextField` (system tvOS keyboard) plus optional suggestion
-//  pills, in the same chrome family as `ConfirmationPopupViewController` /
-//  `InfoPopupViewController`.
+//  One text field on its own page, laid out like tvOS Settings' text entry
+//  (`TSKTextInputViewController`): a title, one sentence saying what to type
+//  and which button to select, the field, and a single button. Menu goes back.
 //
-//  Commit vs cancel is explicit: Done (or keyboard submit) calls `onCommit`
-//  with the final text; Menu / Cancel calls `onCancel` and leaves the caller's
-//  value untouched. The caller only ever writes on commit.
+//  Selecting the field opens the system keyboard, which covers this page. Its
+//  only header is the field's placeholder (`_defaultPromptString`), so the
+//  placeholder always names the field; examples belong in the message.
 //
-//  tvOS focus: the text field takes initial focus in `viewDidAppear` (the view
-//  must be in the window — an earlier request is a no-op). Suggestion pills own
-//  Select via a press-typed tap recognizer, since a bare control's
-//  primaryAction does NOT fire on Select.
+//  Commit vs cancel is explicit: the button or the keyboard's return key calls
+//  `onCommit` with the final text; Menu calls `onCancel`. The caller only
+//  writes on commit.
 //
 
 import UIKit
@@ -29,38 +27,52 @@ final class TextEntryViewController: UIViewController {
     typealias Suggestion = (label: String, value: String)
 
     private let titleText: String
+    private let message: String?
+    private let fieldName: String
     private let initialText: String
-    private let placeholder: String
-    private let hint: String?
     private let suggestions: [Suggestion]
     private let keyboard: UIKeyboardType
     private let isSecure: Bool
+    private let contentType: UITextContentType?
+    private let submitTitle: String
+    private let allowsEmpty: Bool
 
-    /// Final text, on Done / keyboard submit only. Never called on cancel.
+    /// Final text, on the button / keyboard return only. Never called on cancel.
     private let onCommit: (String) -> Void
-    /// Menu / Cancel — the caller leaves its value unchanged.
+    /// Menu: the caller leaves its value unchanged.
     private let onCancel: (() -> Void)?
 
     private let textField = UITextField()
-    private var doneButton: TextEntryPillButton!
-    private var cancelButton: TextEntryPillButton!
+    private var submitButton: TextEntryPillButton!
 
+    /// - Parameters:
+    ///   - fieldName: the keyboard's header, so it must name the field
+    ///     ("Password"), never show an example value.
+    ///   - message: one sentence, Apple's style: what to enter, then "and
+    ///     select Continue." Shown above the field.
+    ///   - allowsEmpty: an optional field may be committed empty.
     init(title: String,
+         message: String? = nil,
+         fieldName: String? = nil,
          initialText: String,
-         placeholder: String = "",
-         hint: String? = nil,
          suggestions: [Suggestion] = [],
          keyboardType: UIKeyboardType = .default,
          isSecure: Bool = false,
+         contentType: UITextContentType? = nil,
+         submitTitle: String = "Done",
+         allowsEmpty: Bool = true,
          onCommit: @escaping (String) -> Void,
          onCancel: (() -> Void)? = nil) {
         self.titleText = title
+        self.message = message
+        self.fieldName = fieldName ?? title
         self.initialText = initialText
-        self.placeholder = placeholder
-        self.hint = hint
         self.suggestions = suggestions
         self.keyboard = keyboardType
         self.isSecure = isSecure
+        self.contentType = contentType
+        self.submitTitle = submitTitle
+        self.allowsEmpty = allowsEmpty
         self.onCommit = onCommit
         self.onCancel = onCancel
         super.init(nibName: nil, bundle: nil)
@@ -72,66 +84,64 @@ final class TextEntryViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        view.backgroundColor = .clear
 
-        // Same card chrome as the confirm/info popups so every modal reads as
-        // one family. (tvOS UIBlurEffect has no systemMaterial styles.)
-        let effect: UIVisualEffect
-        if #available(tvOS 26.0, *) { effect = UIGlassEffect() }
-        else { effect = UIBlurEffect(style: .regular) }
-        let blur = UIVisualEffectView(effect: effect)
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.layer.cornerRadius = 38
-        blur.layer.cornerCurve = .continuous
-        blur.clipsToBounds = true
-
-        let card = UIView()
-        card.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(card)
-        card.addSubview(blur)
+        // Full-screen, like the system page: the screen behind is blurred out
+        // so nothing competes with the one question being asked.
+        let backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+        backdrop.frame = view.bounds
+        backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(backdrop)
 
         let titleLabel = UILabel()
         titleLabel.text = titleText
-        titleLabel.font = .systemFont(ofSize: 32, weight: .semibold)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        titleLabel.font = .systemFont(ofSize: 57, weight: .semibold)
+        titleLabel.textColor = .white
         titleLabel.textAlignment = .center
+        titleLabel.numberOfLines = 0
 
-        textField.text = initialText
-        textField.placeholder = placeholder
-        textField.font = .systemFont(ofSize: 36, weight: .regular)
-        textField.textColor = .white
-        textField.keyboardType = keyboard
-        textField.autocorrectionType = .no
-        // Only prose gets a capital: not an address, a username, or a password.
-        textField.autocapitalizationType = (keyboard == .default) ? .sentences : .none
-        textField.isSecureTextEntry = isSecure
-        textField.clearButtonMode = .whileEditing
-        textField.returnKeyType = .done
-        textField.delegate = self
-        textField.translatesAutoresizingMaskIntoConstraints = false
-
-        var fieldStack: [UIView] = [titleLabel, textField]
-
-        if let hint {
-            let hintLabel = UILabel()
-            hintLabel.text = hint
-            hintLabel.font = .systemFont(ofSize: 24, weight: .regular)
-            hintLabel.textColor = UIColor.white.withAlphaComponent(0.45)
-            hintLabel.textAlignment = .center
-            hintLabel.numberOfLines = 0
-            fieldStack.append(hintLabel)
+        var arranged: [UIView] = [titleLabel]
+        if let message {
+            let messageLabel = UILabel()
+            messageLabel.text = message
+            messageLabel.font = .systemFont(ofSize: 29, weight: .regular)
+            messageLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+            messageLabel.textAlignment = .center
+            messageLabel.numberOfLines = 0
+            arranged.append(messageLabel)
         }
 
-        let stack = UIStackView(arrangedSubviews: fieldStack)
+        textField.text = initialText
+        textField.placeholder = fieldName
+        textField.borderStyle = .roundedRect
+        textField.font = .systemFont(ofSize: 38, weight: .regular)
+        textField.keyboardType = keyboard
+        textField.autocorrectionType = .no
+        // Only prose gets a capital: not an address, username, or password.
+        textField.autocapitalizationType = (keyboard == .default && contentType == nil) ? .sentences : .none
+        textField.isSecureTextEntry = isSecure
+        textField.textContentType = contentType
+        textField.clearButtonMode = .whileEditing
+        textField.returnKeyType = submitTitle == "Done" ? .done : .continue
+        textField.delegate = self
+        textField.addTarget(self, action: #selector(textChanged), for: .editingChanged)
+        // The keyboard's return button. tvOS sends this, not `textFieldShouldReturn`.
+        textField.addTarget(self, action: #selector(returnPressed), for: .editingDidEndOnExit)
+        textField.translatesAutoresizingMaskIntoConstraints = false
+        arranged.append(textField)
+
+        let stack = UIStackView(arrangedSubviews: arranged)
         stack.axis = .vertical
         stack.alignment = .fill
-        stack.spacing = 20
+        stack.spacing = 24
+        stack.setCustomSpacing(56, after: arranged[arranged.count - 2])
 
         // Suggestions: a focusable pill per preset, filling the field on Select.
         if !suggestions.isEmpty {
             let pills = suggestions.map { suggestion in
                 TextEntryPillButton(title: suggestion.label, prominent: false) { [weak self] in
                     self?.textField.text = suggestion.value
+                    self?.textChanged()
                 }
             }
             let pillRow = UIStackView(arrangedSubviews: pills)
@@ -139,58 +149,39 @@ final class TextEntryViewController: UIViewController {
             pillRow.alignment = .center
             pillRow.distribution = .fillProportionally
             pillRow.spacing = 16
-            // Gap between the field block and the suggestion row.
-            stack.setCustomSpacing(36, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
+            stack.setCustomSpacing(40, after: textField)
             stack.addArrangedSubview(pillRow)
             pillRow.heightAnchor.constraint(equalToConstant: 64).isActive = true
         }
 
-        cancelButton = TextEntryPillButton(title: "Cancel", prominent: false) { [weak self] in
-            self?.cancel()
-        }
-        doneButton = TextEntryPillButton(title: "Done", prominent: true) { [weak self] in
+        submitButton = TextEntryPillButton(title: submitTitle, prominent: true) { [weak self] in
             self?.commit()
         }
-        let buttonRow = UIStackView(arrangedSubviews: [cancelButton, doneButton])
-        buttonRow.axis = .horizontal
+        let buttonRow = UIStackView(arrangedSubviews: [submitButton])
+        buttonRow.axis = .vertical
         buttonRow.alignment = .center
-        buttonRow.distribution = .fillEqually
-        buttonRow.spacing = 24
-
-        stack.setCustomSpacing(36, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
+        stack.setCustomSpacing(56, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
         stack.addArrangedSubview(buttonRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
-        blur.contentView.addSubview(stack)
+        view.addSubview(stack)
 
-        let pad: CGFloat = 52
         NSLayoutConstraint.activate([
-            card.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            card.widthAnchor.constraint(equalToConstant: 1000),
-
-            blur.topAnchor.constraint(equalTo: card.topAnchor),
-            blur.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            blur.bottomAnchor.constraint(equalTo: card.bottomAnchor),
-
-            stack.topAnchor.constraint(equalTo: blur.contentView.topAnchor, constant: pad),
-            stack.leadingAnchor.constraint(equalTo: blur.contentView.leadingAnchor, constant: pad),
-            stack.trailingAnchor.constraint(equalTo: blur.contentView.trailingAnchor, constant: -pad),
-            stack.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor, constant: -pad),
-
-            textField.heightAnchor.constraint(equalToConstant: 76),
-            buttonRow.heightAnchor.constraint(equalToConstant: 72)
+            stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            stack.widthAnchor.constraint(equalToConstant: 1100),
+            stack.topAnchor.constraint(equalTo: view.topAnchor, constant: 230),
+            textField.heightAnchor.constraint(equalToConstant: 90),
+            submitButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
+            submitButton.heightAnchor.constraint(equalToConstant: 72)
         ])
+        textChanged()
 
-        // Menu cancels (the pills own Select via their own recognizers).
         let menuTap = UITapGestureRecognizer(target: self, action: #selector(menuPressed))
         menuTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
         view.addGestureRecognizer(menuTap)
     }
 
-    // The field takes initial focus; on tvOS focusing it opens the system
-    // keyboard. Must run once the view is in the window — an earlier request
-    // is a no-op.
+    // Focus starts on the field: one Select opens the keyboard. Must run once
+    // the view is in the window; an earlier request is a no-op.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         [textField]
     }
@@ -200,9 +191,27 @@ final class TextEntryViewController: UIViewController {
         updateFocusIfNeeded()
     }
 
+    private var canCommit: Bool {
+        allowsEmpty || !(textField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// A required field's button stays dimmed until something is typed.
+    @objc private func textChanged() {
+        submitButton.isEnabled = canCommit
+    }
+
     @objc private func menuPressed() { cancel() }
 
+    /// Submits once the keyboard has closed, so the next page presents cleanly.
+    @objc private func returnPressed() {
+        DispatchQueue.main.async { [weak self] in self?.commit() }
+    }
+
+    private var committed = false
+
     private func commit() {
+        guard canCommit, !committed else { return }
+        committed = true
         let value = textField.text ?? ""
         dismiss(animated: true) { [onCommit] in onCommit(value) }
     }
@@ -213,10 +222,10 @@ final class TextEntryViewController: UIViewController {
 }
 
 extension TextEntryViewController: UITextFieldDelegate {
-    // Keyboard "Done" commits.
+    // Hardware keyboards report return here; the on-screen one goes through
+    // `.editingDidEndOnExit`.
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        commit()
-        return true
+        true
     }
 }
 
@@ -231,7 +240,11 @@ private final class TextEntryPillButton: UIView {
     private let onPress: () -> Void
     private let prominent: Bool
 
-    override var canBecomeFocused: Bool { true }
+    override var canBecomeFocused: Bool { isEnabled }
+
+    var isEnabled = true {
+        didSet { alpha = isEnabled ? 1 : 0.4 }
+    }
 
     init(title: String, prominent: Bool, onPress: @escaping () -> Void) {
         self.onPress = onPress
@@ -264,7 +277,7 @@ private final class TextEntryPillButton: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func pressed() { onPress() }
+    @objc private func pressed() { if isEnabled { onPress() } }
 
     private func applyUnfocusedStyle() {
         backgroundColor = UIColor.white.withAlphaComponent(0.12)

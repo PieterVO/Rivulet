@@ -20,6 +20,9 @@ actor XMLTVParser {
     struct ParsedXMLTVChannel: Sendable {
         let id: String
         let displayName: String
+        /// Every `<display-name>`, first included. Feeds often add the channel
+        /// number or a short name as later ones.
+        var displayNames: [String] = []
         let iconURL: String?
     }
 
@@ -27,7 +30,7 @@ actor XMLTVParser {
     struct ParsedProgram: Sendable {
         let channelId: String
         let start: Date
-        let stop: Date
+        var stop: Date
         let title: String
         let subtitle: String?
         let description: String?
@@ -62,6 +65,8 @@ actor XMLTVParser {
     /// Fetch data from a URL with optional custom timeout
     private func fetchData(from url: URL, timeout: TimeInterval? = nil) async throws -> (Data, URLResponse) {
         var request = URLRequest(url: url)
+        // Some panels refuse a request with no recognisable client.
+        request.setValue(LiveTVClientIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         if let timeout = timeout {
             request.timeoutInterval = timeout
         }
@@ -151,6 +156,7 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
     private var text = ""
     private var currentChannelId: String?
     private var currentDisplayName: String = ""
+    private var currentDisplayNames: [String] = []
     private var currentIconURL: String?
 
     // Program parsing state
@@ -182,7 +188,21 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
             throw XMLTVParseError.parseFailed
         }
 
-        return XMLTVParser.ParseResult(channels: channels, programs: programs)
+        return XMLTVParser.ParseResult(channels: channels, programs: programs.mapValues(Self.closingOpenEnded))
+    }
+
+    /// `stop` is optional in XMLTV. A programme without one ends where the next
+    /// on its channel starts; the last one, with nothing after it, is dropped.
+    static func closingOpenEnded(_ programs: [XMLTVParser.ParsedProgram]) -> [XMLTVParser.ParsedProgram] {
+        guard programs.contains(where: { $0.stop == .distantFuture }) else { return programs }
+        let sorted = programs.sorted { $0.start < $1.start }
+        return sorted.indices.compactMap { index in
+            var program = sorted[index]
+            guard program.stop == .distantFuture else { return program }
+            guard let next = sorted[(index + 1)...].first(where: { $0.start > program.start }) else { return nil }
+            program.stop = next.start
+            return program
+        }
     }
 
     // MARK: - XMLParserDelegate
@@ -194,6 +214,7 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         case "channel":
             currentChannelId = attributeDict["id"]
             currentDisplayName = ""
+            currentDisplayNames = []
             currentIconURL = nil
 
         case "programme":
@@ -249,6 +270,7 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         switch elementName {
         case "display-name":
             if currentDisplayName.isEmpty { currentDisplayName = value }
+            if !value.isEmpty { currentDisplayNames.append(value) }
         case "title":
             if currentTitle.isEmpty { currentTitle = value }
         case "sub-title":
@@ -271,6 +293,7 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
                 channels[id] = XMLTVParser.ParsedXMLTVChannel(
                     id: id,
                     displayName: currentDisplayName,
+                    displayNames: currentDisplayNames,
                     iconURL: currentIconURL
                 )
             }
@@ -279,8 +302,8 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         case "programme":
             if let channelId = currentProgramChannelId,
                let start = currentProgramStart,
-               let stop = currentProgramStop,
                !currentTitle.isEmpty {
+                let stop = currentProgramStop ?? .distantFuture
                 let program = XMLTVParser.ParsedProgram(
                     channelId: channelId,
                     start: start,
@@ -381,9 +404,11 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         let suffix = s[s.index(s.startIndex, offsetBy: 14)...]
             .trimmingCharacters(in: .whitespacesAndNewlines)
         var timeZone = TimeZone(secondsFromGMT: 0)
-        if suffix.count >= 5 {
-            let signCharacter = suffix.first
-            let digits = suffix.dropFirst().prefix(4)
+        // `+0800`, and the colon form `+08:00` some feeds write.
+        let offset = suffix.replacingOccurrences(of: ":", with: "")
+        if offset.count >= 5 {
+            let signCharacter = offset.first
+            let digits = offset.dropFirst().prefix(4)
             if (signCharacter == "+" || signCharacter == "-"),
                digits.count == 4,
                let hours = Int(digits.prefix(2)),

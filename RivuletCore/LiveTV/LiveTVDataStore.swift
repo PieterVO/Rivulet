@@ -137,7 +137,7 @@ class LiveTVDataStore: ObservableObject {
 
     struct SourceConfiguration: Codable {
         var id: String
-        let type: String  // "dispatcharr", "m3u", "plex"
+        let type: String  // "dispatcharr", "m3u", "xtream", "plex"
         let name: String
         let baseURL: String?
         /// Kept in the Keychain (`playlistURLKey`); here only if the Keychain refused it.
@@ -150,9 +150,12 @@ class LiveTVDataStore: ObservableObject {
         /// a missing key leaves it nil, which is the previous all-channels
         /// behavior.
         var channelProfile: String?
+        /// Xtream Codes account name. Its password is in the Keychain (`apiTokenKey`).
+        var username: String?
 
         init(id: String, type: String, name: String, baseURL: String?, m3uURL: String?,
-             epgURL: String?, apiToken: String?, channelProfile: String? = nil) {
+             epgURL: String?, apiToken: String?, channelProfile: String? = nil, username: String? = nil) {
+            self.username = username
             self.id = id
             self.type = type
             self.name = name
@@ -310,6 +313,20 @@ class LiveTVDataStore: ObservableObject {
         await updateSourceInfo()
     }
 
+    /// Add an Xtream Codes source. Re-adding the same login replaces it.
+    func addXtreamSource(account: XtreamAccount, name: String) async {
+        let sourceId = Self.xtreamSourceId(for: account)
+        providers[sourceId] = IPTVProvider(xtream: account, sourceId: sourceId, displayName: name)
+        saveSources()
+        await updateSourceInfo()
+    }
+
+    /// From a hash of the server and username, so neither ends up in channel ids.
+    static func xtreamSourceId(for account: XtreamAccount) -> String {
+        let key = account.server.absoluteString.lowercased() + "\n" + account.username
+        return "xtream:" + SHA256.hash(data: Data(key.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
     #if DEBUG
     /// DEBUG launch hooks: a source for this run only, never saved.
     func debugAddTransientSource(_ provider: any LiveTVProvider) {
@@ -382,6 +399,14 @@ class LiveTVDataStore: ObservableObject {
                         displayName: config.name
                     )
                     providers[config.id] = provider
+                }
+
+            case "xtream":
+                if let server = config.baseURL.flatMap(URL.init(string:)), let username = config.username,
+                   let password = KeychainHelper.get(Self.apiTokenKey(sourceId: config.id)) ?? config.apiToken {
+                    providers[config.id] = IPTVProvider(
+                        xtream: XtreamAccount(server: server, username: username, password: password),
+                        sourceId: config.id, displayName: config.name)
                 }
 
             case "plex":
@@ -520,6 +545,20 @@ class LiveTVDataStore: ObservableObject {
                         epgURL: Self.storeSecret(iptvProvider.epgURL?.absoluteString,
                                                  key: Self.guideURLKey(sourceId: id)),
                         apiToken: nil
+                    ))
+                }
+
+            case .xtream:
+                if let iptvProvider = provider as? IPTVProvider, let account = iptvProvider.xtreamAccount {
+                    configs.append(SourceConfiguration(
+                        id: id,
+                        type: "xtream",
+                        name: provider.displayName,
+                        baseURL: account.server.absoluteString,
+                        m3uURL: nil,
+                        epgURL: nil,
+                        apiToken: Self.storeAPIToken(account.password, sourceId: id),
+                        username: account.username
                     ))
                 }
 

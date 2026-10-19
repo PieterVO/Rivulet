@@ -534,6 +534,7 @@ most servers and fails on the ones reached by raw IP (#314, #337).
 
 #### Live TV
 Two layouts: What's On (`LiveBrowseViewController`, the default) and the Guide (`GuideLayoutView`). Both play through `LiveTVAetherPlayerViewController` on the VOD glass rail. Multiview (`LiveMultiviewViewController`) runs **AetherPlayer** per slot (`MultiStreamViewModel` instantiates `AetherPlayer()`, each tile binds the engine surface), up to 4 concurrent slots. HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
+**Xtream Codes** (`RivuletCore/IPTV/XtreamService.swift`) is live channels only, never VOD or series: account check on `player_api.php` with no `action`, channels from `get_live_streams` + `get_live_categories` (not `get.php`), guide from one bulk `xmltv.php`, streams `/live/<user>/<pass>/<id>.ts`. Panels mix ints and strings for the same field, so replies are walked by hand; never put a reply body in a log or error, `player_api.php` echoes the password. Never loop `get_short_epg` across channels: it gets users rate-banned.
 iOS reads the same `LiveTVDataStore` and saved sources and adds sources through the same `LiveTVSourceConnector`. Dispatcharr API keys and M3U playlist/guide URLs (which often embed credentials) live in the Keychain (`liveTVSourceToken_`, `liveTVSourceM3U_`, `liveTVSourceEPG_` + source id); the saved source JSON keeps one only if the Keychain write fails. An M3U source id is a hash of its URL (`m3uSourceId`), never the URL itself; older URL-keyed sources are re-keyed on launch with their saved channel ids renamed.
 
 ### Content Filter (VOD)
@@ -880,6 +881,14 @@ relevant page's builder, picking a `SettingsRowItem.Kind`:
 Every row title renders at one size and weight; there is no per-row-kind
 typography. The SwiftUI settings rows are gone (`SettingsComponents.swift` and
 `UserProfileSettingsView.swift` are deleted) — do not reintroduce them.
+
+**A form that collects several fields** (add-source, Jellyfin sign-in) builds its
+rows from `EntryStep`s (`AddLiveTVSourceContent.swift`). On arrival
+`SettingsContent.guide` asks each required field on its own
+`TextEntryViewController` page, as tvOS Settings and Apple Account sign-in do,
+then lands focus on the form's button; the form is the review. The system
+keyboard covers the page and shows only the field's placeholder as its header,
+so the placeholder names the field and examples go in the page's message.
 
 **A row's `key:` is not wired to anything by adding the row.** Nothing reads it
 for you and nothing warns you, so a toggle can look and persist perfectly while

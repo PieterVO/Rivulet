@@ -30,14 +30,14 @@ enum LiveTVClientIdentity {
     /// Read from the bundle rather than hardcoded so it tracks releases without
     /// anyone remembering to update it. Contains no user, device, or token data,
     /// so it is safe to send to any server and safe to log.
-    static let userAgent: String = {
+    nonisolated static let userAgent: String = {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
         return "Rivulet/\(version)"
     }()
 
     /// Headers attached to every Live TV stream load. Kept as a single value so
     /// the player call sites cannot drift apart from one another.
-    static let streamHeaders: [String: String] = ["User-Agent": userAgent]
+    nonisolated static let streamHeaders: [String: String] = ["User-Agent": userAgent]
 
     /// Headers for one channel's stream: the base identity, overridden by any
     /// headers the playlist authored for that channel (`url|User-Agent=...`).

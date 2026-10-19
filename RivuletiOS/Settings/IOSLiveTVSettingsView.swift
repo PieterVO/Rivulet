@@ -178,14 +178,20 @@ struct IOSLiveAddSourceSheet: View {
                     .foregroundStyle(.primary)
                 }
                 NavigationLink {
-                    IOSLiveServerForm { dismiss() }
+                    IOSLiveXtreamForm { dismiss() }
                 } label: {
-                    row("My Own Server", detail: "Dispatcharr, Threadfin", systemImage: "antenna.radiowaves.left.and.right")
+                    row("Xtream Codes", detail: "A server, username and password from your provider",
+                        systemImage: "person.badge.key")
                 }
                 NavigationLink {
                     IOSLivePlaylistForm { dismiss() }
                 } label: {
-                    row("Playlist URL", detail: "From an IPTV provider", systemImage: "list.bullet")
+                    row("Playlist URL", detail: "An M3U link from your provider", systemImage: "list.bullet")
+                }
+                NavigationLink {
+                    IOSLiveServerForm { dismiss() }
+                } label: {
+                    row("My Own Server", detail: "Dispatcharr, Threadfin and similar", systemImage: "antenna.radiowaves.left.and.right")
                 }
             }
             .navigationTitle("Add Source")
@@ -241,11 +247,7 @@ private struct IOSLiveServerForm: View {
         Form {
             Section {
                 HStack {
-                    TextField("Server URL", text: $address, prompt: Text(verbatim: "http://\(host):9191"))
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    IOSFormField("Address", text: $address, prompt: "http://\(host):9191", kind: .url)
                     Menu {
                         ForEach(LiveTVSourceConnector.serverSuggestions(host: host), id: \.label) { suggestion in
                             Button(suggestion.label) { address = suggestion.value }
@@ -255,30 +257,28 @@ private struct IOSLiveServerForm: View {
                     }
                     .accessibilityLabel("Suggestions")
                 }
-                TextField("Display Name", text: $name, prompt: Text(LiveTVSourceConnector.defaultServerName))
-            } footer: {
-                Text("The address of the server on your network, with its port.")
-            }
-
-            Section {
-                TextField("Username", text: $username, prompt: Text("Optional"))
-                    .textContentType(.username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("Password", text: $password, prompt: Text("Optional"))
-                    .textContentType(.password)
             } header: {
-                Text("Sign In")
+                Text("Server")
             } footer: {
-                Text("Only needed to record. Leave it empty to just watch.")
+                Text("The address of the server on your network, with its port. Pick your app from the list to fill in its usual port.")
             }
 
             Section {
-                TextField("Channel Profile", text: $profile, prompt: Text("Optional"))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                IOSFormField("Username", text: $username, prompt: "Optional", kind: .username)
+                IOSFormField("Password", text: $password, prompt: "Optional", kind: .password)
+            } header: {
+                Text("Dispatcharr Sign-In")
             } footer: {
-                Text("Shows only the channels in one profile.")
+                Text("Only needed to record. Leave both empty to just watch.")
+            }
+
+            Section {
+                IOSFormField("Channel Profile", text: $profile, prompt: "All Channels", kind: .username)
+                IOSFormField("Name", text: $name, prompt: LiveTVSourceConnector.defaultServerName)
+            } header: {
+                Text("Options")
+            } footer: {
+                Text("A channel profile shows only that profile's channels. The name is how this source appears in Live TV.")
             }
 
             IOSLiveAddButton(isChecking: isChecking, action: add)
@@ -309,6 +309,70 @@ private struct IOSLiveServerForm: View {
     }
 }
 
+private struct IOSLiveXtreamForm: View {
+    let onAdded: () -> Void
+    @State private var address = ""
+    @State private var username = ""
+    @State private var password = ""
+    @State private var name = ""
+    @State private var isChecking = false
+    @State private var failure: LiveTVConnectError?
+
+    var body: some View {
+        Form {
+            Section {
+                IOSFormField("Server", text: $address, prompt: "http://provider.example:8080", kind: .url)
+            } footer: {
+                Text("The server address from your provider, with its port. You can also paste a get.php link: Rivulet fills in the username and password from it.")
+            }
+            Section {
+                IOSFormField("Username", text: $username, prompt: "Required", kind: .username)
+                IOSFormField("Password", text: $password, prompt: "Required", kind: .password)
+            } header: {
+                Text("Account")
+            }
+            Section {
+                IOSFormField("Name", text: $name, prompt: LiveTVSourceConnector.defaultPlaylistName)
+            } footer: {
+                Text("How this source appears in Live TV.")
+            }
+            IOSLiveAddButton(isChecking: isChecking, action: add)
+        }
+        .navigationTitle("Xtream Codes")
+        .disabled(isChecking)
+        .connectFailureAlert($failure)
+        .onChange(of: address) { _, new in fillLogin(from: new) }
+    }
+
+    /// A pasted get.php link carries the login: move it into its own fields.
+    private func fillLogin(from text: String) {
+        let parsed = XtreamService.parseAddress(text)
+        guard let user = parsed.username, let pass = parsed.password else { return }
+        username = user
+        password = pass
+        address = parsed.server
+    }
+
+    private func add() {
+        let connector = LiveTVSourceConnector()
+        do {
+            let request = try connector.xtreamRequest(address: address, username: username, password: password)
+            isChecking = true
+            Task {
+                defer { isChecking = false }
+                do {
+                    try await connector.connect(request, name: name.trimmingCharacters(in: .whitespaces))
+                    onAdded()
+                } catch {
+                    failure = error as? LiveTVConnectError ?? .source(error.localizedDescription)
+                }
+            }
+        } catch {
+            failure = error as? LiveTVConnectError ?? .source(error.localizedDescription)
+        }
+    }
+}
+
 private struct IOSLivePlaylistForm: View {
     let onAdded: () -> Void
     @State private var m3u = ""
@@ -320,19 +384,19 @@ private struct IOSLivePlaylistForm: View {
     var body: some View {
         Form {
             Section {
-                TextField("M3U Playlist URL", text: $m3u, prompt: Text(verbatim: "http://example.com/playlist.m3u"))
-                    .urlEntry()
+                IOSFormField("Playlist", text: $m3u, prompt: "http://provider.example/playlist.m3u", kind: .url)
             } footer: {
-                Text("The playlist link from your provider.")
+                Text("The M3U link from your provider.")
             }
             Section {
-                TextField("EPG URL (Optional)", text: $epg, prompt: Text(verbatim: "http://example.com/epg.xml"))
-                    .urlEntry()
+                IOSFormField("Guide", text: $epg, prompt: "Optional", kind: .url)
             } footer: {
-                Text("A guide link in XMLTV format, for what's on.")
+                Text("An XMLTV link for what's on. Leave it empty if the playlist names its own guide.")
             }
             Section {
-                TextField("Display Name", text: $name, prompt: Text(LiveTVSourceConnector.defaultPlaylistName))
+                IOSFormField("Name", text: $name, prompt: LiveTVSourceConnector.defaultPlaylistName)
+            } footer: {
+                Text("How this source appears in Live TV.")
             }
             IOSLiveAddButton(isChecking: isChecking, action: add)
         }
@@ -360,6 +424,50 @@ private struct IOSLivePlaylistForm: View {
     }
 }
 
+/// A labelled form row, the way Settings and Mail lay out an account: the label
+/// stays put once the field has text, so what was typed is never ambiguous.
+private struct IOSFormField: View {
+    enum Kind { case text, url, username, password }
+
+    let label: String
+    @Binding var text: String
+    let prompt: String
+    let kind: Kind
+
+    init(_ label: String, text: Binding<String>, prompt: String, kind: Kind = .text) {
+        self.label = label
+        self._text = text
+        self.prompt = prompt
+        self.kind = kind
+    }
+
+    var body: some View {
+        LabeledContent(label) {
+            field
+                .multilineTextAlignment(.trailing)
+                .textInputAutocapitalization(kind == .text ? .words : .never)
+                .autocorrectionDisabled(kind != .text)
+        }
+    }
+
+    @ViewBuilder private var field: some View {
+        switch kind {
+        case .password:
+            SecureField(label, text: $text, prompt: Text(verbatim: prompt))
+                .textContentType(.password)
+        case .url:
+            TextField(label, text: $text, prompt: Text(verbatim: prompt))
+                .keyboardType(.URL)
+                .textContentType(.URL)
+        case .username:
+            TextField(label, text: $text, prompt: Text(verbatim: prompt))
+                .textContentType(.username)
+        case .text:
+            TextField(label, text: $text, prompt: Text(verbatim: prompt))
+        }
+    }
+}
+
 private struct IOSLiveAddButton: View {
     let isChecking: Bool
     let action: () -> Void
@@ -382,13 +490,6 @@ private struct IOSLiveAddButton: View {
 }
 
 private extension View {
-    func urlEntry() -> some View {
-        keyboardType(.URL)
-            .textContentType(.URL)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-    }
-
     func connectFailureAlert(_ failure: Binding<LiveTVConnectError?>) -> some View {
         alert(
             failure.wrappedValue?.title ?? "",

@@ -290,7 +290,7 @@ enum SettingsDescriptorStore {
         ),
         "addLiveTVSource": SettingDescriptor(
             icon: "plus.circle.fill",
-            description: "Connect a Live TV source you already have access to: your Plex server's tuners, a server you run yourself, or a playlist URL from an IPTV provider."
+            description: "Connect a Live TV source you already have access to: your Plex server's tuners, a login or playlist from an IPTV provider, or a server you run yourself."
         ),
         "refreshChannels": SettingDescriptor(
             icon: "arrow.clockwise",
@@ -304,13 +304,29 @@ enum SettingsDescriptorStore {
             icon: "play.rectangle.fill",
             description: "Add the tuners already set up on your Plex server. One press adds them and loads the channel list."
         ),
+        "addXtream": SettingDescriptor(
+            icon: "person.badge.key",
+            description: "Sign in with the server address, username and password your IPTV provider gave you, often called an Xtream Codes login. Rivulet loads the channels, categories and guide. It supplies no channels of its own."
+        ),
+        "xtreamServerField": SettingDescriptor(
+            icon: "globe",
+            description: "The server address from your provider, with its port. If your provider gave you a single link with your username and password in it, enter that instead: Rivulet fills in the rest."
+        ),
+        "xtreamUsernameField": SettingDescriptor(
+            icon: "person",
+            description: "The username your provider gave you."
+        ),
+        "xtreamPasswordField": SettingDescriptor(
+            icon: "key",
+            description: "The password your provider gave you. Rivulet keeps it in the Keychain."
+        ),
         "addOwnServer": SettingDescriptor(
             icon: "server.rack",
             description: "A server you run yourself that serves a playlist and a guide, such as Dispatcharr, Threadfin, xTeVe, ErsatzTV, or Cabernet. You give Rivulet the address and it finds the rest."
         ),
         "addPlaylistURL": SettingDescriptor(
             icon: "list.bullet.rectangle",
-            description: "A playlist link from an IPTV provider you subscribe to. Rivulet supplies no channels of its own."
+            description: "An M3U playlist link from an IPTV provider you subscribe to, with an optional guide link. Rivulet supplies no channels of its own."
         ),
         "serverURL": SettingDescriptor(
             icon: "globe",
@@ -318,7 +334,7 @@ enum SettingsDescriptorStore {
         ),
         "displayNameField": SettingDescriptor(
             icon: "textformat",
-            description: "What this source is called in the sidebar and the guide."
+            description: "What this source is called in Live TV. Optional."
         ),
         "usernameField": SettingDescriptor(
             icon: "person",
@@ -338,7 +354,7 @@ enum SettingsDescriptorStore {
         ),
         "epgURLField": SettingDescriptor(
             icon: "calendar",
-            description: "Optional. An XMLTV guide link from the same provider, so channels show what is on."
+            description: "Optional. An XMLTV guide link from the same provider, so channels show what is on. Leave it empty if the playlist names its own guide."
         ),
         "addSourceConfirm": SettingDescriptor(
             icon: "plus.circle.fill",
@@ -446,6 +462,7 @@ enum SettingsDescriptorStore {
         case .liveTVSourceDetail: return ("tv.and.mediabox", .systemBlue)
         case .liveTVFavorites: return ("star.fill", .systemYellow)
         case .addLiveTVSource: return ("plus.circle.fill", .systemBlue)
+        case .addXtream: return ("person.badge.key.fill", .systemIndigo)
         case .addOwnServer: return ("server.rack", .systemBlue)
         case .addPlaylistURL: return ("list.bullet.rectangle", .systemGreen)
         }

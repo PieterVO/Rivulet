@@ -122,6 +122,10 @@ final class SettingsContainerViewController: UIViewController {
             guard let self, let vc, self.topPage === vc else { return }
             self.pop()
         }
+        vc.onPopTwo = { [weak self, weak vc] in
+            guard let self, let vc, self.topPage === vc else { return }
+            self.pop(levels: 2)
+        }
         vc.onFocusRow = { [weak self] id in self?.leftPanel.show(id: id) }
         return vc
     }
@@ -154,8 +158,15 @@ final class SettingsContainerViewController: UIViewController {
         onDepthChange?(pages.count > 1)
     }
 
-    func pop() {
-        guard !isAnimating, pages.count > 1 else { return }
+    /// Pops `levels` pages in one transition: the pages between are dropped
+    /// unseen (they hold no view while covered).
+    func pop(levels: Int = 1) {
+        guard !isAnimating, pages.count > levels else { return }
+        for _ in 1..<max(levels, 1) {
+            let skipped = pages.remove(at: pages.count - 2)
+            skipped.willMove(toParent: nil)
+            skipped.removeFromParent()
+        }
         let oldVC = pages.removeLast()
         let newVC = topPage
         if let newVC {

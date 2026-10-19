@@ -25,6 +25,8 @@ actor M3UParser {
         let name: String
         let streamURL: URL
         let httpHeaders: [String: String]
+        /// The source's own stable channel id, when it has one (Xtream's stream id).
+        let key: String?
 
         init(
             tvgId: String?,
@@ -34,8 +36,10 @@ actor M3UParser {
             channelNumber: Int?,
             name: String,
             streamURL: URL,
-            httpHeaders: [String: String] = [:]
+            httpHeaders: [String: String] = [:],
+            key: String? = nil
         ) {
+            self.key = key
             self.tvgId = tvgId
             self.tvgName = tvgName
             self.tvgLogo = tvgLogo
@@ -72,6 +76,8 @@ actor M3UParser {
     /// Fetch data from a URL with optional custom timeout
     private func fetchData(from url: URL, timeout: TimeInterval? = nil) async throws -> (Data, URLResponse) {
         var request = URLRequest(url: url)
+        // Some panels refuse a request with no recognisable client.
+        request.setValue(LiveTVClientIdentity.userAgent, forHTTPHeaderField: "User-Agent")
         if let timeout = timeout {
             request.timeoutInterval = timeout
         }
@@ -97,6 +103,23 @@ actor M3UParser {
         return try parse(content: content)
     }
 
+    /// The guide the last parsed playlist names in its `#EXTM3U` line, if any.
+    private(set) var headerGuideURL: URL?
+
+    /// `x-tvg-url`, `url-tvg` or `tvg-url` from an `#EXTM3U` line. Some list
+    /// several guides separated by commas; the first is used.
+    nonisolated static func guideURL(inHeader header: String) -> URL? {
+        for name in ["x-tvg-url", "url-tvg", "tvg-url"] {
+            guard let value = extractAttribute(from: header, name: name) else { continue }
+            let first = value.split(separator: ",").first.map(String.init) ?? value
+            if let url = URL(string: first.trimmingCharacters(in: .whitespaces)),
+               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+                return url
+            }
+        }
+        return nil
+    }
+
     /// Parse M3U playlist from string content
     /// - Parameter content: M3U playlist as string
     /// - Returns: Array of parsed channels
@@ -108,6 +131,7 @@ actor M3UParser {
         guard lines.first?.uppercased().hasPrefix("#EXTM3U") == true else {
             throw M3UParseError.invalidFormat("Missing #EXTM3U header")
         }
+        headerGuideURL = lines.first.flatMap(Self.guideURL(inHeader:))
 
         var channels: [ParsedChannel] = []
         var currentExtInf: String?
@@ -161,12 +185,12 @@ actor M3UParser {
         }
 
         // Parse attributes
-        let tvgId = extractAttribute(from: attributesPart, name: "tvg-id")
-        let tvgName = extractAttribute(from: attributesPart, name: "tvg-name")
-        let tvgLogo = extractAttribute(from: attributesPart, name: "tvg-logo")
-        let groupTitle = extractAttribute(from: attributesPart, name: "group-title")
-        let channelNumberStr = extractAttribute(from: attributesPart, name: "tvg-chno")
-            ?? extractAttribute(from: attributesPart, name: "channel-number")
+        let tvgId = Self.extractAttribute(from: attributesPart, name: "tvg-id")
+        let tvgName = Self.extractAttribute(from: attributesPart, name: "tvg-name")
+        let tvgLogo = Self.extractAttribute(from: attributesPart, name: "tvg-logo")
+        let groupTitle = Self.extractAttribute(from: attributesPart, name: "group-title")
+        let channelNumberStr = Self.extractAttribute(from: attributesPart, name: "tvg-chno")
+            ?? Self.extractAttribute(from: attributesPart, name: "channel-number")
         let channelNumber = channelNumberStr.flatMap { Int($0) }
 
         return ParsedChannel(
@@ -206,7 +230,7 @@ actor M3UParser {
     ///   - string: The attributes portion of EXTINF line
     ///   - name: Attribute name to extract
     /// - Returns: The attribute value, or nil if not found
-    private func extractAttribute(from string: String, name: String) -> String? {
+    private nonisolated static func extractAttribute(from string: String, name: String) -> String? {
         // Look for patterns like: tvg-id="value" or tvg-id='value'
         let patterns = [
             "\(name)=\"([^\"]*)\"",  // Double quotes

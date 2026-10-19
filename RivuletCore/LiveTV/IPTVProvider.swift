@@ -38,6 +38,10 @@ actor IPTVProvider: LiveTVProvider {
     nonisolated let channelProfile: String?
 
     let dispatcharrService: DispatcharrService?
+    let xtreamService: XtreamService?
+
+    /// A guide named in the playlist's own header, used when none was entered.
+    private var playlistGuideURL: URL?
 
     // Cached data
     private(set) var cachedChannels: [UnifiedChannel] = []
@@ -87,6 +91,7 @@ actor IPTVProvider: LiveTVProvider {
         self.channelProfile = profile
         self.dispatcharrService = DispatcharrService(baseURL: cleanedURL, apiToken: apiToken,
                                                      channelProfile: profile)
+        self.xtreamService = nil
         self.m3uURL = DispatcharrService.outputURL(base: cleanedURL, kind: "m3u",
                                                    channelProfile: profile)
         self.epgURL = DispatcharrService.outputURL(base: cleanedURL, kind: "epg",
@@ -102,14 +107,35 @@ actor IPTVProvider: LiveTVProvider {
         self.channelProfile = nil
         self.baseURL = nil
         self.dispatcharrService = nil
+        self.xtreamService = nil
         self.m3uURL = m3uURL
         self.epgURL = epgURL
     }
+
+    /// Xtream Codes source: channels from the panel's API, guide from its xmltv.php.
+    init(xtream account: XtreamAccount, sourceId: String, displayName: String) {
+        let service = XtreamService(account: account)
+        self.sourceType = .xtream
+        self.sourceId = sourceId
+        self.displayName = displayName
+        self.apiToken = nil
+        self.channelProfile = nil
+        self.baseURL = account.server
+        self.dispatcharrService = nil
+        self.xtreamService = service
+        self.m3uURL = nil
+        self.epgURL = service.guideURL
+    }
+
+    nonisolated var xtreamAccount: XtreamAccount? { xtreamService?.account }
 
     // MARK: - LiveTVProvider Protocol
 
     var isConnected: Bool {
         get async {
+            if let xtreamService {
+                return (try? await xtreamService.verify()) != nil
+            }
             // Check if we can reach the M3U URL
             guard let url = m3uURL else { return false }
             do {
@@ -138,7 +164,7 @@ actor IPTVProvider: LiveTVProvider {
     }
 
     func refreshChannels() async throws -> [UnifiedChannel] {
-        guard let url = m3uURL else {
+        guard let url = m3uURL ?? xtreamService?.account.server else {
             throw LiveTVProviderError.sourceNotConfigured
         }
 
@@ -148,13 +174,18 @@ actor IPTVProvider: LiveTVProvider {
         do {
             if let dispatcharr = dispatcharrService {
                 parsedChannels = try await dispatcharr.fetchChannels()
+            } else if let xtreamService {
+                let info = try await xtreamService.verify()
+                parsedChannels = try await xtreamService.fetchChannels(
+                    format: XtreamService.streamFormat(allowed: info.allowedFormats))
             } else {
                 parsedChannels = try await parser.parse(from: url)
+                playlistGuideURL = await parser.headerGuideURL
             }
         } catch {
             // Only capture unexpected errors to Sentry. HTTP errors mean a dead
             // user-configured URL; transport errors are the provider being down.
-            let isHTTPError = error is M3UParseError && "\(error)".contains("httpError")
+            let isHTTPError = (error is M3UParseError && "\(error)".contains("httpError")) || error is XtreamError
             if !isHTTPError && shouldCaptureEPGError(error) {
                 let capturedSourceType = self.sourceType
                 let capturedDisplayName = self.displayName
@@ -193,7 +224,7 @@ actor IPTVProvider: LiveTVProvider {
         startDate: Date,
         endDate: Date
     ) async throws -> [String: [UnifiedProgram]] {
-        guard let epgURL = epgURL else {
+        guard let epgURL = epgURL ?? playlistGuideURL else {
             throw LiveTVProviderError.epgNotAvailable
         }
 
@@ -359,9 +390,14 @@ extension XMLTVParser.ParseResult {
     nonisolated func guideIds(for candidates: [String: [String]]) -> [String: String] {
         let ids = Set(channels.keys).union(programs.keys)
         let idsIgnoringCase = Dictionary(ids.map { ($0.lowercased(), $0) }, uniquingKeysWith: min)
-        let idsByName = Dictionary(channels.values.map { (Self.normalize($0.displayName), $0.id) }
-                                       .filter { !$0.0.isEmpty },
-                                   uniquingKeysWith: min)
+        // The first display name wins a clash with a later one, then the lower id.
+        let named = channels.values.flatMap { channel in
+            (channel.displayNames.isEmpty ? [channel.displayName] : channel.displayNames).enumerated()
+                .map { (name: Self.normalize($0.element), rank: $0.offset, id: channel.id) }
+        }.filter { !$0.name.isEmpty }
+        let idsByName = Dictionary(grouping: named, by: \.name).mapValues { entries in
+            entries.min { ($0.rank, $0.id) < ($1.rank, $1.id) }!.id
+        }
         return candidates.compactMapValues { names in
             let names = names.filter { !$0.isEmpty }
             return names.first(where: ids.contains)
