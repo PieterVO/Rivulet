@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
+import XCTest
+@testable import Rivulet
+
+final class DolbyVisionPlaybackTests: XCTestCase {
+
+    private func playback(_ profile: Int?, converted: Bool = false, dv: Bool = false, hdr: Bool = false) -> DolbyVisionPlayback? {
+        DolbyVisionPlayback(sourceProfile: profile, convertedTo81: converted, presentsDolbyVision: dv, presentsHDR: hdr)
+    }
+
+    func test_notDolbyVision_hasNoLabel() {
+        XCTAssertNil(playback(nil, dv: true, hdr: true))
+    }
+
+    func test_profile7_eachRoute() {
+        XCTAssertEqual(playback(7, dv: true, hdr: true), .dualLayer)
+        XCTAssertEqual(playback(7, converted: true, dv: true, hdr: true), .convertedTo81)
+        XCTAssertEqual(playback(7, hdr: true), .hdr10BaseLayer)
+    }
+
+    func test_singleLayerProfiles() {
+        XCTAssertEqual(playback(8, dv: true, hdr: true), .dolbyVision)
+        XCTAssertEqual(playback(5, dv: true, hdr: true), .dolbyVision)
+        XCTAssertEqual(playback(8), .sdr)
+    }
+}

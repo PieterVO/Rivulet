@@ -776,6 +776,14 @@ final class AetherPlayer: PlayerProtocol {
     /// The engine's decode path and source codec for the current load, as
     /// plain strings for telemetry.
     var videoRouteName: String { engine.videoRoute.rawValue }
+
+    /// How the current Dolby Vision source is reaching the screen; nil when not DV.
+    var dolbyVisionPlayback: DolbyVisionPlayback? {
+        DolbyVisionPlayback(sourceProfile: engine.sourceDVProfile,
+                            convertedTo81: engine.dolbyVisionConversion == .profile7ToProfile81,
+                            presentsDolbyVision: engine.videoFormat == .dolbyVision,
+                            presentsHDR: engine.videoFormat != .sdr)
+    }
     var sourceVideoCodecName: String? { engine.sourceVideoCodecName }
 
     /// The start of a fullscreen live join, measured for issue #319. See
