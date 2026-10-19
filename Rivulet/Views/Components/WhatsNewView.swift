@@ -149,7 +149,16 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        // confirm build number at release
+        ("1.1.0 (99)", [
+            "New Xtream Codes sources in Live TV: sign in with your provider's login.",
+            "Adding a Live TV source or Jellyfin server now asks one thing per page.",
+            "Fixed missing guide data from some IPTV playlists and guides.",
+            "Choose an Enhance Dialogue level from the audio menu.",
+            "Subtitles turn on while muted when Show When Muted is on.",
+            "Player stats now show how Dolby Vision is playing.",
+            "Cast and trivia now work from Continue Watching.",
+            "Fixed a freeze when opening a director's page.",
+        ]),
         ("1.1.0 (98)", [
             "Full Dolby Vision for Profile 7 FEL titles on Dolby Vision TVs.",
             "Fixed the white edge on Continue Watching corners when a card is selected.",
