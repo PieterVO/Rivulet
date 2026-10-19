@@ -3850,6 +3850,9 @@ final class PlexHomeViewController: UIViewController {
             Perf.interval(.cellPrepare, key: perfKey) {
                 cell.configure(item: section.items[indexPath.item])
             }
+            // The next few cards build now, so one reaching the edge arrives finished.
+            let ahead = (indexPath.item + 1)..<min(indexPath.item + 5, section.items.count)
+            ContinueWatchingCell.prewarm(section.items[ahead], scale: innerCV.traitCollection.displayScale)
             return cell
         case .recentlyAdded, .recommendations, .discoverList, .searchGrid:
             let cell = innerCV.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath) as! PosterCell

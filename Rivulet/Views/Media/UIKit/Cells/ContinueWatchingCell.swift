@@ -166,18 +166,30 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
     func configure(item: MediaItem) {
-        // Episodes/shows: prefer the grandparent (show) logo; fall back to
-        // the item's own logo. The URL is already resolved — no async fetch.
-        let logoURL = item.grandparentArtwork?.logo ?? item.artwork.logo
-        // Backdrop > thumbnail in landscape orientation.
-        let url = item.grandparentArtwork?.backdrop
-            ?? item.artwork.backdrop
-            ?? item.artwork.thumbnail
+        let (logoURL, url) = Self.urls(for: item)
         titleLogoView.configure(logoURL: logoURL, fallbackTitle: item.title, artworkURL: url)
 
         infoBar.configure(item: item)
 
         loadArtwork(from: url, failureKind: item.kind)
+    }
+
+    /// Episodes and shows prefer the show's logo; the still is backdrop, then thumbnail.
+    private static func urls(for item: MediaItem) -> (logo: URL?, artwork: URL?) {
+        (item.grandparentArtwork?.logo ?? item.artwork.logo,
+         item.grandparentArtwork?.backdrop ?? item.artwork.backdrop ?? item.artwork.thumbnail)
+    }
+
+    /// Builds the card and title for items about to scroll in, so a card
+    /// arriving at the screen edge is already finished.
+    static func prewarm(_ items: some Sequence<MediaItem>, scale: CGFloat) {
+        for item in items {
+            let (logoURL, url) = urls(for: item)
+            ContinueWatchingTitleLogoView.prewarm(logoURL: logoURL, title: item.title, artworkURL: url, scale: scale)
+            guard let url, ContinueWatchingCardCompositor.cached(.card, for: url, geometry: geometry, scale: scale) == nil
+            else { continue }
+            Task { _ = await ContinueWatchingCardCompositor.image(.card, for: url, geometry: geometry, scale: scale) }
+        }
     }
 
     override func prepareForReuse() {
@@ -304,7 +316,7 @@ private final class ContinueWatchingTitleLogoView: UIView {
 
         // Fallback title: 30pt bold, white, soft drop shadow.
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 30, weight: .bold)
+        titleLabel.font = Self.titleFont
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
         titleLabel.shadowOffset = CGSize(width: 0, height: 2)
@@ -345,8 +357,79 @@ private final class ContinueWatchingTitleLogoView: UIView {
 
     /// MediaItem path. The logo URL is already resolved.
     func configure(logoURL: URL?, fallbackTitle: String, artworkURL: URL?) {
-        configure(key: "\(logoURL?.absoluteString ?? fallbackTitle)|\(artworkURL?.absoluteString ?? "")",
+        configure(key: Self.key(logoURL: logoURL, title: fallbackTitle, artworkURL: artworkURL),
                   title: fallbackTitle, artworkURL: artworkURL) { logoURL }
+    }
+
+    private static func key(logoURL: URL?, title: String, artworkURL: URL?) -> String {
+        "\(logoURL?.absoluteString ?? title)|\(artworkURL?.absoluteString ?? "")"
+    }
+
+    // MARK: Prepared titles
+
+    /// A title worked out ahead: the bitmap (nil for text) and the slot it sits in.
+    private final class Prepared {
+        let image: UIImage?
+        let logoSize: CGSize?
+        let placement: Compositor.Placement
+        init(image: UIImage?, logoSize: CGSize?, placement: Compositor.Placement) {
+            self.image = image
+            self.logoSize = logoSize
+            self.placement = placement
+        }
+    }
+
+    private static let prepared: NSCache<NSString, Prepared> = {
+        let cache = NSCache<NSString, Prepared>()
+        cache.countLimit = 60
+        return cache
+    }()
+    private static var preparing: [String: Task<(Prepared, keep: Bool), Never>] = [:]
+
+    private static let titleFont = UIFont.systemFont(ofSize: 30, weight: .bold)
+
+    private static func textSize(_ title: String) -> CGSize {
+        let size = (title as NSString).size(withAttributes: [.font: titleFont])
+        return CGSize(width: ceil(size.width), height: ceil(size.height))
+    }
+
+    /// Works out a title once per item and scale; callers share one in-flight run.
+    private static func prepare(key: String, title: String, artworkURL: URL?, scale: CGFloat,
+                                logoURL: @escaping () async -> URL?) async -> Prepared {
+        let cacheKey = "\(key)#\(scale)"
+        if let done = prepared.object(forKey: cacheKey as NSString) { return done }
+        if let running = preparing[cacheKey] { return await running.value.0 }
+        let geometry = ContinueWatchingCell.geometry
+        let textSize = textSize(title)
+        let task = Task { () -> (Prepared, keep: Bool) in
+            async let analysed = signals(for: artworkURL)
+            var logo: (url: URL, size: CGSize)?
+            let url = await logoURL()
+            if let url, let size = await ImageCacheManager.shared.image(for: url)?.size {
+                logo = (url, size)
+            }
+            let placement = Compositor.placement(signals: await analysed, logoSize: logo?.size,
+                                                 textSize: textSize, geometry: geometry)
+            var image: UIImage?
+            if let logo {
+                image = await Compositor.image(placement.strongShadow ? .titleStrong : .title, for: logo.url,
+                                               geometry: geometry, scale: scale)
+            }
+            // A logo that failed to load is not kept: the next display tries again.
+            let keep = url == nil || image != nil
+            return (Prepared(image: image, logoSize: logo?.size, placement: placement), keep)
+        }
+        preparing[cacheKey] = task
+        let (result, keep) = await task.value
+        preparing[cacheKey] = nil
+        if keep { prepared.setObject(result, forKey: cacheKey as NSString) }
+        return result
+    }
+
+    static func prewarm(logoURL: URL?, title: String, artworkURL: URL?, scale: CGFloat) {
+        let key = key(logoURL: logoURL, title: title, artworkURL: artworkURL)
+        guard prepared.object(forKey: "\(key)#\(scale)" as NSString) == nil else { return }
+        Task { _ = await prepare(key: key, title: title, artworkURL: artworkURL, scale: scale) { logoURL } }
     }
 
     /// Loads the logo and the still's analysis side by side, then shows the
@@ -363,22 +446,16 @@ private final class ContinueWatchingTitleLogoView: UIView {
         currentItemKey = key
 
         let geometry = ContinueWatchingCell.geometry, scale = traitCollection.displayScale
-        let textSize = titleLabel.intrinsicContentSize
+        let textSize = Self.textSize(title)
+        // Worked out ahead (or shown before): in place at once, no fade.
+        if let done = Self.prepared.object(forKey: "\(key)#\(scale)" as NSString) {
+            show(done.image, logoSize: done.logoSize, placement: done.placement, animated: false)
+            return
+        }
         fetchTask = Task { [weak self] in
-            async let analysed = Self.signals(for: artworkURL)
-            var logo: (url: URL, size: CGSize)?
-            if let url = await logoURL(), let size = await ImageCacheManager.shared.image(for: url)?.size {
-                logo = (url, size)
-            }
-            let placement = Compositor.placement(signals: await analysed, logoSize: logo?.size,
-                                                 textSize: textSize, geometry: geometry)
-            var image: UIImage?
-            if let logo {
-                image = await Compositor.image(placement.strongShadow ? .titleStrong : .title, for: logo.url,
-                                               geometry: geometry, scale: scale)
-            }
+            let done = await Self.prepare(key: key, title: title, artworkURL: artworkURL, scale: scale, logoURL: logoURL)
             guard !Task.isCancelled, let self, self.currentItemKey == key else { return }
-            self.show(image, logoSize: logo?.size, placement: placement)
+            self.show(done.image, logoSize: done.logoSize, placement: done.placement)
         }
         // Slow server: show the text in the default slot rather than nothing.
         deadlineTask = Task { [weak self] in
@@ -414,7 +491,7 @@ private final class ContinueWatchingTitleLogoView: UIView {
     }
 
     /// Both configure paths end here: move to the slot, then fade in.
-    private func show(_ image: UIImage?, logoSize: CGSize?, placement: Compositor.Placement) {
+    private func show(_ image: UIImage?, logoSize: CGSize?, placement: Compositor.Placement, animated: Bool = true) {
         let geometry = ContinueWatchingCell.geometry
         let box = geometry.titleBox.offsetBy(dx: 0, dy: placement.offset)
         imageTop.constant = box.minY - Compositor.titleShadowPad
@@ -433,9 +510,14 @@ private final class ContinueWatchingTitleLogoView: UIView {
             translationX: slot.midX - box.midX - (resting.midX - box.midX) * placement.scale, y: 0)
             .scaledBy(x: placement.scale, y: placement.scale)
         layoutIfNeeded()
-        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut]) {
+        let reveal = {
             self.imageView.alpha = image == nil ? 0 : 1
             self.titleLabel.alpha = image == nil ? 1 : 0
+        }
+        if animated {
+            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut], animations: reveal)
+        } else {
+            reveal()
         }
     }
 
