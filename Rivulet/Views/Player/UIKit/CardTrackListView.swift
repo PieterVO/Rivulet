@@ -11,7 +11,7 @@ import UIKit
 /// a 70pt section header, 66pt rows (86 with a second line), a checkmark column,
 /// and a focused row that turns into a white pill. Fills the popup edge to edge;
 /// its own insets match AVKit's.
-final class CardTrackListView: UIView {
+final class CardTrackListView: UIView, RailPanelMenuHandling {
 
     /// AVKit's menus are a fixed 450pt wide.
     static let menuWidth: CGFloat = 450
@@ -50,9 +50,15 @@ final class CardTrackListView: UIView {
 
     private let rows: [Row]
     private let actions: [CardActionConfig]
+    private let choices: [CardChoiceConfig]
     private let toggles: [CardToggleConfig]
     private let steppers: [CardStepperConfig]
     private let onSelect: (Int?) -> Void
+    private let header: String
+    private let headerLabel = UILabel()
+    /// The choice whose options are showing in place of the menu, AVKit's submenu.
+    private var openChoice: Int?
+    private weak var pendingFocus: UIView?
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var rowButtons: [CardTrackRowButton] = []
@@ -65,7 +71,7 @@ final class CardTrackListView: UIView {
     private weak var lastFocusedControl: UIView?
 
     convenience init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool,
-                     actions: [CardActionConfig] = [],
+                     actions: [CardActionConfig] = [], choices: [CardChoiceConfig] = [],
                      toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
                      onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
@@ -80,28 +86,30 @@ final class CardTrackListView: UIView {
                 isSelected: track.id == selectedTrackId
             )
         })
-        self.init(header: header, rows: rows, actions: actions, toggles: toggles, steppers: steppers, onSelect: onSelect)
+        self.init(header: header, rows: rows, actions: actions, choices: choices, toggles: toggles,
+                  steppers: steppers, onSelect: onSelect)
     }
 
     /// A plain list of choices: each row's `trackId` is what `onSelect` receives.
-    init(header: String, rows: [Row], actions: [CardActionConfig] = [], toggles: [CardToggleConfig] = [],
-         steppers: [CardStepperConfig] = [], onSelect: @escaping (Int?) -> Void) {
+    init(header: String, rows: [Row], actions: [CardActionConfig] = [], choices: [CardChoiceConfig] = [],
+         toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
+         onSelect: @escaping (Int?) -> Void) {
         self.rows = rows
         self.actions = actions
+        self.choices = choices
         self.toggles = toggles
         self.steppers = steppers
         self.onSelect = onSelect
+        self.header = header
         super.init(frame: .zero)
-        setupViews(header: header)
+        setupViews()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private func setupViews(header: String) {
-        let headerLabel = UILabel()
-        headerLabel.text = header
+    private func setupViews() {
         headerLabel.font = Metrics.secondaryFont
         headerLabel.textColor = Metrics.secondaryColor
         addSubview(headerLabel)
@@ -139,6 +147,20 @@ final class CardTrackListView: UIView {
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -Metrics.bottomInset),
             stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -2 * Metrics.rowInset),
         ])
+        buildRows()
+    }
+
+    private func buildRows() {
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        rowButtons = []
+        stepperRows = []
+        hasPinnedInitialFocus = false
+
+        if let index = openChoice {
+            buildSubmenu(choices[index])
+            return
+        }
+        headerLabel.text = header
 
         for row in rows {
             let button = CardTrackRowButton(row: row)
@@ -164,9 +186,25 @@ final class CardTrackListView: UIView {
             rowButtons.append(button)
         }
 
-        // On/off toggles (Enhance Dialogue, Reduce Loud Sounds) get their own
-        // section; a press flips the checkmark in place and leaves the popup up.
-        if !toggles.isEmpty, !rowButtons.isEmpty {
+        // Choices (Enhance Dialogue levels): one row naming the current option
+        // that opens the options in place, like AVKit's submenu.
+        if !choices.isEmpty, !rowButtons.isEmpty {
+            stack.addArrangedSubview(MenuSeparatorView())
+        }
+        for (index, config) in choices.enumerated() {
+            let button = CardTrackRowButton(row: Row(title: config.title,
+                                                     subtitle: config.options.indices.contains(config.selected())
+                                                         ? config.options[config.selected()] : nil,
+                                                     trackId: nil, isSelected: false),
+                                            showsChevron: true)
+            button.onTap = { [weak self] in self?.showChoice(index) }
+            stack.addArrangedSubview(button)
+            rowButtons.append(button)
+        }
+
+        // On/off toggles flip in place and leave the popup up. AVKit keeps them
+        // in one section with the Enhance Dialogue levels row.
+        if !toggles.isEmpty, !rowButtons.isEmpty, choices.isEmpty {
             stack.addArrangedSubview(MenuSeparatorView())
         }
         for config in toggles {
@@ -195,7 +233,45 @@ final class CardTrackListView: UIView {
         }
     }
 
+    private func buildSubmenu(_ config: CardChoiceConfig) {
+        headerLabel.text = config.title
+        let selected = config.selected()
+        for (index, title) in config.options.enumerated() {
+            let button = CardTrackRowButton(row: Row(title: title, subtitle: nil, trackId: nil,
+                                                     isSelected: index == selected))
+            button.onTap = { [weak self] in
+                config.onSelect(index)
+                self?.showChoice(nil)
+            }
+            stack.addArrangedSubview(button)
+            rowButtons.append(button)
+        }
+    }
+
+    /// Swaps between the menu and a choice's options; focus lands on the
+    /// selected option going in and on the choice's row coming back.
+    private func showChoice(_ index: Int?) {
+        let returning = openChoice
+        openChoice = index
+        buildRows()
+        if index == nil, let returning {
+            pendingFocus = rowButtons.first { $0.showsChevron && $0.row.title == choices[returning].title }
+        }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    func handleMenuPress() -> Bool {
+        guard openChoice != nil else { return false }
+        showChoice(nil)
+        return true
+    }
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let pendingFocus {
+            self.pendingFocus = nil
+            return [pendingFocus]
+        }
         // After the first landing, hold the CURRENT row: when an edge press
         // finds no in-popup candidate the popup's fence re-resolves through
         // here, and returning the focused row makes focus stop at the edge
@@ -244,6 +320,16 @@ private final class MenuSeparatorView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+// MARK: - CardChoiceConfig
+
+/// A one-of-N submenu: `selected` and `onSelect` use option indices.
+struct CardChoiceConfig {
+    let title: String
+    let options: [String]
+    let selected: () -> Int
+    let onSelect: (Int) -> Void
 }
 
 // MARK: - CardActionConfig
@@ -398,6 +484,7 @@ final class CardStepperButton: UIControl {
 final class CardTrackRowButton: UIControl {
 
     let row: CardTrackListView.Row
+    let showsChevron: Bool
     var onTap: (() -> Void)?
     var isChecked: Bool {
         get { !checkmarkView.isHidden }
@@ -413,8 +500,14 @@ final class CardTrackRowButton: UIControl {
         withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .bold)
     ))
 
-    init(row: CardTrackListView.Row) {
+    private let chevronView = UIImageView(image: UIImage(
+        systemName: "chevron.forward",
+        withConfiguration: UIImage.SymbolConfiguration(pointSize: 22, weight: .bold)
+    ))
+
+    init(row: CardTrackListView.Row, showsChevron: Bool = false) {
         self.row = row
+        self.showsChevron = showsChevron
         super.init(frame: .zero)
         typealias M = CardTrackListView.Metrics
 
@@ -444,6 +537,10 @@ final class CardTrackRowButton: UIControl {
         addSubview(pill)
         addSubview(content)
         [checkmarkView, titleLabel, subtitleLabel].forEach { content.addSubview($0) }
+        chevronView.isHidden = !showsChevron
+        chevronView.tintColor = M.secondaryColor
+        content.addSubview(chevronView)
+        chevronView.translatesAutoresizingMaskIntoConstraints = false
 
         [content, checkmarkView, titleLabel, subtitleLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         var constraints = [
@@ -461,6 +558,8 @@ final class CardTrackRowButton: UIControl {
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -M.checkColumnX),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -M.checkColumnX),
+            chevronView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -M.checkColumnX),
+            chevronView.centerYAnchor.constraint(equalTo: content.centerYAnchor),
         ]
         if hasSubtitle {
             constraints += [
@@ -520,5 +619,6 @@ final class CardTrackRowButton: UIControl {
         titleLabel.textColor = focused ? .black : .white
         subtitleLabel.textColor = focused ? UIColor.black.withAlphaComponent(0.6) : M.secondaryColor
         checkmarkView.tintColor = focused ? .black : .white
+        chevronView.tintColor = focused ? UIColor.black.withAlphaComponent(0.6) : M.secondaryColor
     }
 }

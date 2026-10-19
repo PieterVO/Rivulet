@@ -67,6 +67,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private var subtitleOverlay: CaptionOverlayView?
     private var captionStyle: CaptionStyle = CaptionAppearance.current()
     private var cancellables = Set<AnyCancellable>()
+    /// Subtitles turned on by tvOS's Show When Muted.
+    private var captionsOnMute = CaptionsOnMuteLogic()
+    private lazy var systemCaptionsOnMute = SystemCaptionsOnMute { [weak self] in self?.updateCaptionsOnMute() }
 
     /// Last-resort AVPlayer (fallback stage 2) rendered on its own layer.
     private var lastResortPlayer: AVPlayer?
@@ -404,6 +407,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         aetherPlayer = aether
         aether.bind(view: engineSurfaceView)
         bindAetherSubtitles(aether)
+        captionsOnMute = CaptionsOnMuteLogic()
+        aether.$subtitleTracks
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateCaptionsOnMute() }
+            .store(in: &cancellables)
         bindNativeLegibleAttachment(aether)
 
         aether.playbackStatePublisher
@@ -1184,8 +1192,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 showsOffRow: true,
                 steppers: steppers
             ) { [weak self] trackId in
-                self?.aetherPlayer?.selectSubtitleTrack(id: trackId)
-                self?.activePanel?.dismissPanel()
+                guard let self else { return }
+                if self.systemCaptionsOnMute.isActive { self.captionsOnMute.userPicked() }
+                self.aetherPlayer?.selectSubtitleTrack(id: trackId)
+                self.activePanel?.dismissPanel()
             }
             presentPanel(content: list, width: 520)
             return
@@ -1235,6 +1245,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 tracks: aether.audioTracks,
                 selectedTrackId: aether.currentAudioTrackId,
                 showsOffRow: false,
+                choices: SystemAudioAdjustment.menuChoices,
                 toggles: SystemAudioAdjustment.menuToggles
             ) { [weak self] trackId in
                 if let trackId { self?.aetherPlayer?.selectAudioTrack(id: trackId) }
@@ -1267,6 +1278,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 tracks: tracks,
                 selectedTrackId: selectedIndex,
                 showsOffRow: false,
+                choices: SystemAudioAdjustment.menuChoices,
                 toggles: SystemAudioAdjustment.menuToggles
             ) { [weak self] trackId in
                 if let trackId, trackId < group.options.count {
@@ -1996,7 +2008,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             return
         }
         if let activePanel {
-            activePanel.dismissPanel()
+            if !activePanel.contentHandlesMenuPress() { activePanel.dismissPanel() }
             armDismissEchoBlock()
             completion?()
             return
@@ -2387,6 +2399,25 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         // Height is sticky per channel, like the delay stepper.
         overlay.heightUnits = subtitleHeightUnits
         overlay.setControlsVisible(railVisible || timelineVisible, animated: animated)
+    }
+
+    /// Shows subtitles while tvOS's Show When Muted applies, then puts the prior
+    /// choice back. Engine demux only: bypass captions belong to AVPlayer.
+    private func updateCaptionsOnMute() {
+        guard let aether = aetherPlayer, !isPlayingRemoteHLSDirectly else { return }
+        if systemCaptionsOnMute.isActive {
+            let audio = aether.audioTracks.first { $0.id == aether.currentAudioTrackId }
+            if let id = captionsOnMute.activate(
+                current: aether.subtitleTracks.first { $0.id == aether.currentSubtitleTrackId },
+                tracks: aether.subtitleTracks,
+                preferredLanguage: CaptionsOnMuteLogic.language(of: TrackIntentStore.subtitleIntent),
+                audioLanguage: audio?.languageCode ?? audio?.language
+            ) {
+                aether.selectSubtitleTrack(id: id)
+            }
+        } else if let restore = captionsOnMute.deactivate(currentTrackId: aether.currentSubtitleTrackId) {
+            aether.selectSubtitleTrack(id: restore)
+        }
     }
 
     private func bindAetherSubtitles(_ aether: AetherPlayer) {

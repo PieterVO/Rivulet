@@ -1478,6 +1478,7 @@ class PlayerContainerViewController: UIViewController {
                 content: CardTrackListView(
                     header: "Audio", tracks: vm.audioTracks,
                     selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
+                    choices: SystemAudioAdjustment.menuChoices,
                     toggles: SystemAudioAdjustment.menuToggles,
                     onSelect: { [weak vm, weak self] id in
                         if let id { vm?.selectAudioTrack(id: id) }

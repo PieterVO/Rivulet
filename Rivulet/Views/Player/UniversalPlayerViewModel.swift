@@ -274,6 +274,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// inside one. Cleared (without reverting) by any user-initiated
     /// absolute seek, manual subtitle-track change, or stopPlayback.
     private var replayWindow: ReplayWindowLogic?
+    /// Subtitles turned on by tvOS's Show When Muted (aether route only).
+    private var captionsOnMute = CaptionsOnMuteLogic()
+    private lazy var systemCaptionsOnMute = SystemCaptionsOnMute { [weak self] in self?.updateCaptionsOnMute() }
     private var compatibilityNoticeTimer: Timer?
     private nonisolated(unsafe) var userActivity: NSUserActivity?
 
@@ -4057,6 +4060,26 @@ final class UniversalPlayerViewModel: ObservableObject {
         replayWindow = nil
         if window.priorSubtitleTrackId == nil {
             selectSubtitleTrackWithoutSaving(id: nil, reloadsTranscode: false)
+            updateCaptionsOnMute()
+        }
+    }
+
+    /// Shows subtitles while tvOS's Show When Muted applies and puts the prior
+    /// choice back after, unless the user picked meanwhile.
+    private func updateCaptionsOnMute() {
+        guard aetherPlayer != nil else { return }
+        if systemCaptionsOnMute.isActive {
+            let audio = audioTracks.first { $0.id == currentAudioTrackId }
+            if let id = captionsOnMute.activate(
+                current: subtitleTracks.first { $0.id == currentSubtitleTrackId },
+                tracks: subtitleTracks,
+                preferredLanguage: CaptionsOnMuteLogic.language(of: TrackIntentStore.subtitleIntent),
+                audioLanguage: audio?.languageCode ?? audio?.language
+            ) {
+                selectSubtitleTrackWithoutSaving(id: id, reloadsTranscode: false)
+            }
+        } else if let restore = captionsOnMute.deactivate(currentTrackId: currentSubtitleTrackId) {
+            selectSubtitleTrackWithoutSaving(id: restore, reloadsTranscode: false)
         }
     }
 
@@ -4433,6 +4456,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // User picked a track manually: their choice wins over any active
         // replay window (no later revert-to-prior-track).
         clearReplayWindow()
+        if aetherPlayer != nil, systemCaptionsOnMute.isActive { captionsOnMute.userPicked() }
 
         // Delegate the actual pipeline switch to the auto-selection helper,
         // then persist the user's explicit choice as the saved preference so
@@ -4557,6 +4581,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func updateTrackLists() {
         let previousSubtitleCount = subtitleTracks.count
         let previousAudioCount = audioTracks.count
+        // Fresh track ids: a mute session from the old list no longer applies.
+        if previousSubtitleCount == 0 { captionsOnMute = CaptionsOnMuteLogic() }
 
         let plexStreams = metadata.Media?.first?.Part?.first?.Stream ?? []
         let plexAudio = plexStreams.filter { $0.isAudio }.map { MediaTrack(from: $0) }
@@ -4621,6 +4647,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             applySubtitlePreference()
         }
         syncSilentSubtitleRead()
+        updateCaptionsOnMute()
     }
 
     /// Apply saved audio preference. Selection priority is:
