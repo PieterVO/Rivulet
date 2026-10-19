@@ -106,6 +106,13 @@ protocol MediaProvider: Sendable, Identifiable {
     func markUnplayed(_ itemRef: MediaItemRef) async throws
     func updateProgress(_ itemRef: MediaItemRef, position: TimeInterval) async throws
 
+    // MARK: - Deletion
+
+    /// Whether this account may delete media from the server. Default: no.
+    func canDeleteMedia() async -> Bool
+    /// Deletes the item and its files from the server.
+    func deleteMedia(_ itemRef: MediaItemRef) async throws
+
     // MARK: - Watchlist
     var supportsWatchlist: Bool { get }
     func isOnWatchlist(_ ref: MediaItemRef) async -> Bool
@@ -152,6 +159,10 @@ extension MediaProvider {
     func letterCounts(in library: MediaLibrary) async throws -> [PlexFirstCharacter] { [] }
     func refreshMetadata(_ itemRef: MediaItemRef) async throws {
         throw MediaProviderError.backendSpecific(underlying: "refresh not supported")
+    }
+    func canDeleteMedia() async -> Bool { false }
+    func deleteMedia(_ itemRef: MediaItemRef) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "delete not supported")
     }
 }
 

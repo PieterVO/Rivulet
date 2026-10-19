@@ -413,6 +413,21 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         try await client.delete("UserPlayedItems/\(itemRef.itemID)")
     }
 
+    /// Answered once per provider from the user's policy.
+    private let deletionAllowed = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+
+    func canDeleteMedia() async -> Bool {
+        if let known = deletionAllowed.withLock({ $0 }) { return known }
+        guard let me: JFUserWithPolicy = try? await client.get("Users/Me") else { return false }
+        let answer = me.policy?.isAdministrator == true || me.policy?.enableContentDeletion == true
+        deletionAllowed.withLock { $0 = answer }
+        return answer
+    }
+
+    func deleteMedia(_ itemRef: MediaItemRef) async throws {
+        try await client.delete("Items/\(itemRef.itemID)")
+    }
+
     func updateProgress(_ itemRef: MediaItemRef, position: TimeInterval) async throws {
         try await client.post(
             "UserItems/\(itemRef.itemID)/UserData",

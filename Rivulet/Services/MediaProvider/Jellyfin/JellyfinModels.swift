@@ -31,6 +31,15 @@ nonisolated struct JFUser: Decodable, Sendable {
     let name: String?
 }
 
+/// `Users/Me`, read for the deletion rights in its policy.
+nonisolated struct JFUserWithPolicy: Decodable, Sendable {
+    let policy: Policy?
+    nonisolated struct Policy: Decodable, Sendable {
+        let isAdministrator: Bool?
+        let enableContentDeletion: Bool?
+    }
+}
+
 /// `/MediaSegments/{id}`: `type` is Intro, Outro, Recap, Commercial, Preview or Unknown.
 nonisolated struct JFMediaSegment: Decodable, Sendable {
     let type: String?

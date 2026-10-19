@@ -1287,6 +1287,30 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
 
+    /// Whether the server's "Allow media deletion" setting is on (`allowMediaDeletion` on `/`).
+    func allowsMediaDeletion(serverURL: String, authToken: String) async -> Bool {
+        guard let url = URL(string: serverURL) else { return false }
+        let root: PlexServerRootWrapper? = try? await request(url, headers: plexHeaders(authToken: authToken))
+        return root?.MediaContainer.allowMediaDeletion == true
+    }
+
+    /// Deletes an item and its files from the server.
+    func deleteMetadata(serverURL: String, authToken: String, ratingKey: String) async throws {
+        guard let url = URL(string: "\(serverURL)/library/metadata/\(ratingKey)") else {
+            throw PlexAPIError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw PlexAPIError.invalidResponse }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: nil)
+        }
+    }
+
     /// Saves a search result next to the media. PMS answers at once and lists
     /// the new stream (under a new id) about two seconds later.
     func downloadSubtitle(

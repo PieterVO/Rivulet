@@ -149,3 +149,23 @@ nonisolated struct PlexStreamListWrapper: Codable, Sendable {
         let Stream: [PlexStream]?
     }
 }
+
+/// The server root (`/`), read for its media deletion setting.
+nonisolated struct PlexServerRootWrapper: Decodable, Sendable {
+    let MediaContainer: Inner
+    nonisolated struct Inner: Decodable, Sendable {
+        let allowMediaDeletion: Bool?
+
+        private enum CodingKeys: String, CodingKey { case allowMediaDeletion }
+
+        // PMS writes this as a JSON bool or as 0/1 depending on version.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let flag = try? c.decodeIfPresent(Bool.self, forKey: .allowMediaDeletion) {
+                allowMediaDeletion = flag
+            } else {
+                allowMediaDeletion = (try? c.decodeIfPresent(Int.self, forKey: .allowMediaDeletion)).flatMap { $0 }.map { $0 == 1 }
+            }
+        }
+    }
+}

@@ -4140,8 +4140,43 @@ final class PlexHomeViewController: UIViewController {
     private func presentTileMenu(for item: MediaItem, isContinueWatching: Bool,
                                  shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) {
         if presentMusicTileMenuIfNeeded(for: item) { return }
-        presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: isContinueWatching,
-                                                   shelfLocation: shelfLocation))
+        let provider = playableItem(item).flatMap { MediaProviderRegistry.shared.provider(for: $0.ref.providerID) }
+        Task { @MainActor [weak self] in
+            // Cached per provider after the first menu.
+            let canDelete = await provider?.canDeleteMedia() ?? false
+            guard let self else { return }
+            var sections = tileMenuSections(for: item, isContinueWatching: isContinueWatching,
+                                            shelfLocation: shelfLocation)
+            if canDelete, let provider {
+                sections.append([TileMenuAction(title: "Delete…", systemImage: "trash", destructive: true) {
+                    [weak self] in self?.confirmDelete(item, provider: provider)
+                }])
+            }
+            presentTileMenu(sections: sections)
+        }
+    }
+
+    private func confirmDelete(_ item: MediaItem, provider: any MediaProvider) {
+        let message = item.kind == .show || item.kind == .season
+            ? "Every episode's files will be deleted from \(provider.displayName). This cannot be undone."
+            : "The files will be deleted from \(provider.displayName). This cannot be undone."
+        let alert = UIAlertController(title: "Delete \u{201C}\(item.title)\u{201D}?", message: message,
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
+            Task { @MainActor in
+                do {
+                    try await provider.deleteMedia(item.ref)
+                    NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+                } catch {
+                    let failed = UIAlertController(title: "Couldn't Delete", message: error.localizedDescription,
+                                                   preferredStyle: .alert)
+                    failed.addAction(UIAlertAction(title: "OK", style: .cancel))
+                    self?.present(failed, animated: true)
+                }
+            }
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
     }
 
     private func presentTileMenu(sections: [[TileMenuAction]]) {

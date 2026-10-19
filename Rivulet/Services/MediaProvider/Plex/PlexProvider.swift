@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import os
 
 final class PlexProvider: MediaProvider, @unchecked Sendable {
     nonisolated let id: String
@@ -388,6 +389,30 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
             try await networkManager.reportProgress(
                 serverURL: serverURL, authToken: authToken,
                 ratingKey: itemRef.itemID, timeMs: Int(position * 1000), state: "playing"
+            )
+        }
+    }
+
+    // MARK: - Deletion
+
+    /// Answered once per provider; a new token builds a new provider.
+    private let deletionAllowed = OSAllocatedUnfairLock<Bool?>(initialState: nil)
+
+    /// Owner only, and only with the server's "Allow media deletion" on.
+    func canDeleteMedia() async -> Bool {
+        if let known = deletionAllowed.withLock({ $0 }) { return known }
+        async let isAdmin = networkManager.canAdministerServer(serverURL: serverURL, authToken: authToken)
+        async let allowed = networkManager.allowsMediaDeletion(serverURL: serverURL, authToken: authToken)
+        let (admin, on) = await (isAdmin, allowed)
+        let answer = admin && on
+        deletionAllowed.withLock { $0 = answer }
+        return answer
+    }
+
+    func deleteMedia(_ itemRef: MediaItemRef) async throws {
+        try await plexCall {
+            try await networkManager.deleteMetadata(
+                serverURL: serverURL, authToken: authToken, ratingKey: itemRef.itemID
             )
         }
     }
