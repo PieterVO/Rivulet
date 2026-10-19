@@ -2,7 +2,7 @@
 Requires numpy and Pillow.
 
 The R sits in the middle half of a canvas twice its size, so its glow can spread past it.
-flow.png: R = coarse and B = fine distance along the R from its top stroke (phase = (R*255 + B) / 256),
+glow.png: R = the R's glow, G = a screen-wide wash, B = the wash's phase.\nflow.png: R = coarse and B = fine distance along the R from its top stroke (phase = (R*255 + B) / 256),
 G = the R's brightness, blurred. glow.png: the same brightness blurred wide, for color spilling across the screen.
 Distances are geodesic (through the strands, dearer through empty space), so color follows the curve.
 """
@@ -71,4 +71,21 @@ body = blurred(luma * 1.6, 6) * 255
 Image.fromarray(np.dstack([coarse, body, fine]).astype(np.uint8)).save(sys.argv[2])
 glow = blurred(luma * 3, 40) * 0.6 + blurred(luma * 3, 90) * 0.4
 glow = glow / max(glow.max(), 1e-6)
-Image.fromarray((glow * 255).astype(np.uint8)).save(sys.argv[3])
+# A screen-wide wash: the R's light blurred far past its shape, so the bloom fills the view.
+def soft(a, radius):
+    """Float Gaussian (three box passes per axis), edges extended."""
+    r = max(1, int(radius))
+    out = a.astype(np.float64)
+    for axis in (0, 1):
+        for _ in range(3):
+            pad = np.pad(out, [(r + 1, r) if i == axis else (0, 0) for i in range(2)], mode="edge")
+            c = np.cumsum(pad, axis=axis)
+            hi = np.take(c, range(2 * r + 1, c.shape[axis]), axis=axis)
+            lo = np.take(c, range(0, c.shape[axis] - 2 * r - 1), axis=axis)
+            out = (hi - lo) / (2 * r + 1)
+    return out
+weight = soft(luma, 220)
+wash = weight / max(weight.max(), 1e-6)
+# The wash takes the R's colors averaged over the same reach, so it has no seams.
+wash_phase = soft(luma * phase, 220) / np.maximum(weight, 1e-6)
+Image.fromarray((np.dstack([glow, wash, wash_phase]) * 255).astype(np.uint8)).save(sys.argv[3])

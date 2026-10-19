@@ -45,7 +45,7 @@ enum WelcomeGlowShader {
     constant float tripSeconds = 7, streamLength = 0.19, streamGain = 0.65;
     constant float drift = 0.085, bands = 0.75, bodyGain = 0.2, blur = 0.9;
     constant float halo = 0.9, haloSpread = 1.1, spill = 0.35, ripple = 0.006;
-    constant float starfield = 0.8, scrim = 0.65;
+    constant float starfield = 0.8, scrim = 0.65, wash = 0.14;
     constant float2 scrimCenter = float2(0.5, 0.62);
 
     fragment float4 welcomeFragment(WelcomeVertexOut in [[stage_in]],
@@ -72,7 +72,8 @@ enum WelcomeGlowShader {
         }
         body /= 25;
         near /= 25;
-        float wide = spillMap.sample(edge, c).r;
+        float4 spillSample = spillMap.sample(edge, c);
+    float wide = spillSample.r;
 
         // At rest: the palette along the R, drifting. One soft swell runs down it.
         float3 rest = flowColor(phase * bands - u.time * drift);
@@ -84,7 +85,11 @@ enum WelcomeGlowShader {
 
         float lit = body * bodyGain + near * halo + wide * spill;
         float3 color = rest * lit + streamColor * stream * (body * streamGain + near * halo * 0.35 + wide * spill * 0.3);
-        float3 sky = stars.sample(wrap, (in.screen - 0.5) * u.starScale + 0.5).rgb * starfield;
+        // A wash of the R's colors across the whole view.
+    color += flowColor(spillSample.b * bands - u.time * drift) * spillSample.g * wash;
+    // Highlights roll off instead of clipping to white.
+    color = min(color, 0.75) + 0.25 * (1 - exp(-max(color - 0.75, 0.0) / 0.25));
+    float3 sky = stars.sample(wrap, (in.screen - 0.5) * u.starScale + 0.5).rgb * starfield;
 
         float2 q = (in.screen - scrimCenter) * float2(1.6, 4.5);
         return float4((sky + color) * (1 - scrim * exp(-dot(q, q))), 1);
