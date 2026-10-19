@@ -111,7 +111,12 @@ struct TVSidebarView: View {
             profileAvatar: profileManager.selectedUser?.thumb.flatMap { URL(string: $0) },
             canSwitchProfile: profileManager.hasMultipleProfiles,
             jellyfinServerName: jellyfinStore.account?.serverName,
-            jellyfinLibraries: jellyfinStore.visibleLibraries)
+            jellyfinLibraries: jellyfinStore.visibleLibraries,
+            hasMediaServer: isSignedInToAnyServer)
+    }
+
+    private var opensToLiveTV: Bool {
+        ShellSidebarModel.opensToLiveTV(hasMediaServer: isSignedInToAnyServer, liveTVSources: liveTVDataStore.sources)
     }
 
     private var tabSelection: Binding<SidebarTab> {
@@ -177,6 +182,11 @@ struct TVSidebarView: View {
             } else if switcherProfileId == profileManager.selectedUser?.id {
                 sidebarProfileRowRequest += 1
             }
+        }
+        // Live TV and no media server: open on Live TV, since Home is hidden.
+        .onChange(of: opensToLiveTV, initial: true) { _, liveOnly in
+            guard liveOnly, !isLiveTVSelected, selectedTab != .settings else { return }
+            selectedTab = .liveTV(sourceId: combineLiveTVSources ? nil : liveTVDataStore.sources.first?.id)
         }
         // Reset tab selection when live TV source mode changes
         .onChange(of: combineLiveTVSources) { _, combined in
@@ -598,7 +608,7 @@ struct TVSidebarView: View {
                         if !isSignedInToAnyServer {
                             welcomeView
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .background(.black)
+                                .background { WelcomeGlowBackground().ignoresSafeArea() }
                         }
                     }
             case .providerLibrary:
@@ -641,19 +651,20 @@ struct TVSidebarView: View {
 
     private var welcomeView: some View {
         VStack(spacing: 28) {
-            Image(systemName: "play.rectangle.fill")
-                .font(.system(size: 72, weight: .ultraLight))
-                .foregroundStyle(.white.opacity(0.3))
-
             VStack(spacing: 12) {
                 Text("Welcome to Rivulet")
                     .font(.system(size: 46, weight: .semibold))
 
-                Text("Connect your Plex server in Settings to get started.")
+                Text("Your Media and Live TV, together in one place.")
+                    .font(.system(size: 28))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 1100)
+
+                Text("To get started, connect Plex, Jellyfin, or a Live TV source in Settings.")
                     .font(.system(size: 28))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 500)
+                    .frame(maxWidth: 1100)
             }
 
             Button {
@@ -667,6 +678,8 @@ struct TVSidebarView: View {
             .buttonStyle(.card)
             .padding(.top, 12)
         }
+        // Lower than centre, where the backdrop darkens behind the text.
+        .padding(.top, 260)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

@@ -15,6 +15,29 @@ final class ShellSidebarModelTests: XCTestCase {
             jellyfinServerName: jellyfinName, jellyfinLibraries: jellyfin)
     }
 
+    private func tabs(hasServer: Bool, liveTV: Bool) -> [SidebarTab] {
+        let source = LiveTVDataStore.LiveTVSourceInfo(
+            id: "m3u", sourceType: .genericM3U, displayName: "IPTV", channelCount: 10, isConnected: true, lastSync: nil)
+        return ShellSidebarModel.sections(
+            libraries: [], liveTVSources: liveTV ? [source] : [], combineLiveTV: true,
+            showDiscover: true, discoverAbove: true, showWatchlist: true,
+            liveTVAbove: false, serverName: nil, profileName: "Account", hasMediaServer: hasServer)
+            .flatMap(\.items).map(\.tab)
+    }
+
+    func test_liveTVOnly_hidesServerTabs_andHome() {
+        XCTAssertEqual(tabs(hasServer: false, liveTV: true), [.account, .liveTV(sourceId: nil), .settings])
+    }
+
+    func test_nothingConnected_keepsHomeForTheWelcome() {
+        XCTAssertEqual(tabs(hasServer: false, liveTV: false), [.account, .home, .settings])
+    }
+
+    func test_withServer_keepsEveryTab() {
+        XCTAssertEqual(tabs(hasServer: true, liveTV: true),
+                       [.account, .search, .home, .discover, .watchlist, .liveTV(sourceId: nil), .settings])
+    }
+
     func test_jellyfinLibraries_getAServerNamedSection_withProviderTabs() {
         let libs = [MediaLibrary(id: "lib-m", providerID: "jellyfin:srv", title: "Movies", kind: .movies),
                     MediaLibrary(id: "lib-t", providerID: "jellyfin:srv", title: "TV Shows", kind: .shows),
