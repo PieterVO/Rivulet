@@ -5,7 +5,7 @@ import MetalKit
 import SwiftUI
 import UIKit
 
-/// The signed-out welcome's backdrop: `WelcomeGlow.metal` draws the icon's R,
+/// The signed-out welcome's backdrop: `WelcomeGlowShader` draws the icon's R,
 /// blurred, with its colors spilling across the screen and a soft stream
 /// running down it; stars twinkle above in Core Animation.
 final class WelcomeGlowView: UIView {
@@ -121,7 +121,8 @@ final class WelcomeGlowView: UIView {
 
         init?(view: MTKView) {
             guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue(),
-                  let library = device.makeDefaultLibrary() else { return nil }
+                  let library = try? device.makeLibrary(source: WelcomeGlowShader.source, options: nil)
+            else { return nil }
             let descriptor = MTLRenderPipelineDescriptor()
             descriptor.vertexFunction = library.makeFunction(name: "welcomeVertex")
             descriptor.fragmentFunction = library.makeFunction(name: "welcomeFragment")
