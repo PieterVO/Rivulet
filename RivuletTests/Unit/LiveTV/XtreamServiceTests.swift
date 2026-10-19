@@ -113,6 +113,7 @@ final class XtreamServiceTests: XCTestCase {
         XCTAssertEqual(error("", 200), .notXtream)
         XCTAssertEqual(error("{\"error\": \"Unauthorized\"}", 401), .invalidLogin)
         XCTAssertEqual(error("<h1>Not Found</h1>", 404), .invalidLogin)
+        XCTAssertEqual(error("", 513), .invalidLogin)
         XCTAssertEqual(error("Banned for repeated abuse", 403), .refused("Banned for repeated abuse"))
         XCTAssertEqual(error("<html>403</html>", 403), .invalidLogin)
         XCTAssertEqual(error("", 502), .httpError(502))
@@ -128,6 +129,8 @@ final class XtreamServiceTests: XCTestCase {
             ["num": "7.1", "name": " Sub ", "stream_id": "900", "epg_channel_id": NSNull(), "category_id": 12],
             ["name": "No id"],
             ["stream_id": 5, "name": ""],
+            ["stream_id": 6, "name": "Radio", "stream_type": "radio_streams"],
+            ["stream_id": 7, "name": "##### 4K UHD #####", "stream_type": "live"],
         ]
         let categories: [[String: Any]] = [["category_id": "3807", "category_name": "Local", "parent_id": 0],
                                            ["category_id": 12, "category_name": "Sports"]]

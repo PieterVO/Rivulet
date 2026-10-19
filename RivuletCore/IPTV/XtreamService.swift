@@ -155,8 +155,8 @@ actor XtreamService {
                 throw XtreamError.notXtream
             }
             return value
-        case 401, 404:
-            // Dispatcharr answers an unknown user with 404, a wrong password with 401.
+        case 401, 404, 513:
+            // Dispatcharr: 404 unknown user, 401 wrong password. XUI panels: 513, empty body.
             throw XtreamError.invalidLogin
         case 403:
             let text = String(decoding: body, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -200,9 +200,11 @@ actor XtreamService {
             }
         }
         return (streams as? [[String: Any]] ?? []).compactMap { stream in
-            guard let id = string(stream["stream_id"]),
+            // Panels list radio stations as live streams too.
+            guard string(stream["stream_type"]) != "radio_streams",
+                  let id = string(stream["stream_id"]),
                   let name = string(stream["name"])?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !name.isEmpty else { return nil }
+                  !name.isEmpty, !isSectionHeader(name) else { return nil }
             let number = double(stream["num"]).flatMap { $0 >= 0 && $0 == $0.rounded() ? Int($0) : nil }
             return M3UParser.ParsedChannel(
                 tvgId: string(stream["epg_channel_id"]),
@@ -215,6 +217,12 @@ actor XtreamService {
                 // The panel's id: unlike epg_channel_id it survives renumbering.
                 key: "xc\(id)")
         }
+    }
+
+    /// Panels pad their lists with dead entries named like `##### 4K UHD #####`
+    /// to head each section.
+    nonisolated static func isSectionHeader(_ name: String) -> Bool {
+        name.hasPrefix("###") || name.hasPrefix("===") || name.hasPrefix("***")
     }
 
     /// A non-empty string from a string or a number.
