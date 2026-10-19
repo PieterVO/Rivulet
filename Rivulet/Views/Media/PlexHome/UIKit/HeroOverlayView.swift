@@ -13,9 +13,9 @@
 //    - HeroButtonRowView — Play / Watchlist / Info / Next
 //    - paging dots     — pinned to the bottom of the overlay
 //
-//  The slide content lags the backdrop's `currentIndex` by 100ms so the
-//  Apple TV "metadata follows the art" beat is preserved (matches
-//  `HeroOverlayContent.slideSwapDelay`).
+//  Paging is the Apple TV app's: the old metadata leaves with its page, the
+//  new one fades in over the last 0.42 s of the 1 s slide, and the hero
+//  advances by itself every 5 s while it has focus or the page is at the top.
 //
 //  The view does NOT manage the backdrop image. The collection-view
 //  controller hosts `HeroBackdropView` as a sibling and updates it
@@ -51,6 +51,9 @@ final class HeroOverlayView: UIView {
     var onInfo: ((PlexMetadata) -> Void)?
     var onPlay: ((PlexMetadata) -> Void)?
     var onFocusEntered: (() -> Void)?
+    /// False while something covers Home (a player, a preview): the timer
+    /// then waits for the next interval instead of paging unseen.
+    var autoAdvanceGate: (() -> Bool)?
 
     // MARK: - Subviews
 
@@ -123,14 +126,6 @@ final class HeroOverlayView: UIView {
         ])
     }
 
-    /// The frame the logo, metadata row, tagline and buttons can fill in a
-    /// hero of `bounds`: the tallest stack, which the backdrop's scrim measures.
-    static func textRegion(in bounds: CGRect) -> CGRect {
-        let bottom = bounds.maxY - 94
-        let top = bottom - HeroPillButton.buttonHeight - 28 - HeroSlideView.maxHeight
-        return CGRect(x: bounds.minX + MediaRowMetrics.rowLeading, y: top, width: HeroSlideView.maxTaglineWidth, height: bottom - top)
-    }
-
     // MARK: - Configure
 
     func configure(items: [PlexMetadata],
@@ -152,28 +147,73 @@ final class HeroOverlayView: UIView {
         renderSlide(animated: false)
         updateButtonStateForCurrentItem()
         renderPagingDots()
+        prefetchNextBackdrop()
+        updateAutoAdvanceTimer()
         if switchingRows { moveFocusToVisibleRow() }
     }
 
-    // MARK: - Scroll parallax
+    // MARK: - Scroll
 
-    /// Parallax the paging dots upward as the page scrolls below the hero so
-    /// they don't sink too low. Driven by the home VC's `scrollViewDidScroll`.
-    /// The dots otherwise ride the content at 1x while the backdrop recedes at
-    /// 1.4x, so without this they fall too low relative to the hero image. At
-    /// rest (offset 0) the transform is identity, so the rest position is
-    /// unchanged.
-    func applyScrollOffset(_ offset: CGFloat) {
-        let lift = -max(0, offset) * Self.dotsParallaxFactor
-        pagingDotsBackground.transform = CGAffineTransform(translationX: 0, y: lift)
-        // In Discover mode our own dots are hidden and the live dots live in the
-        // MediaItem overlay child — forward the lift so they parallax the same.
-        mediaItemOverlay?.applyScrollOffset(offset)
+    /// Apple's showcase transition: as the page scrolls from the hero (`p` 1)
+    /// to the shelves (`p` 0), the text rises 120 pt faster than the content.
+    func applyShowcase(_ p: CGFloat) {
+        let lift = CGAffineTransform(translationX: 0, y: -(1 - p) * Self.showcaseTextLift)
+        slideView.transform = lift
+        buttonRow.transform = lift
+        mediaItemOverlay?.applyShowcase(p)
+        let wasAtTop = showcasePercentage == 1
+        showcasePercentage = p
+        if wasAtTop != (p == 1) { updateAutoAdvanceTimer() }
     }
 
-    /// Upward parallax rate for the dots (fraction of scroll). ~0.1 lifts them
-    /// ~50px by the time Continue Watching is focused.
-    private static let dotsParallaxFactor: CGFloat = 0.1
+    static let showcaseTextLift: CGFloat = 120
+
+    // MARK: - Auto-advance
+
+    private var focusInHero = false
+    private var showcasePercentage: CGFloat = 1
+    private var autoAdvanceTimer: Timer?
+
+    /// Apple's `advanceToNextPageDelayDurationImageOnly` on the home hero.
+    static let autoAdvanceInterval: TimeInterval = 5
+
+    private var pageCount: Int {
+        if let mediaItemOverlay, !mediaItemOverlay.isHidden { return mediaItemOverlay.pageCount }
+        return items.count
+    }
+
+    /// Restarted on every page change and every focus move inside the hero.
+    /// Runs while focus is in the hero or the page sits at the top; focus on a
+    /// shelf stops it. The active page dot fills with it.
+    fileprivate func updateAutoAdvanceTimer() {
+        autoAdvanceTimer?.invalidate()
+        autoAdvanceTimer = nil
+        let running = pageCount > 1 && (focusInHero || showcasePercentage == 1)
+        let duration = running ? Self.autoAdvanceInterval : nil
+        pagingDots.setProgress(duration: duration)
+        mediaItemOverlay?.setDotProgress(duration: duration)
+        guard running else { return }
+        autoAdvanceTimer = Timer.scheduledTimer(withTimeInterval: Self.autoAdvanceInterval, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.autoAdvance() }
+        }
+    }
+
+    private func autoAdvance() {
+        guard window != nil, autoAdvanceGate?() ?? true else {
+            updateAutoAdvanceTimer()
+            return
+        }
+        if let mediaItemOverlay, !mediaItemOverlay.isHidden { mediaItemOverlay.advance() } else { advance() }
+    }
+
+    private func prefetchNextBackdrop() {
+        guard items.count > 1 else { return }
+        let next = items[(currentIndex + 1) % items.count]
+        let request = next.heroBackdropRequest(serverURL: serverURL, authToken: authToken)
+        if let url = request.backdropURL ?? request.thumbnailURL {
+            Task { await ImageCacheManager.shared.prefetch(urls: [url], quality: .full) }
+        }
+    }
 
     // MARK: - Focus
 
@@ -202,6 +242,10 @@ final class HeroOverlayView: UIView {
         let prevInside = context.previouslyFocusedView?.isDescendant(of: self) == true
         if nextInside, !prevInside {
             onFocusEntered?()
+        }
+        if nextInside || nextInside != focusInHero {
+            focusInHero = nextInside
+            updateAutoAdvanceTimer()
         }
         // Land-on-Play gate: secondary buttons are focus candidates only
         // while focus lives inside the hero (see
@@ -261,17 +305,15 @@ final class HeroOverlayView: UIView {
         // Advance the dots NOW, on the press (with the backdrop image), not in
         // the delayed metadata swap below.
         renderPagingDots()
+        prefetchNextBackdrop()
+        updateAutoAdvanceTimer()
 
-        // Fade the OLD metadata out quickly on the click so it clears while the
-        // backdrop changes (it would otherwise linger for the full 600ms lag).
-        UIView.animate(withDuration: 0.15, delay: 0, options: [.curveEaseIn]) {
-            self.slideView.alpha = 0
-        }
+        // The old metadata leaves with its page.
+        HeroPageMotion.slideOut(slideView, in: self)
 
-        // Then, after a 600ms lag (so the new backdrop image has changed), swap
-        // in the new metadata and fade it in SLOWLY. renderSlide is animated:false
-        // here (no crossfade — the old is already gone); we hold alpha at 0 and
-        // drive the slow fade-in ourselves.
+        // The new metadata fades in over the slide's last 0.42 s. renderSlide is
+        // animated:false here (the old is already gone); we hold alpha at 0 and
+        // drive the fade-in ourselves.
         displayedSwapWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -283,13 +325,13 @@ final class HeroOverlayView: UIView {
             self.slideView.alpha = 0
             self.renderSlide(animated: false, manageAlpha: false) { [weak self] in
                 guard let self else { return }
-                UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseOut]) {
+                UIView.animate(withDuration: HeroPageMotion.metadataFade, delay: 0, options: [.curveEaseOut]) {
                     self.slideView.alpha = 1
                 }
             }
         }
         displayedSwapWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + HeroPageMotion.metadataDelay, execute: work)
     }
 
     // MARK: - Buttons + handlers
@@ -449,6 +491,7 @@ final class HeroOverlayView: UIView {
         pagingDotsBackground.isHidden = true
 
         mediaItemOverlay?.isHidden = false
+        mediaItemOverlay?.onPaged = { [weak self] in self?.updateAutoAdvanceTimer() }
         mediaItemOverlay?.onToggleWatchlist = onToggleWatchlist
         mediaItemOverlay?.badge = badge
         mediaItemOverlay?.configure(
@@ -458,6 +501,7 @@ final class HeroOverlayView: UIView {
             onPlay: onPlay,
             onInfo: onInfo
         )
+        updateAutoAdvanceTimer()
         if switchingRows { moveFocusToVisibleRow() }
     }
 
@@ -510,6 +554,12 @@ final class MediaItemHeroOverlayView: UIView {
         didSet { syncWatchlistCircle() }
     }
     var badge: ((MediaItem) -> String?)?
+    /// Every page change, so the parent restarts its auto-advance timer.
+    var onPaged: (() -> Void)?
+
+    var pageCount: Int { items.count }
+
+    func setDotProgress(duration: TimeInterval?) { pagingDots.setProgress(duration: duration) }
 
     // MARK: - Subviews (layout mirrors HeroOverlayView)
 
@@ -591,6 +641,7 @@ final class MediaItemHeroOverlayView: UIView {
             }
         }
         renderPagingDots()
+        prefetchNextBackdrop()
         buttonRow.canAdvance = items.count > 1
     }
 
@@ -612,16 +663,13 @@ final class MediaItemHeroOverlayView: UIView {
         buttonRow.setSecondaryButtonsFocusable(nextInside)
     }
 
-    // MARK: - Scroll parallax
+    // MARK: - Scroll
 
-    /// Lifts the paging dots as the page scrolls below the hero so they don't
-    /// sink behind the receding backdrop — same factor/behaviour as the Plex
-    /// `HeroOverlayView`, which forwards its scroll offset here in Discover mode.
-    static let dotsParallaxFactor: CGFloat = 0.1
-
-    func applyScrollOffset(_ offset: CGFloat) {
-        let lift = -max(0, offset) * Self.dotsParallaxFactor
-        pagingDotsBackground.transform = CGAffineTransform(translationX: 0, y: lift)
+    /// Same showcase lift as `HeroOverlayView.applyShowcase`.
+    func applyShowcase(_ p: CGFloat) {
+        let lift = CGAffineTransform(translationX: 0, y: -(1 - p) * HeroOverlayView.showcaseTextLift)
+        slideView.transform = lift
+        buttonRow.transform = lift
     }
 
     /// Per-item primary action (Discover): library-matched items get the
@@ -683,10 +731,10 @@ final class MediaItemHeroOverlayView: UIView {
         buttonRow.canAdvance = items.count > 1
         // Advance the dots NOW, on the press, with the backdrop image.
         renderPagingDots()
+        prefetchNextBackdrop()
+        onPaged?()
 
-        UIView.animate(withDuration: 0.15, delay: 0, options: [.curveEaseIn]) {
-            self.slideView.alpha = 0
-        }
+        HeroPageMotion.slideOut(slideView, in: self)
 
         displayedSwapWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -698,13 +746,26 @@ final class MediaItemHeroOverlayView: UIView {
             self.slideView.alpha = 0
             self.renderSlide { [weak self] in
                 guard let self else { return }
-                UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseOut]) {
+                UIView.animate(withDuration: HeroPageMotion.metadataFade, delay: 0, options: [.curveEaseOut]) {
                     self.slideView.alpha = 1
                 }
             }
         }
         displayedSwapWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + HeroPageMotion.metadataDelay, execute: work)
+    }
+
+    func advance() {
+        guard items.count > 1 else { return }
+        setCurrentIndex((currentIndex + 1) % items.count)
+    }
+
+    private func prefetchNextBackdrop() {
+        guard items.count > 1 else { return }
+        let next = items[(currentIndex + 1) % items.count]
+        if let url = next.artwork.backdrop ?? next.artwork.thumbnail ?? next.artwork.poster {
+            Task { await ImageCacheManager.shared.prefetch(urls: [url], quality: .full) }
+        }
     }
 
     // MARK: - Buttons
@@ -718,15 +779,38 @@ final class MediaItemHeroOverlayView: UIView {
             guard let self, let item = self.currentItem else { return }
             self.onInfo?(item)
         }
-        buttonRow.onNext = { [weak self] in
-            guard let self, self.items.count > 1 else { return }
-            self.setCurrentIndex((self.currentIndex + 1) % self.items.count)
-        }
+        buttonRow.onNext = { [weak self] in self?.advance() }
         buttonRow.onWatchlist = { [weak self] in
             guard let self, let item = self.currentItem else { return }
             self.onToggleWatchlist?(item)
         }
         buttonRow.isOnWatchlist = false
+    }
+}
+
+// MARK: - Page motion
+
+/// The Apple TV app's hero page change (VideosUI, tvOS 26.5).
+@MainActor
+enum HeroPageMotion {
+    /// The new metadata fades in over the last 0.42 s of the 1 s slide.
+    static let metadataFade: TimeInterval = 0.42
+    static let metadataDelay: TimeInterval = 1.0 - metadataFade
+
+    /// Slides a snapshot of `view` off the leading edge with the backdrop's
+    /// page spring, and hides the live view for the swap.
+    static func slideOut(_ view: UIView, in container: UIView) {
+        defer { view.alpha = 0 }
+        guard view.alpha > 0, let snapshot = view.snapshotView(afterScreenUpdates: false) else { return }
+        snapshot.frame = view.frame
+        snapshot.isUserInteractionEnabled = false
+        container.insertSubview(snapshot, aboveSubview: view)
+        let animator = HeroBackdropView.pageAnimator()
+        animator.addAnimations {
+            snapshot.transform = CGAffineTransform(translationX: -container.bounds.width, y: 0)
+        }
+        animator.addCompletion { _ in snapshot.removeFromSuperview() }
+        animator.startAnimation()
     }
 }
 

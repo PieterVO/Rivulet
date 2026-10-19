@@ -10,8 +10,7 @@
 //
 //  Composition:
 //    - `HeroBackdropView` (fixed): full-bleed sibling of the collection
-//      view, translated upward on scroll for the receding parallax effect
-//      (matches the SwiftUI `.offset(y: -heroScrollOffset * 1.3 ...)`).
+//      view, lifted on scroll by Apple's showcase transition.
 //    - `UICollectionView` (scrolling):
 //        * Section 0: hero overlay (SwiftUI `HeroOverlayContent` via
 //          `HeroOverlayCell` / UIHostingController) — when hero is enabled
@@ -2202,8 +2201,8 @@ final class PlexHomeViewController: UIViewController {
     /// immediately so the startup splash doesn't wait for an image that isn't
     /// coming. The non-nil case is reported by `onFirstImageLoaded` once the
     /// image is on screen.
-    private func setHeroBackdrop(url: URL?) {
-        backdropView.setBackdrop(url: url)
+    private func setHeroBackdrop(url: URL?, paging: Bool = false) {
+        backdropView.setBackdrop(url: url, paging: paging)
         // The ambient wash tracks the hero: same artwork, diffused by the
         // frosted material in front of it. Every hero page change lands here,
         // so this is the only place the wash needs driving.
@@ -2258,7 +2257,7 @@ final class PlexHomeViewController: UIViewController {
     /// `onIndexChanged` so the backdrop matches exactly the slide the overlay is
     /// showing. The index-based path above can disagree once `heroItems` is
     /// reordered by the TMDB upgrade after the overlay was configured.
-    private func updateBackdrop(for item: PlexMetadata) {
+    private func updateBackdrop(for item: PlexMetadata, paging: Bool = false) {
         guard showHomeHero,
               let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
@@ -2267,17 +2266,17 @@ final class PlexHomeViewController: UIViewController {
         }
         let request = item.heroBackdropRequest(serverURL: serverURL, authToken: token)
         let url = request.backdropURL ?? request.thumbnailURL
-        setHeroBackdrop(url: url)
+        setHeroBackdrop(url: url, paging: paging)
     }
 
     /// MediaItem-backed backdrop (Discover hero — TMDB CDN URLs are absolute,
     /// no server/token needed).
-    private func updateBackdrop(forMediaItem item: MediaItem) {
+    private func updateBackdrop(forMediaItem item: MediaItem, paging: Bool = false) {
         guard showHomeHero else {
             setHeroBackdrop(url: nil)
             return
         }
-        setHeroBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster)
+        setHeroBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster, paging: paging)
     }
 
     /// Discover hero Play (pill in `.play` mode — library-matched items only):
@@ -2989,10 +2988,8 @@ final class PlexHomeViewController: UIViewController {
     }
 
     private func makeHeroSectionLayout() -> NSCollectionLayoutSection {
-        // Height matches the SwiftUI hero section height: screen - 200pt.
-        let height = max(400, UIScreen.main.bounds.height - 200)
         let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
-                                              heightDimension: .absolute(height))
+                                              heightDimension: .absolute(Self.heroHeight))
         let item = NSCollectionLayoutItem(layoutSize: itemSize)
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: itemSize, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
@@ -3002,8 +2999,19 @@ final class PlexHomeViewController: UIViewController {
         section.contentInsetsReference = .none
         // Small bottom gap so the first row (Continue Watching) sits a bit
         // lower, separated from the hero.
-        section.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 40, trailing: 0)
+        section.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: Self.heroShelfGap, trailing: 0)
         return section
+    }
+
+    /// The hero section: the screen less 200 pt, then a 40 pt gap to the first shelf.
+    private static var heroHeight: CGFloat { max(400, UIScreen.main.bounds.height - 200) }
+    private static let heroShelfGap: CGFloat = 40
+
+    /// Nothing covers Home, so a hero page change would be seen. Checks the
+    /// window's root: the carousel and player present from the shell, not here.
+    private var heroCanAutoAdvance: Bool {
+        guard let root = view.window?.rootViewController else { return false }
+        return root.presentedViewController == nil
     }
 
     /// One full-width ShelfRowCell per hub section. The row hosts its own
@@ -3153,7 +3161,7 @@ final class PlexHomeViewController: UIViewController {
                     onIndexChanged: { [weak self, weak cell] newIndex, item in
                         guard let self else { return }
                         self.heroCurrentIndex = newIndex
-                        self.updateBackdrop(forMediaItem: item)
+                        self.updateBackdrop(forMediaItem: item, paging: true)
                         self.applyMediaItemHeroState(for: item, on: cell)
                     },
                     onPlay: { [weak self] item in
@@ -3178,6 +3186,7 @@ final class PlexHomeViewController: UIViewController {
                 cell.overlay.onFocusEntered = { [weak self] in
                     self?.scrollHeroIntoView()
                 }
+                cell.overlay.autoAdvanceGate = { [weak self] in self?.heroCanAutoAdvance ?? false }
                 if heroCurrentIndex < section.heroMediaItems.count {
                     applyMediaItemHeroState(for: section.heroMediaItems[heroCurrentIndex], on: cell)
                 }
@@ -3194,7 +3203,7 @@ final class PlexHomeViewController: UIViewController {
                     // Drive the backdrop off the exact item the overlay is
                     // showing, not heroItems[newIndex] (the two arrays diverge
                     // once the TMDB upgrade reorders heroItems).
-                    self.updateBackdrop(for: item)
+                    self.updateBackdrop(for: item, paging: true)
                 },
                 onInfo: { [weak self] item in self?.presentDetailPage(for: item) },
                 onPlay: { [weak self] item in self?.playItemDirectly(item) },
@@ -3202,6 +3211,7 @@ final class PlexHomeViewController: UIViewController {
                     self?.scrollHeroIntoView()
                 }
             ))
+            cell.overlay.autoAdvanceGate = { [weak self] in self?.heroCanAutoAdvance ?? false }
             return cell
 
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid:
@@ -6867,12 +6877,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let offset = scrollView.contentOffset.y
-        backdropView.applyScrollOffset(offset)
-        // Parallax the hero paging dots up so they don't sink too low when the
-        // page scrolls below the hero: they ride the content at 1x while the
-        // backdrop recedes at 1.4x, so without this they fall behind the image.
+        let shelfTop = Self.heroHeight + Self.heroShelfGap
+        backdropView.applyScrollOffset(offset, shelfTop: shelfTop)
+        let showcase = HeroBackdropView.showcasePercentage(offset, shelfTop: shelfTop)
         for case let heroCell as HeroOverlayCell in collectionView.visibleCells {
-            heroCell.overlay.applyScrollOffset(offset)
+            heroCell.overlay.applyShowcase(showcase)
         }
     }
 

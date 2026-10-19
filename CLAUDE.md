@@ -104,8 +104,7 @@ Rivulet/                # The tvOS app — everything below.
 │   │   ├── UIKit/, PlexHome/UIKit/, MediaDetail/UIKit/, Person/UIKit/, Library/UIKit/, PreviewCarousel/UIKit/
 │   │   │              #   The canonical UIKit home/detail/library/person/carousel surfaces.
 │   │   │              #   UIKit/Cells/ContinueWatchingCard{Compositor,Placement,Cache} build the
-│   │   │              #   Continue Watching card and hold the shared artwork analysis;
-│   │   │              #   PlexHome/UIKit/HeroScrim reads it for the Home hero
+│   │   │              #   Continue Watching card and hold the shared artwork analysis
 │   │   └── Hero/       # HeroPlaySession + hero support (SwiftUI HeroBackdropLayer/OverlayContent removed)
 │   ├── Music/UIKit/    # MusicLibraryViewController (+ MusicLibrarySidebarView, MusicBrowseViewController),
 │   │                   #   MusicAlbumViewController (album and playlist), MusicArtistViewController,
@@ -610,9 +609,9 @@ xcrun simctl openurl <udid> "rivulet://detail?ratingKey=<key>"
 xcrun simctl openurl <udid> "rivulet://play?ratingKey=<key>"
 ```
 
-### Artwork analysis (Continue Watching, Top Shelf, Home hero)
+### Artwork analysis (Continue Watching, Top Shelf)
 
-Three surfaces read the artwork before drawing over it, and they share one
+Two surfaces read the artwork before drawing over it, and they share one
 analysis. `ContinueWatchingCardCompositor.analyse` (in
 `ContinueWatchingCardPlacement.swift`) turns a still into `Signals`: face boxes,
 a luminance grid, and Vision's attention and objectness maps. The scoring is pure
@@ -628,8 +627,9 @@ functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
   The same hold applies to Top Shelf and the pause screen through `chooseSlot`.
 - **Top Shelf logo**: `TopShelfImageCompositor.placement` runs the same `choose`
   over its own candidate rects.
-- **Home hero scrim**: `HeroScrim.strength` reads only the luminance grid under
-  the text stack and darkens a bright or busy region.
+- **The Home hero does not read its artwork.** Its scrim is the Apple TV app's,
+  constant black on every image (`HeroBackdropView`); do not bring back a
+  brightness-driven boost (#342: it read as a dim filter next to Apple's).
 - **Vision needs the CPU pin in the simulator.** The simulator can only build
   Vision's models on the CPU; without `setComputeDevice` under
   `#if targetEnvironment(simulator)` face detection fails there, `Signals.faces`
@@ -1015,7 +1015,7 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 | Deep link handling | `Services/DeepLinkHandler.swift` |
 | Continue Watching card | `Views/Media/UIKit/Cells/ContinueWatchingCardCompositor.swift` |
 | Artwork analysis and scoring | `Views/Media/UIKit/Cells/ContinueWatchingCardPlacement.swift` |
-| Home hero scrim | `Views/Media/PlexHome/UIKit/HeroScrim.swift` |
+| Home hero backdrop, scrim and motion | `Views/Media/PlexHome/UIKit/HeroBackdropView.swift` |
 | Top Shelf logo placement | `Services/Cache/TopShelfImageCompositor.swift` |
 | Focus memory | `Services/Focus/FocusMemory.swift` |
 | Watch progress rule | `RivuletCore/Models/Media/WatchProgressPolicy.swift` |

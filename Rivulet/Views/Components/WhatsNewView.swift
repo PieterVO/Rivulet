@@ -158,6 +158,9 @@ struct WhatsNewView: View {
             "Player stats now show how Dolby Vision is playing.",
             "Cast and trivia now work from Continue Watching.",
             "Fixed a freeze when opening a director's page.",
+            "The Home banner is brighter and slides between titles like the Apple TV app.",
+            "The Home banner moves on every 5 seconds; the page dots count down.",
+            "Show pages show the full summary, and episode pages are less dimmed.",
         ]),
         ("1.1.0 (98)", [
             "Full Dolby Vision for Profile 7 FEL titles on Dolby Vision TVs.",

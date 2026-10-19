@@ -225,7 +225,7 @@ final class MediaDetailChromeView: UIView {
         return s
     }()
 
-    /// Italic tagline OR plain overview, up to 4 lines / 677pt wide (860 on
+    /// The overview (Apple shows no tagline), up to 4 lines / 677pt wide (860 on
     /// an episode).
     private let descriptionLabel: UILabel = {
         let l = UILabel()
@@ -651,9 +651,6 @@ final class MediaDetailChromeView: UIView {
             attr.append(NSAttributedString(string: overview, attributes: [
                 .font: Self.descriptionFont, .foregroundColor: color]))
             descriptionLabel.attributedText = attr
-        } else if let tagline = detail.tagline, !tagline.isEmpty {
-            descriptionLabel.text = tagline
-            descriptionLabel.font = UIFont.italicSystemFont(ofSize: 23)
         } else if let overview = detail.item.overview, !overview.isEmpty {
             descriptionLabel.text = overview
             descriptionLabel.font = Self.descriptionFont

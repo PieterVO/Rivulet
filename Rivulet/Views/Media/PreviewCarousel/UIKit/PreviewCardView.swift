@@ -86,34 +86,12 @@ final class PreviewCardView: UICollectionViewCell {
         return v
     }()
 
-    // The Apple TV app's product-page scrim: three black layers, each filling the card.
+    // The Apple TV app's product-page scrim, each layer filling the card.
     // GRADIENT-BACKED UIVIEWS (not CAGradientLayer sublayers) so their bounds
     // animate with the morph's UIViewPropertyAnimator; unit coordinates fill
     // the view at any size, so nothing sets frames in layoutSubviews.
-    private let scrimLayers: [GradientView] = [
-        // Bottom band: clear over the top 64 percent.
-        makeScrim(.axial, from: CGPoint(x: 0.5, y: 0), to: CGPoint(x: 0.5, y: 1),
-                  alphas: [0, 0, 0.03, 0.135, 0.27, 0.405, 0.54, 0.675],
-                  locations: [0, 0.64, 0.71, 0.78, 0.84, 0.91, 0.95, 1.0]),
-        // Radial, clear at two thirds across the top edge, darkest lower left.
-        makeScrim(.radial, from: CGPoint(x: 0.667, y: 0), to: CGPoint(x: 1.727, y: 1.884),
-                  alphas: [0, 0.04, 0.15, 0.30, 0.33, 0.49, 0.67, 0.85, 1.0],
-                  locations: [0, 0.19, 0.36, 0.51, 0.53, 0.65, 0.77, 0.89, 1.0]),
-        // Left-to-right wash across the whole width.
-        makeScrim(.axial, from: CGPoint(x: 0, y: 1), to: CGPoint(x: 1, y: 0.8),
-                  alphas: [0.30, 0], locations: nil)
-    ]
-
-    private static func makeScrim(_ type: CAGradientLayerType, from start: CGPoint, to end: CGPoint,
-                                  alphas: [CGFloat], locations: [NSNumber]?) -> GradientView {
-        let v = GradientView()
+    private let scrimLayers: [GradientView] = GradientView.productPageScrim().map { v in
         v.translatesAutoresizingMaskIntoConstraints = false
-        v.isUserInteractionEnabled = false
-        v.gradientLayer.type = type
-        v.gradientLayer.startPoint = start
-        v.gradientLayer.endPoint = end
-        v.gradientLayer.colors = alphas.map { UIColor.black.withAlphaComponent($0).cgColor }
-        v.gradientLayer.locations = locations
         // Follows the card's top corners, or the scrim shows as dark squares
         // against the grey surround.
         v.layer.cornerCurve = .continuous
@@ -425,4 +403,33 @@ final class PreviewCardView: UICollectionViewCell {
 final class GradientView: UIView {
     override class var layerClass: AnyClass { CAGradientLayer.self }
     var gradientLayer: CAGradientLayer { layer as! CAGradientLayer }
+
+    convenience init(_ type: CAGradientLayerType, from start: CGPoint, to end: CGPoint,
+                     alphas: [CGFloat], locations: [NSNumber]?) {
+        self.init(frame: .zero)
+        isUserInteractionEnabled = false
+        gradientLayer.type = type
+        gradientLayer.startPoint = start
+        gradientLayer.endPoint = end
+        gradientLayer.colors = alphas.map { UIColor.black.withAlphaComponent($0).cgColor }
+        gradientLayer.locations = locations
+    }
+
+    /// The Apple TV app's product-page scrim (`ProductGradientLayout`): three
+    /// black layers, each meant to fill the page.
+    static func productPageScrim() -> [GradientView] {
+        [
+            // Bottom band: clear over the top 64 percent.
+            GradientView(.axial, from: CGPoint(x: 0.5, y: 0), to: CGPoint(x: 0.5, y: 1),
+                         alphas: [0, 0, 0.03, 0.135, 0.27, 0.405, 0.54, 0.675],
+                         locations: [0, 0.64, 0.71, 0.78, 0.84, 0.91, 0.95, 1.0]),
+            // Radial, clear at two thirds across the top edge, darkest lower left.
+            GradientView(.radial, from: CGPoint(x: 0.667, y: 0), to: CGPoint(x: 1.727, y: 1.884),
+                         alphas: [0, 0.04, 0.15, 0.30, 0.33, 0.49, 0.67, 0.85, 1.0],
+                         locations: [0, 0.19, 0.36, 0.51, 0.53, 0.65, 0.77, 0.89, 1.0]),
+            // Left-to-right wash across the whole width.
+            GradientView(.axial, from: CGPoint(x: 0, y: 1), to: CGPoint(x: 1, y: 0.8),
+                         alphas: [0.30, 0], locations: nil)
+        ]
+    }
 }

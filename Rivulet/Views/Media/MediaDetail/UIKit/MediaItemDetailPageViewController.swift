@@ -21,21 +21,17 @@
 import Combine
 import UIKit
 
-/// A diagonal dark scrim (bottom-left → top-right) so the title stack stays
-/// readable over any backdrop. Static gradient as a UIView layer (no morph).
+/// The Apple TV app's product-page scrim, so the title stack stays readable
+/// over any backdrop. Each layer fills the hero page.
 private final class ScrimGradientView: UIView {
-    override class var layerClass: AnyClass { CAGradientLayer.self }
     override init(frame: CGRect) {
         super.init(frame: frame)
-        guard let g = layer as? CAGradientLayer else { return }
-        g.colors = [
-            UIColor.black.withAlphaComponent(0.92).cgColor,
-            UIColor.black.withAlphaComponent(0.55).cgColor,
-            UIColor.clear.cgColor,
-        ]
-        g.locations = [0.0, 0.45, 1.0]
-        g.startPoint = CGPoint(x: 0.0, y: 1.0)   // bottom-left
-        g.endPoint = CGPoint(x: 1.0, y: 0.0)     // top-right
+        isUserInteractionEnabled = false
+        for layer in GradientView.productPageScrim() {
+            layer.frame = bounds
+            layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(layer)
+        }
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }

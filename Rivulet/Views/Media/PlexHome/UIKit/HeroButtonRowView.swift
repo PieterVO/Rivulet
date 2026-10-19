@@ -487,10 +487,40 @@ final class HeroCircleButton: UIControl {
 
 // MARK: - Paging dots
 
+/// The hero's page dots. The active dot is a pill that fills while the
+/// auto-advance timer runs, so the viewer can see the page is about to change
+/// (Apple's `UIPageControlTimerProgress` look).
 @MainActor
 final class HeroPagingDotsView: UIView {
+    private final class Dot: UIView {
+        let fill = CALayer()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            translatesAutoresizingMaskIntoConstraints = false
+            backgroundColor = UIColor.white.withAlphaComponent(0.35)
+            layer.cornerRadius = 4
+            layer.cornerCurve = .continuous
+            layer.masksToBounds = true
+            fill.backgroundColor = UIColor.white.cgColor
+            fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+            fill.isHidden = true
+            layer.addSublayer(fill)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            fill.bounds = bounds
+            fill.position = CGPoint(x: 0, y: bounds.midY)
+            CATransaction.commit()
+        }
+    }
+
     private let stack = UIStackView()
-    private var dots: [UIView] = []
+    private var dots: [Dot] = []
+    private var activeIndex = -1
+    static let activeWidth: CGFloat = 36, dotSize: CGFloat = 8
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -513,31 +543,45 @@ final class HeroPagingDotsView: UIView {
     func update(count: Int, activeIndex: Int) {
         if dots.count != count {
             dots.forEach { $0.removeFromSuperview() }
-            dots.removeAll()
-            for _ in 0..<count {
-                let dot = UIView()
-                dot.translatesAutoresizingMaskIntoConstraints = false
-                dot.layer.cornerRadius = 4
-                dot.layer.cornerCurve = .continuous
+            dots = (0..<count).map { _ in
+                let dot = Dot()
                 stack.addArrangedSubview(dot)
-                NSLayoutConstraint.activate([
-                    dot.heightAnchor.constraint(equalToConstant: 8)
-                ])
-                dots.append(dot)
+                dot.heightAnchor.constraint(equalToConstant: Self.dotSize).isActive = true
+                return dot
             }
+            self.activeIndex = -1
         }
+        guard activeIndex != self.activeIndex else { return }
+        self.activeIndex = activeIndex
+        for (i, dot) in dots.enumerated() where i != activeIndex {
+            dot.fill.removeAllAnimations()
+            dot.fill.isHidden = true
+        }
+        if dots.indices.contains(activeIndex) { setProgress(duration: nil) }
         UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseInOut]) {
             for (i, dot) in self.dots.enumerated() {
-                let active = i == activeIndex
-                let width: CGFloat = active ? 22 : 8
-                // Update width constraint
-                for c in dot.constraints where c.firstAttribute == .width {
-                    dot.removeConstraint(c)
-                }
-                dot.widthAnchor.constraint(equalToConstant: width).isActive = true
-                dot.backgroundColor = UIColor.white.withAlphaComponent(active ? 1.0 : 0.35)
+                dot.constraints.filter { $0.firstAttribute == .width }.forEach(dot.removeConstraint)
+                dot.widthAnchor.constraint(equalToConstant: i == activeIndex ? Self.activeWidth : Self.dotSize).isActive = true
             }
             self.layoutIfNeeded()
         }
+    }
+
+    /// Fills the active pill over `duration`; nil shows it full (timer off).
+    func setProgress(duration: TimeInterval?) {
+        guard dots.indices.contains(activeIndex) else { return }
+        let fill = dots[activeIndex].fill
+        fill.removeAllAnimations()
+        fill.isHidden = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.transform = CATransform3DIdentity
+        CATransaction.commit()
+        guard let duration else { return }
+        let grow = CABasicAnimation(keyPath: "transform.scale.x")
+        grow.fromValue = 0
+        grow.toValue = 1
+        grow.duration = duration
+        fill.add(grow, forKey: "progress")
     }
 }

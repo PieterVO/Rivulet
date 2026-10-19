@@ -5,16 +5,11 @@
 //  HeroBackdropView.swift
 //  Rivulet
 //
-//  UIKit counterpart to `HeroBackdropLayer.swift`. A fixed full-bleed
-//  backdrop image with a horizontal + vertical scrim, sitting behind the
-//  home screen's collection view. Driven via `scrollViewDidScroll`: the
-//  parent translates this view upward at a constant 1.4x the scroll rate to
-//  produce the Apple TV "receding hero" effect (one steady rate, so it rides
-//  the content's ease-out curve rather than kinking mid-scroll).
-//
-//  Image source is the same `ImageCacheManager.imageFullSize(for:)` used
-//  by the SwiftUI version, with a 0.22s opacity crossfade on URL change
-//  (matches `HeroBackdropImage`).
+//  The Home hero's full-bleed backdrop and scrim, behind the collection view.
+//  Motion and scrim are the Apple TV app's home hero (VideosUI, read on tvOS
+//  26.5): a page change slides the art over with the image at half the page's
+//  speed, and scrolling down lifts the backdrop until its bottom edge meets the
+//  first shelf, then it rides the content.
 //
 
 import UIKit
@@ -22,18 +17,38 @@ import UIKit
 @MainActor
 final class HeroBackdropView: UIView {
 
-    private let currentImageView = UIImageView()
-    private let previousImageView = UIImageView()
-    private let horizontalScrim = CAGradientLayer()
-    private let verticalScrim = CAGradientLayer()
+    /// One page: a clipping container whose image is counter-offset while it
+    /// slides, so the art moves at `parallaxRatio` of the page's speed.
+    private final class Page: UIView {
+        let imageView = UIImageView()
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            clipsToBounds = true
+            imageView.contentMode = .scaleAspectFill
+            imageView.clipsToBounds = true
+            addSubview(imageView)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            imageView.bounds = bounds
+            imageView.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        }
+        /// Page translation `x`; the image inside moves at half of it.
+        func setOffset(_ x: CGFloat) {
+            transform = CGAffineTransform(translationX: x, y: 0)
+            imageView.transform = CGAffineTransform(translationX: -x * HeroBackdropView.parallaxRatio, y: 0)
+        }
+    }
+
+    private var currentPage = Page()
+    private var previousPage = Page()
     private let placeholderLayer = CAGradientLayer()
-    /// Extra darkening behind the hero's text, shown only over artwork that
-    /// is bright or busy there. Alpha is `HeroScrim` strength minus one.
-    private let boostScrim = BoostScrimView()
+    private let scrimLayers: [CAGradientLayer]
 
     private var currentURL: URL?
     private var loadTask: Task<Void, Never>?
-    private var clearPreviousTask: Task<Void, Never>?
+    private var pageAnimator: UIViewPropertyAnimator?
 
     /// Fired when a real backdrop image is on screen. Used by the home VC to
     /// gate startup/profile-switch loading on the hero so it doesn't pop in
@@ -41,21 +56,51 @@ final class HeroBackdropView: UIView {
     /// image will load) — the caller marks readiness directly in that case.
     var onFirstImageLoaded: (() -> Void)?
 
+    /// Apple's `parallaxRatio`: the image moves at half the page's speed.
+    static let parallaxRatio: CGFloat = 0.5
+    /// Apple's page animator: 1 s, its composed spring + cubic timing.
+    static func pageAnimator() -> UIViewPropertyAnimator {
+        UIViewPropertyAnimator(duration: 1.0, timingParameters: HeroPageTiming())
+    }
+    /// Non-paging image swaps (a refreshed URL for the same slide).
     private let crossfadeDuration: TimeInterval = 0.22
 
     override init(frame: CGRect) {
+        // Apple's home hero scrim (`MediaShowcasingGradientLayout`, stage):
+        // constant black, no per-image darkening.
+        scrimLayers = [
+            Self.gradient(.axial, from: CGPoint(x: 0, y: 0.6), to: CGPoint(x: 0.41, y: 0.5),
+                          alphas: [0.14, 0], locations: nil),
+            Self.gradient(.axial, from: CGPoint(x: 0.5, y: 0), to: CGPoint(x: 0.5, y: 1),
+                          alphas: [0, 0, 0.02, 0.09, 0.18, 0.27, 0.36, 0.45],
+                          locations: [0, 0.64, 0.71, 0.78, 0.84, 0.91, 0.95, 1.0]),
+            Self.gradient(.radial, from: CGPoint(x: 0.6671875, y: 0), to: CGPoint(x: 1.7270833, y: 1.8842593),
+                          alphas: [0, 0.04, 0.15, 0.30, 0.33, 0.49, 0.67, 0.85, 1.0],
+                          locations: [0, 0.19, 0.36, 0.51, 0.53, 0.65, 0.77, 0.89, 1.0])
+        ]
         super.init(frame: frame)
         setUp()
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
+    private static func gradient(_ type: CAGradientLayerType, from start: CGPoint, to end: CGPoint,
+                                 alphas: [CGFloat], locations: [NSNumber]?) -> CAGradientLayer {
+        let g = CAGradientLayer()
+        g.type = type
+        g.colors = alphas.map { UIColor.black.withAlphaComponent($0).cgColor }
+        g.locations = locations
+        g.startPoint = start
+        g.endPoint = end
+        return g
+    }
+
     private func setUp() {
         backgroundColor = .black
         isUserInteractionEnabled = false
 
         // Placeholder gradient (dark grey -> nearly-black) shows before the
-        // first image resolves. Sits beneath both image views.
+        // first image resolves. Sits beneath both pages.
         placeholderLayer.colors = [
             UIColor(white: 0.15, alpha: 1).cgColor,
             UIColor(white: 0.05, alpha: 1).cgColor
@@ -64,172 +109,154 @@ final class HeroBackdropView: UIView {
         placeholderLayer.endPoint = CGPoint(x: 0.5, y: 1)
         layer.addSublayer(placeholderLayer)
 
-        for iv in [previousImageView, currentImageView] {
-            iv.translatesAutoresizingMaskIntoConstraints = false
-            iv.contentMode = .scaleAspectFill
-            iv.clipsToBounds = true
-            addSubview(iv)
-            NSLayoutConstraint.activate([
-                iv.topAnchor.constraint(equalTo: topAnchor),
-                iv.bottomAnchor.constraint(equalTo: bottomAnchor),
-                iv.leadingAnchor.constraint(equalTo: leadingAnchor),
-                iv.trailingAnchor.constraint(equalTo: trailingAnchor)
-            ])
+        for page in [previousPage, currentPage] {
+            page.alpha = 0
+            addSubview(page)
         }
-        previousImageView.alpha = 0
-        currentImageView.alpha = 0
-
-        // Horizontal scrim — matches HeroBackdropLayer's leading-to-trailing
-        // gradient (0.88 -> 0.55 -> 0.08 -> clear at 0/0.28/0.55/0.7).
-        horizontalScrim.colors = [
-            UIColor.black.withAlphaComponent(0.88).cgColor,
-            UIColor.black.withAlphaComponent(0.55).cgColor,
-            UIColor.black.withAlphaComponent(0.08).cgColor,
-            UIColor.clear.cgColor
-        ]
-        horizontalScrim.locations = [0.0, 0.28, 0.55, 0.7]
-        horizontalScrim.startPoint = CGPoint(x: 0, y: 0.5)
-        horizontalScrim.endPoint = CGPoint(x: 1, y: 0.5)
-        layer.addSublayer(horizontalScrim)
-
-        // Vertical scrim — clear -> 0.15 -> 0.85 at 0/0.55/1 so content rows
-        // below blend into the bottom of the art.
-        verticalScrim.colors = [
-            UIColor.clear.cgColor,
-            UIColor.black.withAlphaComponent(0.15).cgColor,
-            UIColor.black.withAlphaComponent(0.85).cgColor
-        ]
-        verticalScrim.locations = [0.0, 0.55, 1.0]
-        verticalScrim.startPoint = CGPoint(x: 0.5, y: 0)
-        verticalScrim.endPoint = CGPoint(x: 0.5, y: 1)
-        layer.addSublayer(verticalScrim)
-
-        boostScrim.alpha = 0
-        addSubview(boostScrim)
-    }
-
-    /// Where the hero's text can sit, in this view. The hero section is the
-    /// screen less 200 pt (`PlexHomeViewController.makeHeroSectionLayout`).
-    private var textRegion: CGRect {
-        HeroOverlayView.textRegion(in: CGRect(x: 0, y: 0, width: bounds.width, height: max(400, bounds.height - 200)))
+        scrimLayers.forEach { layer.addSublayer($0) }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // CALayer doesn't autoresize with bounds without explicit work.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         placeholderLayer.frame = bounds
-        horizontalScrim.frame = bounds
-        verticalScrim.frame = bounds
+        scrimLayers.forEach { $0.frame = bounds }
         CATransaction.commit()
-        let region = textRegion, radii = HeroScrim.boostRadii(for: region.size)
-        boostScrim.frame = CGRect(x: region.midX - radii.width, y: region.midY - radii.height,
-                                  width: 2 * radii.width, height: 2 * radii.height)
+        for page in [previousPage, currentPage] {
+            page.bounds = bounds
+            page.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        }
     }
 
     // MARK: - API
 
-    /// Load the backdrop for the supplied URL. Cancels any in-flight load.
-    /// Crossfades over 0.22s when replacing an existing image. Setting nil
-    /// shows the placeholder gradient.
-    func setBackdrop(url: URL?) {
+    /// Load the backdrop for `url`. `paging` slides the new art in from the
+    /// trailing edge (a hero page change); otherwise it crossfades. Nil shows
+    /// the placeholder.
+    func setBackdrop(url: URL?, paging: Bool = false) {
         guard url != currentURL else { return }
         loadTask?.cancel()
-        clearPreviousTask?.cancel()
 
         guard let url else {
             currentURL = nil
-            currentImageView.image = nil
-            previousImageView.image = nil
-            currentImageView.alpha = 0
-            previousImageView.alpha = 0
-            boostScrim.alpha = 0
+            finishPageAnimation()
+            for page in [previousPage, currentPage] {
+                page.imageView.image = nil
+                page.alpha = 0
+            }
             return
         }
-        let oldImage = currentImageView.image
         currentURL = url
 
+        // A prefetched image slides at once, on the same beat as the text.
+        if let image = ImageCacheManager.shared.cachedImage(for: url, quality: .full) {
+            show(image, paging: paging)
+            return
+        }
         loadTask = Task { [weak self] in
             let image = await ImageCacheManager.shared.imageFullSize(for: url)
-            // The scrim is read off the same image, so both arrive together.
-            let luma = await Task.detached(priority: .userInitiated) { image?.cgImage.flatMap(HeroScrim.luma) }.value
-            guard !Task.isCancelled, let self else { return }
-            await MainActor.run {
-                guard self.currentURL == url else { return }
-                guard let image else { return }
-                let strength = HeroScrim.strength(
-                    under: HeroScrim.unitRect(self.textRegion, in: self.bounds, imageSize: image.size), luma: luma)
-                self.applyImage(image, boost: CGFloat(strength - 1), replacing: oldImage)
-            }
+            guard !Task.isCancelled, let self, self.currentURL == url, let image else { return }
+            self.show(image, paging: paging)
         }
     }
 
-    private func applyImage(_ image: UIImage, boost: CGFloat, replacing oldImage: UIImage?) {
-        if let oldImage {
-            previousImageView.image = oldImage
-            previousImageView.alpha = 1
-        } else {
-            previousImageView.image = nil
-            previousImageView.alpha = 0
+    private func show(_ image: UIImage, paging: Bool) {
+        finishPageAnimation()
+        guard currentPage.imageView.image != nil, currentPage.alpha > 0 else {
+            currentPage.imageView.image = image
+            currentPage.setOffset(0)
+            currentPage.alpha = 1
+            onFirstImageLoaded?()
+            return
         }
-        currentImageView.image = image
-        currentImageView.alpha = oldImage == nil ? 1 : 0
+        swap(&currentPage, &previousPage)
+        bringSubviewToFront(currentPage)
+        scrimLayers.forEach { layer.addSublayer($0) }  // keep the scrim on top
+        currentPage.imageView.image = image
 
-        if oldImage == nil {
-            boostScrim.alpha = boost
-            fireFirstImageLoadedIfNeeded()
-            return  // No previous image — current is shown immediately.
-        }
-
-        UIView.animate(withDuration: crossfadeDuration, delay: 0, options: [.curveEaseInOut]) {
-            self.currentImageView.alpha = 1
-            self.previousImageView.alpha = 0
-            self.boostScrim.alpha = boost
-        } completion: { _ in
-            self.fireFirstImageLoadedIfNeeded()
-            // Defer clearing the previous image slightly so the layer composition
-            // settles before we release the reference.
-        }
-
-        let totalNs = UInt64(crossfadeDuration * 1_000_000_000) + 50_000_000
-        clearPreviousTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: totalNs)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.previousImageView.image = nil
+        guard paging else {
+            currentPage.setOffset(0)
+            currentPage.alpha = 0
+            UIView.animate(withDuration: crossfadeDuration, delay: 0, options: [.curveEaseInOut]) {
+                self.currentPage.alpha = 1
+            } completion: { _ in
+                self.previousPage.alpha = 0
+                self.previousPage.imageView.image = nil
             }
+            onFirstImageLoaded?()
+            return
         }
-    }
 
-    private func fireFirstImageLoadedIfNeeded() {
+        let width = bounds.width
+        currentPage.alpha = 1
+        currentPage.setOffset(width)
+        let animator = Self.pageAnimator()
+        animator.addAnimations {
+            self.currentPage.setOffset(0)
+            self.previousPage.setOffset(-width)
+        }
+        animator.addCompletion { [weak self] _ in self?.settlePages() }
+        pageAnimator = animator
+        animator.startAnimation()
         onFirstImageLoaded?()
     }
 
-    /// Apply the scroll-driven parallax transform. A constant 1.4x of the scroll
-    /// offset: the hero recedes faster than the content but at one steady rate,
-    /// so it shares the content's ease-out curve instead of kinking. (Previously
-    /// added a capped `min(72, offset * 0.72)` kicker, which changed the parallax
-    /// rate at ~100pt of scroll and read as a different motion from the rows.)
-    func applyScrollOffset(_ offset: CGFloat) {
-        let clamped = max(0, offset)
-        let translation = -clamped * 1.4
-        transform = CGAffineTransform(translationX: 0, y: translation)
+    /// Jumps an in-flight page slide to its end so the next one starts clean.
+    private func finishPageAnimation() {
+        guard let animator = pageAnimator else { return }
+        pageAnimator = nil
+        if animator.state == .active {
+            animator.stopAnimation(false)
+            animator.finishAnimation(at: .end)
+        }
+        settlePages()
     }
 
-    /// A radial black gradient filling its bounds (`HeroScrim`'s shape).
-    private final class BoostScrimView: UIView {
-        override class var layerClass: AnyClass { CAGradientLayer.self }
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            isUserInteractionEnabled = false
-            let gradient = layer as! CAGradientLayer
-            gradient.type = .radial
-            gradient.colors = HeroScrim.boostAlphas.map { UIColor.black.withAlphaComponent($0).cgColor }
-            gradient.locations = HeroScrim.boostLocations.map { NSNumber(value: $0) }
-            gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
-            gradient.endPoint = CGPoint(x: 1, y: 1)
-        }
-        required init?(coder: NSCoder) { fatalError() }
+    private func settlePages() {
+        currentPage.setOffset(0)
+        previousPage.setOffset(0)
+        previousPage.alpha = 0
+        previousPage.imageView.image = nil
     }
+
+    /// Scroll-driven lift (Apple's showcase scroll, `s` = scroll past rest):
+    /// the backdrop rises faster than the content until its bottom edge meets
+    /// the first shelf, then moves with it. `shelfTop` is where the first shelf
+    /// rests at offset 0.
+    func applyScrollOffset(_ offset: CGFloat, shelfTop: CGFloat) {
+        transform = CGAffineTransform(translationX: 0, y: -Self.scrollLift(offset, shelfTop: shelfTop, height: bounds.height))
+    }
+
+    /// Apple's catch-up point: the shelf and the backdrop's bottom meet at y 338.
+    static let meetY: CGFloat = 338
+
+    nonisolated static func scrollLift(_ offset: CGFloat, shelfTop: CGFloat, height: CGFloat) -> CGFloat {
+        let s = max(0, offset)
+        let travel = max(1, shelfTop - meetY)      // Apple's T
+        let catchUp = max(0, height - shelfTop)     // Apple's A
+        return s + catchUp * min(1, s / travel)
+    }
+
+    /// Apple's showcase percentage: 1 at rest, 0 once the shelf has caught up.
+    nonisolated static func showcasePercentage(_ offset: CGFloat, shelfTop: CGFloat) -> CGFloat {
+        let travel = max(1, shelfTop - meetY)
+        return min(1, max(0, (1 - max(0, offset) / travel)))
+    }
+}
+
+/// The timing Apple hands its page animator: a spring (mass 1, stiffness 100,
+/// damping 22) composed with a cubic (0.05, 0)-(1, 1). UIKit decides how the
+/// two combine, so passing both reproduces Apple's curve exactly.
+final class HeroPageTiming: NSObject, UITimingCurveProvider {
+    let timingCurveType: UITimingCurveType = .composed
+    let cubicTimingParameters: UICubicTimingParameters? =
+        UICubicTimingParameters(controlPoint1: CGPoint(x: 0.05, y: 0), controlPoint2: CGPoint(x: 1, y: 1))
+    let springTimingParameters: UISpringTimingParameters? =
+        UISpringTimingParameters(mass: 1, stiffness: 100, damping: 22, initialVelocity: .zero)
+
+    override init() { super.init() }
+    required init?(coder: NSCoder) { super.init() }
+    func encode(with coder: NSCoder) {}
+    func copy(with zone: NSZone? = nil) -> Any { HeroPageTiming() }
 }
