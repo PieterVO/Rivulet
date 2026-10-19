@@ -68,10 +68,8 @@ enum PreviewCarouselGeometry {
     /// Vertical reserve below the chrome — sets BOTH the chrome's bottom inset
     /// (in the carousel cell) and the height of the below-fold peek region (in
     /// the detail container), so the metadata and the episode peek move
-    /// together. Lowered from 220 to push the metadata block down and thin the
-    /// episode peek toward the Apple TV+ layout (action row near the bottom,
-    /// episodes a shallow strip beneath it).
-    static let carouselChromeShelfPeek: CGFloat = 110
+    /// together. Apple's: 75 below the buttons plus a 40 peek (banner 1040 of 1080).
+    static let carouselChromeShelfPeek: CGFloat = 115
 
     /// Duration of the expand/collapse morph (ease-in-out). Card frame,
     /// chrome insets, corner radius and hairline all run on this curve.

@@ -41,24 +41,21 @@ final class MediaRatingTests: XCTestCase {
                      audience: 9.1, audienceImage: "rottentomatoes://image.rating.upright")
         XCTAssertEqual(r?.source, .rottenTomatoes)
         XCTAssertEqual(r?.badgeText, "89%")
-        XCTAssertEqual(r?.showsStar, false)
         XCTAssertEqual(r?.summary, "89% on Rotten Tomatoes")
     }
 
     func test_plex_rtAudienceOnly_asPercent() {
         let r = plex(audience: 5.4, audienceImage: "rottentomatoes://image.rating.spilled")
         XCTAssertEqual(r?.badgeText, "54%")
-        XCTAssertEqual(r?.showsStar, false)
     }
 
-    func test_plex_imdbAudience_keepsStar() {
+    func test_plex_imdbAudience_isDecimal() {
         let r = plex(audience: 7.6, audienceImage: "imdb://image.rating")
         XCTAssertEqual(r?.badgeText, "7.6")
-        XCTAssertEqual(r?.showsStar, true)
         XCTAssertEqual(r?.summary, "7.6 on IMDb")
     }
 
-    func test_plex_tmdbAudience_keepsStar() {
+    func test_plex_tmdbAudience_isDecimal() {
         let r = plex(audience: 6.5, audienceImage: "themoviedb://image.rating")
         XCTAssertEqual(r?.badgeText, "6.5")
         XCTAssertEqual(r?.summary, "6.5 on TMDB")
@@ -68,7 +65,6 @@ final class MediaRatingTests: XCTestCase {
         let r = plex(rating: 8.6)
         XCTAssertEqual(r?.source, .unknown)
         XCTAssertEqual(r?.badgeText, "8.6")
-        XCTAssertEqual(r?.showsStar, true)
         XCTAssertEqual(r?.summary, "8.6 / 10 average rating")
     }
 
@@ -92,7 +88,6 @@ final class MediaRatingTests: XCTestCase {
     func test_jellyfin_communityOnly_isUnknownSource() {
         let r = jellyfin(#","CommunityRating":7.5"#)
         XCTAssertEqual(r, MediaRating(7.5, source: .unknown))
-        XCTAssertEqual(r?.showsStar, true)
     }
 
     func test_jellyfin_nothing_isNil() {

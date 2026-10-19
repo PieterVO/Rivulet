@@ -54,8 +54,9 @@ nonisolated enum BelowFoldItem: Hashable, Sendable {
 
 final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
-    /// How much of the episode thumbnails peeks at rest (matches the placeholder peek).
-    private static let episodePeek: CGFloat = 40
+    /// The first row's FRAME peek at rest: Apple's 40 of artwork, plus the half of
+    /// `focusGrowth` a lockup rests its artwork below its frame top.
+    private static let episodePeek: CGFloat = 40 + MediaRowMetrics.focusGrowth / 2
     /// Where every row's content rests in the untransformed collection: under
     /// the collapsed card's metadata. The host pulls the collection left on
     /// expand, which lands it on the expanded margin. Sections measure from

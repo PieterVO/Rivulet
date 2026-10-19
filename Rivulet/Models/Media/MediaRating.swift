@@ -44,9 +44,6 @@ nonisolated struct MediaRating: Sendable, Hashable {
             : String(format: "%.1f", value)
     }
 
-    /// Star glyph beside the badge. A percent with a star reads as an average.
-    var showsStar: Bool { source != .rottenTomatoes }
-
     /// Prose form for text that describes the score.
     var summary: String {
         switch source {

@@ -69,7 +69,7 @@ final class ExpandedDetailContainerView: UIView {
     /// Gap from the hero shelf to the top of the episode peek at rest. Larger
     /// gap = thinner/lower peek (visible peek ≈ shelfPeek − peekTopGap), without
     /// moving the metadata. Tuned so episodes show as a shallow bottom strip.
-    private static let peekTopGap: CGFloat = 70
+    private static let peekTopGap: CGFloat = 75
     /// Episode-peek horizontal insets. Carousel-stable aligns to the inset card
     /// (left with the metadata, right clipped at the card edge); expanded goes
     /// near-full-bleed. The inset animates on expand (driven by the VC, Step 3).

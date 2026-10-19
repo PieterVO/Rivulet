@@ -960,24 +960,23 @@ final class MediaDetailChromeView: UIView {
                 Self.makeCaptionLabel(parts.joined(separator: " · "), alpha: Self.qualityRowAlpha))
         }
 
-        if let rating = detail?.rating {
-            let ratingLabel = Self.makeCaptionLabel(rating.badgeText, alpha: Self.qualityRowAlpha)
-            let starStack = UIStackView(arrangedSubviews: [ratingLabel])
-            if rating.showsStar {
-                let star = UIImageView(image: UIImage(systemName: "star.fill"))
-                star.tintColor = .systemYellow
-                star.contentMode = .scaleAspectFit
-                star.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([
-                    star.widthAnchor.constraint(equalToConstant: 20),
-                    star.heightAnchor.constraint(equalToConstant: 20)
-                ])
-                starStack.insertArrangedSubview(star, at: 0)
-            }
-            starStack.axis = .horizontal
-            starStack.spacing = 4
-            starStack.alignment = .center
-            qualityRow.addArrangedSubview(starStack)
+        // Apple shows the Common Sense age here, never a review score, and none on episodes.
+        if item.kind != .episode, let age = detail?.contentAdvisory?.ageRating {
+            let seal = UIImageView(image: UIImage(systemName: "checkmark.circle"))
+            seal.tintColor = .systemGreen
+            seal.contentMode = .scaleAspectFit
+            seal.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                seal.widthAnchor.constraint(equalToConstant: 20),
+                seal.heightAnchor.constraint(equalToConstant: 20)
+            ])
+            let ageStack = UIStackView(arrangedSubviews: [
+                seal, Self.makeCaptionLabel(age, alpha: Self.qualityRowAlpha)
+            ])
+            ageStack.axis = .horizontal
+            ageStack.spacing = 2
+            ageStack.alignment = .center
+            qualityRow.addArrangedSubview(ageStack)
         }
 
         if let badges = detail?.primarySource?.qualityBadges(), !badges.isEmpty {
