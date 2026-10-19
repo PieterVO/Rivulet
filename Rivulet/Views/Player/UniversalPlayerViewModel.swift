@@ -5764,16 +5764,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     func loadInsightsCast() async {
         let generation = itemGeneration
         let isMovie = metadata.type == "movie"
-        // Episodes: use the SHOW's tmdb id, never the episode's own guid. Some
-        // Plex agents put a per-episode tmdb:// id in the episode's Guid array,
-        // which would resolve to the wrong id and silently drop TMDB cast.
-        var tmdbId = metadata.type == "episode"
-            ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
-            : metadata.tmdbId
-        if let providerEpisode {
-            tmdbId = await providerShowTmdbID(providerEpisode)
-            guard generation == itemGeneration else { return }
-        }
+        let tmdbId = await insightsTmdbID()
+        guard generation == itemGeneration else { return }
 
         var people: [MediaPerson] = []
 
@@ -5791,12 +5783,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Plex Role fallback: item's own roles, then (episodes) the show's roles.
         if people.isEmpty, case .plex = source {
-            var roles = metadata.Role ?? []
-            if roles.isEmpty, let key = metadata.ratingKey,
-               let full = try? await PlexNetworkManager.shared.getFullMetadata(
-                   serverURL: serverURL, authToken: authToken, ratingKey: key) {
-                roles = full.Role ?? []
-            }
+            // Hub items carry a truncated Role list (3 on Continue Watching).
+            var roles = await insightsFullMetadata()?.Role ?? metadata.Role ?? []
             if roles.isEmpty, metadata.type == "episode", let showKey = metadata.grandparentRatingKey,
                let show = try? await PlexNetworkManager.shared.getFullMetadata(
                    serverURL: serverURL, authToken: authToken, ratingKey: showKey) {
@@ -5820,25 +5808,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// stays nil and the panel shows no Trivia section).
     func loadInsightsTrivia() async {
         let generation = itemGeneration
-        var tmdbId = metadata.type == "episode"
-            ? (metadata.parentShowTmdbId ?? metadata.showTmdbId)
-            : metadata.tmdbId
-
-        // For episodes, Plex often gives a plex:// or tvdb:// grandparent guid
-        // (not tmdb://), so the direct extraction above is nil. Resolve the
-        // show TMDB id from the show's external ids (tvdb/imdb -> tmdb via the
-        // proxy find route) so Insights can fetch/request generation instead of
-        // silently bailing. Cached per show, so this is one lookup, not per
-        // episode.
-        if let providerEpisode {
-            tmdbId = await providerShowTmdbID(providerEpisode)
-            guard generation == itemGeneration else { return }
-        } else if tmdbId == nil, metadata.type == "episode" {
-            let externalIDs = await resolveShowExternalIDs()
-            guard generation == itemGeneration else { return }
-            tmdbId = await InsightsShowIDResolver.shared.resolve(externalIDs)
-            guard generation == itemGeneration else { return }
-        }
+        let tmdbId = await insightsTmdbID()
+        guard generation == itemGeneration else { return }
 
         guard let tmdbId else {
             guard generation == itemGeneration else { return }
@@ -5895,6 +5866,35 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard generation == itemGeneration else { return }
         insightsTrivia = trivia
         suppressedTriviaIDs = suppressed
+    }
+
+    /// The TMDB id both Insights sections describe: an episode's SHOW (never the
+    /// episode's own guid, which some agents set wrongly), else the item. Hub
+    /// items (Continue Watching) arrive without Guid, so a miss reads full metadata.
+    private func insightsTmdbID() async -> Int? {
+        if let providerEpisode { return await providerShowTmdbID(providerEpisode) }
+        if metadata.type == "episode" {
+            if let id = metadata.parentShowTmdbId ?? metadata.showTmdbId { return id }
+            return await InsightsShowIDResolver.shared.resolve(await resolveShowExternalIDs())
+        }
+        if let id = metadata.tmdbId { return id }
+        return await insightsFullMetadata()?.tmdbId
+    }
+
+    /// One full-metadata fetch per item, shared by the cast and trivia loads.
+    private var insightsFullMetadataTask: (generation: Int, task: Task<PlexMetadata?, Never>)?
+
+    private func insightsFullMetadata() async -> PlexMetadata? {
+        guard case .plex = source, let key = metadata.ratingKey else { return nil }
+        if let cached = insightsFullMetadataTask, cached.generation == itemGeneration {
+            return await cached.task.value
+        }
+        let (url, token) = (serverURL, authToken)
+        let task = Task {
+            try? await PlexNetworkManager.shared.getFullMetadata(serverURL: url, authToken: token, ratingKey: key)
+        }
+        insightsFullMetadataTask = (itemGeneration, task)
+        return await task.value
     }
 
     /// `.provider` episodes only: the playback, since an episode's own ids are

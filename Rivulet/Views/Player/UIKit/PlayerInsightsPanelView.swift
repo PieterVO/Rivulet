@@ -28,6 +28,8 @@ final class InsightsCastListView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private let attribution = UILabel()
+    /// The card focus was last on, so returning from an actor lands back on it.
+    private weak var lastFocusedCard: UIView?
 
     /// Card counts for the shown tab, for tests.
     var triviaRowCount: Int { stack.arrangedSubviews.filter { $0 is InsightsTriviaCardView }.count }
@@ -113,7 +115,13 @@ final class InsightsCastListView: UIView {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        stack.arrangedSubviews.first.map { [$0] } ?? []
+        if let card = lastFocusedCard, card.superview === stack { return [card] }
+        return stack.arrangedSubviews.first.map { [$0] } ?? []
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if let next = context.nextFocusedView, next.superview === stack { lastFocusedCard = next }
     }
 }
 
