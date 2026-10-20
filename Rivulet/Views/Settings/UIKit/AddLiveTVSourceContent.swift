@@ -9,11 +9,8 @@
 //  picker (`.addLiveTVSource`) that pushes one form per kind (`.addXtream`,
 //  `.addPlaylistURL`, `.addOwnServer`).
 //
-//  Every form works the same way, after tvOS Settings and Apple Account
-//  sign-in: on arrival it asks for each required field on its own page, one
-//  after another (`guide`), then lands on the form with focus on its button.
-//  The form is the review: every value in one list, optional fields included,
-//  and any row reopens its page.
+//  Every form is one list of its fields, optional ones included. Each row
+//  opens its own entry page; nothing opens on arrival.
 //
 //  Draft state lives in `AddSourceDraft`, created when the picker pushes a form
 //  and released when the flow leaves. Nothing touches UserDefaults until a
@@ -37,8 +34,6 @@ final class AddSourceDraft {
     var m3uURL = ""
     var epgURL = ""
     var status: Status = .idle
-    /// The step-by-step entry has run for this draft; it runs once.
-    var guided = false
 
     /// A failed check is not a state: it goes back to `.idle` and the cause
     /// shows in a popup (`SettingsContent.fail`).
@@ -64,9 +59,6 @@ struct EntryStep {
     var contentType: UITextContentType?
     var isSecure = false
     var suggestions: [(label: String, value: String)] = []
-    /// Asked for on arrival. Optional fields usually wait on the form.
-    var asked = false
-    var required = false
     let value: () -> String
     let set: (String) -> Void
 
@@ -77,12 +69,6 @@ struct EntryStep {
                                          isSecure: isSecure, contentType: contentType, set: set))
     }
 
-    func entryPage(onCommit: @escaping (String) -> Void, onCancel: @escaping () -> Void) -> TextEntryViewController {
-        TextEntryViewController(title: title, message: message, initialText: value(),
-                                suggestions: suggestions, keyboardType: keyboard, isSecure: isSecure,
-                                contentType: contentType, submitTitle: "Continue", allowsEmpty: !required,
-                                onCommit: onCommit, onCancel: onCancel)
-    }
 }
 
 // MARK: - Add-source pages
@@ -180,50 +166,6 @@ extension SettingsContent {
         }
     }
 
-    // MARK: Step-by-step entry
-
-    /// Runs each form's step-by-step entry the first time it appears.
-    static func pageDidAppear(_ page: SettingsPage, on vc: SettingsPageViewController) {
-        guard let draft = addSourceDraft, !draft.guided else { return }
-        let steps: [EntryStep]
-        let button: String
-        switch page {
-        case .addXtream: (steps, button) = (xtreamSteps(draft), "addSourceConfirm")
-        case .addPlaylistURL: (steps, button) = (playlistSteps(draft), "addSourceConfirm")
-        case .addOwnServer: (steps, button) = (ownServerSteps(draft), "addSourceConfirm")
-        case .jellyfin where JellyfinSession.account == nil: (steps, button) = (jellyfinSteps(draft), "jellyfinSignIn")
-        default: return
-        }
-        draft.guided = true
-        guide(steps, from: 0, on: vc, finishOn: button)
-    }
-
-    /// Presents the next asked step that is still empty, starting at `start`.
-    /// Menu before anything is typed leaves the form; later it stops on the
-    /// form with what was entered so far.
-    private static func guide(_ steps: [EntryStep], from start: Int, on page: SettingsPageViewController,
-                              finishOn button: String) {
-        guard let index = steps.indices.first(where: { $0 >= start && steps[$0].asked && steps[$0].value().isEmpty })
-        else {
-            page.reloadRows()
-            page.focusRow(id: button)
-            return
-        }
-        let step = steps[index]
-        let entry = step.entryPage(onCommit: { text in
-            step.set(text)
-            page.reloadRows()
-            guide(steps, from: index + 1, on: page, finishOn: button)
-        }, onCancel: {
-            if steps.allSatisfy({ $0.value().isEmpty }) {
-                page.onPop?()
-            } else {
-                page.reloadRows()
-            }
-        })
-        page.present(entry, animated: true)
-    }
-
     // MARK: Xtream Codes
 
     static var addXtream: [SettingsRowItem] {
@@ -237,7 +179,7 @@ extension SettingsContent {
                       message: "Enter the server address from your provider, with its port, "
                           + "for example http://provider.example:8080. You can also paste a link "
                           + "that includes your username and password.",
-                      placeholder: "Required", keyboard: .URL, contentType: .URL, asked: true, required: true,
+                      placeholder: "Required", keyboard: .URL, contentType: .URL,
                       value: { draft.serverURL },
                       set: { text in
                           // A pasted get.php link carries the login: split it out.
@@ -254,12 +196,10 @@ extension SettingsContent {
             EntryStep(id: "xtreamUsernameField", title: "Username",
                       message: "Enter the username your provider gave you for this server.",
                       placeholder: "Required", keyboard: .asciiCapable, contentType: .username,
-                      asked: true, required: true,
                       value: { draft.username }, set: { draft.username = $0; draft.status = .idle }),
             EntryStep(id: "xtreamPasswordField", title: "Password",
                       message: "Enter the password your provider gave you for this server.",
                       placeholder: "Required", keyboard: .asciiCapable, contentType: .password, isSecure: true,
-                      asked: true, required: true,
                       value: { draft.password }, set: { draft.password = $0; draft.status = .idle }),
             nameStep(draft, fallback: xtreamDefaultName(draft))
         ]
@@ -290,12 +230,12 @@ extension SettingsContent {
             EntryStep(id: "m3uURLField", title: "Playlist URL",
                       message: "Enter the M3U playlist link from your provider, "
                           + "for example http://provider.example/playlist.m3u.",
-                      placeholder: "Required", keyboard: .URL, contentType: .URL, asked: true, required: true,
+                      placeholder: "Required", keyboard: .URL, contentType: .URL,
                       value: { draft.m3uURL }, set: { draft.m3uURL = $0; draft.status = .idle }),
             EntryStep(id: "epgURLField", title: "Guide URL",
                       message: "If your provider gave you a guide link (XMLTV), enter it. "
                           + "Otherwise leave this empty: Rivulet uses the guide the playlist names, if it has one.",
-                      keyboard: .URL, contentType: .URL, asked: true,
+                      keyboard: .URL, contentType: .URL,
                       value: { draft.epgURL }, set: { draft.epgURL = $0; draft.status = .idle }),
             nameStep(draft, fallback: LiveTVSourceConnector.defaultPlaylistName)
         ]
@@ -321,7 +261,7 @@ extension SettingsContent {
                       message: "Enter the address of the server on your network, with its port. "
                           + "Pick your app below to fill in its usual address.",
                       placeholder: "Required", keyboard: .URL, contentType: .URL,
-                      suggestions: serverSuggestions, asked: true, required: true,
+                      suggestions: serverSuggestions,
                       value: { draft.serverURL }, set: { draft.serverURL = $0; draft.status = .idle }),
             EntryStep(id: "usernameField", title: "Username",
                       message: "Your Dispatcharr username. Only needed to record; leave it empty to just watch.",

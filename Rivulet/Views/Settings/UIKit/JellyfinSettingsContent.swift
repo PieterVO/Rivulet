@@ -43,24 +43,22 @@ extension SettingsContent {
         ]
     }
 
-    /// Asked one at a time on arrival, like Apple Account sign-in.
+    /// The sign-in form's fields. Each row opens its own entry page.
     static func jellyfinSteps(_ draft: AddSourceDraft) -> [EntryStep] {
         [
             EntryStep(id: "jellyfinURL", title: "Server Address",
                       message: "Enter your Jellyfin server's address, with its port, "
                           + "for example http://192.168.1.100:8096.",
-                      placeholder: "Required", keyboard: .URL, contentType: .URL, asked: true, required: true,
+                      placeholder: "Required", keyboard: .URL, contentType: .URL,
                       value: { draft.serverURL }, set: { draft.serverURL = $0; draft.status = .idle }),
             EntryStep(id: "jellyfinUsername", title: "Username",
                       message: "Enter your Jellyfin username.",
                       placeholder: "Required", keyboard: .asciiCapable, contentType: .username,
-                      asked: true, required: true,
                       value: { draft.username }, set: { draft.username = $0; draft.status = .idle }),
             // Not required: a Jellyfin user can have no password.
             EntryStep(id: "jellyfinPassword", title: "Password",
                       message: "Enter the password for this Jellyfin user. Leave it empty if the user has none.",
                       placeholder: "None", keyboard: .asciiCapable, contentType: .password, isSecure: true,
-                      asked: true,
                       value: { draft.password }, set: { draft.password = $0; draft.status = .idle })
         ]
     }

@@ -188,27 +188,7 @@ final class SettingsPageViewController: UIViewController {
         hasAppeared = true
     }
 
-    private var hasNotifiedAppear = false
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        guard !hasNotifiedAppear else { return }
-        hasNotifiedAppear = true
-        SettingsContent.pageDidAppear(page, on: self)
-    }
 
-    /// Row that takes focus on the next focus update, once.
-    private var preferredRowId: String?
-
-    /// Moves focus to a row. Only works while this page holds focus, so call it
-    /// after a presented page has dismissed.
-    func focusRow(id: String) {
-        preferredRowId = id
-        collectionView.remembersLastFocusedIndexPath = false
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
-        collectionView.remembersLastFocusedIndexPath = true
-        preferredRowId = nil
-    }
 
     /// Rebuild the row models for this page from current manager/UserDefaults
     /// state. Falls back to a single focusable placeholder for empty pages so
@@ -318,11 +298,6 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         case .info:
             break
         }
-    }
-
-    func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
-        guard let id = preferredRowId, let index = rows.firstIndex(where: { $0.id == id }) else { return nil }
-        return IndexPath(item: index, section: 0)
     }
 
     func collectionView(_ collectionView: UICollectionView,
