@@ -157,7 +157,9 @@ struct WhatsNewView: View {
             "If you only use Live TV, Rivulet opens straight to it.",
             "Added Xtream Codes sources to Live TV.",
             "Added Enhance Dialogue levels to the audio menu.",
+            "Atmos and DTS:X height channels, in Settings under Playback.",
             "UI tweaks.",
+            "Updated AetherEngine to 7.44.0",
         ]),
         ("1.1.0 (98)", [
             "Full Dolby Vision for Profile 7 FEL titles on Dolby Vision TVs.",

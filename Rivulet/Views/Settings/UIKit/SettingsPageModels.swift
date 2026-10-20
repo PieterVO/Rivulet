@@ -306,6 +306,10 @@ enum SettingsContent {
         TrackIntentStore.effectiveSubtitleIntent.language ?? TrackLanguage.device
     }
 
+    private static var heightSpeakers: String {
+        SettingsStore.string(AetherPlayer.heightSpeakersKey, default: "")
+    }
+
     private static var subtitleSDH: Bool {
         switch TrackIntentStore.effectiveSubtitleIntent {
         case .off: return false
@@ -430,6 +434,13 @@ enum SettingsContent {
                             kind: .toggle(get: { subtitleSDH },
                                           set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
                             isEnabled: subtitlesOn),
+            SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
+                            kind: .cycle(value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers },
+                                         next: {
+                                             let all = ["", "5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"]
+                                             let next = all[((all.firstIndex(of: heightSpeakers) ?? 0) + 1) % all.count]
+                                             SettingsStore.setString(AetherPlayer.heightSpeakersKey, next)
+                                         })),
             .header("Auto-Skip"),
             toggle("autoSkipIntro", "Intro", key: "autoSkipIntro", default: false),
             toggle("autoSkipCredits", "Credits", key: "autoSkipCredits", default: false),

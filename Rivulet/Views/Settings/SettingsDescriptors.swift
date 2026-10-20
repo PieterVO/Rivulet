@@ -176,6 +176,10 @@ enum SettingsDescriptorStore {
             icon: "ear",
             description: "Prefers subtitles for the deaf and hard of hearing, which also describe sounds and name who is speaking."
         ),
+        "heightSpeakers": SettingDescriptor(
+            icon: "hifispeaker.2",
+            description: "Plays the height channels of Dolby Atmos (TrueHD) and DTS:X soundtracks as Atmos on your receiver. Pick your speaker layout. DTS:X works with 7.1.4 and 9.1.6 only. While on, Profile 7 FEL titles play as single-layer Dolby Vision so the heights come through. Off keeps lossless 7.1 without the heights."
+        ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",
             description: "How long to wait before automatically playing the next episode. Set to Off to disable autoplay."

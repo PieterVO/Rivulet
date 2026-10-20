@@ -887,11 +887,13 @@
 			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
 			requirement = {
 				kind = exactVersion;
-				version = 7.39.0;
+				version = 7.44.0;
 			};
 			traits = (
 				DualLayerDolbyVision,
 				DolbyVisionStillReshaping,
+				TrueHDObjectAudio,
+				DTSXObjectAudio,
 			);
 		};
 		B2000020AAAA000000000002 /* XCRemoteSwiftPackageReference "LibassBuild" */ = {
