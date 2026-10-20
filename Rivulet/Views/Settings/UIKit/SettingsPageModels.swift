@@ -407,7 +407,14 @@ enum SettingsContent {
 
     private static var playback: [SettingsRowItem] {
         let subtitlesOn = { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent) != .off }
+        // Leading block unheaded, like Appearance; the rest grouped under
+        // headers whose titles the rows then drop ("Intro" under AUTO-SKIP).
         return [
+            SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
+                            kind: .navigationValue(.contentFilter, value: {
+                                SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
+                            })),
+            .header("Audio & Subtitles"),
             SettingsRowItem(id: "audioLanguage", title: "Audio Language",
                             kind: .navigationValue(.audioLanguagePicker, value: {
                                 audioLanguageName(TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language))
@@ -423,48 +430,49 @@ enum SettingsContent {
                             kind: .toggle(get: { subtitleSDH },
                                           set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
                             isEnabled: subtitlesOn),
-            toggle("autoSkipIntro", "Auto-Skip Intro", key: "autoSkipIntro", default: false),
-            toggle("autoSkipCredits", "Auto-Skip Credits", key: "autoSkipCredits", default: false),
-            toggle("autoSkipAds", "Auto-Skip Ads", key: "autoSkipAds", default: false),
-            toggle("autoSkipRecap", "Auto-Skip Recap", key: "autoSkipRecap", default: false),
+            .header("Auto-Skip"),
+            toggle("autoSkipIntro", "Intro", key: "autoSkipIntro", default: false),
+            toggle("autoSkipCredits", "Credits", key: "autoSkipCredits", default: false),
+            toggle("autoSkipAds", "Ads", key: "autoSkipAds", default: false),
+            toggle("autoSkipRecap", "Recap", key: "autoSkipRecap", default: false),
             toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
+            .header("Remote"),
+            SettingsRowItem(id: "skipLength", title: "Skip Forward",
+                            kind: .navigationValue(.skipIntervalPicker, value: {
+                                SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
+                            })),
+            SettingsRowItem(id: "skipBackLength", title: "Skip Back",
+                            kind: .navigationValue(.skipBackIntervalPicker, value: {
+                                SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
+                            })),
+            .header("Streaming Quality"),
+            SettingsRowItem(id: "homeStreamingQuality", title: "Home",
+                            kind: .navigationValue(.homeQualityPicker, value: {
+                                StreamingQuality.setting(home: true).label
+                            })),
+            SettingsRowItem(id: "awayStreamingQuality", title: "Away",
+                            kind: .navigationValue(.awayQualityPicker, value: {
+                                StreamingQuality.setting(home: false).label
+                            })),
+            .header("Resume"),
             toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
             // The prompt only has anything to interrupt while a Continue
             // Watching tile plays on Select, so it dims with Instant Resume off.
             toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
                    enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
-            SettingsRowItem(id: "homeStreamingQuality", title: "Home Streaming Quality",
-                            kind: .navigationValue(.homeQualityPicker, value: {
-                                StreamingQuality.setting(home: true).label
-                            })),
-            SettingsRowItem(id: "awayStreamingQuality", title: "Away Streaming Quality",
-                            kind: .navigationValue(.awayQualityPicker, value: {
-                                StreamingQuality.setting(home: false).label
-                            })),
-            SettingsRowItem(id: "autoplayCountdown", title: "Autoplay Countdown",
+            .header("Autoplay"),
+            SettingsRowItem(id: "autoplayCountdown", title: "Countdown",
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
                                 AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
                             })),
-            SettingsRowItem(id: "autoplayLimit", title: "Autoplay Limit",
+            SettingsRowItem(id: "autoplayLimit", title: "Limit",
                             kind: .cycle(value: { AutoplayLimit.current.description },
                                          next: {
                                              let all = AutoplayLimit.allCases
                                              let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
                                              SettingsStore.setInt(AutoplayLimit.storageKey, next.rawValue)
                                          })),
-            SettingsRowItem(id: "skipLength", title: "Skip Forward Length",
-                            kind: .navigationValue(.skipIntervalPicker, value: {
-                                SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
-                            })),
-            SettingsRowItem(id: "skipBackLength", title: "Skip Back Length",
-                            kind: .navigationValue(.skipBackIntervalPicker, value: {
-                                SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
-                            })),
-            toggle("showPostVideoUpNext", "Show Up Next Panel", key: "showPostVideoUpNext", default: true),
-            SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
-                            kind: .navigationValue(.contentFilter, value: {
-                                SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
-                            }))
+            toggle("showPostVideoUpNext", "Up Next Panel", key: "showPostVideoUpNext", default: true),
         ]
     }
 
