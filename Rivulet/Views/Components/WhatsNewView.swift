@@ -150,19 +150,14 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (99)", [
-            "Set your audio and subtitle languages in Settings, under Playback.",
-            "Subtitles now turn on by themselves when the audio isn't in your language.",
-            "New Xtream Codes sources in Live TV: sign in with your provider's login.",
-            "Adding a Live TV source or Jellyfin server now asks one thing per page.",
-            "Fixed missing guide data from some IPTV playlists and guides.",
-            "Choose an Enhance Dialogue level from the audio menu.",
-            "Subtitles turn on while muted when Show When Muted is on.",
-            "Player stats now show how Dolby Vision is playing.",
-            "Cast and trivia now work from Continue Watching.",
-            "Fixed a freeze when opening a director's page.",
-            "The Home banner is brighter and slides between titles like the Apple TV app.",
-            "The Home banner moves on every 5 seconds; the page dots count down.",
-            "Show pages show the full summary, and episode pages are less dimmed.",
+            "Added folder view.",
+            "Added delete to the long press menu.",
+            "Added audio and subtitle language options to Settings.",
+            "New welcome screen.",
+            "If you only use Live TV, Rivulet opens straight to it.",
+            "Added Xtream Codes sources to Live TV.",
+            "Added Enhance Dialogue levels to the audio menu.",
+            "UI tweaks.",
         ]),
         ("1.1.0 (98)", [
             "Full Dolby Vision for Profile 7 FEL titles on Dolby Vision TVs.",
