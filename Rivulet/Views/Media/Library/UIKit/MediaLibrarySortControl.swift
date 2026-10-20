@@ -8,9 +8,9 @@
 //  Full-width sort header cell for MediaLibraryViewController.
 //
 //  Layout: library title (left, 34pt bold) + item count (below, 17pt dimmed) and,
-//  on the right in glass style, a focusable sort button and the Titles /
-//  Collections switch (outermost). The CELL itself is not focusable; only the
-//  two embedded SortButtons receive focus.
+//  on the right in glass style, a focusable sort button and the View menu
+//  button (outermost: Titles, Collections, Folders).
+//  The CELL itself is not focusable; only the embedded SortButtons receive focus.
 //
 //  Glass + focus appearance mirrors FocusableActionButton.swift and the
 //  AppStoreActionButtonStyle values in GlassRowStyle.swift:
@@ -18,10 +18,8 @@
 //    - focused fill: .white, content inverted to black
 //    - scale: 1.0 -> 1.06 via UIFocusAnimationCoordinator
 //
-//  Select handling: bare UIButton.primaryActionTriggered is unreliable on tvOS
-//  (press goes to the FOCUSED VIEW's press handlers). We override pressesEnded
-//  for .select on SortButton, debounced the same way as FocusableActionButton
-//  to prevent double-fire with primaryActionTriggered.
+//  Both buttons open a system menu (`UIButton.menu`). Up and Down reach them
+//  only from beneath them, so a column on the left passes straight by.
 //
 
 import UIKit
@@ -43,13 +41,39 @@ extension SortOption {
     }
 }
 
+// MARK: - LibraryViewMode
+
+/// How a library tab shows its contents, saved per library and profile.
+enum LibraryViewMode: String {
+    case titles, collections, folders
+
+    var title: String { rawValue.capitalized }
+
+    var symbol: String {
+        switch self {
+        case .titles: "square.grid.2x2"
+        case .collections: "square.stack"
+        case .folders: "folder"
+        }
+    }
+
+    /// The View button's menu; nil when there is nothing to switch to.
+    static func menu(_ modes: [LibraryViewMode], current: LibraryViewMode,
+                     select: @escaping (LibraryViewMode) -> Void) -> UIMenu? {
+        guard modes.count > 1 else { return nil }
+        return UIMenu(children: modes.map { mode in
+            UIAction(title: mode.title, image: UIImage(systemName: mode.symbol),
+                     state: mode == current ? .on : .off) { _ in select(mode) }
+        })
+    }
+}
+
 // MARK: - SortButton
 
 /// A focusable rounded button that renders a sort label + SF Symbol icon.
 /// Manages its own glass/focus appearance via UIFocusAnimationCoordinator.
-/// Exposed as a non-private type so MediaLibraryViewController can detect it
-/// in cell(for:at:in:) if needed, but otherwise opaque to callers.
-final class SortButton: UIControl {
+/// A UIButton so it can carry a `menu`, which Select then opens.
+final class SortButton: UIButton {
 
     // MARK: - Subviews
 
@@ -83,16 +107,14 @@ final class SortButton: UIControl {
         return v
     }()
 
-    // MARK: - Callback
-
-    var onSortTapped: (() -> Void)?
+    /// Whether a focus move may land here; nil always allows it.
+    var isReachable: (() -> Bool)?
 
     // MARK: - Init
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
-        addTarget(self, action: #selector(primary), for: .primaryActionTriggered)
     }
 
     @available(*, unavailable)
@@ -122,6 +144,14 @@ final class SortButton: UIControl {
 
     // MARK: - Configure
 
+    /// The View button: shows `current` and opens `menu`; hidden without one.
+    func configure(view current: LibraryViewMode, menu: UIMenu?) {
+        configure(sortName: current.title, symbol: current.symbol)
+        self.menu = menu
+        showsMenuAsPrimaryAction = true
+        isHidden = menu == nil
+    }
+
     func configure(sortName: String, symbol: String = "arrow.up.arrow.down") {
         sortLabel.text = sortName
         iconView.image = UIImage(
@@ -131,7 +161,7 @@ final class SortButton: UIControl {
 
     // MARK: - Focus
 
-    override var canBecomeFocused: Bool { true }
+    override var canBecomeFocused: Bool { isReachable?() ?? true }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         let focused = context.nextFocusedView === self
@@ -146,41 +176,13 @@ final class SortButton: UIControl {
             self.sortLabel.textColor = focused ? .black : .white
         }
     }
-
-    // MARK: - Select press handling
-    //
-    // On tvOS, bare UIControl.primaryActionTriggered is unreliable for the Siri Remote
-    // Select press: the press goes to the FOCUSED view's press handlers, not
-    // primaryActionTriggered. We handle pressesEnded(.select) directly, debounced
-    // so both paths can't double-fire. Mirrors FocusableActionButton.swift.
-
-    private var lastFireTime: CFTimeInterval = 0
-
-    private func fireOnce() {
-        let now = CACurrentMediaTime()
-        guard now - lastFireTime > 0.3 else { return }
-        lastFireTime = now
-        onSortTapped?()
-    }
-
-    @objc private func primary() { fireOnce() }
-
-    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if presses.contains(where: { $0.type == .select }) { return }
-        super.pressesBegan(presses, with: event)
-    }
-
-    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if presses.contains(where: { $0.type == .select }) { fireOnce(); return }
-        super.pressesEnded(presses, with: event)
-    }
 }
 
 // MARK: - MediaLibrarySortControl
 
 /// Full-width UICollectionViewCell hosting the library title, item count, a
-/// focusable sort button and the Titles / Collections switch. The CELL is not
-/// focusable; only the two SortButtons are.
+/// focusable sort button and the View menu button. The CELL is not focusable;
+/// only the two SortButtons are.
 final class MediaLibrarySortControl: UICollectionViewCell {
 
     static let reuseID = "library.sortHeader"
@@ -209,43 +211,31 @@ final class MediaLibrarySortControl: UICollectionViewCell {
         return b
     }()
 
-    /// Titles / Collections switch: shows the current state, Select flips it.
-    /// A SortButton, so the glass focus, select debounce and press overrides
-    /// come with it.
+    /// The View menu: Titles, Collections, Folders.
     private let viewButton: SortButton = {
         let b = SortButton()
         b.translatesAutoresizingMaskIntoConstraints = false
         return b
     }()
 
-    /// The sort button's trailing edge: beside the switch while both show,
-    /// otherwise at the cell edge (alone, or hidden under the switch). Not a
-    /// UIStackView: its hiding constraint (width 0, required) fights
-    /// SortButton's required internal padding and logs a conflict each toggle.
-    private lazy var sortBesideSwitch: NSLayoutConstraint = sortButton.trailingAnchor.constraint(
+    /// The sort button's trailing edge: beside the View button while both
+    /// show, otherwise at the cell edge. Not a UIStackView: its hiding
+    /// constraint (width 0, required) fights SortButton's required internal
+    /// padding and logs a conflict each toggle.
+    private lazy var sortBesideView: NSLayoutConstraint = sortButton.trailingAnchor.constraint(
         equalTo: viewButton.leadingAnchor, constant: -16)
     private lazy var sortAtEdge: NSLayoutConstraint = sortButton.trailingAnchor.constraint(
         equalTo: contentView.trailingAnchor)
 
     // MARK: - Public API
 
-    /// Called by the ViewController when the sort action sheet should appear (Task 10).
-    var onSortTapped: (() -> Void)? {
-        get { sortButton.onSortTapped }
-        set { sortButton.onSortTapped = newValue }
-    }
-
-    /// Called when the Titles / Collections switch is selected.
-    var onViewTapped: (() -> Void)? {
-        get { viewButton.onSortTapped }
-        set { viewButton.onSortTapped = newValue }
-    }
 
     // MARK: - Init
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
+        for button in [sortButton, viewButton] { button.isReachable = { [weak self] in self?.buttonsReachable() ?? true } }
     }
 
     @available(*, unavailable)
@@ -269,59 +259,66 @@ final class MediaLibrarySortControl: UICollectionViewCell {
             countLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             countLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
 
-            // Switch: pinned to the right edge, so it never moves under focus
-            // when the sort button hides.
+            // View button: pinned to the right edge, so it never moves under
+            // focus when the sort button hides.
             viewButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             viewButton.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             viewButton.heightAnchor.constraint(equalToConstant: 44),
             viewButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
 
-            // Sort button: left of the switch, or at the edge (configure()
-            // swaps these two). Starts at the edge: no switch until the
-            // collection list arrives.
+            // Sort button: left of the View button, or at the edge
+            // (configure() swaps these two).
             sortAtEdge,
             sortButton.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             sortButton.heightAnchor.constraint(equalToConstant: 44),
             sortButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
 
             // Keep the buttons from overrunning the title. Both stay active: a
-            // hidden sort button parks under the switch, so either way the
+            // hidden sort button parks under the View button, so either way the
             // leftmost visible button binds.
             sortButton.leadingAnchor.constraint(
                 greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 16),
             viewButton.leadingAnchor.constraint(
                 greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 16),
+
         ])
     }
 
     // MARK: - Configure
 
-    /// `collections`: nil hides the switch (the library has no non-empty
-    /// collection); false shows "Titles" with "N items"; true shows
-    /// "Collections" with "N collections" and hides the sort button, which
-    /// also takes it out of the focus graph.
-    func configure(title: String, count: Int, sortName: String, collections: Bool?) {
+    /// In Collections the count reads "N collections" and the sort button
+    /// hides, which also takes it out of the focus graph.
+    func configure(title: String, count: Int, sortName: String, sortMenu: UIMenu,
+                   view: LibraryViewMode, viewMenu: UIMenu?) {
         titleLabel.text = title
-        countLabel.text = collections == true ? "\(count) collections" : "\(count) items"
+        countLabel.text = view == .collections ? "\(count) collections" : "\(count) items"
         sortButton.configure(sortName: sortName)
-        sortButton.isHidden = collections == true
-        viewButton.isHidden = collections == nil
-        viewButton.configure(
-            sortName: collections == true ? "Collections" : "Titles",
-            symbol: collections == true ? "square.stack" : "square.grid.2x2")
+        sortButton.menu = sortMenu
+        sortButton.showsMenuAsPrimaryAction = true
+        sortButton.isHidden = view == .collections
+        viewButton.configure(view: view, menu: viewMenu)
         // Deactivate before activate, so the two are never active together.
-        let beside = collections == false
-        NSLayoutConstraint.deactivate([beside ? sortAtEdge : sortBesideSwitch])
-        NSLayoutConstraint.activate([beside ? sortBesideSwitch : sortAtEdge])
+        let beside = !viewButton.isHidden
+        NSLayoutConstraint.deactivate([beside ? sortAtEdge : sortBesideView])
+        NSLayoutConstraint.activate([beside ? sortBesideView : sortAtEdge])
     }
 
     // MARK: - Focus
 
     override var canBecomeFocused: Bool { false }
 
+    /// Reachable from inside the header, or from a view whose column overlaps the buttons.
+    private func buttonsReachable() -> Bool {
+        guard let window, let focused = UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView else { return true }
+        if focused.isDescendant(of: self) { return true }
+        let left = [sortButton, viewButton].filter { !$0.isHidden }.map { $0.convert($0.bounds, to: window).minX }.min()
+        guard let left else { return false }
+        return focused.convert(focused.bounds, to: window).maxX > left
+    }
+
     // Forward focus to the buttons (so the engine moves there on Up/Down into
     // this section rather than skipping past it entirely). A hidden sort button
-    // is not focusable, so a programmatic request falls through to the switch.
+    // is not focusable, so a programmatic request falls through to the View button.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         [sortButton, viewButton]
     }

@@ -76,5 +76,9 @@ extension Notification.Name {
     /// press is dead until the user leaves the tab. `RootShellViewController`
     /// listens and re-drives focus into the content.
     static let contentBecameFocusable = Notification.Name("contentBecameFocusable")
+
+    /// Posted by a tab's content controller (object: itself) after it swapped the
+    /// page it shows. The shell drives focus into it as on a tab switch.
+    static let tabContentReplaced = Notification.Name("tabContentReplaced")
 }
 

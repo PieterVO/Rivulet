@@ -117,11 +117,11 @@ enum HomeSectionKind: Equatable {
     /// the kind is just a tag so the layout/render code can pick it.
     case recommendationsError
     /// Library mode only — full-width sort header (library title + item
-    /// count + focusable sort button and Titles / Collections switch,
+    /// count + focusable sort button and View menu,
     /// `MediaLibrarySortControl`).
     case sortHeader
     /// Library mode only — 6-across paginated poster grid of the whole
-    /// library, sorted by `gridSort`; or, on the Collections switch, the
+    /// library, sorted by `gridSort`; or, in the Collections view, the
     /// library's collection list whole.
     case grid
     /// Discover mode only — a TMDB curated list (or "For You") shelf.
@@ -354,8 +354,8 @@ struct HomeSectionData {
     }
 
     /// Library mode: the sort-header section. `title` carries the library
-    /// title for `MediaLibrarySortControl.configure(title:count:sortName:collections:)`;
-    /// count, sort name and switch state live on the controller
+    /// title for `MediaLibrarySortControl.configure(title:count:sortName:view:viewMenu:)`;
+    /// count, sort name and view live on the controller
     /// (totalGridCount / gridSort / gridShowsCollections).
     static func sortHeader(title: String) -> HomeSectionData {
         HomeSectionData(
@@ -429,6 +429,10 @@ final class PlexHomeViewController: UIViewController {
     /// only covers itself with a carousel or detail. The carousel passes one
     /// that puts focus back on the below-fold tile that opened the page.
     var onDismiss: (() -> Void)?
+    /// Library mode: the tab container, which saves the View choice and adds Folders.
+    var onSelectViewMode: ((LibraryViewMode) -> Void)?
+
+    var hasCollections: Bool { !libraryCollections.isEmpty }
     /// Collection mode's blur-fade transition. UIKit holds a transitioning
     /// delegate weakly, so the page keeps it alive (PersonDetailViewController
     /// does the same).
@@ -478,7 +482,7 @@ final class PlexHomeViewController: UIViewController {
     private var libraryHubsError: String?
     /// This library's non-empty collections in server order, filled by
     /// refreshThisLibraryHubs. Feeds the Collections row and, while the
-    /// Titles / Collections switch is on Collections, the grid. Kept as-is
+    /// Collections view is on, the grid. Kept as-is
     /// when a fetch fails.
     private var libraryCollections: [MediaItem] = []
     /// A provider library's own rows (Continue Watching, Recently Added), the
@@ -635,10 +639,8 @@ final class PlexHomeViewController: UIViewController {
     /// `indexPathForPreferredFocusedView` when Left leaves the bar for the
     /// grid; cleared once focus is in the grid.
     private var pendingGridFocusItem: Int?
-    /// Titles / Collections switch in the sort header. Session only: the
-    /// shell caches one controller per library tab, so it survives tab
-    /// switches and resets on relaunch. While on, `gridItems` is
-    /// `libraryCollections` in server order.
+    /// The Collections view. While on, `gridItems` is `libraryCollections`
+    /// in server order.
     private var gridShowsCollections = false
     private let alphabetBar = LibraryAlphabetBarView()
     private let letterIndicator = LibraryLetterIndicatorView()
@@ -1358,8 +1360,8 @@ final class PlexHomeViewController: UIViewController {
         applySnapshotKeepingFocusedRowStill()
         // The sort header's item id never changes, so the apply above never
         // re-vends it; without this it keeps whatever list it first saw, and
-        // the Titles / Collections switch (shown only while the list is not
-        // empty) would stay hidden, or linger after the list emptied.
+        // the View menu's Collections item (offered only while the list is
+        // not empty) would stay missing, or linger after the list emptied.
         if collectionsChanged { refreshSortHeaderCount() }
         selectHeroItemsIfNeeded()
         updateHomeState()
@@ -1804,23 +1806,15 @@ final class PlexHomeViewController: UIViewController {
         return dataStore.libraries.first(where: { $0.key == key })?.type
     }
 
-    /// Action-sheet sort picker. One action per LibrarySortOption relevant
-    /// to this library's type (PlexLibraryView used the same
-    /// `options(for:)` source); a checkmark prefix marks the active sort
-    /// (tvOS UIAlertAction has no native checkmark accessory).
-    private func presentSortPicker() {
-        guard case .library = mode else { return }
-        let sheet = UIAlertController(title: "Sort By", message: nil, preferredStyle: .actionSheet)
+    /// The sort menu: this library's options, the active one checked.
+    private func sortMenu() -> UIMenu {
         let options = providerLibrary.map { Self.providerSortOptions(for: $0.kind) }
             ?? LibrarySortOption.options(for: currentLibraryType)
-        for option in options {
-            let title = option == gridSort ? "\u{2713} \(option.displayName)" : option.displayName
-            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+        return UIMenu(children: options.map { option in
+            UIAction(title: option.displayName, state: option == gridSort ? .on : .off) { [weak self] _ in
                 self?.applySort(option)
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(sheet, animated: true)
+            }
+        })
     }
 
     /// Persists the new sort, resets the grid (bumping the generation token
@@ -1867,14 +1861,17 @@ final class PlexHomeViewController: UIViewController {
         reconfigureGridSlots(0..<gridItems.count)
     }
 
-    /// The Titles / Collections switch. Collections come whole from
+    /// Titles or Collections. Collections come whole from
     /// `libraryCollections` in server order: no paging, no A-Z bar, and no
     /// sort (`gridSort` is never forwarded; `sort=mediaHeight:desc` returns
     /// an empty list). Makes no focus request: the header reconfigure
-    /// re-vends the same cell, so focus stays on the switch, and Down enters
-    /// the grid by geometry.
-    private func setGridShowsCollections(_ on: Bool) {
+    /// re-vends the same cell, so focus stays on the View button, and Down
+    /// enters the grid by geometry. Before the view loads it only sets the
+    /// start; the first collection list then fills the grid, or falls back.
+    func setGridShowsCollections(_ on: Bool) {
+        guard on != gridShowsCollections else { return }
         gridShowsCollections = on
+        guard isViewLoaded else { return }
         resetGrid()
         if on {
             showCollectionsInGrid()
@@ -3247,19 +3244,22 @@ final class PlexHomeViewController: UIViewController {
         case .sortHeader:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: MediaLibrarySortControl.reuseID, for: indexPath) as! MediaLibrarySortControl
             // Read only when the cell is dequeued or reconfigured, which is why
-            // a changed list calls refreshSortHeaderCount(). nil hides the
-            // switch: the library has no non-empty collection.
+            // a changed list calls refreshSortHeaderCount().
+            let modes: [LibraryViewMode] = [.titles] + (libraryCollections.isEmpty ? [] : [.collections])
+                + (onSelectViewMode == nil ? [] : [.folders])
+            let viewMenu = LibraryViewMode.menu(modes, current: gridShowsCollections ? .collections : .titles) {
+                [weak self] mode in
+                guard let self else { return }
+                if let onSelectViewMode { onSelectViewMode(mode) } else { setGridShowsCollections(mode == .collections) }
+            }
             cell.configure(
                 title: section.title ?? "",
                 count: totalGridCount,
                 sortName: gridSort.displayName,
-                collections: libraryCollections.isEmpty ? nil : gridShowsCollections
+                sortMenu: sortMenu(),
+                view: gridShowsCollections ? .collections : .titles,
+                viewMenu: viewMenu
             )
-            cell.onSortTapped = { [weak self] in self?.presentSortPicker() }
-            cell.onViewTapped = { [weak self] in
-                guard let self else { return }
-                self.setGridShowsCollections(!self.gridShowsCollections)
-            }
             return cell
 
         case .recommendationsLoading:
@@ -5275,7 +5275,7 @@ final class PlexHomeViewController: UIViewController {
         case .hero, .recommendationsLoading, .recommendationsError:
             return  // hero overlay + state cells handle their own input
         case .sortHeader:
-            return  // the embedded SortButton handles its own Select press
+            return  // the embedded buttons open their own menus
         case .searchPrompt, .searchState:
             return  // recents pills / Try Again are FocusableActionButtons
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid:

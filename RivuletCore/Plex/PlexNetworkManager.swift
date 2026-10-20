@@ -443,6 +443,31 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return container.MediaContainer.Metadata ?? []
     }
 
+    /// One level of a section's on-disk tree: the root, or a folder by `parent`.
+    /// Start must ride with Size or PMS ignores both.
+    func getFolder(
+        serverURL: String,
+        authToken: String,
+        sectionId: String,
+        parent: String?,
+        start: Int,
+        size: Int
+    ) async throws -> (items: [PlexMetadata], totalSize: Int?) {
+        guard var components = URLComponents(string: "\(serverURL)/library/sections/\(sectionId)/folder") else {
+            throw PlexAPIError.invalidURL
+        }
+        components.queryItems = (parent.map { [URLQueryItem(name: "parent", value: $0)] } ?? []) + [
+            URLQueryItem(name: "X-Plex-Container-Start", value: "\(start)"),
+            URLQueryItem(name: "X-Plex-Container-Size", value: "\(size)")
+        ]
+        guard let url = components.url else { throw PlexAPIError.invalidURL }
+        let container: PlexMediaContainerWrapper = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+        return (container.MediaContainer.Metadata ?? [], container.MediaContainer.totalSize)
+    }
+
     /// Get library items with total count for pagination
     /// - Parameters:
     ///   - serverURL: The Plex server URL

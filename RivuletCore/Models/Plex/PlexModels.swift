@@ -202,6 +202,11 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
         type == "artist"
     }
 
+    /// Movie/show section with no metadata agent: browsed by folder.
+    var hasNoMetadataAgent: Bool {
+        isVideoLibrary && (agent == "tv.plex.agents.none" || agent == "com.plexapp.agents.none")
+    }
+
     /// Check if this is a photo library
     var isPhotoLibrary: Bool {
         type == "photo"

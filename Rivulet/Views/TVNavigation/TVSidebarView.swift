@@ -534,6 +534,8 @@ struct TVSidebarView: View {
             // gets its own controller — this is what the SwiftUI `.id(key)`
             // was buying.
             if let lib = dataStore.libraries.first(where: { $0.key == key }) {
+                if lib.hasNoMetadataAgent { return FolderLibraryViewController(plex: lib) }
+                if lib.isVideoLibrary { return PlexLibraryModeViewController(library: lib) }
                 if lib.isPhotoLibrary {
                     return PhotoLibraryViewController(title: lib.title) {
                         guard let provider = MediaProviderRegistry.shared.plexProvider,
@@ -548,6 +550,12 @@ struct TVSidebarView: View {
         case .providerLibrary(_, let libraryID):
             // The same page as a Plex library, through the provider.
             if let library = jellyfinStore.libraries.first(where: { $0.id == libraryID }) {
+                if library.browsesByFolder {
+                    return FolderLibraryViewController(title: library.title) {
+                        (MediaProviderRegistry.shared.provider(for: library.providerID) as? any FolderProvider)
+                            .map { ($0, library) }
+                    }
+                }
                 if library.kind == .photos {
                     return PhotoLibraryViewController(title: library.title) {
                         (MediaProviderRegistry.shared.provider(for: library.providerID) as? any PhotoProvider)

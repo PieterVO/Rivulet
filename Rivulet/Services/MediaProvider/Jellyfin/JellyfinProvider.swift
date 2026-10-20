@@ -56,11 +56,11 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         var libraries: [MediaLibrary] = []
         for view in result.items ?? [] {
             // One count per "homevideos" view decides photo browser or video page.
-            var holdsPhotos = false
+            var content = HomeVideosContent.videos
             if view.collectionType == "homevideos", let viewID = view.id {
-                holdsPhotos = try await self.holdsPhotos(libraryID: viewID)
+                content = try await self.homeVideosContent(libraryID: viewID)
             }
-            if let library = JellyfinMediaMapper.library(view, providerID: id, homeVideosHoldPhotos: holdsPhotos) {
+            if let library = JellyfinMediaMapper.library(view, providerID: id, homeVideos: content) {
                 libraries.append(library)
             }
         }

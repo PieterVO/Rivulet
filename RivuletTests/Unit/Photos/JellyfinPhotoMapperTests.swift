@@ -106,6 +106,7 @@ final class JellyfinPhotoMapperTests: XCTestCase {
 
     func test_homeVideos_withPhotos_isAPhotoLibrary() async throws {
         server.respond("/Items", query: ["includeItemTypes": "Photo", "limit": "0"], body: list([], total: 6))
+        server.respond("/Items", query: ["includeItemTypes": "Video", "limit": "0"], body: list([], total: 0))
 
         let kinds = try await libraryKinds("homevideos")
 

@@ -154,6 +154,9 @@ final class RootShellViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleContentBecameFocusable),
             name: .contentBecameFocusable, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleTabContentReplaced(_:)),
+            name: .tabContentReplaced, object: nil)
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -325,6 +328,16 @@ final class RootShellViewController: UIViewController {
     @objc private func handleContentBecameFocusable() {
         guard !contentHasHadFocus else { return }
         contentFocusGaveUp = false
+        updateChromeVisibility()
+        driveFocusIntoContent()
+    }
+
+    /// The mounted tab swapped its page: hand focus in as `mountContent` does.
+    @objc private func handleTabContentReplaced(_ note: Notification) {
+        guard let content = contentVCs[currentTab], note.object as AnyObject? === content else { return }
+        contentHasHadFocus = false
+        contentFocusGaveUp = false
+        belowTop = false
         updateChromeVisibility()
         driveFocusIntoContent()
     }

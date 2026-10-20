@@ -15,6 +15,8 @@ struct MediaLibrary: Identifiable, Hashable, Sendable {
     let providerID: String
     let title: String
     let kind: LibraryKind
+    /// Lists the on-disk folder tree (no metadata agent, or unsorted Jellyfin).
+    var browsesByFolder: Bool = false
 
     enum LibraryKind: Sendable, Hashable, Codable {
         case movies

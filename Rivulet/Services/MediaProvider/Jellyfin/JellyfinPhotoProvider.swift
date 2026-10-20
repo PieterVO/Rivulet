@@ -56,17 +56,21 @@ enum JellyfinPhotoMapper {
 }
 
 extension JellyfinProvider: PhotoProvider {
-    /// Whether a "homevideos" view holds any photo: a count with no items.
+    /// What a "homevideos" view holds, by two counts with no items.
     /// Throws on a failed probe, so the store keeps the libraries it had.
-    func holdsPhotos(libraryID: String) async throws -> Bool {
-        let result: JFQueryResult = try await client.get("Items", [
-            URLQueryItem(name: "parentId", value: libraryID),
-            URLQueryItem(name: "recursive", value: "true"),
-            URLQueryItem(name: "includeItemTypes", value: "Photo"),
-            URLQueryItem(name: "limit", value: "0"),
-            URLQueryItem(name: "enableTotalRecordCount", value: "true")
-        ])
-        return (result.totalRecordCount ?? 0) > 0
+    func homeVideosContent(libraryID: String) async throws -> HomeVideosContent {
+        func count(_ type: String) async throws -> Int {
+            let result: JFQueryResult = try await client.get("Items", [
+                URLQueryItem(name: "parentId", value: libraryID),
+                URLQueryItem(name: "recursive", value: "true"),
+                URLQueryItem(name: "includeItemTypes", value: type),
+                URLQueryItem(name: "limit", value: "0"),
+                URLQueryItem(name: "enableTotalRecordCount", value: "true")
+            ])
+            return result.totalRecordCount ?? 0
+        }
+        if try await count("Photo") == 0 { return .videos }
+        return try await count("Video") > 0 ? .videos : .photosOnly
     }
 
     func photoPage(in library: MediaLibrary, folder: MediaItemRef?, page: Page) async throws -> PhotoPage {

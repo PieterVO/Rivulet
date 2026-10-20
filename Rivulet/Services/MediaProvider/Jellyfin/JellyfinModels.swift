@@ -80,6 +80,7 @@ nonisolated struct JFItem: Decodable, Sendable {
     let indexNumber: Int?
     let parentIndexNumber: Int?
     let recursiveItemCount: Int?
+    let childCount: Int?
 
     let userData: JFUserData?
 

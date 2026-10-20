@@ -382,6 +382,22 @@ class LibrarySettingsManager: ObservableObject {
         librarySortOptions[libraryKey] = option
     }
 
+    // MARK: - View mode
+
+    private let viewModeBaseKey = "libraryViewMode"
+
+    /// The view this profile last left the library on.
+    func viewMode(_ libraryKey: String) -> LibraryViewMode {
+        (userDefaults.dictionary(forKey: currentKey(viewModeBaseKey))?[libraryKey] as? String)
+            .flatMap(LibraryViewMode.init) ?? .titles
+    }
+
+    func setViewMode(_ mode: LibraryViewMode, for libraryKey: String) {
+        var modes = userDefaults.dictionary(forKey: currentKey(viewModeBaseKey)) ?? [:]
+        modes[libraryKey] = mode.rawValue
+        userDefaults.set(modes, forKey: currentKey(viewModeBaseKey))
+    }
+
     // MARK: - MediaLibrary SortOption persistence
     //
     // Independent of LibrarySortOption above. Keyed by a distinct prefix so

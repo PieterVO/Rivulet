@@ -24,7 +24,9 @@ enum PlexMediaMapper {
         case "photo": kind = .photos
         default: kind = .mixed
         }
-        return MediaLibrary(id: section.key, providerID: providerID, title: section.title, kind: kind)
+        var library = MediaLibrary(id: section.key, providerID: providerID, title: section.title, kind: kind)
+        library.browsesByFolder = section.hasNoMetadataAgent
+        return library
     }
 
     // MARK: - Kind
