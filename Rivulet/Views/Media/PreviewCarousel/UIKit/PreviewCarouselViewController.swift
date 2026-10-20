@@ -524,8 +524,11 @@ final class PreviewCarouselViewController: UIViewController {
         // every layout pass because `collectionViewContentSize`
         // depends on bounds and `bounds` can change (orientation,
         // focus shifts).
-        let offset = layout.contentOffsetCentered(index: selectedIndex)
-        collectionView.contentOffset = offset
+        // Not mid-page: selectedIndex is still the outgoing item, so a layout
+        // pass there snapped the glide back to it for a frame.
+        if pagingAnimation == nil {
+            collectionView.contentOffset = layout.contentOffsetCentered(index: selectedIndex)
+        }
 
         if !isExpanded {
             syncCards()
