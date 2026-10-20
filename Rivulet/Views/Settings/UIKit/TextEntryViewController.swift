@@ -5,13 +5,12 @@
 //  TextEntryViewController.swift
 //  Rivulet
 //
-//  One text field on its own page, laid out like tvOS Settings' text entry
-//  (`TSKTextInputViewController`): a title, one sentence saying what to type
-//  and which button to select, the field, and a single button. Menu goes back.
-//
-//  Selecting the field opens the system keyboard, which covers this page. Its
-//  only header is the field's placeholder (`_defaultPromptString`), so the
-//  placeholder always names the field; examples belong in the message.
+//  Text entry for a Settings row. Like tvOS Settings, it opens the system
+//  keyboard at once and Menu goes straight back to the row; the keyboard's
+//  only header is the field's placeholder, so the row's description panel
+//  carries any examples. A field with suggestions instead shows its own page
+//  (title, message, field, suggestion pills, one button), since the keyboard
+//  has nowhere to put them.
 //
 //  Commit vs cancel is explicit: the button or the keyboard's return key calls
 //  `onCommit` with the final text; Menu calls `onCancel`. The caller only
@@ -44,6 +43,8 @@ final class TextEntryViewController: UIViewController {
 
     private let textField = UITextField()
     private var submitButton: TextEntryPillButton!
+    /// No page of its own: the keyboard opens on arrival and closing it leaves.
+    private var opensKeyboard: Bool { suggestions.isEmpty }
 
     /// - Parameters:
     ///   - fieldName: the keyboard's header, so it must name the field
@@ -87,11 +88,14 @@ final class TextEntryViewController: UIViewController {
         view.backgroundColor = .clear
 
         // Full-screen, like the system page: the screen behind is blurred out
-        // so nothing competes with the one question being asked.
-        let backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-        backdrop.frame = view.bounds
-        backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(backdrop)
+        // so nothing competes with the one question being asked. The keyboard
+        // brings its own blur.
+        if !opensKeyboard {
+            let backdrop = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+            backdrop.frame = view.bounds
+            backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(backdrop)
+        }
 
         let titleLabel = UILabel()
         titleLabel.text = titleText
@@ -127,6 +131,9 @@ final class TextEntryViewController: UIViewController {
         textField.addTarget(self, action: #selector(textChanged), for: .editingChanged)
         // The keyboard's return button. tvOS sends this, not `textFieldShouldReturn`.
         textField.addTarget(self, action: #selector(returnPressed), for: .editingDidEndOnExit)
+        textField.addTarget(self, action: #selector(editingEnded), for: .editingDidEnd)
+        // A required field's Done stays off until something is typed.
+        textField.enablesReturnKeyAutomatically = !allowsEmpty
         textField.translatesAutoresizingMaskIntoConstraints = false
         arranged.append(textField)
 
@@ -163,6 +170,8 @@ final class TextEntryViewController: UIViewController {
         stack.setCustomSpacing(56, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
         stack.addArrangedSubview(buttonRow)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        // Kept in the hierarchy so the field can take the keyboard, never seen.
+        stack.alpha = opensKeyboard ? 0 : 1
         view.addSubview(stack)
 
         NSLayoutConstraint.activate([
@@ -187,6 +196,10 @@ final class TextEntryViewController: UIViewController {
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        if opensKeyboard, !textField.isFirstResponder, !committed {
+            textField.becomeFirstResponder()
+            return
+        }
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -202,21 +215,35 @@ final class TextEntryViewController: UIViewController {
 
     @objc private func menuPressed() { cancel() }
 
+    private var returning = false
+
     /// Submits once the keyboard has closed, so the next page presents cleanly.
     @objc private func returnPressed() {
+        returning = true
         DispatchQueue.main.async { [weak self] in self?.commit() }
+    }
+
+    /// Menu on the keyboard: with no page to fall back to, leave.
+    @objc private func editingEnded() {
+        guard opensKeyboard, !returning, !committed else { return }
+        cancel()
     }
 
     private var committed = false
 
     private func commit() {
-        guard canCommit, !committed else { return }
+        guard canCommit, !committed else {
+            if opensKeyboard, !committed { cancel() }
+            return
+        }
         committed = true
         let value = textField.text ?? ""
         dismiss(animated: true) { [onCommit] in onCommit(value) }
     }
 
     private func cancel() {
+        guard !committed else { return }
+        committed = true
         dismiss(animated: true) { [onCancel] in onCancel?() }
     }
 }

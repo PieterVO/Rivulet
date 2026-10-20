@@ -285,7 +285,7 @@ enum SettingsDescriptorStore {
         ),
         "jellyfinURL": SettingDescriptor(
             icon: "globe",
-            description: "Your Jellyfin server's address, including the port. You can paste the address from your browser."
+            description: "Your Jellyfin server's address, including the port, for example http://192.168.1.100:8096. You can paste the address from your browser."
         ),
         "jellyfinUsername": SettingDescriptor(
             icon: "person",
@@ -349,7 +349,7 @@ enum SettingsDescriptorStore {
         ),
         "xtreamServerField": SettingDescriptor(
             icon: "globe",
-            description: "The server address from your provider, with its port. If your provider gave you a single link with your username and password in it, enter that instead: Rivulet fills in the rest."
+            description: "The server address from your provider, with its port, for example http://provider.example:8080. If your provider gave you a single link with your username and password in it, enter that instead: Rivulet fills in the rest."
         ),
         "xtreamUsernameField": SettingDescriptor(
             icon: "person",
@@ -389,7 +389,7 @@ enum SettingsDescriptorStore {
         ),
         "m3uURLField": SettingDescriptor(
             icon: "list.bullet.rectangle",
-            description: "The playlist link your IPTV provider gave you. It usually ends in .m3u or .m3u8."
+            description: "The playlist link your IPTV provider gave you, for example http://provider.example/playlist.m3u. It usually ends in .m3u or .m3u8."
         ),
         "epgURLField": SettingDescriptor(
             icon: "calendar",

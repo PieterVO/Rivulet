@@ -892,11 +892,13 @@ typography. The SwiftUI settings rows are gone (`SettingsComponents.swift` and
 `UserProfileSettingsView.swift` are deleted) — do not reintroduce them.
 
 **A form that collects several fields** (add-source, Jellyfin sign-in) builds its
-rows from `EntryStep`s (`AddLiveTVSourceContent.swift`): one list of its fields,
-each row opening its own `TextEntryViewController` page. Nothing opens on
-arrival; landing on a form and being made to type first read as forced. The
-system keyboard covers the page and shows only the field's placeholder as its
-header, so the placeholder names the field and examples go in the page's message.
+rows from `EntryStep`s (`AddLiveTVSourceContent.swift`): one list of its fields.
+Nothing opens on arrival; landing on a form and being made to type first read as
+forced. Selecting any text row opens the system keyboard at once and Menu goes
+straight back, as tvOS Settings does (measured: About > Name has no page between
+the row and the keyboard). The keyboard's only header is the field's placeholder,
+so the placeholder names the field and examples go in the row's description
+panel. Only a field with suggestions (My Own Server's address) shows a page.
 
 **A row's `key:` is not wired to anything by adding the row.** Nothing reads it
 for you and nothing warns you, so a toggle can look and persist perfectly while
