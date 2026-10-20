@@ -290,6 +290,11 @@ sidebar.
   Closing the panel on the profile it opened on reopens the sidebar on the
   profile row (`profileRowRequest`). Switching to another profile goes to Home
   with the sidebar closed (`collapseRequest`), as the Apple TV app does.
+- **Live TV with no media server opens on Live TV.** With no Plex or Jellyfin
+  signed in, `ShellSidebarModel` hides Search, Home, Discover and Watchlist
+  (`opensToLiveTV`) and `TVSidebarView` switches to the Live TV tab. Home stays
+  only as the signed-out welcome, whose backdrop is `WelcomeGlowView` (maps from
+  `tools/welcome/flow_map.py`).
 - **"Profile Picker on Launch" is a hard gate.** `ProfilePickerOverlay` reports a
   chosen profile through `onSelected`; `TVSidebarView` re-presents the picker on
   any other close, so Menu cannot dismiss it into the last profile's content.
@@ -979,6 +984,8 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 
 **One Xcode everywhere: `codemagic.yaml`'s `xcode:` pin.** Both build checks read it, and it must equal the Xcode you build with locally (27.1 today). When you upgrade local Xcode, bump the pin in the same commit (and the checks' `runs-on` image on a major). The type checker is the reason: a newer compiler accepts expressions an older one gives up on ("unable to type-check this expression in reasonable time"), so a mismatch passes every local build and breaks CI after the push. It happened twice before the pin (`e602163`, the favorites sort in `LiveTVDataStore`).
 
+**No `.metal` files.** Compiling one needs Apple's separate Metal Toolchain download, which the GitHub runners (and likely Codemagic) lack: the tvOS check failed on it once. Ship a shader as source and compile it at runtime with `makeLibrary(source:)`, as `WelcomeGlowShader` does.
+
 **The Simulator does not fully mimic Apple TV**, especially for focus-engine behavior. Treat Simulator-only verification of tvOS focus/remote-input changes as provisional; say so rather than declaring it fixed.
 
 **`Docs/` is gitignored** (untracked on purpose, `c89b52d`), though some files under it are force-added and do ship: the `superpowers/` plans, specs and handoff, `handoff/`, `release/screenshots/` (App Store art), and `AETHER_ENGINE_STARTUP_NOTES.md`. What is *not* in the repo is `Docs/RIVULET_PLAYER.md` and `Docs/DESIGN_GUIDE.md`, both referenced throughout this file; they live only on the maintainer's machine. The `aether-update` and `rivulet-tvos-uikit` skills referenced above are also absent — `.claude/` is gitignored with nothing force-added. If a referenced doc or skill is missing in your environment, say so and proceed carefully rather than guessing its contents.
@@ -1111,6 +1118,11 @@ The Plex Discover API uses three different hosts:
 | Mutations | Resolve external GUID → discover `ratingKey` via matches endpoint first, then PUT actions |
 
 ## Plex server API gotchas
+
+**Hub items are not full metadata.** `/hubs/continueWatching` sends no `Guid`
+array (so no TMDB id) and only three `Role` entries. Anything keyed on external
+ids or the full cast reads `getFullMetadata` first, as Insights does
+(`insightsFullMetadata`).
 
 **`X-Plex-Container-Size` is ignored unless `X-Plex-Container-Start` is sent
 with it.** Measured on PMS 1.43.4: `/library/recentlyAdded?X-Plex-Container-Size=1`
