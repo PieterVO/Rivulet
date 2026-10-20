@@ -293,6 +293,7 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         case .cycle(let value, let next):
             next()
             (collectionView.cellForItem(at: indexPath) as? SettingsCell)?.updateValue(value())
+            refreshDimmedRows()
         case .action(_, let handler):
             handler(self)
         case .option(_, let select):

@@ -611,4 +611,71 @@ final class TrackPreferenceTests: XCTestCase {
         XCTAssertNil(TrackIntentStore.subtitleIntent)
         XCTAssertNil(TrackIntentStore.audioIntent)
     }
+
+    // MARK: - Foreign Audio
+
+    private var englishFilmSubs: [MediaTrack] {
+        [sub(1, lang: "eng"), sub(2, lang: "eng", forced: true), sub(3, lang: "spa")]
+    }
+
+    func testForeignAudioShowsFullSubtitlesOverForeignAudio() {
+        let intent = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        XCTAssertEqual(TrackIntentResolver.resolveSubtitle(intent: intent, in: englishFilmSubs, audioLanguage: "jpn")?.id, 1)
+    }
+
+    func testForeignAudioShowsOnlyForcedOverNativeAudio() {
+        let intent = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        XCTAssertEqual(TrackIntentResolver.resolveSubtitle(intent: intent, in: englishFilmSubs, audioLanguage: "en")?.id, 2)
+        XCTAssertNil(TrackIntentResolver.resolveSubtitle(intent: intent, in: [sub(1, lang: "eng")], audioLanguage: "eng"))
+    }
+
+    func testForeignAudioTreatsUntaggedAudioAsNative() {
+        let intent = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        XCTAssertNil(TrackIntentResolver.resolveSubtitle(intent: intent, in: [sub(1, lang: "eng")], audioLanguage: "und"))
+        XCTAssertNil(TrackIntentResolver.resolveSubtitle(intent: intent, in: [sub(1, lang: "eng")], audioLanguage: nil))
+    }
+
+    func testNothingStoredMeansForeignAudio() {
+        guard case .foreignAudio = TrackIntentStore.effectiveSubtitleIntent else {
+            return XCTFail("default should be Foreign Audio")
+        }
+    }
+
+    func testPickKeepsForeignAudioWhenItFitsTheMode() {
+        let current = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        XCTAssertEqual(SubtitleIntent.afterPick(sub(1, lang: "eng", hi: true), replacing: current, audioLanguage: "jpn"),
+                       .foreignAudio(language: "eng", hearingImpaired: true))
+        XCTAssertEqual(SubtitleIntent.afterPick(sub(2, lang: "eng", forced: true), replacing: current, audioLanguage: "eng"),
+                       .foreignAudio(language: "eng", hearingImpaired: false))
+    }
+
+    func testPickOfFullSubtitlesOverNativeAudioMeansAlways() {
+        let current = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        XCTAssertEqual(SubtitleIntent.afterPick(sub(1, lang: "eng"), replacing: current, audioLanguage: "eng"),
+                       .track(language: "eng", forced: false, hearingImpaired: false, codec: "srt"))
+        XCTAssertEqual(SubtitleIntent.afterPick(nil, replacing: current, audioLanguage: "jpn"), .off)
+    }
+
+    func testOldStoredIntentsStillDecode() throws {
+        let data = try JSONEncoder().encode(SubtitleIntent.track(language: "eng", forced: true, hearingImpaired: false, codec: nil))
+        XCTAssertEqual(try JSONDecoder().decode(SubtitleIntent.self, from: data),
+                       .track(language: "eng", forced: true, hearingImpaired: false, codec: nil))
+    }
+
+    // MARK: - Original audio
+
+    func testOriginalPicksTheMainTrackAtBestQuality() {
+        let tracks = [
+            audio(1, lang: "eng", codec: "eac3", channels: 6),
+            audio(2, lang: "jpn", codec: "aac", channels: 2, isDefault: true),
+            audio(3, lang: "jpn", codec: "truehd", channels: 6),
+            audio(4, lang: "jpn", channels: 6, name: "Commentary")
+        ]
+        XCTAssertEqual(TrackIntentResolver.resolveAudio(intent: AudioIntent(language: TrackLanguage.original), in: tracks)?.id, 3)
+    }
+
+    func testOriginalWithNoDefaultTakesTheFirstTrack() {
+        let tracks = [audio(1, lang: "fra"), audio(2, lang: "eng")]
+        XCTAssertEqual(TrackIntentResolver.resolveAudio(intent: AudioIntent(language: TrackLanguage.original), in: tracks)?.id, 1)
+    }
 }

@@ -29,6 +29,8 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("pinnedCollection_") { return descriptors["pinnedCollection"] }
         if id.hasPrefix("fav_") { return descriptors["liveTVFavoriteRow"] }
         if id.hasPrefix("sq_") { return descriptors["streamingQualityOption"] }
+        if id.hasPrefix("al_") { return descriptors["audioLanguage"] }
+        if id.hasPrefix("sl_") { return descriptors["subtitleLanguage"] }
         return nil
     }
 
@@ -157,6 +159,22 @@ enum SettingsDescriptorStore {
         "streamingQualityOption": SettingDescriptor(
             icon: "dial.medium",
             description: "Original plays the file untouched. Auto measures your connection and converts only when the file will not fit. A fixed rate converts anything above it; converted video plays without HDR, Dolby Vision or Atmos."
+        ),
+        "audioLanguage": SettingDescriptor(
+            icon: "waveform",
+            description: "The audio track to play when a title has several. Original plays the file's main track, so foreign films and anime keep their own language. Picking a track in the player also changes this."
+        ),
+        "subtitleMode": SettingDescriptor(
+            icon: "captions.bubble",
+            description: "Foreign Audio shows subtitles when the audio is not in your subtitle language, and forced subtitles for foreign lines otherwise. Always shows them on every title. Picking a track in the player also changes this."
+        ),
+        "subtitleLanguage": SettingDescriptor(
+            icon: "globe",
+            description: "The language subtitles are shown in."
+        ),
+        "subtitleSDH": SettingDescriptor(
+            icon: "ear",
+            description: "Prefers subtitles for the deaf and hard of hearing, which also describe sounds and name who is speaking."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",
@@ -457,6 +475,8 @@ enum SettingsDescriptorStore {
         case .skipBackIntervalPicker: return ("backward.fill", .systemBlue)
         case .homeQualityPicker: return ("house.fill", .systemBlue)
         case .awayQualityPicker: return ("antenna.radiowaves.left.and.right", .systemBlue)
+        case .audioLanguagePicker: return ("waveform", .systemCyan)
+        case .subtitleLanguagePicker: return ("captions.bubble", .systemYellow)
         case .contentFilter: return ("hand.raised.fill", .systemOrange)
         case .contentFilterStrength: return ("dial.medium.fill", .systemOrange)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .systemBlue)

@@ -2238,7 +2238,12 @@ final class UniversalPlayerViewModel: ObservableObject {
             languages.append(contentsOf: languageCandidates(for: track))
         }
 
-        languages.append(TrackIntentStore.effectiveAudioIntent.language)
+        let audioIntent = TrackIntentStore.effectiveAudioIntent
+        if audioIntent.language != TrackLanguage.original {
+            languages.append(audioIntent.language)
+        } else if let main = TrackIntentResolver.resolveAudio(intent: audioIntent, in: plexAudioTracksFromMetadata()) {
+            languages.append(contentsOf: languageCandidates(for: main))
+        }
 
         if let selected = plexAudioTracksFromMetadata().first(where: { $0.isDefault }) {
             languages.append(contentsOf: languageCandidates(for: selected))
@@ -2261,14 +2266,22 @@ final class UniversalPlayerViewModel: ObservableObject {
             break
         }
 
-        switch TrackIntentStore.subtitleIntent {
+        switch TrackIntentStore.effectiveSubtitleIntent {
         case let .track(language, _, _, _) where !language.isEmpty:
             languages.append(language)
         case .off:
             break
-        case .track, .none:
-            // No stored intent (or an intent with no usable language): fall
-            // back to the file's forced/default subtitle stream.
+        case .foreignAudio:
+            let audio = TrackIntentResolver.resolveAudio(intent: TrackIntentStore.effectiveAudioIntent,
+                                                         in: plexAudioTracksFromMetadata())
+            if let track = TrackIntentResolver.resolveSubtitle(
+                intent: TrackIntentStore.effectiveSubtitleIntent, in: plexSubtitleTracksFromMetadata(),
+                audioLanguage: audio?.languageCode ?? audio?.language) {
+                languages.append(contentsOf: languageCandidates(for: track))
+            }
+        case .track:
+            // An intent with no usable language: fall back to the file's
+            // forced/default subtitle stream.
             if let selected = plexSubtitleTracksFromMetadata()
                 .first(where: { $0.isForced || $0.isDefault }) {
                 languages.append(contentsOf: languageCandidates(for: selected))
@@ -3452,13 +3465,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         default:
             break
         }
-        let intent = TrackIntentStore.subtitleIntent
+        let intent = TrackIntentStore.effectiveSubtitleIntent
         if let selected = streams.first(where: { $0.isSubtitle && $0.selected == true })?.id,
            let track = subs.first(where: { $0.id == selected }), !track.isDefault, !track.isForced,
            TrackIntentResolver.plexSelectedSubtitleMayOverride(track, intent: intent) {
             ids.subtitle = selected
-        } else if let intent {
-            ids.subtitle = TrackIntentResolver.resolveSubtitle(intent: intent, in: subs)?.id ?? 0
+        } else {
+            let playing = audio.first { $0.id == ids.audio }
+            ids.subtitle = TrackIntentResolver.resolveSubtitle(
+                intent: intent, in: subs, audioLanguage: playing?.languageCode ?? playing?.language)?.id ?? 0
         }
         return ids
     }
@@ -4435,9 +4450,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         // future playback sessions restore it.
         selectAudioTrackWithoutSaving(id: id)
 
-        if let track = audioTracks.first(where: { $0.id == id }) {
+        // Picking what the intent already chooses (Original's main track) leaves it alone.
+        if let track = audioTracks.first(where: { $0.id == id }),
+           TrackIntentResolver.resolveAudio(intent: TrackIntentStore.effectiveAudioIntent, in: audioTracks)?.id != id {
             TrackIntentStore.audioIntent = AudioIntent(from: track)
         }
+        // Foreign Audio follows the new language.
+        if case .foreignAudio = TrackIntentStore.effectiveSubtitleIntent { applyGlobalSubtitleIntent() }
     }
 
     /// Select audio track without saving preference (for auto-selection)
@@ -4463,11 +4482,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // future playback sessions restore it.
         selectSubtitleTrackWithoutSaving(id: id)
 
-        if let id = id, let track = subtitleTracks.first(where: { $0.id == id }) {
-            TrackIntentStore.subtitleIntent = SubtitleIntent(from: track)
-        } else {
-            TrackIntentStore.subtitleIntent = .off
-        }
+        TrackIntentStore.subtitleIntent = .afterPick(
+            id.flatMap { id in subtitleTracks.first { $0.id == id } },
+            replacing: TrackIntentStore.effectiveSubtitleIntent, audioLanguage: playingAudioLanguage)
     }
 
     // MARK: - Subtitle Search
@@ -4494,7 +4511,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// The subtitle preference's language, else the device's, as ISO 639-1.
     private var subtitleSearchLanguage: String {
         let device = Locale.current.language.languageCode?.identifier(.alpha2) ?? "en"
-        guard case .track(let preferred, _, _, _) = TrackIntentStore.subtitleIntent ?? .off else { return device }
+        guard let preferred = TrackIntentStore.effectiveSubtitleIntent.language else { return device }
         let code = TrackLanguage.normalize(preferred)
         return code.isEmpty ? device : Locale.LanguageCode(code).identifier(.alpha2) ?? device
     }
@@ -4528,7 +4545,9 @@ final class UniversalPlayerViewModel: ObservableObject {
                     $0.isSubtitle && $0.key != nil && !known.contains($0.id)
                 }) else { continue }
                 metadata.Media = media
-                TrackIntentStore.subtitleIntent = SubtitleIntent(from: MediaTrack(from: added))
+                TrackIntentStore.subtitleIntent = .afterPick(
+                    MediaTrack(from: added), replacing: TrackIntentStore.effectiveSubtitleIntent,
+                    audioLanguage: playingAudioLanguage)
                 tracks.subtitle = added.id
                 hideCompatibilityNotice()
                 enqueueStreamWork { vm in
@@ -4746,30 +4765,30 @@ final class UniversalPlayerViewModel: ObservableObject {
            let track = subtitleTrackMatchingPlexStreamId(selectedId),
            !track.isDefault, !track.isForced,
            TrackIntentResolver.plexSelectedSubtitleMayOverride(
-               track, intent: TrackIntentStore.subtitleIntent
+               track, intent: TrackIntentStore.effectiveSubtitleIntent
            ) {
             selectSubtitleTrackWithoutSaving(id: track.id)
             return
         }
 
-        // 3. No explicit user intent yet: honor selected/default stream behavior.
-        guard let intent = TrackIntentStore.subtitleIntent else {
-            if currentSubtitleTrackId == nil,
-               let forcedTrack = subtitleTracks.first(where: { $0.isForced }) {
-                selectSubtitleTrackWithoutSaving(id: forcedTrack.id)
-            } else if let activeSubtitleTrackId = currentSubtitleTrackId {
-                selectSubtitleTrackWithoutSaving(id: activeSubtitleTrackId)
-            }
-            return
-        }
+        applyGlobalSubtitleIntent()
+    }
 
-        // 4. Global subtitle intent. Resolution is a PURE READ: when no track
+    /// The playing audio track's language, for Foreign Audio.
+    private var playingAudioLanguage: String? {
+        let audio = audioTracks.first { $0.id == currentAudioTrackId }
+        return audio?.languageCode ?? audio?.language
+    }
+
+    private func applyGlobalSubtitleIntent() {
+        // 3. Global subtitle intent. Resolution is a PURE READ: when no track
         //    on this title matches the intent (e.g. stored "ENG forced" but
         //    this title only ships a regular English track), subtitles come up
         //    off for this title and the stored intent is left ALONE, so it
         //    re-engages on the next title that does have a forced English
         //    track. Only an explicit user pick writes intent.
-        if let match = TrackIntentResolver.resolveSubtitle(intent: intent, in: subtitleTracks) {
+        if let match = TrackIntentResolver.resolveSubtitle(intent: TrackIntentStore.effectiveSubtitleIntent,
+                                                           in: subtitleTracks, audioLanguage: playingAudioLanguage) {
             selectSubtitleTrackWithoutSaving(id: match.id)
         } else {
             selectSubtitleTrackWithoutSaving(id: nil)

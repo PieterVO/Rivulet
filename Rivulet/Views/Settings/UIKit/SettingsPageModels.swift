@@ -205,6 +205,8 @@ enum SettingsContent {
         case .skipBackIntervalPicker: return skipBackIntervalPicker
         case .homeQualityPicker:      return qualityPicker(home: true)
         case .awayQualityPicker:      return qualityPicker(home: false)
+        case .audioLanguagePicker:    return audioLanguagePicker
+        case .subtitleLanguagePicker: return subtitleLanguagePicker
         case .contentFilter:          return contentFilter
         case .contentFilterStrength:  return contentFilterStrength
         }
@@ -251,6 +253,77 @@ enum SettingsContent {
             SettingsRowItem(id: "sq_\(choice.rawValue)", title: choice.label, kind: .option(
                 isSelected: { StreamingQuality.setting(home: home) == choice },
                 select: { SettingsStore.setString(key, choice.rawValue) }))
+        }
+    }
+
+    private static var audioLanguagePicker: [SettingsRowItem] {
+        let languages = TrackLanguage.choices.sorted { TrackLanguage.displayName($0) < TrackLanguage.displayName($1) }
+        return ([TrackLanguage.original] + languages).map { code in
+            SettingsRowItem(id: "al_\(code)", title: audioLanguageName(code), kind: .option(
+                isSelected: { TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language) == code },
+                select: { TrackIntentStore.audioIntent = AudioIntent(language: code) }))
+        }
+    }
+
+    private static var subtitleLanguagePicker: [SettingsRowItem] {
+        TrackLanguage.choices.sorted { TrackLanguage.displayName($0) < TrackLanguage.displayName($1) }.map { code in
+            SettingsRowItem(id: "sl_\(code)", title: TrackLanguage.displayName(code), kind: .option(
+                isSelected: { TrackLanguage.normalize(subtitleLanguage) == code },
+                select: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), language: code) }))
+        }
+    }
+
+    // MARK: Audio and subtitles (read and written through TrackIntentStore)
+
+    private static func audioLanguageName(_ code: String) -> String {
+        if code == TrackLanguage.original { return "Original" }
+        // An untagged or unknown pick resolves to English (see resolveAudio).
+        return TrackLanguage.isKnown(code) ? TrackLanguage.displayName(code) : TrackLanguage.displayName(TrackLanguage.english)
+    }
+
+    private enum SubtitleMode: String {
+        case foreignAudio = "Foreign Audio", always = "Always", off = "Off", forcedOnly = "Forced Only"
+
+        init(_ intent: SubtitleIntent) {
+            switch intent {
+            case .off: self = .off
+            case .foreignAudio: self = .foreignAudio
+            case .track(_, let forced, _, _): self = forced ? .forcedOnly : .always
+            }
+        }
+
+        /// Forced Only comes from a player pick; cycling leaves it for Always.
+        var next: SubtitleMode {
+            switch self {
+            case .foreignAudio, .forcedOnly: return .always
+            case .always: return .off
+            case .off: return .foreignAudio
+            }
+        }
+    }
+
+    private static var subtitleLanguage: String {
+        TrackIntentStore.effectiveSubtitleIntent.language ?? TrackLanguage.device
+    }
+
+    private static var subtitleSDH: Bool {
+        switch TrackIntentStore.effectiveSubtitleIntent {
+        case .off: return false
+        case .track(_, _, let hi, _), .foreignAudio(_, let hi): return hi
+        }
+    }
+
+    private static func setSubtitles(mode: SubtitleMode, language: String? = nil, sdh: Bool? = nil) {
+        let language = language ?? subtitleLanguage
+        let sdh = sdh ?? subtitleSDH
+        switch mode {
+        case .off:
+            TrackIntentStore.subtitleIntent = .off
+        case .foreignAudio:
+            TrackIntentStore.subtitleIntent = .foreignAudio(language: language, hearingImpaired: sdh)
+        case .always, .forcedOnly:
+            TrackIntentStore.subtitleIntent = .track(language: language, forced: mode == .forcedOnly,
+                                                     hearingImpaired: sdh, codec: nil)
         }
     }
 
@@ -333,7 +406,23 @@ enum SettingsContent {
     // MARK: Playback
 
     private static var playback: [SettingsRowItem] {
-        [
+        let subtitlesOn = { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent) != .off }
+        return [
+            SettingsRowItem(id: "audioLanguage", title: "Audio Language",
+                            kind: .navigationValue(.audioLanguagePicker, value: {
+                                audioLanguageName(TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language))
+                            })),
+            SettingsRowItem(id: "subtitleMode", title: "Subtitles",
+                            kind: .cycle(value: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).rawValue },
+                                         next: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).next) })),
+            SettingsRowItem(id: "subtitleLanguage", title: "Subtitle Language",
+                            kind: .navigationValue(.subtitleLanguagePicker, value: {
+                                TrackLanguage.displayName(TrackLanguage.normalize(subtitleLanguage))
+                            }), isEnabled: subtitlesOn),
+            SettingsRowItem(id: "subtitleSDH", title: "SDH Subtitles",
+                            kind: .toggle(get: { subtitleSDH },
+                                          set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
+                            isEnabled: subtitlesOn),
             toggle("autoSkipIntro", "Auto-Skip Intro", key: "autoSkipIntro", default: false),
             toggle("autoSkipCredits", "Auto-Skip Credits", key: "autoSkipCredits", default: false),
             toggle("autoSkipAds", "Auto-Skip Ads", key: "autoSkipAds", default: false),

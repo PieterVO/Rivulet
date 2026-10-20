@@ -1043,7 +1043,7 @@ final class AetherPlayer: PlayerProtocol {
     /// The user's saved audio-language intent (ISO code), if any.
     private static func livePreferredAudioLanguages() -> [String] {
         let lang = TrackIntentStore.effectiveAudioIntent.language
-        return lang.isEmpty ? [] : [lang]
+        return lang.isEmpty || lang == TrackLanguage.original ? [] : [lang]
     }
 
     /// The user's saved subtitle-language intent (ISO code) when subtitles

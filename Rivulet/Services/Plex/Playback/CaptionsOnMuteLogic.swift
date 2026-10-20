@@ -46,8 +46,7 @@ struct CaptionsOnMuteLogic {
 
     /// The language a saved subtitle pick names, if any.
     static func language(of intent: SubtitleIntent?) -> String? {
-        if case let .track(language, _, _, _) = intent { return language }
-        return nil
+        intent?.language
     }
 
     /// Preferred subtitle language, else the audio language, else the first

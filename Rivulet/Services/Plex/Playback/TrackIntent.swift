@@ -31,6 +31,9 @@ import Foundation
 enum SubtitleIntent: Codable, Equatable {
     case off
     case track(language: String, forced: Bool, hearingImpaired: Bool, codec: String?)
+    /// Full subtitles in `language` when the audio is in another language,
+    /// forced ones when it isn't. The default when nothing is stored.
+    case foreignAudio(language: String, hearingImpaired: Bool)
 }
 
 /// What the user wants for audio, globally.
@@ -59,6 +62,29 @@ extension SubtitleIntent {
             hearingImpaired: track.isHearingImpaired,
             codec: track.codec
         )
+    }
+
+    /// The intent a player pick leaves behind. Under Foreign Audio, a pick
+    /// that fits the mode (a forced track, or subtitles over foreign audio)
+    /// keeps the mode and only updates the language.
+    static func afterPick(_ track: MediaTrack?, replacing current: SubtitleIntent,
+                          audioLanguage: String?) -> SubtitleIntent {
+        guard let track else { return .off }
+        let language = track.languageCode ?? track.language ?? ""
+        if case .foreignAudio = current, TrackLanguage.isKnown(language),
+           track.isForced || TrackLanguage.isForeign(audioLanguage, to: language) {
+            return .foreignAudio(language: language, hearingImpaired: track.isHearingImpaired)
+        }
+        return SubtitleIntent(from: track)
+    }
+
+    /// The subtitle language this intent asks for, if any.
+    var language: String? {
+        switch self {
+        case .off: return nil
+        case .track(let language, _, _, _), .foreignAudio(let language, _):
+            return TrackLanguage.isKnown(language) ? language : nil
+        }
     }
 }
 
@@ -117,6 +143,37 @@ enum TrackLanguage {
     }
 
     static let english = "eng"
+
+    /// Audio intent sentinel: the file's main (default) track, whatever its language.
+    static let original = "original"
+
+    /// Languages offered in Settings, as normalized keys.
+    static let choices = [
+        "ara", "zho", "ces", "dan", "nld", "eng", "fin", "fra", "deu", "ell",
+        "heb", "hin", "hun", "ita", "jpn", "kor", "nor", "pol", "por", "rus",
+        "spa", "swe", "tha", "tur", "ukr", "vie"
+    ]
+
+    /// The device's language, the subtitle default.
+    static var device: String {
+        let code = normalize(Locale.current.language.languageCode?.identifier)
+        return code.isEmpty ? english : code
+    }
+
+    static func displayName(_ code: String) -> String {
+        let alpha2 = Locale.LanguageCode(code).identifier(.alpha2) ?? code
+        return Locale.current.localizedString(forLanguageCode: alpha2)?.capitalized ?? code
+    }
+
+    /// False for missing, undetermined and "no linguistic content" tags.
+    static func isKnown(_ code: String?) -> Bool {
+        !["", "und", "mis", "mul", "zxx"].contains(normalize(code))
+    }
+
+    /// Both languages known and different.
+    static func isForeign(_ audio: String?, to subtitle: String?) -> Bool {
+        isKnown(audio) && isKnown(subtitle) && !matches(audio, subtitle)
+    }
 
     static func matches(_ a: String?, _ b: String?) -> Bool {
         let na = normalize(a)
@@ -239,10 +296,23 @@ enum TrackIntentResolver {
     ///   2. language + forced + hearingImpaired
     ///   3. language + forced
     ///   4. off
-    static func resolveSubtitle(intent: SubtitleIntent, in tracks: [MediaTrack]) -> MediaTrack? {
+    ///
+    /// `.foreignAudio` asks for full subtitles when `audioLanguage` is known
+    /// and differs, falling back to forced; otherwise forced only.
+    static func resolveSubtitle(intent: SubtitleIntent, in tracks: [MediaTrack],
+                                audioLanguage: String? = nil) -> MediaTrack? {
         switch intent {
         case .off:
             return nil
+
+        case let .foreignAudio(language, hearingImpaired):
+            if TrackLanguage.isForeign(audioLanguage, to: language),
+               let full = resolveSubtitle(intent: .track(language: language, forced: false,
+                                                         hearingImpaired: hearingImpaired, codec: nil), in: tracks) {
+                return full
+            }
+            return resolveSubtitle(intent: .track(language: language, forced: true,
+                                                  hearingImpaired: hearingImpaired, codec: nil), in: tracks)
 
         case let .track(language, forced, hearingImpaired, codec):
             // Every tier requires language AND the forced bit to agree.
@@ -295,7 +365,7 @@ enum TrackIntentResolver {
 
     /// Resolve the stored audio intent against the tracks of the current title.
     ///
-    /// Ladder:
+    /// Ladder (`TrackLanguage.original` takes the file's main track instead):
     ///   1. Exact: language + codec + channels (commentary allowed — the user
     ///      explicitly asked for this track shape).
     ///   2. Same language, best quality (commentary excluded).
@@ -303,6 +373,20 @@ enum TrackIntentResolver {
     ///   4. File default, else first track (commentary excluded where possible).
     static func resolveAudio(intent: AudioIntent?, in tracks: [MediaTrack]) -> MediaTrack? {
         guard !tracks.isEmpty else { return nil }
+
+        // Auto-selection tiers never pick commentary / audio description.
+        let selectable = tracks.filter { !TrackCommentary.isCommentaryOrDescription($0) }
+
+        // Original: the file's main track, at the best quality in its language.
+        if intent?.language == TrackLanguage.original {
+            guard let main = selectable.first(where: { $0.isDefault }) ?? selectable.first else {
+                return tracks.first(where: { $0.isDefault }) ?? tracks.first
+            }
+            let sameLanguage = selectable.filter {
+                TrackLanguage.matches($0.languageCode ?? $0.language, main.languageCode ?? main.language)
+            }
+            return bestByQuality(sameLanguage) ?? main
+        }
 
         // 1. Exact match — honors an explicitly-picked commentary track.
         if let intent {
@@ -314,9 +398,6 @@ enum TrackIntentResolver {
                 return exact
             }
         }
-
-        // Auto-selection tiers never pick commentary / audio description.
-        let selectable = tracks.filter { !TrackCommentary.isCommentaryOrDescription($0) }
 
         // 2. Same language, best quality.
         if let intent, !TrackLanguage.normalize(intent.language).isEmpty {
@@ -391,7 +472,6 @@ enum TrackIntentStore {
     // MARK: Subtitle
 
     /// The stored subtitle intent, or `nil` if the user has never picked one.
-    /// `nil` means "no stored intent" — honor the file's forced/default track.
     /// `.off` means the user explicitly turned subtitles off.
     static var subtitleIntent: SubtitleIntent? {
         get {
@@ -415,6 +495,12 @@ enum TrackIntentStore {
     static var hasSubtitleIntent: Bool {
         migrateLegacyIfNeeded()
         return defaults.data(forKey: subtitleKey) != nil
+    }
+
+    /// What playback resolves against: Foreign Audio in the device's
+    /// language when nothing is stored.
+    static var effectiveSubtitleIntent: SubtitleIntent {
+        subtitleIntent ?? .foreignAudio(language: TrackLanguage.device, hearingImpaired: false)
     }
 
     // MARK: Audio

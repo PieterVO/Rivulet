@@ -150,6 +150,8 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (99)", [
+            "Set your audio and subtitle languages in Settings, under Playback.",
+            "Subtitles now turn on by themselves when the audio isn't in your language.",
             "New Xtream Codes sources in Live TV: sign in with your provider's login.",
             "Adding a Live TV source or Jellyfin server now asks one thing per page.",
             "Fixed missing guide data from some IPTV playlists and guides.",
