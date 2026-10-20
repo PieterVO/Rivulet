@@ -287,6 +287,10 @@ class PlexAuthManager: ObservableObject {
                 await Self.onAuthenticated?()
 
                 return true
+            } else if selectedServerURL != nil {
+                // The switch failed. The current server stays selected.
+                // The app did not test it again, so do not mark it as unreachable.
+                return false
             } else {
                 isConnected = false
                 connectionError = "Could not connect to server. Check your network."
@@ -884,6 +888,7 @@ class PlexAuthManager: ObservableObject {
         }
         if storedContent == .account {
             selectedServerToken = token
+            if serverChanged { LiveTVDataStore.shared.plexContentTokenChanged() }
         } else if serverChanged {
             // The profile's token is for the old server: enter it again on this one.
             withholdContent()
@@ -904,6 +909,22 @@ class PlexAuthManager: ObservableObject {
     /// Get saved server name
     var savedServerName: String? {
         userDefaults.string(forKey: serverNameKey)
+    }
+
+    /// Returns true if the app uses `server` now.
+    /// After a relaunch, `selectedServer` is nil, so this also compares the saved URL and name.
+    func isCurrentServer(_ server: PlexDevice) -> Bool {
+        if let current = selectedServer { return current.clientIdentifier == server.clientIdentifier }
+        if let url = selectedServerURL, urlBelongs(url, to: server) { return true }
+        return server.name == savedServerName
+    }
+
+    /// Whether `url` points at the server in use, so its token may go there.
+    func isCurrentServerURL(_ url: String) -> Bool {
+        if url == selectedServerURL { return true }
+        if let server = selectedServer { return urlBelongs(url, to: server) }
+        guard let current = selectedServerURL.flatMap(URL.init(string:)), let other = URL(string: url) else { return false }
+        return current.host == other.host && current.port == other.port
     }
 
     /// Verify current connection and re-select if needed

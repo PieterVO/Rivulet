@@ -149,6 +149,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (100)", [
+            "Switch Plex servers in Settings without signing out.",
+        ]),
         ("1.1.0 (99)", [
             "Added folder view.",
             "Added delete to the long press menu.",

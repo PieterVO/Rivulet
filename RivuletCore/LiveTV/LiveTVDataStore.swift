@@ -461,7 +461,8 @@ class LiveTVDataStore: ObservableObject {
 
     /// A Plex source under the token content uses now; nil while content is withheld.
     private func plexProvider(for config: SourceConfiguration) -> PlexLiveTVProvider? {
-        guard let serverURL = config.baseURL,
+        // A source added on another server stays withheld: this token is not for it.
+        guard let serverURL = config.baseURL, PlexAuthManager.shared.isCurrentServerURL(serverURL),
               let authToken = PlexAuthManager.shared.selectedServerToken else { return nil }
         return PlexLiveTVProvider(serverURL: serverURL, authToken: authToken,
                                   serverName: PlexAuthManager.shared.savedServerName ?? "Plex")
