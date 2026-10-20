@@ -150,12 +150,10 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (100)", [
-            "Switch Plex servers in Settings without signing out.",
-        ]),
-        ("1.1.0 (99)", [
             "Added folder view.",
             "Added delete to the long press menu.",
             "Added audio and subtitle language options to Settings.",
+            "Switch Plex servers in Settings without signing out.",
             "New welcome screen.",
             "If you only use Live TV, Rivulet opens straight to it.",
             "Added Xtream Codes sources to Live TV.",
