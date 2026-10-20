@@ -3764,6 +3764,9 @@ final class PlexHomeViewController: UIViewController {
                 // A show's unwatched count and watched glyph (#333).
                 hasher.combine(item.childProgress)
                 hasher.combine(item.userState.isPlayed)
+                // A poster changed on the server keeps the same items.
+                hasher.combine(item.artwork)
+                hasher.combine(item.grandparentArtwork)
             }
         }
         return hasher.finalize()

@@ -899,10 +899,7 @@ enum SettingsContent {
                                confirmTitle: "Refresh", destructive: false) {
                     Task {
                         await CacheManager.shared.clearAllCache()
-                        await PlexDataStore.shared.refreshLibraries()
-                        await PlexDataStore.shared.refreshHubs()
-                        await PlexDataStore.shared.refreshLibraryHubs()
-                        NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+                        await reloadFromServer()
                     }
                 }
             })),
@@ -914,10 +911,19 @@ enum SettingsContent {
                     Task {
                         await ImageCacheManager.shared.clearAll()
                         await CacheManager.shared.clearAllCache()
+                        await reloadFromServer()
                     }
                 }
             }))
         ]
+    }
+
+    /// Refetches libraries and Home rows, then tells every surface to repaint.
+    private static func reloadFromServer() async {
+        await PlexDataStore.shared.refreshLibraries()
+        await PlexDataStore.shared.refreshHubs()
+        await PlexDataStore.shared.refreshLibraryHubs()
+        NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
     }
 
     /// Canonical confirm/cancel prompt: the Liquid-Glass card

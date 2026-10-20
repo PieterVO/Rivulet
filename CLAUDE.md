@@ -639,7 +639,11 @@ functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
   Vision's models on the CPU; without `setComputeDevice` under
   `#if targetEnvironment(simulator)` face detection fails there, `Signals.faces`
   is nil and each title stays where it started, which looks like scoring that
-  does nothing.
+  does nothing. Even pinned, the simulator's saliency and objectness maps are
+  junk: the same near-zero map for every image (measured 2026-10-20). Faces
+  work, but almost every title stays on the floor. **Judge placement on a device
+  or on a macOS bench** (swiftc the two pure files plus a small `main.swift`;
+  the Mac's Vision returns real maps), never in the simulator.
 - **Vision and drawing run on `ContinueWatchingCardCache`'s own serial queue
   (`offPool`), never in a `Task`.** On Swift's cooperative pool a few cards'
   analysis held every thread of a 3-core Apple TV (2nd-gen 4K), and image
