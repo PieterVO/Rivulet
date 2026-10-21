@@ -762,6 +762,8 @@ class PlexAuthManager: ObservableObject {
 
         // Clear user profile selection
         PlexUserProfileManager.shared.reset()
+        // Takes the server's DVR out of Live TV.
+        LiveTVDataStore.shared.plexContentTokenChanged()
 
         // Clear cached library / hub / metadata content from the previous
         // session. Without this, after a sign-out + sign-in to a different
@@ -888,7 +890,8 @@ class PlexAuthManager: ObservableObject {
         }
         if storedContent == .account {
             selectedServerToken = token
-            if serverChanged { LiveTVDataStore.shared.plexContentTokenChanged() }
+            // A no-op unless server or token changed; a first sign-in changes both.
+            LiveTVDataStore.shared.plexContentTokenChanged()
         } else if serverChanged {
             // The profile's token is for the old server: enter it again on this one.
             withholdContent()

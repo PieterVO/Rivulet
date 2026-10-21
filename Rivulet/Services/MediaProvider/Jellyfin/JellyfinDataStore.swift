@@ -96,6 +96,8 @@ final class JellyfinDataStore: ObservableObject {
         // Assigned only on change: Plex-only users reach here on every launch,
         // foreground and watch-state change, and each publish redraws Home.
         update(\.account, PlexUserProfileManager.shared.isRestrictedProfile ? nil : JellyfinSession.account)
+        // The server's Live TV follows the account into and out of Live TV.
+        JellyfinLiveTVProvider.sync(account.flatMap { MediaProviderRegistry.shared.provider(for: $0.providerID) } as? JellyfinProvider)
         guard let account,
               let provider = MediaProviderRegistry.shared.provider(for: account.providerID) else {
             update(\.libraries, [])

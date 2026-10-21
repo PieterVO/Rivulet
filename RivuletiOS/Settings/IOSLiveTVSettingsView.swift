@@ -98,18 +98,21 @@ private struct IOSLiveSourceDetailView: View {
                     }
                     .disabled(isRefreshing)
                 }
-                Section {
-                    Button("Remove Source", role: .destructive) { confirmingRemove = true }
-                        .confirmationDialog("Remove Source?", isPresented: $confirmingRemove, titleVisibility: .visible) {
-                            Button("Remove", role: .destructive) {
-                                Task {
-                                    await store.removeSource(id: sourceId)
-                                    dismiss()
+                // A server's own Live TV leaves with its sign-in.
+                if !source.sourceType.followsServer {
+                    Section {
+                        Button("Remove Source", role: .destructive) { confirmingRemove = true }
+                            .confirmationDialog("Remove Source?", isPresented: $confirmingRemove, titleVisibility: .visible) {
+                                Button("Remove", role: .destructive) {
+                                    Task {
+                                        await store.removeSource(id: sourceId)
+                                        dismiss()
+                                    }
                                 }
+                            } message: {
+                                Text("This will remove \"\(source.displayName)\" and all its channels from Live TV.")
                             }
-                        } message: {
-                            Text("This will remove \"\(source.displayName)\" and all its channels from Live TV.")
-                        }
+                    }
                 }
             }
         }
@@ -156,27 +159,12 @@ private struct IOSLiveFavoritesView: View {
 
 /// Picker named after what the user has, then a short form. Closes on success.
 struct IOSLiveAddSourceSheet: View {
-    @EnvironmentObject private var plex: IOSPlexSession
     @Environment(\.dismiss) private var dismiss
-    @State private var checkingPlex = false
-    @State private var failure: LiveTVConnectError?
 
     var body: some View {
         NavigationStack {
+            // No Plex row: the Plex server's DVR is added on its own.
             List {
-                if plex.isConfigured {
-                    Button(action: addPlex) {
-                        HStack {
-                            row("Plex Live TV", detail: "From your Plex server's tuners", systemImage: "server.rack")
-                            if checkingPlex {
-                                Spacer()
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(checkingPlex)
-                    .foregroundStyle(.primary)
-                }
                 NavigationLink {
                     IOSLiveXtreamForm { dismiss() }
                 } label: {
@@ -201,7 +189,6 @@ struct IOSLiveAddSourceSheet: View {
                     Button(role: .cancel) { dismiss() }
                 }
             }
-            .connectFailureAlert($failure)
         }
         .presentationSizing(.form)
     }
@@ -214,19 +201,6 @@ struct IOSLiveAddSourceSheet: View {
             }
         } icon: {
             Image(systemName: systemImage)
-        }
-    }
-
-    private func addPlex() {
-        checkingPlex = true
-        Task {
-            defer { checkingPlex = false }
-            do {
-                try await LiveTVSourceConnector().connect(LiveTVSourceConnector.plexRequest())
-                dismiss()
-            } catch {
-                failure = error as? LiveTVConnectError ?? .plex(error.localizedDescription)
-            }
         }
     }
 }

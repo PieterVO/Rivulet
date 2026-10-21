@@ -20,7 +20,6 @@ final class SettingsFormFailurePopupTests: XCTestCase {
         window?.isHidden = true
         window = nil
         SettingsContent.addSourceDraft = nil
-        SettingsContent.plexStatus = .idle
         try await super.tearDown()
     }
 

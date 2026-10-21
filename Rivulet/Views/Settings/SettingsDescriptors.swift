@@ -339,10 +339,6 @@ enum SettingsDescriptorStore {
             icon: "trash",
             description: "Remove this Live TV source and all its channels."
         ),
-        "addPlexLiveTV": SettingDescriptor(
-            icon: "play.rectangle.fill",
-            description: "Add the tuners already set up on your Plex server. One press adds them and loads the channel list."
-        ),
         "addXtream": SettingDescriptor(
             icon: "person.badge.key",
             description: "Sign in with the server address, username and password your IPTV provider gave you, often called an Xtream Codes login. Rivulet loads the channels, categories and guide. It supplies no channels of its own."

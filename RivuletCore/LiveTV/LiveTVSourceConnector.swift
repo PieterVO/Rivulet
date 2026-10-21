@@ -23,19 +23,9 @@ struct LiveTVConnectError: LocalizedError, Equatable {
     static func source(_ message: String) -> LiveTVConnectError {
         LiveTVConnectError(title: "Couldn't Add Source", message: message)
     }
-
-    static func plex(_ message: String) -> LiveTVConnectError {
-        LiveTVConnectError(title: "Couldn't Add Plex Live TV", message: message)
-    }
 }
 
 struct LiveTVSourceConnector {
-    struct PlexRequest {
-        let serverURL: String
-        let token: String
-        let serverName: String
-    }
-
     struct ServerRequest {
         let baseURL: URL
         let channelProfile: String?
@@ -62,28 +52,6 @@ struct LiveTVSourceConnector {
 
     init(session: URLSession? = nil) {
         self.session = session
-    }
-
-    // MARK: Plex
-
-    static func plexRequest() throws -> PlexRequest {
-        let auth = PlexAuthManager.shared
-        guard let serverURL = auth.selectedServerURL,
-              let token = auth.selectedServerToken,
-              let serverName = auth.savedServerName else {
-            throw LiveTVConnectError.plex("Plex server is not connected.")
-        }
-        return PlexRequest(serverURL: serverURL, token: token, serverName: serverName)
-    }
-
-    func connect(_ request: PlexRequest) async throws {
-        guard await PlexLiveTVProvider.checkAvailability(serverURL: request.serverURL, authToken: request.token) else {
-            throw LiveTVConnectError.plex("No DVR or tuners are set up on this Plex server.")
-        }
-        let store = LiveTVDataStore.shared
-        await store.addPlexSource(provider: PlexLiveTVProvider(serverURL: request.serverURL, authToken: request.token,
-                                                               serverName: request.serverName))
-        await Self.load(store)
     }
 
     // MARK: Own server (Dispatcharr)

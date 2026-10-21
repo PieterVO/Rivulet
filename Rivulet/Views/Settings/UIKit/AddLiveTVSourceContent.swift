@@ -87,15 +87,8 @@ extension SettingsContent {
     /// "My Own Server" row are load-bearing: that's how someone running
     /// Threadfin recognises the row as theirs.
     static var addLiveTVSource: [SettingsRowItem] {
+        // No Plex or Jellyfin row: a signed-in server's Live TV is added on its own.
         var rows: [SettingsRowItem] = []
-
-        if PlexAuthManager.shared.isAuthenticated {
-            rows.append(SettingsRowItem(
-                id: "addPlexLiveTV",
-                title: plexRowTitle,
-                kind: .action(destructive: false, handler: { vc in addPlexLiveTV(on: vc) })))
-        }
-
         rows.append(SettingsRowItem(
             id: "addXtream", title: "Xtream Codes",
             kind: .navigationAction(.addXtream,
@@ -114,56 +107,16 @@ extension SettingsContent {
         return rows
     }
 
-    /// Picker-local status for the Plex row (the Plex path has no form, so it
-    /// can't use the draft). Reset by `resetAddSourceFlow()` on entry so a
-    /// previous visit's state never greets the next one.
-    static var plexStatus: AddSourceDraft.Status = .idle
-
     /// Clears everything the flow holds. Called when the picker page loads, so
     /// entering the flow always starts blank.
     static func resetAddSourceFlow() {
-        plexStatus = .idle
         addSourceDraft = nil
-    }
-
-    private static var plexRowTitle: String {
-        plexStatus == .checking ? "Checking…" : "Plex Live TV"
     }
 
     private static func beginDraft(displayName: String) {
         let draft = AddSourceDraft()
         draft.displayName = displayName
         addSourceDraft = draft
-    }
-
-    /// Single press: check, add, load, pop. No confirm page.
-    private static func addPlexLiveTV(on vc: UIViewController) {
-        guard plexStatus != .checking else { return }
-        let request: LiveTVSourceConnector.PlexRequest
-        do {
-            request = try LiveTVSourceConnector.plexRequest()
-        } catch {
-            plexStatus = .idle
-            fail(nil, page: vc as? SettingsPageViewController, error: error)
-            return
-        }
-
-        plexStatus = .checking
-        let page = vc as? SettingsPageViewController
-        page?.reloadRows()
-
-        Task { @MainActor in
-            do {
-                try await LiveTVSourceConnector().connect(request)
-            } catch {
-                plexStatus = .idle
-                fail(nil, page: page, error: error)
-                return
-            }
-            plexStatus = .idle
-            addSourceDraft = nil
-            page?.onPop?()  // the picker itself: one level to the list
-        }
     }
 
     // MARK: Xtream Codes

@@ -53,6 +53,12 @@ final class PlexLiveTimelineKeepalive {
     /// Bumped by stop(). A ping still queued behind a slow request is
     /// dropped rather than sent after the stop.
     private var generation = 0
+    /// A non-Plex URL `start` was given, handed to `releaseOtherSession` on stop.
+    private var otherSessionURL: URL?
+
+    /// Host hook for live sessions on other servers (tvOS: Jellyfin's live
+    /// streams). Called once per started URL on stop; ignores URLs not its own.
+    static var releaseOtherSession: (@MainActor (URL) -> Void)?
 
     init(transport: @escaping Transport = PlexLiveTimelineKeepalive.send) {
         self.transport = transport
@@ -72,6 +78,7 @@ final class PlexLiveTimelineKeepalive {
               let token = components.queryItems?
                   .first(where: { $0.name == "X-Plex-Token" })?.value,
               let sessionPath = Self.sessionPath(from: url, components: components) else {
+            otherSessionURL = url
             return
         }
 
@@ -117,6 +124,10 @@ final class PlexLiveTimelineKeepalive {
         heartbeatTask?.cancel()
         heartbeatTask = nil
         generation += 1
+        if let otherSessionURL {
+            self.otherSessionURL = nil
+            Self.releaseOtherSession?(otherSessionURL)
+        }
         guard let context else { return }
         self.context = nil
         enqueue(timelineRequest(context, state: "stopped"))

@@ -1060,6 +1060,8 @@ enum SettingsContent {
                 (vc as? SettingsPageViewController)?.reloadRows()
             }
         })))
+        // A server's own Live TV leaves with its sign-in; removed here it would come straight back.
+        guard !source.sourceType.followsServer else { return rows }
         rows.append(SettingsRowItem(id: "removeSource", title: "Remove Source",
                                     kind: .action(destructive: true, handler: { vc in
             presentConfirm(on: vc, title: "Remove Source?",

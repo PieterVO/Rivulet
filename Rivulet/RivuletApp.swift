@@ -41,6 +41,7 @@ struct RivuletApp: App {
             Task { await ImageCacheManager.shared.clearAll() }
         }
         JellyfinSession.onChanged = { JellyfinDataStore.shared.reload() }
+        PlexLiveTimelineKeepalive.releaseOtherSession = { JellyfinLiveTVProvider.closeLiveStream($0) }
         PlexUserProfileManager.onProfileChanged = {
             // The queue reports progress with whichever token is current.
             MusicQueue.shared.stop()
