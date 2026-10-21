@@ -32,19 +32,20 @@ class LiveTVDataStore: ObservableObject {
     /// because midweek the loaded window holds no such block.
     private(set) var eventSlotIds: Set<String> = []
 
-    /// End of the currently loaded EPG window. The guide extends past this as
-    /// the user scrolls toward the right edge (see `extendEPG`). nil until the
-    /// first `loadEPG` completes.
+    /// End of the currently loaded EPG window. `fillGuide` moves it out to
+    /// `epgMaxHoursAhead` after each `loadEPG`. nil until the first load completes.
     @Published private(set) var epgLoadedThrough: Date?
 
-    /// True while an incremental `extendEPG` fetch is in flight; the guide's
-    /// scroll-edge trigger checks this so it never stacks concurrent extensions.
-    @Published private(set) var isExtendingEPG = false
-
-    /// Safety ceiling for lazy extension: never fetch EPG more than this far
-    /// past "now". Most providers cap their grid well inside this anyway; the
-    /// bound just stops an endless right-scroll from firing pointless fetches.
-    private let epgMaxHoursAhead = 72
+    /// How far ahead the guide fills. Plex serves 8 days; providers with less
+    /// just return nothing past their end.
+    static let epgMaxHoursAhead = 192
+    /// Hours per background fill request.
+    private static let fillChunkHours = 12
+    private var fillTask: Task<Void, Never>?
+    private var keepFreshTask: Task<Void, Never>?
+    /// Last full `loadEPG`. Past 6 hours a refresh reloads every day, not
+    /// just the next hours, so far-off schedule changes show up too.
+    private var lastFullEPGLoad: Date?
 
     /// Channels played lately, newest first: What's On's Recently Watched row.
     @Published private(set) var recentChannelIds: [String] = []
@@ -117,8 +118,7 @@ class LiveTVDataStore: ObservableObject {
     nonisolated static let defaultMaxAge: TimeInterval = 30 * 60
 
     /// EPG window a staleness refresh fetches. Matches the guide's own
-    /// initial window (EPGTheme.initialGuideHours); the guide extends from
-    /// there as the user scrolls right.
+    /// initial window (EPGTheme.initialGuideHours); `fillGuide` does the rest.
     static let refreshWindowHours = 6
 
     /// Guards `refreshIfStale` so several surfaces appearing at once (the tab
@@ -259,13 +259,47 @@ class LiveTVDataStore: ObservableObject {
             guard let self else { return }
             // Channels first: the EPG fetch is keyed by the channel list, so
             // a source whose line-up changed needs the new list in hand.
+            let count = self.channels.count
             await self.loadChannels()
             guard !self.channels.isEmpty else { return }
-            await self.loadEPG(startDate: Date(), hours: Self.refreshWindowHours)
+            let now = Date()
+            let near = now.addingTimeInterval(Double(Self.refreshWindowHours) * 3600)
+            if self.epg.isEmpty || self.channels.count != count || (self.epgLoadedThrough ?? now) <= near
+                || now.timeIntervalSince(self.lastFullEPGLoad ?? .distantPast) > 6 * 3600 {
+                await self.loadEPG(startDate: now, hours: Self.refreshWindowHours)
+            } else if await self.mergeEPG(from: now, to: near) {
+                // The far days stay; only the next hours are re-read for changes.
+                self.lastEPGLoad = Date()
+            }
         }
         staleRefreshTask = task
         await task.value
         staleRefreshTask = nil
+    }
+
+    /// Re-checks the guide every 10 minutes while the app is open, so a guide
+    /// left on screen (or behind the player) keeps moving forward.
+    private func keepGuideFresh() {
+        guard keepFreshTask == nil else { return }
+        keepFreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.defaultMaxAge / 3))
+                await self?.refreshIfStale()
+                self?.fillGuide()
+            }
+        }
+    }
+
+    /// Pulls the rest of the guide in half-day requests after the first
+    /// window paints. Stops at the ceiling or on a failure; the next refresh
+    /// starts it again.
+    private func fillGuide() {
+        guard fillTask == nil, !epg.isEmpty else { return }
+        fillTask = Task { [weak self] in
+            while !Task.isCancelled, await self?.extendEPG() == true {}
+            // A cancelled fill was already replaced by `loadEPG`.
+            if !Task.isCancelled { self?.fillTask = nil }
+        }
     }
 
     /// Refresh the guide when the app returns to the foreground. tvOS suspends
@@ -917,6 +951,8 @@ class LiveTVDataStore: ObservableObject {
             if answers { return }
         }
         epgLoad?.task.cancel()
+        fillTask?.cancel()
+        fillTask = nil
 
         isLoadingEPG = true
         epgIssues = []
@@ -1013,7 +1049,7 @@ class LiveTVDataStore: ObservableObject {
                 self.epgLoadedThrough = endDate
                 self.applyXMLTVChannelLogos(finalLogos)
                 // See the note in loadChannels: an empty grid is not "fresh".
-                if !finalEPG.isEmpty { self.lastEPGLoad = Date() }
+                if !finalEPG.isEmpty { self.lastEPGLoad = Date(); self.lastFullEPGLoad = Date() }
             }
         }
 
@@ -1021,6 +1057,8 @@ class LiveTVDataStore: ObservableObject {
 
         await task.value
         if epgLoad?.task == task { epgLoad = nil }
+        fillGuide()
+        if !epg.isEmpty { keepGuideFresh() }
     }
 
     /// Whether a guide load for `loading` answers a request for `requested`.
@@ -1031,76 +1069,62 @@ class LiveTVDataStore: ObservableObject {
             && loading.end >= requested.end.addingTimeInterval(-3600)
     }
 
-    /// Extend the loaded EPG window forward by `hours`, MERGING the new grid
-    /// into `epg` (append + de-dupe by program id, keep each channel sorted by
-    /// start). Drives the guide's lazy horizontal loading: the grid calls this
-    /// as focus/scroll approaches the loaded right edge, so more programming
-    /// appears before the user reaches empty space. No-op while another load or
-    /// extension is running, once the window reaches `epgMaxHoursAhead`, or
-    /// before the first `loadEPG` set `epgLoadedThrough`.
-    func extendEPG(byHours hours: Int) async {
-        guard !providers.isEmpty, !channels.isEmpty,
-              !isLoadingEPG, !isExtendingEPG,
-              let from = epgLoadedThrough
-        else { return }
+    /// Extends the loaded window by one fill chunk. False when there is
+    /// nothing left to fetch, no source answered, or a full load replaced the grid.
+    private func extendEPG() async -> Bool {
+        guard !isLoadingEPG, let from = epgLoadedThrough else { return false }
+        let ceiling = Date().addingTimeInterval(Double(Self.epgMaxHoursAhead) * 3600)
+        let to = min(from.addingTimeInterval(Double(Self.fillChunkHours) * 3600), ceiling)
+        // An hour's minimum, so the moving ceiling doesn't buy a request per tick.
+        guard to.timeIntervalSince(from) >= 3600, await mergeEPG(from: from, to: to),
+              epgLoadedThrough == from, !Task.isCancelled
+        else { return false }
+        epgLoadedThrough = to
+        return true
+    }
 
-        // Respect the look-ahead ceiling; clamp the new end to it.
-        let ceiling = Calendar.current.date(byAdding: .hour, value: epgMaxHoursAhead, to: Date()) ?? from
-        guard from < ceiling else { return }
-        let requestedEnd = Calendar.current.date(byAdding: .hour, value: hours, to: from) ?? from
-        let to = min(requestedEnd, ceiling)
-        guard to > from else { return }
-
-        isExtendingEPG = true
-        defer { isExtendingEPG = false }
-
-        let sourceNames: [String: String] = providers.reduce(into: [:]) { acc, entry in
-            acc[entry.key] = entry.value.displayName
-        }
+    /// Fetches `from..<to` from every source and replaces that range of `epg`
+    /// with it. Channels a source returned nothing for keep what they had.
+    /// False when every source failed or a full load started meanwhile.
+    private func mergeEPG(from: Date, to: Date) async -> Bool {
+        guard !providers.isEmpty, !channels.isEmpty else { return false }
         let channelsBySource = Dictionary(grouping: channels, by: { $0.sourceId })
 
         var newEPG: [String: [UnifiedProgram]] = [:]
-        var issues: [EPGFetchIssue] = []
+        var answered = 0
 
-        await withTaskGroup(of: (String, Result<[String: [UnifiedProgram]], Error>).self) { group in
+        await withTaskGroup(of: [String: [UnifiedProgram]]?.self) { group in
             for (sourceId, sourceChannels) in channelsBySource {
                 guard let provider = providers[sourceId] else { continue }
                 group.addTask {
-                    do {
-                        let epg = try await provider.fetchEPG(for: sourceChannels, startDate: from, endDate: to)
-                        return (sourceId, .success(epg))
-                    } catch {
-                        return (sourceId, .failure(error))
-                    }
+                    try? await provider.fetchEPG(for: sourceChannels, startDate: from, endDate: to)
                 }
             }
-            for await (sourceId, result) in group {
-                switch result {
-                case .success(let epg):
-                    for (channelId, programs) in epg { newEPG[channelId] = programs }
-                case .failure(let error):
-                    if error is CancellationError || (error as NSError).code == NSURLErrorCancelled { continue }
-                    issues.append(EPGFetchIssue(
-                        sourceId: sourceId,
-                        sourceName: sourceNames[sourceId] ?? sourceId,
-                        reason: Self.shortEPGFailureReason(for: error)))
-                }
+            for await result in group {
+                guard let result else { continue }
+                answered += 1
+                newEPG.merge(result) { _, new in new }
             }
         }
+        guard !isLoadingEPG, !Task.isCancelled else { return false }
+        // No banner on failure: the guide already on screen stays usable.
+        epg = Self.merging(newEPG, into: epg, from: from, to: to)
+        return answered > 0
+    }
 
-        // Merge: append new programs, de-dupe by id (providers re-serve the
-        // boundary programme), keep sorted by start.
+    /// `incoming` replaces each of its channels' programmes overlapping
+    /// `from..<to`; everything outside that range stays.
+    nonisolated static func merging(_ incoming: [String: [UnifiedProgram]],
+                                    into epg: [String: [UnifiedProgram]],
+                                    from: Date, to: Date) -> [String: [UnifiedProgram]] {
         var merged = epg
-        for (channelId, incoming) in newEPG {
-            var existing = merged[channelId] ?? []
-            let known = Set(existing.map(\.id))
-            existing.append(contentsOf: incoming.filter { !known.contains($0.id) })
-            existing.sort { $0.startTime < $1.startTime }
-            merged[channelId] = existing
+        for (channelId, programs) in incoming {
+            let kept = (merged[channelId] ?? []).filter { $0.endTime <= from || $0.startTime >= to }
+            let ids = Set(programs.map(\.id))
+            merged[channelId] = (kept.filter { !ids.contains($0.id) } + programs)
+                .sorted { $0.startTime < $1.startTime }
         }
-        epg = merged
-        epgLoadedThrough = to
-        if !issues.isEmpty { epgIssues = issues }
+        return merged
     }
 
     /// Fills in channel artwork from XMLTV `<channel><icon>` logos for any

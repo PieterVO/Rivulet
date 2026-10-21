@@ -116,10 +116,6 @@ struct IOSLiveTVView: View {
                         channel: channel, program: program, recorder: recorder,
                         watch: play, details: { selection = $0 }
                     ))
-                },
-                needsMoreGuide: {
-                    guard !store.isExtendingEPG else { return }
-                    Task { await store.extendEPG(byHours: 6) }
                 }
             )
         )

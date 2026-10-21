@@ -120,7 +120,7 @@ struct GuideLayoutView: View {
     }
 
     /// Timeline width in minutes, tracking the loaded EPG window so the grid
-    /// grows as `extendEPG` pulls more programming. Floors at the initial load
+    /// grows as the store fills in more programming. Floors at the initial load
     /// so the first paint has room, and never runs past the placeholder ceiling.
     private var totalMinutes: Int {
         let floor = EPGTheme.initialGuideHours * 60
@@ -260,9 +260,6 @@ struct GuideLayoutView: View {
                     focusedProgram = program ?? channel.flatMap { dataStore.getCurrentProgram(for: $0) }
                 },
                 onSelect: { channel, _ in selectChannel(channel) },
-                onNeedMore: {
-                    Task { await dataStore.extendEPG(byHours: EPGTheme.lazyLoadChunkHours) }
-                },
                 transparent: true,                 // dark see-through boxes + rounded clipping
                 // Reserve the info bar + category bar above the ruler.
                 topInset: EPGTheme.infoBarHeight + EPGTheme.categoryBarHeight,

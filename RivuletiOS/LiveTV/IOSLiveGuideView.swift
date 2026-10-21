@@ -6,13 +6,12 @@ import UIKit
 
 /// The programme grid. A UICollectionView virtualizes both axes; the channel
 /// column, time ruler and now line are pinned supplementary views.
-/// The window runs from two hours ago to the loaded guide (72 h at most).
+/// The window runs from two hours ago to the loaded guide (8 days at most).
 struct IOSLiveGuideView: UIViewRepresentable {
     struct Actions {
         let play: (UnifiedChannel) -> Void
         let details: (IOSLiveProgrammeSelection) -> Void
         let menu: (UnifiedChannel, UnifiedProgram?) -> UIMenu
-        let needsMoreGuide: () -> Void
     }
 
     let channels: [UnifiedChannel]
@@ -73,7 +72,7 @@ final class IOSLiveGuideCoordinator: NSObject, UICollectionViewDataSource, UICol
     }
 
     private static let historyMinutes: TimeInterval = 120
-    private static let maxHoursAhead: TimeInterval = 72
+    private static let maxHoursAhead = TimeInterval(LiveTVDataStore.epgMaxHoursAhead)
 
     fileprivate let layout = IOSLiveGuideLayout()
     fileprivate lazy var collectionView: UICollectionView = makeCollectionView()
@@ -83,7 +82,6 @@ final class IOSLiveGuideCoordinator: NSObject, UICollectionViewDataSource, UICol
     private var recordingIds: Set<String> = []
     private var signature = 0
     private var jumpToken = 0
-    private var requestedMoreAt: Date?
     private var hasPositioned = false
     fileprivate private(set) var windowStart = Date()
 
@@ -300,14 +298,6 @@ final class IOSLiveGuideCoordinator: NSObject, UICollectionViewDataSource, UICol
                                                          at: IndexPath(item: 0, section: 0)) as? IOSLiveGuideCornerView {
             corner.configure(date: dateAtLeftEdge())
         }
-        // Near the loaded end: ask for more, once per loaded window.
-        let metrics = layout.metrics
-        let rightMinute = (scrollView.contentOffset.x + scrollView.bounds.width - metrics.channelWidth) / metrics.pointsPerMinute
-        guard layout.totalMinutes - rightMinute < 90,
-              let through = guide?.loadedThrough, requestedMoreAt != through,
-              through < Date().addingTimeInterval(Self.maxHoursAhead * 3600 - 60) else { return }
-        requestedMoreAt = through
-        guide?.actions.needsMoreGuide()
     }
 
     /// Settles on half-hour columns, like the ruler.
