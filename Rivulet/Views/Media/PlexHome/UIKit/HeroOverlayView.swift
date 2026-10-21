@@ -157,8 +157,9 @@ final class HeroOverlayView: UIView {
     private var showcasePercentage: CGFloat = 1
     private var autoAdvanceTimer: Timer?
 
-    /// Apple's `advanceToNextPageDelayDurationImageOnly` on the home hero.
-    static let autoAdvanceInterval: TimeInterval = 5
+    /// Longer than Apple's image-only 5 s: Apple's hero usually plays a trailer
+    /// first, and ours is image-only, so 5 s read as rushed.
+    static let autoAdvanceInterval: TimeInterval = 8
 
     private var pageCount: Int {
         if let mediaItemOverlay, !mediaItemOverlay.isHidden { return mediaItemOverlay.pageCount }
