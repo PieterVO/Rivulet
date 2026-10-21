@@ -5,19 +5,9 @@
 //  EngineFailureKindTests.swift
 //  RivuletTests
 //
-//  RIVULET-19. The aether route classified its own failures by lowercasing the
-//  engine's message and looking for "open input", "decoder", "stream info" and
-//  friends. That fails twice: roughly half those messages are
-//  AVPlayerItem.error.localizedDescription, so they arrive in the device's
-//  language and match nothing on a non-English Apple TV, and the two failures
-//  worth telling apart (an origin answering with an HTTP status vs a body that
-//  genuinely is not media) produced the identical FFmpeg sentence until
-//  AetherEngine 6.29.0 split them into `sourceRefused` / `sourceOpenFailed`.
-//
-//  AetherEngine now publishes a stable `PlaybackErrorKind` beside every error.
-//  `DirectPlayFailureKind(engineKind:)` is the seam where that becomes a
-//  routing decision, and it is a pure function, so unlike the view model that
-//  calls it, it is reachable from a unit test.
+//  `DirectPlayFailureKind(engineKind:)`, which maps AetherEngine's stable
+//  `PlaybackErrorKind` to a routing decision instead of matching localized
+//  messages (RIVULET-19).
 //
 
 import XCTest
@@ -27,7 +17,7 @@ final class EngineFailureKindTests: XCTestCase {
 
     // MARK: - The RIVULET-19 split
 
-    /// The whole point of the change: these two used to be one bucket.
+    /// A refused origin and an unreadable body are separate buckets.
     func test_refusedAndUnreadable_noLongerShareABucket() {
         XCTAssertNotEqual(
             DirectPlayFailureKind(engineKind: EngineFailureKind.sourceRefused),

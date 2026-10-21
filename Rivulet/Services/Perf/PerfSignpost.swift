@@ -1,27 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PerfSignpost.swift
-//  Rivulet
-//
-//  Shared `os_signpost` plumbing for the home-screen perf instrumentation.
-//  Emits "Points of Interest" intervals/events so Instruments traces line up.
-//
-//  Subsystem `com.rivulet.perf`, category `.pointsOfInterest`. Shows up
-//  as the "Points of Interest" track in Time Profiler and Animation
-//  Hitches recordings without extra config.
-//
-//  Signpost names:
-//    - AppLaunch          (event)    — app init
-//    - HomeDataFetch      (interval) — refreshHubs called → models in memory
-//    - HomeFirstRender    (interval) — data ready → first cell laid out
-//    - HomeFirstFrameOnScreen (event) — earliest frame containing a cell
-//    - HomeScroll         (interval) — wraps a scroll gesture
-//    - CellPrepare        (interval) — per-cell: configure → ready
-//    - ImageDecode        (interval) — per-image: cache miss → UIImage ready
-//    - FocusUpdate        (interval) — focus engine: shouldUpdate → didUpdate
-//
+// `os_signpost` Points of Interest for the Home perf traces (subsystem `com.rivulet.perf`).
+// Names: AppLaunch, HomeFirstFrameOnScreen (events); HomeDataFetch, HomeFirstRender,
+// HomeScroll, CellPrepare, ImageDecode, FocusUpdate (intervals).
 
 import Foundation
 import os.log

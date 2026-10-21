@@ -5,12 +5,9 @@
 //  RootShellViewController.swift
 //  Rivulet
 //
-//  The navigation shell: replaces the SwiftUI TabView(.sidebarAdaptable).
-//  Owns one content child per tab (hosted SwiftUI, built by TVSidebarView's
-//  tabContent so every existing behavior keeps its home), the custom sidebar
-//  as chrome, the left-edge focus catcher, and the Menu policy. SwiftUI
-//  remains the tab AUTHORITY: the shell reports intent through onTabChange,
-//  and the selection binding pushes the result back via applySelection.
+//  The navigation shell: one content child per tab, the sidebar, the left-edge
+//  focus catcher and the Menu policy. SwiftUI owns the selection: the shell
+//  reports intent through onTabChange and gets the result via applySelection.
 //
 
 import UIKit
@@ -82,27 +79,16 @@ final class RootShellViewController: UIViewController {
     private let sidebar = ShellSidebarViewController()
     private let edgeCatcher = EdgeCatcherView()
     private var belowTop = false
-    /// The edge catcher stays out of the focus system until the CURRENTLY
-    /// MOUNTED content has genuinely held focus; otherwise a focus search run
-    /// while content is not yet focusable lands on it.
-    ///
-    /// Scoped per mount, not per launch (issue #280). A freshly mounted tab is
-    /// exactly as unfocusable as content is at launch — the hosted SwiftUI
-    /// takes a few runloop turns to build its focus items — so the launch
-    /// guard has to re-arm on every switch. It did not, and Search and
-    /// Discover were dead on arrival: focus parked on the invisible 2pt strip
-    /// and, because nothing re-resolves once it settles, no direction did
-    /// anything at all until the user left the tab.
+    /// The edge catcher stays out of the focus system until the mounted content
+    /// has held focus, or a focus search on not-yet-focusable content parks on
+    /// it for good. Reset on every mount, not once per launch (#280).
     private var contentHasHadFocus = false
     private var pendingSections: [ShellSidebarSection]?
     /// Bounded retry that pushes focus into freshly mounted content — see
     /// `driveFocusIntoContent()`.
     private var contentFocusRetries = 0
-    /// Set when the retry budget ran out and content never took focus, which
-    /// means the surface has NOTHING focusable (a state view with no action
-    /// button, say). The catcher is re-armed then purely as an escape hatch:
-    /// with focus nowhere, `handleMenuBack` declines and Menu quits the app,
-    /// so the user needs something to press Left/Menu against.
+    /// The retry budget ran out with nothing focusable on the page. The catcher
+    /// is re-armed as an escape hatch so Left and Menu still have a target.
     private var contentFocusGaveUp = false
 
     // MARK: Lifecycle
@@ -127,13 +113,9 @@ final class RootShellViewController: UIViewController {
             guard let self else { return }
             // The profile row opens the switcher; it has no content to mount.
             if tab == .account { self.onTabChange?(tab); return }
-            // Mount BEFORE collapsing. `collapseSidebar` resolves focus
-            // immediately, but the report back through SwiftUI is async, so
-            // waiting for the binding to return parked focus in the OUTGOING
-            // tab's content for a beat and then moved it again — visible as
-            // focus landing on the tab you picked and then jumping to the one
-            // you left. `applySelection` no-ops when the binding round trip
-            // finally arrives, since `currentTab` already matches.
+            // Mount before collapsing: `collapseSidebar` resolves focus at once
+            // and the SwiftUI round trip is async, so focus would land in the
+            // outgoing tab first. The round trip's `applySelection` then no-ops.
             self.applySelection(tab)
             self.onTabChange?(tab)
             self.collapseSidebar()
@@ -185,14 +167,8 @@ final class RootShellViewController: UIViewController {
     }
 
     /// Re-points every cached hosting controller at a freshly built root so
-    /// content stays reactive to TVSidebarView's observed state. The adopt
-    /// call lives on RootShellHostingController (SwiftUI side) so this file
-    /// stays SwiftUI-free.
-    ///
-    /// The type check comes FIRST on purpose. A directly-mounted UIKit surface
-    /// has nothing to re-point, and building one costs a whole view controller
-    /// — this runs on every SwiftUI update of TVSidebarView, which observes
-    /// eight stores and six defaults keys.
+    /// content tracks TVSidebarView's state. The type check runs before `build`
+    /// because this fires on every TVSidebarView update and a UIKit tab needs none.
     func refreshContentRoots(_ build: (SidebarTab) -> UIViewController?) {
         for tab in contentVCs.keys {
             guard let host = contentVCs[tab] as? RootShellHostingController,
@@ -223,31 +199,18 @@ final class RootShellViewController: UIViewController {
         view.insertSubview(next.view, at: 0)
         next.endAppearanceTransition()
 
-        // This content has not held focus yet, so the edge catcher goes back
-        // out of the focus system until it has (see `contentHasHadFocus`), and
-        // focus has to be pushed in once the hosted SwiftUI is focusable.
         contentHasHadFocus = false
         contentFocusGaveUp = false
-        // `belowTop` belongs to the page that reported it. Only the UIKit home
-        // surfaces post `.contentFocusBelowTopChanged`, so leaving it set meant
-        // arriving on Music or Live TV from a scrolled-down Home with the pill
-        // already hidden and nothing on the new page that would ever show it
-        // again. A page with an opinion re-posts on its first focus change.
+        // `belowTop` belongs to the page that posted it; pages that care re-post
+        // on their first focus change, others would inherit a hidden pill.
         belowTop = false
         updateChromeVisibility()
         driveFocusIntoContent()
     }
 
-    /// Ask the engine to resolve focus into the mounted content, retrying until
-    /// it actually lands.
-    ///
-    /// One synchronous request is not enough. The tab's SwiftUI content is not
-    /// focusable in the same runloop turn it is mounted in, so a single
-    /// `updateFocusIfNeeded()` finds nothing and focus stays wherever it is —
-    /// and once focus settles nothing asks again. Retry on the runloop until
-    /// content takes it (`contentHasHadFocus`, set from `didUpdateFocus`) or
-    /// the budget runs out, so an unfocusable surface degrades to "focus
-    /// nowhere" rather than to a hang.
+    /// Resolves focus into the mounted content, retrying on the runloop because
+    /// hosted SwiftUI is not focusable in the turn it mounts. Stops when content
+    /// takes focus or the budget runs out.
     private func driveFocusIntoContent() {
         contentFocusRetries = 20        // ~1s at 50ms
         retryFocusIntoContent()
@@ -297,19 +260,9 @@ final class RootShellViewController: UIViewController {
         if interactionBlocked, sidebar.isExpanded { collapseSidebar() }
         // The profile panel hangs under the pill, so the pill shows on every page.
         sidebar.setPillHidden(!profilePanelOpen && (belowTop || pillSuppressed || interactionBlocked))
-        // `sidebar.view` is full-screen, transparent and the LAST subview here,
-        // so while collapsed it is an interactive layer painted over every
-        // content view. `UIFocusDebugger` names it as the occluder for every
-        // single focusable item on the page beneath it. Home tolerates that, so
-        // it is not uniformly fatal, but there is no reason for a collapsed
-        // chrome overlay to be in hit-testing or in the engine's occlusion
-        // consideration at all. Nothing inside it is focusable while collapsed;
-        // the pill is decoration.
+        // The collapsed sidebar is a full-screen overlay above all content, and
+        // `UIFocusDebugger` names it as the occluder of every item beneath it.
         sidebar.view.isUserInteractionEnabled = sidebar.isExpanded
-        // While expanded, the sidebar's focus containment already guards the
-        // catcher; it only needs to vanish when interaction is blocked or
-        // before the mounted content has held focus (see `contentHasHadFocus`
-        // and `contentFocusGaveUp`).
         edgeCatcher.isHidden = interactionBlocked || !(contentHasHadFocus || contentFocusGaveUp)
     }
 
@@ -319,12 +272,7 @@ final class RootShellViewController: UIViewController {
     }
 
     /// The mounted page finished loading and now has something focusable.
-    ///
-    /// `driveFocusIntoContent`'s retry budget is ~1s, which covers the runloop
-    /// turns a freshly mounted SwiftUI tree needs but not a network load. When
-    /// it runs out the surface is treated as permanently unfocusable and focus
-    /// stays parked on the edge catcher forever, because nothing re-resolves
-    /// focus once it settles. This is the "content arrived late" re-arm.
+    /// Re-arms the focus drive, whose ~1s budget does not cover a network load.
     @objc private func handleContentBecameFocusable() {
         guard !contentHasHadFocus else { return }
         contentFocusGaveUp = false
@@ -351,17 +299,8 @@ final class RootShellViewController: UIViewController {
     }
 
     /// The nearest backing `UIView` at or above `item` in the focus chain.
-    ///
-    /// SwiftUI's focus items are NOT UIViews, so `as? UIView` on a focused item
-    /// (and `context.nextFocusedView`, which is the same cast) is nil for a
-    /// hosted SwiftUI tab (Live TV). That silently turned off both
-    /// `contentHasHadFocus` and the Menu containment check there: the tab could
-    /// only ever leave via the give-up fallback, and Menu fell through to the
-    /// system and quit the app.
-    ///
-    /// Walking up to the backing view restores the exact `isDescendant(of:)`
-    /// test for those tabs, modal exclusion included — a presented controller's
-    /// view is added to the window, never to ours.
+    /// SwiftUI focus items are not UIViews, so a bare `as? UIView` is nil on a
+    /// hosted tab and every containment test would fail there.
     private func backingView(of item: UIFocusEnvironment?) -> UIView? {
         var env = item
         while let current = env {
@@ -419,29 +358,10 @@ extension RootShellViewController: MenuBackHandling {
     /// runs, the home page has already consumed below-top Menu presses.
     func handleMenuBack() -> Bool {
         guard view.window?.isKeyWindow == true else { return false }
-        // Focus must be inside the shell's OWN hierarchy. `isKeyWindow` stays
-        // true while a modal covers the shell — the preview carousel's expanded
-        // detail, the player — because a modal is presented into the SAME
-        // window. Without this the shell claimed Menu on behalf of a sidebar
-        // the user cannot see, expanded it invisibly, and returned true. The
-        // press was then withheld from the system AND never reached the modal's
-        // own Menu recognizer, so Menu in the carousel's below-fold did nothing
-        // at all. Worse, the invisible expand flipped `sidebar.isExpanded`, so
-        // the NEXT press took the collapse branch, returned false, and worked:
-        // every other Menu press died.
-        //
-        // A presented controller's view is added to the window, never to the
-        // presenter's view, so descendancy is an exact test. `sidebar.view` IS
-        // a subview here, so the expanded-sidebar branch still qualifies. This
-        // is the same containment check `PlexHomeViewController.handleMenuBack`
-        // already makes, which is why home correctly declined and only the
-        // shell absorbed the press.
-        // Via `backingView`, not a bare `as? UIView`: a SwiftUI tab's focused
-        // item is not a UIView, so the plain cast failed there and Menu bubbled
-        // to the system, quitting the app from Live TV.
-        // Nothing focused with nothing presented is a page still loading (a
-        // spinner, no focus target): Menu opens the sidebar rather than
-        // reaching the system and quitting the app.
+        // Focus must be inside the shell's own views: `isKeyWindow` stays true
+        // under a modal, and claiming Menu there kills it in the modal.
+        // See CLAUDE.md, Remote Input. Nothing focused and nothing presented is
+        // a page still loading, where Menu opens the sidebar instead of quitting.
         let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem
         let loadingPage = focused == nil && view.window?.rootViewController?.presentedViewController == nil
         guard isInsideShell(focused) || loadingPage else { return false }

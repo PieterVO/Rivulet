@@ -24,14 +24,9 @@ nonisolated enum LiveTunerBusy {
         return message.localizedCaseInsensitiveContains("maximum connection limits")
     }
 
-    /// Asks the source once, after a live load has already failed, whether it
-    /// refused for lack of a free connection. AetherEngine rides out a 503 as
-    /// rate limiting and then reports only that the live source never opened,
-    /// so the status has to come from here.
-    ///
-    /// Reads the status and at most 4 KB, then cancels. A source that has a
-    /// connection free by now starts streaming, and holding that open would
-    /// take the slot the next attempt needs.
+    /// Asks the source once, after a live load failed, whether it refused for lack
+    /// of a free connection (Aether reports a 503 only as "never opened"). Reads the
+    /// status and at most 4 KB, then cancels, so it doesn't hold the slot.
     static func sourceIsBusy(_ url: URL, headers: [String: String]) async -> Bool {
         var request = URLRequest(url: url)
         request.timeoutInterval = 10

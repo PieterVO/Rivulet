@@ -5,18 +5,9 @@
 //  IntroDBClient.swift
 //  Rivulet
 //
-//  Fallback marker source backed by the community intro database
-//  (introdb.app). When Plex has no intro / credits markers for an episode we
-//  query by the show's IMDB id + season/episode. These DBs also provide RECAP
-//  segments, which Plex never emits. Reads are anonymous (no key).
-//
-//  The lookup is OPT-IN (SettingsStore "useIntroDB"): it sends the show's
-//  IMDB id + S/E to a third party, so it only runs when the user turns it on.
-//
-//  Markers come back as `PlexMarker` values (type "intro" / "recap" /
-//  "credits") with NEGATIVE synthetic ids, so they flow through the existing
-//  marker check/skip machinery untouched and can never collide with Plex's
-//  own (positive) marker ids.
+//  Fallback intro, recap and credits markers from introdb.app, by IMDb id plus
+//  season and episode. Opt-in ("useIntroDB"): it sends those to a third party.
+//  Markers are `PlexMarker`s with negative ids, so they never collide with Plex's.
 //
 
 import Foundation

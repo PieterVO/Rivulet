@@ -5,15 +5,8 @@
 //  InsightsTriviaPanelTests.swift
 //  RivuletTests
 //
-//  Panel-level coverage for the Trivia rows rendered by a single tab of
-//  `InsightsCastListView` (Docs/superpowers/specs/
-//  2026-07-08-insights-toptrivia-tabs-design.md). `TriviaFactTests` already
-//  covers `visibleFacts`/`topTenFacts` filtering in isolation; this proves
-//  a tab's filtered result wires into the view correctly — including the
-//  graceful-absent rule (no trivia / everything filtered out for this tab
-//  -> zero rows, same as cast's empty state). Each test drives an explicit
-//  `initialTab` so it is independent of `InsightsPanelContainerView`'s own
-//  tab-selection defaulting (covered by `InsightsCastListViewTests`).
+//  A Trivia tab's filtered facts wire into `InsightsCastListView`, and no facts
+//  means zero rows. Each test sets `initialTab` explicitly.
 //
 
 import XCTest

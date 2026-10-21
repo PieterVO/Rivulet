@@ -5,9 +5,8 @@
 //  PlexWatchlistAPIPagingTests.swift
 //  RivuletTests
 //
-//  fetchAll pages until the container's totalSize is covered. A watchlist
-//  longer than one Plex page was previously truncated to whatever the default
-//  page happened to be, which the Watchlist grid (issue #287) makes visible.
+//  fetchAll pages until the container's totalSize is covered, so a watchlist
+//  longer than one Plex page isn't truncated (#287).
 //
 
 import XCTest

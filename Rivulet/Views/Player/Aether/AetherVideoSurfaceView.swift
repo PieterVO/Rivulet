@@ -5,14 +5,9 @@
 //  AetherVideoSurfaceView.swift
 //  Rivulet
 //
-//  SwiftUI wrapper for AetherEngine's render surface (AetherPlayerView).
-//  The engine attaches whichever CALayer the active backend uses —
-//  AVPlayerLayer on the native loopback-HLS path, or
-//  AVSampleBufferDisplayLayer on the software path (AV1 / VP9 / MPEG-2 /
-//  VC-1 / MPEG-4 Part 2) — and re-attaches it across internal session
-//  swaps (audio-track switch, background reopen). Hosting this view is
-//  the only correct way to display Aether video: binding an
-//  AVPlayerLayer to `currentAVPlayer` covers the native backend only.
+//  SwiftUI wrapper for AetherEngine's render surface. The engine attaches the
+//  active backend's layer and re-attaches it across session swaps. Never bind
+//  an AVPlayerLayer to `currentAVPlayer` instead: that covers one backend only.
 //
 
 import SwiftUI

@@ -5,30 +5,17 @@
 //  StartupTimer.swift
 //  Rivulet
 //
-//  Dead-simple wall-clock startup tracing. Unlike the os_signpost-based Perf
-//  helper (Instruments-oriented, hardcoded signpost names), this prints plain
-//  "[Startup +1234ms] <event>" lines to the console so a launch timeline can
-//  be read straight out of a device-console paste — exactly what's needed to
-//  pinpoint where cold-launch time goes (2026-06-10: ~30s to first content on
-//  device, suspected dead cached-URL hitting the 30s request timeout).
-//
-//  Thread-safe (monotonic clock + plain print); callable from any actor.
+//  Wall-clock startup tracing: prints "[Startup +1234ms] <event>" lines so a
+//  launch timeline reads straight out of the device console. Callable from any actor.
 //
 
 import Foundation
 import os
 
 enum StartupTimer {
-    /// Launch reference: the moment the PROCESS started, not the moment this type
-    /// was first touched.
-    ///
-    /// This used to be `ProcessInfo.processInfo.systemUptime` captured on first
-    /// touch, i.e. `arm()` in `RivuletApp.init`'s body. That silently billed
-    /// everything before it to +0ms — dyld, static initializers, and (the big
-    /// one) `RivuletApp.sharedModelContainer`, because Swift initializes stored
-    /// properties BEFORE the initializer body runs, so the 7-model SwiftData
-    /// container is already open by the time `arm()` is reached. A launch trace
-    /// that starts after the expensive part cannot find the expensive part.
+    /// Launch reference: when the process started, not first touch. Stored
+    /// properties such as the SwiftData container initialise before
+    /// `RivuletApp.init`'s body, so first touch would bill them to +0 ms.
     nonisolated(unsafe) private static let launchUptime = processStartUptime()
 
     private static let log = Logger(subsystem: "com.bain.Rivulet", category: "Startup")

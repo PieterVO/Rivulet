@@ -31,18 +31,14 @@ class PlayerContainerViewController: UIViewController {
     private var ambientScrim: BottomScrimView?
     private var captionOverlay: CaptionOverlayView?
     private var cancellables = Set<AnyCancellable>()
-    /// The one floating panel shared by CC/audio/info (Task 5) and Up
-    /// Next (Task 6). Only one can be up at a time — presenting a new
-    /// one dismisses whatever's showing first.
+    /// The one floating panel shared by CC, audio, info and Up Next.
     private var activeRailPanel: PlayerRailPanelView?
     private var subtitleSearchTask: Task<Void, Never>?
 
     /// Previous `railVisible`, so `applyChromeVisibility()` can spot the rail
     /// APPEARING and start every appearance on the scrubber.
     private var railWasVisible = false
-    /// Snapshot of the last `$upNextEpisodes` emission — Task 6's panel
-    /// reads this when it comes online; Task 3 only derives the rail
-    /// button's availability from it.
+    /// Last `$upNextEpisodes` emission, read by the Up Next panel and the rail button.
     private var upNextEpisodesCache: [PlexMetadata] = []
 
     /// The end-of-episode Up Next page. Built on first use and added above
@@ -457,62 +453,23 @@ class PlayerContainerViewController: UIViewController {
 
     // MARK: - Exit Fade
 
-    /// How long the player takes to fade to black on the way out.
-    ///
-    /// This is a functional mask, not decoration. tvOS "Match Content" makes the
-    /// TV renegotiate HDMI when `preferredDisplayCriteria` goes back to nil, and
-    /// many sets black the picture out for around a second while they do it. The
-    /// fade puts the screen at black before that starts, so the blackout reads as
-    /// part of the exit rather than as a flash on the freshly revealed home
-    /// screen (issue #249).
-    ///
-    /// 0.4s is the value: long enough that the ramp reads as intentional at 60fps
-    /// and that the display reset (kicked off at fade start) is well under way
-    /// before anything else is on screen, short enough that Menu still feels like
-    /// it responded immediately. Below roughly 0.3s the fade stops reading as a
-    /// fade and starts reading as a stutter; past about 0.5s the remote feels
-    /// unresponsive.
+    /// Exit fade to black. It masks the HDMI renegotiation Match Content triggers
+    /// when display criteria go back to nil, which blacks many TVs out for about a
+    /// second (#249). Under ~0.3s reads as a stutter, over ~0.5s feels unresponsive.
     private static let exitFadeDuration: TimeInterval = 0.4
 
-    /// Fade the player to black, then hand the dismissal to `super`.
-    ///
-    /// The fade runs on every exit rather than only on sessions that set display
-    /// criteria. The criteria state is not knowable from here without reaching
-    /// into playback internals, the cost of an unnecessary fade is 0.4s of a
-    /// calm ramp, and having the exit behave identically every time is worth more
-    /// than saving that on SDR content. The one thing the criteria state does
-    /// gate is the early reset below.
+    /// Fade the player to black, then hand the dismissal to `super`. Cuts straight
+    /// out when no HDMI handshake is coming.
     private func fadeOutThenDismiss(animated flag: Bool, completion: (() -> Void)?) {
         isFadingOut = true
 
-        // Kick the display reset off at the START of the fade so the roughly
-        // one second HDMI handshake overlaps the fade and then continues behind
-        // an already-black screen. `stopPlayback()` still calls reset() on
-        // teardown; by then the criteria are already nil and it writes nothing.
-        // Nothing in stopPlayback() has to precede this: reset() only writes
-        // preferredDisplayCriteria and drops its own asset reference, and it
-        // touches no player state.
-        //
-        // This is the load-bearing line of the exit fade, not a nicety. Until it
-        // actually wrote nil (it was gated on a flag only this app's own writer
-        // ever set, and AetherEngine has owned the criteria for a long time) the
-        // fade masked nothing: the engine dropped the criteria during
-        // `engine.stop()`, which the player only reaches from `.onDisappear`,
-        // after the dismissal. Do not re-gate it.
+        // Reset display criteria at the start of the fade so the HDMI handshake
+        // runs behind it. Without this the engine drops them in `engine.stop()`,
+        // after the dismissal, and the fade masks nothing. Do not gate it.
         let handshakeIncoming = DisplayCriteriaManager.shared.reset()
 
-        // Nothing was released, so no HDMI renegotiation is coming and there is
-        // nothing to mask: Match Content is off (the engine's `apply()` guards on
-        // `isDisplayCriteriaMatchingEnabled` and writes no criteria at all), or
-        // this route never programmed the panel. Cut straight out instead, so that
-        // cohort does not pay 0.4s of black for a mask they get no benefit from.
-        //
-        // This supersedes the original "the fade is unconditional because the
-        // container cannot read whether criteria were set" call: it can, by
-        // reading `preferredDisplayCriteria` back, which is exactly what reset()
-        // now reports. Note the sim always takes this branch, because
-        // `getDisplayManager()` bails there — the fade genuinely does not render
-        // in the simulator any more, and that is correct, not a regression.
+        // No criteria were set (Match Content off, or the panel was never
+        // programmed), so there is nothing to mask. The simulator always lands here.
         guard handshakeIncoming else {
             performSuperDismiss(animated: flag, completion: completion)
             return
@@ -536,10 +493,7 @@ class PlayerContainerViewController: UIViewController {
         animator.startAnimation()
     }
 
-    /// Thin wrapper so the fade's completion closure can reach `super.dismiss`.
-    /// Swift does not allow `super` inside a closure that explicitly captures
-    /// `self`, which the weak capture there is, so the call has to live in a
-    /// method body.
+    /// Lets the fade's weak-self closure reach `super.dismiss`.
     private func performSuperDismiss(animated flag: Bool, completion: (() -> Void)?) {
         super.dismiss(animated: flag, completion: completion)
     }
@@ -569,9 +523,7 @@ class PlayerContainerViewController: UIViewController {
     }
 
     deinit {
-        // A UIViewPropertyAnimator that is still running when its owner goes
-        // away aborts on release, which on tvOS has already cost this codebase
-        // one crash. Stop it explicitly and finish at the current position.
+        // A running UIViewPropertyAnimator aborts on release, so stop it first.
         if let animator = exitFadeAnimator, animator.state != .inactive {
             animator.stopAnimation(true)
         }
@@ -713,26 +665,11 @@ class PlayerContainerViewController: UIViewController {
 
     // MARK: - Content-state presses
     //
-    // The ONE handler for directional and Select presses whenever no chrome
-    // control owns them: focus on the content anchor (chrome hidden, or up but
-    // not entered), on the skip pill (Left/Right seek behind it), or nowhere.
-    //
-    // It used to be four: SwiftUI's .onTapGesture/.onMoveCommand on a focused
-    // SwiftUI layer, tap/long-press recognizers on this view, and
-    // GameController copies of the same clicks in RemoteInputHandler.
-    //  - An older note here recorded that "UIKit gesture recognizers don't
-    //    receive events when SwiftUI has focus", and SwiftUI held focus in
-    //    exactly this state. That fits every report of a remote with no
-    //    GameController copy of its presses (IR, HDMI-CEC, a clicks-only Siri
-    //    Remote) failing to skip until the scrubber, a UIKit view, had focus:
-    //    #212, #232, #305.
-    //  - The GameController copies were a second opinion on the same click,
-    //    classified by the app instead of by tvOS and reconciled only by timing
-    //    windows, so one click could land as no skip, one, or two.
-    //
-    // Arrow and Select presses never travel past this controller, owned or not.
-    // The player is full screen: the presenter behind it (Home, the preview
-    // carousel) must not page or change state on presses meant for the player.
+    // The one handler for directional and Select presses when no chrome control
+    // owns them: focus on the content anchor, the skip pill, or nowhere. Do not
+    // move these back to a focused SwiftUI layer or GameController (#212, #232, #305).
+    // Arrow and Select presses never travel past this controller, so the
+    // presenter behind the player cannot react to them.
 
     private static func isArrow(_ type: UIPress.PressType) -> Bool {
         switch type {
@@ -756,12 +693,8 @@ class PlayerContainerViewController: UIViewController {
         guard let focusedView = focused as? UIView else { return false }
         if focusedView === contentAnchor { return true }
         if focusedView === skipPill {
-            // Only Left/Right seek behind the pill. Its Up/Down are its own
-            // (chrome hidden) or the focus engine's (chrome up), and an Up that
-            // reaches here is usually the SAME press that just moved focus from
-            // the rail onto the pill (the engine moves focus before the press
-            // is delivered); treating it as content Up bounced focus straight
-            // back to the scrubber, so the pill was unreachable by click.
+            // Only Left/Right seek behind the pill. An Up here is usually the
+            // press that just moved focus onto it, so claiming it bounces focus back.
             return type == .leftArrow || type == .rightArrow
         }
         return false
@@ -781,15 +714,8 @@ class PlayerContainerViewController: UIViewController {
         }
         contentAnchor = anchor
 
-        // Up/Down's touch twin. A focused SwiftUI layer got these as move
-        // commands from touch swipes for free; a UIKit view gets them only as
-        // indirect touches, and the iPhone Remote sends no arrow presses at all.
-        // The anchor is full screen, so the engine never has a vertical move to
-        // make from it and claiming the swipe steals nothing. Left/Right swipes
-        // stay with the swipe-to-scrub pan.
-        // Not while the clickpad is down: a click jolts the reported touch
-        // position into a fake swipe (see the pan's gate), and a vertical ring
-        // click already arrives as its own arrow press.
+        // Up/Down's touch twin (the iPhone Remote sends no arrow presses).
+        // Not while the clickpad is down: a click jolts the touch into a fake swipe.
         contentSwipeBinding = DirectionalInputBinding(
             gatedSwipesOn: anchor,
             directions: [.up, .down],
@@ -1018,28 +944,16 @@ class PlayerContainerViewController: UIViewController {
         let panRecognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePanGesture(_:)))
         // Only recognize indirect touches (Siri Remote touchpad, not direct screen touches)
         panRecognizer.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
-        // The focus engine reads the SAME indirect touch stream this recognizer
-        // does, and a recognizer that reaches .began cancels the competing
-        // interaction. An unconstrained pan therefore swallowed vertical swipes
-        // and the engine never turned them into the move commands that drive
-        // `.onMoveCommand` (swipe up/down to the transport controls). Gate the
-        // begin so only a clearly horizontal, actionable swipe is claimed.
+        // A pan that begins cancels the focus engine's move, so the delegate
+        // lets it begin only on a clearly horizontal, actionable swipe.
         panRecognizer.delegate = self
         view.addGestureRecognizer(panRecognizer)
         panGestureRecognizer = panRecognizer
     }
 
     /// True when a touch-surface swipe should drive the scrubber. Mirrors the
-    /// bail conditions in `handlePanGesture` so the recognizer never *begins*
-    /// in a state where it would no-op — beginning is what steals the gesture
-    /// from the focus engine.
-    ///
-    /// Controls-focus mode does NOT disqualify a swipe. The scrubber is only
-    /// on screen once the controls are up, and raising them is what sets
-    /// `controlsFocusActive` — gating on it meant the pan refused to begin in
-    /// exactly the state where the user can see the thing they want to drag.
-    /// Only focus resting on a transport BUTTON blocks the swipe, so a
-    /// horizontal flick there still moves focus along the row.
+    /// bail conditions in `handlePanGesture`, since beginning steals the gesture
+    /// from the focus engine. Only focus on a transport button blocks it.
     private var panCanDriveScrub: Bool {
         guard let vm = viewModel else { return false }
         return !vm.playbackState.isFailed
@@ -1103,10 +1017,7 @@ class PlayerContainerViewController: UIViewController {
         // A touch that turned into a ring jog belongs to the jog from then on.
         guard !RemoteInputHandler.isRingJogging else { return }
 
-        // Touch-surface pan drives continuous swipe-to-scrub whether the item
-        // is playing or paused. It used to require `.paused`, so a swipe during
-        // playback did nothing at all — the recognizer still began and swallowed
-        // the gesture, but the handler returned immediately.
+        // Swipe-to-scrub works whether playing or paused.
 
         let translation = gesture.translation(in: view)
         let velocity = gesture.velocity(in: view)
@@ -1167,22 +1078,10 @@ class PlayerContainerViewController: UIViewController {
         // Static metadata (re-applied on episode advance via itemGeneration).
         applyRailMetadata(vm: vm)
 
-        // Scrubber focus proxy: an invisible view geometrically below the
-        // rail's button cluster (see its constraints above) so the focus
-        // engine's own downward search from ANY cluster button lands here,
-        // not on a same-row cone candidate. The proxy draws nothing; the bar
-        // dims when focus leaves it for the rail (see didUpdateFocus).
-        // Scrubber input model, unified with the content-focused path (see
-        // RemoteInputHandler): a quick Left/Right tap skips by `tapSeekSeconds`,
-        // a hold (>= holdThreshold) starts the FF/RW shuttle, and any press
-        // while already shuttling bumps its speed. The proxy owns tap-vs-hold
-        // detection; the closures below just carry the resolved intent.
-        //
-        // Controls-focus mode is deliberately NOT exited here. Leaving it
-        // active keeps the GameController seek path swallowed (see
-        // RemoteInputHandler.emit), so while the scrubber holds focus the proxy
-        // is the SOLE seek handler — no press is acted on twice (a double
-        // `stepSeek` would otherwise coalesce into a 2x skip).
+        // Scrubber focus proxy: an invisible view below the rail's buttons, so a
+        // Down from any of them lands here. It owns tap-vs-hold detection.
+        // Controls-focus mode stays active so the GameController seek path stays
+        // swallowed and no press seeks twice.
         scrubberProxy?.isScrubbingProvider = { [weak vm] in vm?.isScrubbing ?? false }
         scrubberProxy?.onSkip = { [weak self, weak vm] forward in
             guard let vm else { return }
@@ -1566,17 +1465,8 @@ class PlayerContainerViewController: UIViewController {
         rail?.setInsightsAvailable(insightsButtonShouldBeAvailable)
     }
 
-    /// Shared presenter for the CC/audio/info/Up Next rail panel. Only
-    /// one panel is ever up: presenting a new one dismisses whatever's
-    /// showing. Guarded on the rail cluster actually being visible and
-    /// not mid-scrub — the rail's buttons are hidden during a scrub and
-    /// while loading, but a stray callback firing in that window (e.g.
-    /// a race on the loading→ready edge) must not construct a panel
-    /// anchored to a rail that isn't there to anchor to.
-    ///
-    /// Returns whether a panel was actually presented, so callers that
-    /// track "which content is showing" (Task 6's Up Next staleness
-    /// check) know whether their flag should stick.
+    /// Shared presenter for the rail panels; presenting one dismisses the last.
+    /// Refuses while the rail is hidden or mid-scrub. Returns whether it presented.
     @discardableResult
     private func presentRailPanel(content: UIView, width: CGFloat, from button: UIView) -> Bool {
         guard let rail, rail.alpha > 0.5, viewModel?.isScrubbing != true else { return false }
@@ -1882,37 +1772,10 @@ class PlayerContainerViewController: UIViewController {
         rail?.setTitle(vm.title, eyebrow: vm.subtitle)
     }
 
-    /// Single writer for all chrome alphas. Every visibility rule lives
-    /// here so no two sinks can fight over the same view's alpha (the old
-    /// setChromeHidden / setAuxChromeHidden split let the ~0.5s time-sink
-    /// re-reveal card/pill/panel over hidden controls). Called from the
-    /// showControls, pausePresentation, playbackState, and time sinks; the
-    /// guard-on-change makes per-tick calls free.
-    ///
-    /// Rules:
-    /// - chromeVisible: controls up AND the frame is live (not ambient
-    ///   pause). `|| isScrubbing` keeps the scrubber + scrim up during a
-    ///   scrub even on the one off-device path (MPRemoteCommand
-    ///   scrubNudge) that can begin a scrub without showControls being set.
-    /// - railVisible: chrome visible AND not scrubbing — scrubbing hides
-    ///   the rail and skip pill so focus reads unambiguously on the
-    ///   scrubber (user call 2026-07-03).
-    /// - paused: playback paused AND the frame is live (not ambient) —
-    ///   drives the full-frame dim.
-    /// - loading: the top-left "Loading" label shows whenever loading/idle
-    ///   AND not ambient (the progress bar's own skeleton shimmer carries
-    ///   the rest of the loading look); it uses `isHidden` from the state
-    ///   sink too so it never intercepts focus while alpha is mid-fade.
-    /// - scrubberProxy.isFocusEnabled: a FOCUS gate, not an alpha write (the
-    ///   proxy is always invisible) — it must never be focusable while
-    ///   controls are hidden, mid-scrub, or ambient, and only actually
-    ///   reachable once controls-focus mode has moved focus onto the rail.
     // MARK: - Post-video (Up Next)
 
-    /// Mount or unmount the Up Next page and hand it focus. The focus update
-    /// is the load-bearing half: `preferredFocusEnvironments` alone changes
-    /// nothing until the engine is asked to re-resolve, which is why the
-    /// SwiftUI version rendered with nothing focused.
+    /// Mount or unmount the Up Next page and hand it focus. The focus update is
+    /// required: `preferredFocusEnvironments` alone changes nothing.
     private func applyPostVideoState(_ state: PostVideoState) {
         if state != .hidden {
             let overlay = postVideoOverlay ?? makePostVideoOverlay()
@@ -1994,6 +1857,8 @@ class PlayerContainerViewController: UIViewController {
         )
     }
 
+    /// Single writer for every chrome alpha and focus gate, so no two sinks fight
+    /// over one view. Runs on every clock tick; the change guards keep that free.
     private func applyChromeVisibility() {
         guard let vm = viewModel else { return }
         let ambient = vm.pausePresentation != .frame
@@ -2006,61 +1871,36 @@ class PlayerContainerViewController: UIViewController {
         let railVisible = chromeVisible && !vm.isScrubbing
         if !chromeVisible { progressBar?.clearSkipIndicator() }
 
-        // Every APPEARANCE of the rail starts on the scrubber: it is the primary
-        // affordance, and "where you left off" is scoped to one visit. The rail's
-        // `lastFocusedButton` still wins WITHIN a visit — that is what returns
-        // focus to the button that opened a rail panel after Menu — but it must
-        // not survive the rail going away and coming back. Resetting only when
-        // controls-focus ends is not enough now that an open panel deliberately
-        // counts as still-in-the-rail (see `railOwnsFocus`).
+        // Every appearance of the rail starts on the scrubber; focus memory
+        // lasts one visit (an open panel still counts as in the rail).
         if railVisible && !railWasVisible { rail?.resetFocusMemory() }
         railWasVisible = railVisible
         let paused = vm.playbackState == .paused && !ambient && hasPlayedSinceLoad
-        // Ambient pause keeps the scrubber (and its bottom scrim) up as a
-        // read-only position indicator even though the rail fades. Not shown
-        // while loading — there is no meaningful position yet.
+        // Ambient pause keeps the scrubber up as a read-only position indicator.
         let scrubberVisible = chromeVisible || (ambient && !isLoading)
-        // For a show, the episode title stays put in the rail during ambient
-        // (same place, same size) while the rest of the rail empties out. The
-        // rail view itself is held at alpha 1 so that held title shows; the
-        // plate/eyebrow/meta/buttons fade inside `setAmbient`. Movies keep
-        // nothing here (logo only).
+        // For an episode the rail stays at alpha 1 during ambient so its title
+        // holds; `setAmbient` fades the rest.
         let keepRailTitle = ambient && vm.metadata.type == "episode"
         let railAlpha: CGFloat = keepRailTitle ? 1 : (railVisible ? 1 : 0)
 
-        // The proxy is the rail's first focus landing, so it must be focusable
-        // as soon as the chrome is up — NOT only after controls-focus mode has
-        // already moved focus onto a rail button (the old rule, which made the
-        // subtitles button the de-facto first landing).
-        //
-        // The `isFocused` term is load-bearing: a left/right press on the
-        // focused proxy calls exitControlsFocus() and begins a scrub, which
-        // clears BOTH `controlsFocusActive` and `railVisible`. Without this
-        // term the proxy would stop being focusable in the middle of the very
-        // gesture it is servicing, and the focus update that follows would yank
-        // focus off the scrubber mid-shuttle. A view that currently holds focus
-        // keeps it; the gate only governs whether focus may ARRIVE here.
+        // The proxy is the rail's first focus landing, focusable as soon as the
+        // chrome is up. `proxyHasFocus` keeps it focusable through a scrub it
+        // started, which clears `railVisible`.
         let proxyHasFocus = scrubberProxy?.isFocused == true
         // AVKit's info pane takes the bar's place while it is open.
         let paneOpen = activeRailPanel.map { $0.isPane && $0.window != nil } ?? false
         scrubberProxy?.isFocusEnabled = !paneOpen
             && ((railVisible && !isLoading) || (proxyHasFocus && !isLoading && !ambient))
 
-        // The content anchor holds focus whenever nothing else should: not
-        // while the rail owns it, not while the skip pill does, not over
-        // post-video, and not in the error state, where it is also HIDDEN so
-        // its full-screen frame cannot occlude the SwiftUI error buttons below
-        // it. Unlike the SwiftUI layer it replaces, this gate is synchronous.
+        // The content anchor holds focus whenever nothing else should. In the
+        // error state it is hidden so it cannot occlude the error buttons.
         let failed = vm.playbackState.isFailed
         let anchorEnabled = vm.postVideoState == .hidden
             && !failed
             && !vm.controlsFocusActive
             && !vm.skipPillOwnsFocus
-        // Focus must move when the anchor gives it up, and when it comes back
-        // from the error state (focus is on an error button that is about to
-        // disappear). The request is made AFTER the alpha writes below, like
-        // the pill's: the pill and the rail only accept focus once their model
-        // alpha is 1, and a request made before that lands nowhere.
+        // Requested after the alpha writes below: the pill and rail accept focus
+        // only once their model alpha is 1.
         var anchorNeedsFocusUpdate = false
         if failed {
             // Handed off one beat later, once SwiftUI has mounted the overlay
@@ -2074,34 +1914,23 @@ class PlayerContainerViewController: UIViewController {
             contentAnchor?.isHidden = false
         }
         if vm.postVideoState != .hidden || failed {
-            // A press or hold in flight must not complete against a state that
-            // no longer takes content presses (a tap landing as a skip behind
-            // post-video). Keyed on those states, NOT on `anchorEnabled`: the
-            // skip pill takes content presses while the anchor is gated off, and
-            // this runs on every clock tick.
+            // Drop a press in flight. Keyed on these states, not `anchorEnabled`,
+            // because the skip pill takes content presses while the anchor is off.
             contentPressDetector.cancel()
             contentDirectionalPressType = nil
             contentSelectPending = false
         }
 
-        // The skip pill lives independently of the rail: it stays up whenever a
-        // marker is active (chrome shown OR hidden), so the user can jump forward
-        // without first surfacing the controls. Hidden only while loading, during
-        // ambient pause, or when post-video has taken over.
+        // The skip pill shows whenever a marker is active, independent of the rail.
         let skipVisible = vm.showSkipButton && !isLoading && !ambient && vm.postVideoState == .hidden
             && !chromeVisible
 
-        // Whether the pill owns focus (e.g. controls just hid with a marker up).
-        // The focus re-resolution happens AFTER the alpha write below: the engine
-        // only treats the pill as focusable once its model alpha is 1, so pushing
-        // focus before the fade write would land nowhere.
+        // Whether the pill owns focus. Re-resolved after the alpha write below.
         let ownsFocus = vm.skipPillOwnsFocus
         let ownershipChanged = ownsFocus != lastSkipPillOwnsFocus
         lastSkipPillOwnsFocus = ownsFocus
 
-        // The panel floats above the rail — a scrub/ambient/hide that
-        // takes the rail away must take the panel with it, since it
-        // has nothing to anchor to and no route back to visible.
+        // The panel anchors to the rail, so it goes when the rail does.
         if !railVisible {
             activeRailPanel?.dismissPanel()
         }
@@ -2115,18 +1944,13 @@ class PlayerContainerViewController: UIViewController {
             (pausedDimView, paused ? 1 : 0),
             (loadingLabel, showsActivityCue && !ambient ? 1 : 0),
         ]
-        // `setAmbient` also drives the rail's sub-view alphas (plate/eyebrow/
-        // meta/buttons vs. the held title), which the `targets` diff below
-        // doesn't see, so fold its own change-detection in. (No rail → nothing
-        // to animate there, so treat as unchanged.)
+        // `setAmbient` drives the rail's sub-view alphas, which `targets` cannot see.
         let railAmbientChanged = rail.map { $0.ambientState != (ambient, keepRailTitle) } ?? false
         let targetsChanged = targets.contains(where: { view, alpha in
             view.map { abs($0.alpha - alpha) > 0.01 } == true
         })
-        // Captions lift out of the rail's way on the SAME animation block, so
-        // the two travel on one curve. Marking the overlay dirty before the
-        // guard keeps its state correct even on the early-out path, where
-        // nothing visible is moving anyway.
+        // Captions lift on the same animation block as the rail. Set before the
+        // guard so the state stays correct on the early-out path.
         let captionLiftChanged = captionOverlay.map { $0.controlsVisible != chromeVisible } ?? false
         captionOverlay?.controlsVisible = chromeVisible
         guard targetsChanged || railAmbientChanged || ownershipChanged
@@ -2179,13 +2003,9 @@ class PlayerContainerViewController: UIViewController {
         updateFocusIfNeeded()
     }
 
-    /// Sync the pill's title (including any live countdown suffix) and
-    /// re-evaluate its visibility + focus ownership.
     /// Sync the pill's title, drive the auto-skip fill sweep, and re-evaluate
-    /// visibility + focus ownership. The fill starts when the countdown begins
-    /// (seconds jump 0 → N, which IS the total duration) and clears when it
-    /// cancels or fires; a mid-countdown re-show restarts with the remaining
-    /// seconds so the sweep still lands with the skip.
+    /// visibility and focus ownership. A mid-countdown re-show fills from the
+    /// remaining seconds so the sweep still ends with the skip.
     private func refreshSkipPill() {
         skipPill?.setTitle(viewModel?.skipButtonDisplayLabel, for: .normal)
         // Apply visibility BEFORE measuring for the fill: beginFill reads the
@@ -2204,26 +2024,9 @@ class PlayerContainerViewController: UIViewController {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
 
-        // `controlsFocusActive` means "the rail owns focus", and it is the SOLE
-        // suppressor of seek input (the GameController path's `emit` gate and
-        // the content anchor's focus gate both key on it). But it was once only
-        // SET from the content layer's Up/Down (`handleContentVertical` now). The rail is focusable whenever chrome is up
-        // (`scrubberProxy.isFocusEnabled = railVisible …`), so raising it any
-        // other way — Select → .playPause → showControlsTemporarily() — left
-        // focus sitting in the rail with the flag false, and every Left/Right
-        // then BOTH moved focus and seeked 30s. Drive the flag from where focus
-        // actually is; entry path stops mattering.
-        //
-        // Decide from the DESTINATION, and only when focus actually landed
-        // somewhere. Two traps make that phrasing load-bearing:
-        //   - Dismissing a rail panel passes through a transient `next == nil`
-        //     before focus re-lands. Treating that as "left the rail" runs
-        //     exitControlsFocus(), whose sink calls `rail.resetFocusMemory()`,
-        //     so the rail forgets the button that opened the panel.
-        //   - The SwiftUI content layer focuses as a `UIKitFocusableViewResponderItem`,
-        //     NOT a UIView, so `nextFocusedView` is nil there too. Gate on
-        //     `nextFocusedItem` (which is non-nil) and test containment on the
-        //     view (which correctly reports "not the rail").
+        // `controlsFocusActive` ("the rail owns focus") gates all seek input, so
+        // drive it from where focus lands. Skip a transient nil destination: a
+        // panel dismiss passes through one and would reset the rail's focus memory.
         if let vm = viewModel, context.nextFocusedItem != nil {
             vm.scrubberOwnsFocus = context.nextFocusedView.map { $0 === scrubberProxy } ?? false
             let elsewhereInRail = context.nextFocusedView.map { $0 !== scrubberProxy && railOwnsFocus($0) } ?? false
@@ -2243,34 +2046,16 @@ class PlayerContainerViewController: UIViewController {
         guard let view else { return false }
         if let proxy = scrubberProxy, view === proxy { return true }
         if let rail, view.isDescendant(of: rail) { return true }
-        // A presented rail panel is an EXTENSION of the rail, not an exit from
-        // it. Its view is added to the window, so `isDescendant(of: rail)` is
-        // false — but treating that as "focus left the rail" runs
-        // exitControlsFocus(), whose sink calls `rail.resetFocusMemory()`.
-        // Dismissing the panel then landed focus on the rail's default first
-        // stop (the INVISIBLE scrubber proxy) instead of the button that opened
-        // it, which reads as focus disappearing.
+        // A presented panel counts as the rail, or its dismiss loses the button
+        // that opened it.
         if let panel = activeRailPanel, panel.window != nil, view.isDescendant(of: panel) { return true }
         return false
     }
 }
 
-/// Invisible, full-screen focus stop for the content state: chrome hidden, or
-/// up but not yet entered. It replaces the focusable SwiftUI layer that used to
-/// hold focus here.
-///
-/// It handles no presses itself. They bubble to the container, whose
-/// "Content-state presses" section is the single owner of that grammar, the
-/// same way the rail's buttons already let Menu and Play/Pause bubble.
-///
-/// Full screen on purpose: the focus engine never finds a candidate beyond
-/// its edges, so no directional press or swipe from here moves focus on its
-/// own. That is the same geometry the SwiftUI layer had, and what every
-/// Up/Down/Left/Right rule in the container assumes. Stacked above the video,
-/// captions and full-frame scrims (so nothing full-screen occludes it) and
-/// below the rail and every other control (so it occludes none of them). It is
-/// hidden in the error state, where the SwiftUI error buttons below it need
-/// focus.
+/// Invisible, full-screen focus stop for the content state. Presses bubble to
+/// the container's "Content-state presses". Full screen so the engine never
+/// finds a move from it; above video and scrims, below every control.
 private final class ContentFocusAnchorView: UIView {
 
     /// Focus gate, set by `PlayerContainerViewController.applyChromeVisibility()`.
@@ -2351,12 +2136,8 @@ final class BottomScrimView: UIView {
 
 extension PlayerContainerViewController: UIGestureRecognizerDelegate {
 
-    /// Only let the swipe-to-scrub pan claim a gesture that is clearly
-    /// HORIZONTAL and that it will actually act on. On tvOS the focus engine
-    /// consumes the same indirect-touch stream; once a recognizer begins, the
-    /// competing interaction is cancelled. Refusing here (rather than bailing
-    /// inside the action) leaves vertical swipes to the focus engine, which is
-    /// what surfaces the transport controls via `.onMoveCommand`.
+    /// Only let the swipe-to-scrub pan claim a clearly horizontal gesture it will
+    /// act on. Refusing here, not in the action, leaves vertical swipes to the engine.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
               pan === panGestureRecognizer
@@ -2364,18 +2145,11 @@ extension PlayerContainerViewController: UIGestureRecognizerDelegate {
 
         guard panCanDriveScrub else { return false }
 
-        // Never while the clickpad is physically down. A click disturbs touch
-        // sensing, and the jump in reported position reads as a fast swipe: the
-        // pan began mid-click and put the player into swipe-scrub, so the
-        // click's own Left/Right then nudged an uncommitted scrub cursor
-        // instead of skipping, and nothing moved until the user pressed Select.
+        // Never while the clickpad is down: a click jolts the touch into a fake swipe.
         guard !RemoteInputHandler.isClickpadDown, !RemoteInputHandler.isRingJogging else { return false }
 
-        // Decide on VELOCITY, not translation. This is called the instant the
-        // pan clears its slop threshold, when translation is still near zero
-        // and its direction is noise; velocity is already well-defined. Require
-        // a decisive horizontal bias (2:1) so a diagonal drift toward the
-        // controls still reads as vertical and reaches the focus engine.
+        // Decide on velocity: translation is still near zero at this point.
+        // A 2:1 horizontal bias leaves diagonal drift to the focus engine.
         let velocity = pan.velocity(in: view)
         guard velocity != .zero else { return false }
         return abs(velocity.x) > abs(velocity.y) * 2

@@ -5,15 +5,8 @@
 //  AetherLoadTimeoutPolicyTests.swift
 //  RivuletTests
 //
-//  Issue #245: TrueHD 7.1 and DTS-HD MA 7.1 titles could stick on the loading
-//  spinner forever because the host awaited the engine's load bare. The fix
-//  races that load against a deadline and lets the existing HLS fallback
-//  recover. The single most load-bearing property of the fix is that the
-//  deadline error is NOT seen as a cancellation, because the catch that drives
-//  the fallback returns early for cancellations. If that ever regresses the
-//  fallback is silently skipped and the hang comes back with no other symptom.
-//
-//  Pure tests: no engine, no view model.
+//  The Aether load deadline error must not count as a cancellation, or the HLS
+//  fallback is skipped and the loading hang comes back (#245).
 //
 
 import XCTest

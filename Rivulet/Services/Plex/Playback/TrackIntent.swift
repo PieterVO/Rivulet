@@ -2,20 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  TrackIntent.swift
-//  Rivulet
-//
-//  Global audio / subtitle track memory.
-//
-//  Replaces the old SubtitlePreference / AudioPreference pair, which dropped
-//  `isForced` on the floor: picking "English (Forced)" on one title persisted
-//  as merely "English", and the next title auto-selected the full English
-//  caption track. Forced ("translate the foreign dialogue") and regular
-//  ("caption every line") are different products, not degradations of one
-//  another, so the resolver never crosses that boundary.
-//
-//  Persistence is global UserDefaults, last-write-wins, shared across
-//  profiles — matching the behavior it replaces.
+//  Global audio and subtitle track memory (UserDefaults, last write wins, shared
+//  across profiles). Forced and regular subtitles are different intents, and the
+//  resolver never substitutes one for the other.
 //
 
 import Foundation
@@ -247,19 +236,8 @@ enum TrackCommentary {
         "narration"
     ]
 
-    /// Heuristic: is this an alternate/accessibility track that should never
-    /// be auto-selected?
-    ///
-    /// This is necessarily a heuristic. Plex exposes NO commentary or
-    /// audio-description flag — `PlexStream` carries only `default`, `forced`,
-    /// `selected` and `hearingImpaired`. The only signal available is the
-    /// title text, so we string-match it. Imperfect, but strictly better than
-    /// the previous behavior (blind max-by-channel-count), which would happily
-    /// auto-select a 5.1 director's commentary over the 5.1 main mix.
-    ///
-    /// Commentary tracks remain fully user-selectable in the picker; they are
-    /// only excluded from *automatic* selection. An explicit pick is stored as
-    /// intent and honored by the exact-match tier.
+    /// Whether a track is commentary or audio description, excluded from auto-select only.
+    /// Plex has no flag for either, so the Plex side is a title-text match.
     static func isCommentaryOrDescription(_ track: MediaTrack) -> Bool {
         // AetherEngine reads the container's disposition bits and reports this
         // outright. Trust it when set; the title match below is the fallback for
@@ -286,10 +264,7 @@ enum TrackIntentResolver {
 
     /// Resolve the stored subtitle intent against the tracks of the current title.
     ///
-    /// Returns `nil` for "subtitles off". Critically, a `nil` result caused by
-    /// *no matching track* is NOT a signal to rewrite the stored intent — the
-    /// caller must treat this as a pure read. Forced and regular are distinct
-    /// intents; we never substitute one for the other.
+    /// Returns `nil` for off. A nil from no matching track must not rewrite the stored intent.
     ///
     /// Ladder for `.track(language:forced:hearingImpaired:codec:)`:
     ///   1. language + forced + hearingImpaired + codec
@@ -345,14 +320,8 @@ enum TrackIntentResolver {
     /// Whether Plex's per-item `selected: true` subtitle stream may override
     /// the stored global intent.
     ///
-    /// The per-item tier exists for deliberate picks persisted server-side
-    /// (the pre-play picker, Plex Web / mobile), so it normally beats the
-    /// global memory — including an explicit global Off. But the forced
-    /// boundary holds here exactly as it does in `resolveSubtitle`: forced
-    /// and regular subs are different products, so a regular selected
-    /// stream never overrides a stored forced intent. Plex marks streams
-    /// `selected` from its own auto-select too, and letting those cross
-    /// the boundary silently turns full captions on for forced-only users.
+    /// It normally wins, even over a global Off, but a regular stream never overrides a
+    /// forced intent: Plex also sets `selected` from its own auto-select.
     static func plexSelectedSubtitleMayOverride(
         _ track: MediaTrack,
         intent: SubtitleIntent?

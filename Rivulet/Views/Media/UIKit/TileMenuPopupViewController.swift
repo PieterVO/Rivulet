@@ -1,34 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  TileMenuPopupViewController.swift
-//  Rivulet
-//
-//  The long-press action menu for poster tiles (home rows, library grid).
-//  Replicates the native tvOS context menu the SwiftUI home got from
-//  `.contextMenu`: a liquid-glass panel appears at the pressed tile's
-//  position, covering it, over a
-//  dimmed (not blurred) backdrop. Rows are leading-icon + title; the
-//  focused row is a white capsule with dark content; hairline dividers
-//  separate action groups.
-//
-//  Why this exists instead of UIContextMenuInteraction: on tvOS 26 the
-//  UIKit context-menu machinery never engages — a held Select press is
-//  cancelled ~0.4s in and neither the collection-view delegate
-//  (`contextMenuConfigurationForItemsAt`) nor a directly-attached
-//  UIContextMenuInteraction is ever asked for a configuration (verified
-//  against a bone-stock UICollectionView in a fresh UIWindow). SwiftUI's
-//  `.contextMenu` still works, but adopting it would make each tile a
-//  hosted SwiftUI focusable — re-introducing the per-cell hosting the
-//  UIKit migration removed for its measured hitch cost. So the menu is
-//  driven by our own long-press recognizer (`TileLongPress`) and this
-//  controller recreates the system presentation.
-//
-//  tvOS focus: each action row is the focus target and owns Select via a
-//  press-typed tap recognizer (a bare control's primaryAction doesn't fire
-//  on Select). Menu cancels. The first row takes initial focus.
-//
+// Long-press action menu for poster tiles: a glass panel at the pressed tile over a dimmed backdrop.
+// Hand-built because UIKit context menus never engage on tvOS 26; driven by `TileLongPress`.
+// Each row owns Select through a press-typed tap (a bare control's primaryAction misses Select).
 
 import UIKit
 
@@ -94,8 +69,7 @@ enum TileLongPress {
 
 final class TileMenuPopupViewController: UIViewController {
 
-    /// Action groups; a hairline divider is drawn between groups, matching
-    /// the SwiftUI menu's `Divider()`s.
+    /// Action groups, with a hairline divider between groups.
     private let sections: [[TileMenuAction]]
     private let header: TileMenuHeader?
     /// The pressed tile's frame in window coordinates. The popup is

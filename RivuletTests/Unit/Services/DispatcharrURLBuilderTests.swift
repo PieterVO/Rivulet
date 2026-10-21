@@ -5,10 +5,8 @@
 //  DispatcharrURLBuilderTests.swift
 //  RivuletTests
 //
-//  Covers the pure URL logic behind GitHub issue #246: capturing a Dispatcharr
-//  channel profile out of a pasted endpoint instead of discarding it, encoding
-//  it correctly as a path segment, and leaving the no-profile URLs byte for byte
-//  as they were.
+//  Dispatcharr channel profile URLs (#246): captured from a pasted endpoint,
+//  encoded as a path segment, and no-profile URLs unchanged.
 //
 
 import XCTest

@@ -36,26 +36,9 @@ enum MarkerSkipPolicy {
     /// seek to literal EOF.
     static let seekEpsilonSeconds: TimeInterval = 0.5
 
-    /// Decide whether skipping this marker finishes playback or seeks.
-    ///
-    /// A credits marker whose end reaches the media end finishes. Seeking
-    /// there instead parks the player on the last frame forever:
-    /// `duration - seekEpsilonSeconds` lands exactly inside AetherEngine's
-    /// `endOfMediaEpsilonSeconds` window, and the engine deliberately
-    /// converts a seek that lands at end-of-media into `.paused` while
-    /// withholding the terminal `.ended` it reserves for organic
-    /// completion. No `.ended` means the host's end-of-playback handling
-    /// never runs, and the `duration - 45` post-video fallback can't
-    /// rescue it either — that fallback is gated on there being no credits
-    /// marker, and a credits marker is precisely what put the pill
-    /// on-screen. Finishing directly is also route-independent: the `hls`
-    /// AVPlayer path gets the same behavior without depending on an
-    /// end-of-stream notification from an unbuffered tail position.
-    ///
-    /// - Parameters:
-    ///   - isCredits: Whether the marker is a credits/outro marker.
-    ///   - markerEnd: The marker's `endTimeSeconds`.
-    ///   - duration: Media duration, or 0 when not yet known.
+    /// Whether skipping this marker finishes playback or seeks. Credits ending at the media end
+    /// finish: a seek there lands in AetherEngine's end-of-media window, which pauses without
+    /// sending `.ended`, so post-video never runs. `duration` is 0 when not yet known.
     static func outcome(
         isCredits: Bool,
         markerEnd: TimeInterval,

@@ -65,12 +65,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: profileManager.isPresentingLaunchPicker) { _, isPresenting in
-            // The launch picker path defers hub loading until after selection,
-            // so isHomeContentReady never fires and the splash would otherwise
-            // ride its full 15s timeout while the picker sits behind it. Drop
-            // the splash immediately so the picker is the launch surface. This
-            // only fires when the picker actually presents (picker-on-launch +
-            // multiple profiles); every other launch is untouched.
+            // Hubs wait for the picker's selection, so content-ready never fires:
+            // drop the splash now instead of riding the 15 s timeout behind the picker.
             if isPresenting {
                 splashLog.info("Launch profile picker presenting — dismissing splash")
                 showSplash = false
@@ -114,15 +110,8 @@ struct ContentView: View {
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
         }
-        // Refresh the server-side library list on every transition
-        // to .active so a library added or renamed on the Plex server
-        // while Rivulet was backgrounded (or while the user was on the
-        // tvOS Home Screen) surfaces without an app restart.
-        // `loadLibrariesIfNeeded` returns early once the cache is
-        // populated, so without this hook the cached list never
-        // reconciles against current server state. Library visibility
-        // is fail-open (a hidden-libraries deny-list), so a freshly
-        // discovered library auto-appears in the sidebar.
+        // Refresh libraries on every return to .active: `loadLibrariesIfNeeded` stops at
+        // the cache, so a library added on the server would never appear otherwise.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await dataStore.refreshLibraries() }
@@ -131,12 +120,8 @@ struct ContentView: View {
         }
     }
 
-    /// The splash covers the home until it's *fully* settled: content ready AND
-    /// the hero backdrop on screen (when the hero is enabled). Gating on the
-    /// hero too is what stops it popping in a beat after the rows paint. If the
-    /// hero is disabled there's nothing to wait for, so content-ready alone
-    /// dismisses. When content is ready but the hero is still loading, arm a
-    /// short cap so a slow image can't hold the splash up.
+    /// Dismisses the splash once content is ready and, with the hero on, its backdrop is too,
+    /// so the hero does not pop in after the rows. A short cap keeps a slow image from holding it.
     private func evaluateSplashDismissal(trigger: String) {
         guard showSplash else { return }
 

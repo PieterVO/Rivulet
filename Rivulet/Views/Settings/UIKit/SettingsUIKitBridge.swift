@@ -5,13 +5,8 @@
 //  SettingsUIKitBridge.swift
 //  Rivulet
 //
-//  Thin SwiftUI seam hosting the all-UIKit Settings surface
-//  (`SettingsContainerViewController`). The only SwiftUI here is the
-//  unavoidable host (like the Home/Library bridges) plus `.onExitCommand`,
-//  which is the proven way to catch the Menu button in the `.sidebarAdaptable`
-//  shell (the old SwiftUI Settings used it too). Menu pops the container's
-//  page stack — and only when in a sub-page, so Menu at the root still exits
-//  to the system. Left is handled inside the container (focus guide).
+//  SwiftUI host for `SettingsContainerViewController`. Its `.onExitCommand`
+//  pops the page stack in a sub-page only, so Menu at the root still exits.
 //
 
 import SwiftUI

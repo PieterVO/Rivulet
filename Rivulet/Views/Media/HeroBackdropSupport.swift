@@ -163,10 +163,8 @@ extension PlexMetadata {
 // MARK: - MediaItem adapter
 
 extension MediaItem {
-    /// Agnostic counterpart to `PlexMetadata.heroBackdropRequest(...)`. No
-    /// server/auth inputs needed — `MediaItem.artwork.*` URLs are already
-    /// fully qualified by the provider's mapper. Episodes/seasons fall
-    /// back to their grandparent's backdrop when their own isn't set.
+    /// Counterpart to `PlexMetadata.heroBackdropRequest(...)`; artwork URLs are already absolute.
+    /// Episodes and seasons fall back to the grandparent's backdrop.
     func heroBackdropRequest() -> HeroBackdropRequest {
         let backdrop = artwork.backdrop ?? grandparentArtwork?.backdrop
         let thumbnail = artwork.thumbnail ?? artwork.poster

@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MediaProviderRegistry.swift
-//  Rivulet
-//
-//  Single source of truth for active MediaProvider instances. Phase 2 wires
-//  this to populate from CredentialRegistry / PlexAuthManager. Wave 1 single-
-//  server reality: at most one Plex provider entry. Multi-server support
-//  arrives in a later wave.
-//
+// The active MediaProvider instances (the Plex server and the Jellyfin server), keyed by id.
 
 import Foundation
 

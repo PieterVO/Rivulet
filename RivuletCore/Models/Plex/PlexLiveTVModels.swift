@@ -218,21 +218,9 @@ nonisolated struct PlexDVR: Codable, Sendable {
     let epgIdentifier: String?
     let Device: [PlexDVRDevice]?
 
-    /// Name for this tuner's guide group.
-    ///
-    /// The lineup carries it already, in its fragment — no extra request:
-    ///
-    ///     lineup://tv.plex.providers.epg.cloud/5fc76c88…#Freeview - Perth (58 channels)
-    ///                                                   └──────── this ────────┘
-    ///
-    /// That is the name the user picked their lineup by, so it wins over the
-    /// hardware description. The trailing "(58 channels)" is a count Plex
-    /// appends for its own picker and is dropped — it goes stale the moment a
-    /// channel is enabled or hidden.
-    ///
-    /// `key` is deliberately NOT in the chain: "161" is a worse heading than no
-    /// heading, and nil leaves the channels ungrouped rather than filed under a
-    /// number.
+    /// Name for this tuner's guide group, from the lineup URL's fragment
+    /// (`lineup://…#Freeview - Perth (58 channels)`), minus the stale channel count.
+    /// `key` is left out: "161" is a worse heading than none.
     var guideGroupName: String? {
         func cleaned(_ value: String?) -> String? {
             guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -298,13 +286,8 @@ extension PlexDVRDevice: Encodable {}
 // MARK: - Converters
 
 extension PlexLiveTVChannel {
-    /// Build a Plex HLS transcode URL for Live TV channels without an HDHomeRun stream URL.
-    /// This is how official Plex clients stream from DVB tuners (e.g. TBS cards) — through
-    /// the Plex server's universal transcode endpoint.
-    ///
-    /// The URL includes comprehensive client profile information that Plex requires to
-    /// properly start a transcode session. Without these parameters, DVB tuners will fail
-    /// to start playback (Fixes GitHub #64, RIVULET-15).
+    /// Plex HLS transcode URL for Live TV channels with no HDHomeRun stream URL
+    /// (DVB tuners). PMS needs the full client profile or playback fails (#64).
     private func buildPlexLiveTVStreamURL(serverURL: String, authToken: String) -> URL? {
         // Generate a unique session ID for this transcode session
         let sessionId = UUID().uuidString.uppercased()
@@ -417,23 +400,10 @@ extension PlexLiveTVChannel {
         ]
     }
 
-    /// Finalise a live-session URL, applying the clause-separator encoding that
-    /// every one of these URLs needs and that nothing enforces.
-    ///
-    /// `X-Plex-Client-Profile-Extra` joins its clauses with a raw `+`. That is a
-    /// legal query character, so `URLComponents` does NOT percent-encode it, and
-    /// a strict parser on the far end reads it as a space — the clause boundary
-    /// is gone and PMS parses a malformed profile. It has to travel as `%2B`.
-    ///
-    /// Forgetting is silent: the URL still forms and still looks right, the
-    /// server just negotiates against garbage. It was already missed once, in
-    /// `PlexLiveTVProvider.buildStreamURL`, which re-parses an
-    /// already-correct URL to swap the session UUID — reading `queryItems`
-    /// decodes `%2B` back to `+`, and re-serialising left it raw. Route every
-    /// build and REBUILD of one of these URLs through here.
-    ///
-    /// (`%2C` needs no such care: it survives the round trip because the `%`
-    /// itself gets encoded to `%25`, and decoded back, symmetrically.)
+    /// Finalises a live-session URL. `X-Plex-Client-Profile-Extra` joins clauses
+    /// with `+`, which `URLComponents` leaves raw and PMS reads as a space, so it
+    /// must travel as `%2B`. Reading `queryItems` decodes it back, so every build
+    /// and rebuild goes through here. (`%2C` round-trips on its own.)
     static func finalizedLiveURL(_ components: URLComponents) -> URL? {
         var components = components
         if let escaped = components.percentEncodedQuery?
@@ -450,21 +420,10 @@ extension PlexLiveTVChannel {
     /// URLComponents handles that, plus the '+'→%2B pass callers apply.
     static func liveClientProfileExtras() -> String {
         let clauses = [
-            // Direct-play profiles: AetherEngine demuxes raw MPEG-TS HLS and
-            // software-decodes MPEG-2 / mp2, so declare the raw broadcast
-            // codecs and let the server grant passthrough when it can.
-            //
-            // Video is deliberately left at the three codecs broadcast actually
-            // uses. Audio adds DTS, which shows up on cable and satellite feeds
-            // and would otherwise pull a channel into a conversion over audio
-            // the client could have taken as-is. Codecs an MPEG-TS cannot carry
-            // (FLAC, ALAC, Vorbis, PCM) are left out: declaring them buys nothing.
-            //
-            // `subtitleCodec=dvb_teletext` is the reason this matters most: it
-            // tells PMS we can take teletext untouched, so it has no cause to
-            // convert the page to WebVTT. Without it, a stream that would
-            // otherwise direct-play can be pulled into a conversion purely by
-            // its subtitles, and the teletext the caption renderer wants is gone.
+            // Direct-play profiles for raw broadcast codecs (Aether demuxes MPEG-TS
+            // and decodes MPEG-2 and mp2). DTS is in for cable and satellite feeds.
+            // `dvb_teletext` keeps PMS from converting teletext to WebVTT, which
+            // would force a conversion and lose the page the caption renderer reads.
             "add-direct-play-profile(type=videoProfile&protocol=hls&container=mpegts&videoCodec=h264%2Chevc%2Cmpeg2video&audioCodec=aac%2Cac3%2Ceac3%2Cmp2%2Cmp3%2Cdts&subtitleCodec=dvb_teletext%2Cdvb_subtitle%2Ceia_608)",
             "add-direct-play-profile(type=videoProfile&protocol=http&container=mpegts&videoCodec=h264%2Chevc%2Cmpeg2video&audioCodec=aac%2Cac3%2Ceac3%2Cmp2%2Cmp3%2Cdts&subtitleCodec=dvb_teletext%2Cdvb_subtitle%2Ceia_608)",
 

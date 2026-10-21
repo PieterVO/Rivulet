@@ -1,28 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MediaProgressInfoBar.swift
-//  Rivulet
-//
-//  Reusable bottom-bar composition shared by `ContinueWatchingCell` and
-//  in-progress tiles in `PosterCell`. Mirrors SwiftUI
-//  `ContinueWatchingCard.bottomInfoBar` (`ContinueWatchingCard.swift:105`):
-//
-//    [▶︎]  [▓▓▓░░ progress 34pt]  S1, E2 · 35m
-//
-//  Sizes, gaps and colours are the Apple TV app's Up Next status row:
-//   - play.fill glyph (20pt regular, small scale)
-//   - 34 x 6 progress pill, hidden when not in progress
-//   - info text (20pt medium): "S{n}, E{n}" for episodes plus
-//     remaining-or-duration ("1h 7m" / "35m")
-//  All three are white at half alpha, and full white on the focused card.
-//
-//  The play icon and the progress capsule both render ONLY when the item
-//  has real play progress (0 < fraction < 1); an "up next" episode with no
-//  progress shows just the info text. The bar sits directly on the artwork
-//  — no dark gradient/scrim behind it.
-//
+// Bottom bar shared by `ContinueWatchingCell` and in-progress `PosterCell` tiles:
+// play glyph, 34 x 6 progress pill, "S1, E2 · 35m". Sizes and colours are the Apple TV app's
+// Up Next row: white at half alpha, full white on focus. Glyph and pill show only while
+// 0 < progress < 1.
 
 import UIKit
 
@@ -115,8 +97,7 @@ final class MediaProgressInfoBar: UIView {
     }
 
     func configure(item: PlexMetadata) {
-        // Show progress capsule only when 0 < watchProgress < 1
-        // (mirrors SwiftUI's `if let progress, progress > 0 && progress < 1`).
+        // Show progress capsule only when 0 < watchProgress < 1.
         let p = item.watchProgress ?? 0
         var parts: [String] = []
         if item.type == "episode" {
@@ -216,23 +197,16 @@ final class MediaProgressInfoBar: UIView {
 
 // MARK: - Bottom info blur
 
-/// Bottom legibility band — the ATV+ treatment (see Docs/atv_ref/
-/// below_home_hero_ref.JPG): the bottom quarter of the card carries a REAL
-/// blur with a soft gradient top edge, so the info bar reads over any
-/// artwork. This replaced the old dark scrim (MediaBottomGradient), which
-/// read as a bad shadow. Shared by ContinueWatchingCell (always on) and
-/// PosterCell (shown only while in-progress, toggled with the info bar).
+/// Apple TV app legibility band: a real blur over the card's bottom quarter with a soft top edge.
+/// ContinueWatchingCell shows it always, PosterCell only while in progress.
 @MainActor
 final class BottomInfoBlurView: UIView {
 
     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
     private let fadeMask = CAGradientLayer()
 
-    /// How opaque the blur band is. < 1 lets the sharp artwork read through by
-    /// (1 - this), so the info stays legible without the blur obscuring the
-    /// picture. Deterministic — replaced the paused-animator "fractionComplete"
-    /// scrub, which silently reset to FULL blur on window attach (device builds
-    /// rendered max-strength regardless). Plain alpha has no such lifecycle.
+    /// Blur band opacity; the sharp artwork shows through by (1 - this). Plain alpha, because a
+    /// paused animator's `fractionComplete` resets to full blur on window attach.
     private let blurStrength: CGFloat = 0.85
 
     override init(frame: CGRect) {
@@ -283,13 +257,8 @@ final class BottomInfoBlurView: UIView {
     }
 }
 
-/// Apple-style "watched" indicator: the rewatch arrow
-/// (`arrow.trianglehead.counterclockwise`) shown at the BOTTOM-LEFT of a
-/// poster/thumb — the same slot the play icon + progress bar occupy for in-progress
-/// items. Replaces the old top-right corner checkmark. Watched and in-progress are
-/// mutually exclusive, so the two never collide in that corner.
-///
-/// Carries a soft shadow so it stays legible on bright artwork without a scrim.
+/// Apple-style watched glyph (`arrow.trianglehead.counterclockwise`), bottom-left in the progress
+/// bar's slot; the two never show together. A soft shadow keeps it legible without a scrim.
 @MainActor
 final class WatchedGlyphView: UIImageView {
 

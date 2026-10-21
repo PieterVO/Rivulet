@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  CacheManager.swift
-//  Rivulet
-//
-//  Adapted from plex_watchOS CacheManager
-//  JSON file caching for offline access to Plex metadata
-//
+// JSON file caching for offline access to Plex metadata.
 
 import Foundation
 
@@ -153,14 +147,8 @@ actor CacheManager {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         let readMs = Int((ProcessInfo.processInfo.systemUptime - readStart) * 1000)
         memoryCache.setObject(data as NSData, forKey: fileName as NSString)
-        // Wall AND cpu, because wall alone is not attributable. A device launch
-        // reported `decode=1033ms` for a 16KB `[PlexMetadata]` payload that a
-        // simulator decodes in 0.4ms warm / 1.0ms cold (see
-        // PlexMetadataDecodeCostTests) — a 1000x gap no CPU difference explains.
-        // Wall time counts the launch storm descheduling this cooperative thread
-        // and page-faulting the decode path in; cpu time counts only real work.
-        // If cpu << wall the payload is innocent and the contention is the story,
-        // so do not go optimizing the model layer off the wall number alone.
+        // Wall and cpu both: at launch wall time counts descheduling and page faults
+        // (1033 ms wall for a 0.4 ms decode). If cpu << wall, the payload is not the problem.
         let decodeStart = ProcessInfo.processInfo.systemUptime
         let cpuStart = Self.threadCPUSeconds()
         let decoded = try? JSONDecoder().decode(T.self, from: data)
@@ -274,12 +262,8 @@ actor CacheManager {
 
     // MARK: - Library Hubs Cache (for individual library screens)
 
-    // NB: versioned for the same reason the MediaItem projection below is —
-    // this decodes into `PlexHub`, so a field added to that model reads back as
-    // nil from every file an older build wrote. v2: `PlexHub.promoted` arrived
-    // 2026-08-03 and `projectHomeItems` gates each Home row on it, so pre-v2
-    // files silently cost a pinned library its row until a network refresh
-    // landed. Bump this whenever `PlexHub` gains a field Home reads.
+    // Bump `_vN` when `PlexHub` gains a field Home reads: older files decode it as nil
+    // (v2: `promoted`, which gates each pinned library's Home row).
     private let libraryHubsCacheBase = "library_hubs_"
     private let libraryHubsCachePrefix = "library_hubs_v2_"
 
@@ -293,26 +277,10 @@ actor CacheManager {
         return decodedCache(for: fileName, as: [PlexHub].self)
     }
 
-    // MARK: - Home Items Cache (MediaItem projection — Stage 1)
-    //
-    // Lightweight `MediaItem`-based projection of the home/library hub rows,
-    // produced by `PlexDataStore.projectHomeItems()` / `projectLibraryItems()`.
-    // ADDITIVE alongside the `[PlexHub]` hub cache above — nothing consumes
-    // this yet (see `perf-spike/MEDIAITEM_HOME_PLAN.md`). Reuses the same
-    // `cacheData` / `decodedCache` helpers as every other cache here.
+    // MARK: - Home Items Cache (MediaItem projection)
 
-    // NB: bump the `_vN` suffix whenever the `MediaItem` schema OR the identity
-    // baked into the projection changes, so a stale projection (written by an
-    // older build) is discarded on update rather than shown as-is.
-    // v2 added `MediaItem.isMusic` (music tiles render 1:1 square); old caches
-    // lacked it, so music rows stayed 2:3 on the first post-update launch.
-    // v3: the Plex connection rework sources `PlexDevice.machineIdentifier` from
-    // `clientIdentifier` at decode time, which flips the `providerID` baked into
-    // every cached `MediaItemRef` (see MediaProviderRegistry.populateFromCurrentAuth).
-    // A v2 projection written under the previous provider identity no longer
-    // matched the active provider, so the home dropped those items and showed
-    // blank rows until the cache was cleared. Raw `PlexMetadata` caches do not
-    // need versioning; they re-project fresh through the mapper under the current id.
+    // Bump `_vN` when the `MediaItem` schema or the `providerID` baked into each
+    // `MediaItemRef` changes, or an old build's rows show stale or blank.
     private let homeItemsCacheFile = "home_items_cache_v3.json"
     private let homeHeroItemsCacheFile = "home_hero_items_cache_v1.json"
     private let libraryItemsCachePrefix = "library_items_v3_"

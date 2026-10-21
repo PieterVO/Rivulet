@@ -4,20 +4,8 @@
 import XCTest
 @testable import Rivulet
 
-/// Issue #201 — regression guard.
-///
-/// A title with several subtitle tracks in the SAME language could only ever
-/// select the first of them. The picker listed Plex streams while the engine
-/// selects by container stream index, and the translation between the two lists
-/// matched on language + codec — not a unique key. Three English SRT tracks all
-/// resolved to the same engine index, so only the first was selectable. Since
-/// the first is typically the forced/foreign-parts track, users could not turn
-/// on real English subtitles at all.
-///
-/// The fix removed the translation entirely: `TrackMerge` builds ONE list whose
-/// ids ARE engine indices. These tests assert the property that matters to the
-/// user — every same-language track is independently addressable — at the level
-/// of the list the picker actually renders.
+/// Every same-language subtitle track is independently selectable in the list the
+/// picker renders, whose ids are engine stream indices (#201).
 final class SameLanguageTrackSelectionTests: XCTestCase {
 
     /// Engine track: `id` IS the container stream index.

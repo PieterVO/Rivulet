@@ -1,19 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  LiveTVSessionHandoff.swift
-//  Rivulet
-//
-//  A running live session in transit between surfaces: the full-screen
-//  player, the corner player the guide keeps going after Back (issue #318),
-//  and a multiview tile. Handing it over rebinds the same player to a new
-//  render surface instead of tuning again, so the picture does not stop and
-//  a Plex tuner is not grabbed twice.
-//
-//  Exactly one surface owns a handoff at a time. Whoever holds it last and
-//  has no further use for it calls `stop()`.
-//
+// A running live session passed between the full-screen player, the guide's corner player (#318)
+// and a multiview tile. It rebinds the same player instead of tuning again, so no second tuner grab.
+// One surface owns it at a time; the last holder with no use for it calls `stop()`.
 
 import Foundation
 

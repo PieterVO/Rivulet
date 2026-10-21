@@ -5,18 +5,10 @@
 //  IOSPlexSession.swift
 //  Rivulet iOS
 //
-//  The iOS content store and view-facing facade over the SHARED Plex stack:
-//  PlexAuthManager owns identity (PIN flow, server selection, tokens) and
-//  PlexNetworkManager owns every request. This file holds no endpoint
-//  knowledge; it shapes shared results for the iOS views and caches what is
-//  expensive to re-resolve (clear logos). The one exception is the playback
-//  URL (direct, or a capped transcode from the shared builder), which iOS
-//  composes here because iOS has no ContentRouter. Content
-//  fetches live in IOSPlexSession+Content.swift.
-//
-//  It exists for the same reason PlexDataStore does on tvOS: the auth manager
-//  hands off to "whatever holds content" through PlexAuthManager.onAuthenticated
-//  / .onSignedOut, and this is that object on iOS.
+//  The iOS content store over the shared Plex stack, the counterpart of tvOS's
+//  PlexDataStore. No endpoint code: it shapes shared results for the views,
+//  caches clear logos, and composes the playback URL (iOS has no ContentRouter).
+//  Content fetches live in IOSPlexSession+Content.swift.
 //
 
 import Combine

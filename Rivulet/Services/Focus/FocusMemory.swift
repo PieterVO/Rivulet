@@ -1,36 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  FocusMemory.swift
-//  Rivulet
-//
-//  Simple focus memory system for tvOS
-//  Tracks last-focused item per memory key without scope validation
-//
-
 import SwiftUI
 
-/// Simple focus memory system for tvOS section focus restoration
-///
-/// Use this for remembering and restoring focus within sections of a view
-/// (e.g., seasons, episodes, cast & crew).
-///
-/// Usage:
-/// ```swift
-/// @FocusState private var focusedItemId: String?
-///
-/// ScrollView(.horizontal) {
-///     HStack {
-///         ForEach(items) { item in
-///             ItemCard(item: item)
-///                 .focused($focusedItemId, equals: item.id)
-///         }
-///     }
-/// }
-/// .focusSection()
-/// .remembersFocus(key: "mySectionKey", focusedId: $focusedItemId)
-/// ```
+/// Last-focused item per section key, for SwiftUI focus restoration.
+/// Use with `.focusSection()` and `.remembersFocus(key:focusedId:)`.
 @MainActor
 final class FocusMemory {
     static let shared = FocusMemory()
@@ -131,17 +105,9 @@ struct FocusMemoryModifier: ViewModifier {
 }
 
 extension View {
-    /// Remember and restore focus for this section
-    ///
-    /// This modifier tracks the currently focused item and restores it when
-    /// the section is re-entered. Do NOT use `.scrollPosition()` with this
-    /// modifier - let the tvOS focus engine handle scrolling naturally.
-    ///
-    /// - Parameters:
-    ///   - key: Unique identifier for this section (e.g., "detailSeasons")
-    ///   - focusedId: Binding to the @FocusState variable tracking focus
-    ///   - restoreOnEntry: When false, remembers focus changes but does not auto-redirect
-    ///     when the section is entered.
+    /// Remembers this section's focused item and restores it when focus re-enters.
+    /// Do not combine with `.scrollPosition()`; let the focus engine scroll.
+    /// `restoreOnEntry: false` remembers without redirecting on entry.
     func remembersFocus(
         key: String,
         focusedId: FocusState<String?>.Binding,

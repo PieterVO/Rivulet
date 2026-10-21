@@ -43,15 +43,7 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
 
     /// The track's index within the container's stream list.
     ///
-    /// THE JOIN KEY between AetherEngine and Plex. The engine's `TrackInfo.id`
-    /// is literally this value (Demuxer walks every stream and passes the loop
-    /// counter through), and Plex reports the same thing as `PlexStream.index`.
-    /// Matching on it is container truth: immune to either side listing streams
-    /// the other doesn't (e.g. Plex's `embeddedInVideo` closed-caption
-    /// pseudo-streams, which FFmpeg never surfaces as separate streams).
-    ///
-    /// `nil` for external sidecar subtitles — they aren't in the container at
-    /// all, so they have no stream index and are paired by registration order.
+    /// The join key between the engine and Plex (see TrackMerge). `nil` for external sidecars.
     let streamIndex: Int?
 
     /// Engine-side marker: true for AetherEngine tracks registered from an

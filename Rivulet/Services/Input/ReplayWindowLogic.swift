@@ -23,16 +23,8 @@ struct ReplayWindowLogic {
     /// are turned back off) when the window reverts.
     let priorSubtitleTrackId: Int?
 
-    /// True once a time-observer tick has been observed *before*
-    /// `invokedAt` — i.e. the backward seek that opens the window has
-    /// actually landed. `openCaptionWindow(until:)` sets the window
-    /// synchronously but performs its seek asynchronously in a Task; a
-    /// stale time-observer tick can fire in that gap at/after `invokedAt`
-    /// (playback hasn't moved yet). Without arming, that stale tick would
-    /// satisfy `shouldRevert` immediately and revert subtitles before the
-    /// seek ever lands. Only a tick that actually observes playback below
-    /// `invokedAt` proves the seek landed, and only then should a
-    /// subsequent pass back over `invokedAt` count as "passed the point."
+    /// True once a tick lands before `invokedAt`, proving the backward seek landed.
+    /// The seek is async, so a stale tick at `invokedAt` would otherwise revert at once.
     let armed: Bool
 
     init(invokedAt: TimeInterval, priorSubtitleTrackId: Int?, armed: Bool = false) {

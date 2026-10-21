@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PreviewEntrySnapshot.swift
-//  Rivulet
-//
-//  UIKit-only handoff for the row -> preview carousel entrance. The presenter
-//  captures visible source tile snapshots before presentation; the carousel VC
-//  owns animating those views into its card geometry.
-//
+//  Row tile snapshots the presenter captures for the carousel's entry morph.
 
 import UIKit
 
@@ -48,18 +41,9 @@ protocol PreviewSourceTile: UICollectionViewCell {
     var previewArtworkLoaded: Bool { get }
 }
 
-/// Clipping window for a captured tile snapshot during the row -> carousel
-/// morph.
-///
-/// A `snapshotView(afterScreenUpdates:)` stretches its contents to whatever
-/// bounds you assign, so animating one straight to the card frame squashes it
-/// (a 2:3 poster tile into a ~1.62:1 card is x5.68 across but x2.34 down).
-/// The window takes that frame instead; the snapshot inside is aspect-filled
-/// and top-anchored, so it scales uniformly and overflows the bottom edge.
-///
-/// No display link needed: both endpoint content frames satisfy
-/// `h = w / aspect`, and linear interpolation preserves that, so the ratio
-/// holds at every intermediate frame.
+/// Clips a tile snapshot during the row to carousel morph. A snapshot view stretches to
+/// its bounds, so the window takes the card frame and the snapshot inside aspect-fills,
+/// top-anchored. Linear interpolation keeps that aspect, so no display link is needed.
 @MainActor
 final class EntryMorphWindowView: UIView {
 

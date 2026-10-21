@@ -5,15 +5,8 @@
 //  StallWatchdogPolicyTests.swift
 //  RivuletTests
 //
-//  Issue #247: pausing media and letting the tvOS screensaver come up
-//  restarted playback. A paused Aether session reports buffering once the
-//  display is taken over, the stall watchdog's 20s recovery kick (seek +
-//  play, which on the Aether route can rebuild the whole session) fired, and
-//  the media started again under the screensaver.
-//
-//  Pure tests over the arm/fire decision. UniversalPlayerViewModel's init
-//  builds a real player and Combine graph, so the watchdog task itself is not
-//  reachable from a unit test — this predicate is the testable seam.
+//  The stall watchdog's arm/fire decision: a paused session that reports
+//  buffering under the screensaver must not get a recovery kick (#247).
 //
 
 import UIKit

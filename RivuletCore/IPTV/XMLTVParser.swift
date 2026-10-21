@@ -335,14 +335,9 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         self.parseError = parseError
     }
 
-    /// Programme poster: the declared-portrait icon closest to 2:3, else the
-    /// first icon with no declared dimensions (the views measure that one
-    /// before trusting it). An icon declared landscape is never a poster, so a
-    /// feed whose only art is landscape yields nil and the poster slot falls
-    /// back to the channel logo.
-    ///
-    /// Declared dimensions only: parsing must not depend on anything the UI
-    /// has measured, or the same feed would parse differently per session.
+    /// Programme poster: the declared-portrait icon closest to 2:3, else the first
+    /// icon with no declared size; never a declared-landscape one. Declared sizes
+    /// only, so the same feed parses the same every session.
     static func posterIcon(from icons: [(url: String, w: Int?, h: Int?)]) -> String? {
         let portraits = icons.compactMap { icon -> (url: String, ratio: Double)? in
             guard let ratio = declaredRatio(icon), ratio < EPGImageClassifier.landscapeThreshold else { return nil }

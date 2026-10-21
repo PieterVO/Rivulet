@@ -122,13 +122,8 @@ struct IOSAetherSubtitleOverlay: View {
         alignment: TextAlignment = .center
     ) -> some View {
         renderedText(body, pointSize: pointSize)
-            // A cue's box hugs its widest line, so a shorter line has slack.
-            // Centring that slack is right for a centred cue and wrong for a
-            // side-anchored one: the box grows away from its anchor when a later
-            // line runs longer, and every shorter line then re-centres in the
-            // wider box, so a left-positioned cue's first word visibly slides
-            // right as the line beneath it extends. Rolling captions show it as
-            // the top line drifting. The anchored edge has to stay put.
+            // Align lines to the cue's anchored edge: centring a side-anchored cue
+            // makes its first line slide as a longer line below it extends the box.
             .multilineTextAlignment(alignment)
             .padding(.horizontal, pointSize * 0.30)
             .padding(.vertical, pointSize * 0.075)
@@ -289,15 +284,8 @@ private extension AetherPlayer.SubtitleCue {
 }
 
 /// Which column a positioned cue anchors to: 0 leading, 1 centre, 2 trailing.
-///
-/// An explicit numpad `alignment` wins. When the source gives none, a fine
-/// `position.x` STILL names an edge: WebVTT's `position:` is the box's start
-/// edge, not its centre, so a cue placed on the left must anchor leading.
-/// Centre-anchoring it is what let a longer second line widen the box
-/// symmetrically and drag the first line sideways.
-///
-/// The layout and the line alignment both read this, so the edge the box is
-/// pinned on and the edge the lines align to cannot disagree.
+/// An explicit numpad `alignment` wins; otherwise `position.x` names the start
+/// edge (WebVTT), so a left cue anchors leading. Layout and line alignment share it.
 private func captionColumn(for placement: AetherPlayer.SubtitleCue.TextPlacement) -> Int {
     if let alignment = placement.alignment {
         return (min(max(alignment, 1), 9) - 1) % 3

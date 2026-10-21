@@ -6,17 +6,10 @@ import XCTest
 
 @testable import Rivulet
 
-/// The search page must start BELOW the tvOS search chrome (#292).
-///
-/// This cannot be eyeballed from the source: the search controller presents
-/// full screen into the window, leaves the results view full screen at (0,0),
-/// and hands over its chrome height only as `safeAreaInsets.top`. The page sets
-/// `contentInsetAdjustmentBehavior = .never` for the hero, so that inset is only
-/// applied because `updateContentTopInset` reads it back. Measured on tvOS 26.5:
-/// field (80,60) 1760x70, keyboard (80,165) 1760x66, safe area top 306.
-///
-/// Without the fix the recents row draws from y=0, through the keyboard, and the
-/// keyboard cannot be reached — which is exactly what shipped.
+/// The search page must start below the tvOS search chrome (#292). The chrome
+/// height arrives only as `safeAreaInsets.top`, which `updateContentTopInset`
+/// reads back. tvOS 26.5: field (80,60) 1760x70, keyboard (80,165) 1760x66,
+/// safe area top 306.
 final class SearchChromeLayoutTests: XCTestCase {
 
     private func seedRecents() {

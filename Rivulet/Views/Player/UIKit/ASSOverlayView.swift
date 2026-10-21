@@ -5,17 +5,10 @@
 //  ASSOverlayView.swift
 //  Rivulet
 //
-//  Draws an ASS/SSA track through libass: up to four region layers over the
-//  picture rect. libass renders ahead of the playhead on its own queue
-//  (ASSRenderQueue); the display tick only picks the unit for the frame on
-//  screen. Lives inside CaptionOverlayView, which decides whether a track
-//  renders here or as plain captions.
-//
-//  Events come from the model's FULL cue list, not the active set: libass
-//  schedules them itself, and a `\fad` or `\move` needs the whole event.
-//  Each cue is handed over once. The engine re-decodes the window after a
-//  seek and re-emits the same lines, and libass's own ReadOrder dedupe is off
-//  (see LibassRenderer).
+//  Draws an ASS/SSA track through libass into up to four region layers over the
+//  picture. libass renders ahead on its own queue; the display tick only picks a unit.
+//  Fed the full cue list, not the active set (`\fad` and `\move` need whole
+//  events), each cue once, since libass's ReadOrder dedupe is off.
 //
 
 import Combine

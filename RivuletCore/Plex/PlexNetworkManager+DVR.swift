@@ -6,26 +6,12 @@
 //  Rivulet
 //
 //  Plex DVR: recording a programme, listing what is scheduled, and cancelling.
-//
-//  Plex records through "subscriptions". The flow every Plex client uses:
-//
-//    1. GET /media/subscriptions/template?guid={airing guid}
-//       The server answers with the ways it can record that airing ("this
-//       episode", "all episodes", "new episodes only" …). Each option carries
-//       a ready-made `parameters` query (hints, airing channels and times,
-//       library type) plus the preference `Setting`s with their defaults.
-//    2. POST /media/subscriptions?{parameters}&targetLibrarySectionID=…
-//       &targetSectionLocationID=…&type=…&prefs[id]=value…
-//       Creates the rule; one-shot rules cover a single airing.
-//
-//  Upcoming recordings are grab operations (/media/subscriptions/scheduled);
-//  cancelling one airing deletes its grab, removing a series rule deletes the
-//  subscription (and every grab it made).
-//
-//  Everything is parsed by walking the JSON rather than decoding a fixed
-//  shape: Setting values arrive as strings, numbers or booleans depending on
-//  the setting, and the tune endpoint in the same family is known to vary its
-//  nesting by PMS version.
+//  Recording is GET /media/subscriptions/template?guid= (the record options, each
+//  with ready-made `parameters` and default `Setting`s), then POST
+//  /media/subscriptions with those parameters. Upcoming recordings are grabs
+//  (/media/subscriptions/scheduled): cancelling one airing deletes its grab,
+//  removing a series rule deletes the subscription. JSON is walked by hand
+//  because Setting values change type per setting.
 //
 
 import Foundation

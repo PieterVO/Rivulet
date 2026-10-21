@@ -1,21 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  ConfirmationPopupViewController.swift
-//  Rivulet
-//
-//  The canonical Yes/No confirmation popup. Shares the exact card chrome of
-//  `InfoPopupViewController` (centered frosted Liquid-Glass card, corner 38,
-//  dim 0.4 backdrop) with two focusable pill buttons at the bottom. Use this
-//  for every confirm/cancel prompt so popups stay consistent app-wide. With
-//  `cancelTitle: nil` it is a notice: one button (an error, say).
-//
-//  tvOS focus: each button is the focus target and owns Select via a press-typed
-//  tap recognizer (a bare control's primaryAction doesn't fire on Select). Menu
-//  cancels. The confirm button takes initial focus (cancel, for destructive
-//  prompts).
-//
+//  The app's one Yes/No popup, on `InfoPopupViewController`'s card; `cancelTitle: nil`
+//  makes it a one-button notice. Buttons own Select through press recognizers, and Menu cancels.
+//  Confirm takes initial focus, or cancel for a destructive prompt.
 
 import UIKit
 

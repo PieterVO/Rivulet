@@ -1,16 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HeroLoadingCell.swift
-//  Rivulet
-//
-//  Hero-sized placeholder vended while the trending hero resolves. Holds
-//  the hero slot at full height so rows below never shift when content
-//  lands, and quietly accepts focus so launch focus parks on the hero area
-//  instead of dropping to the first shelf (which would scroll the viewport
-//  down, then yank back up when the hero arrives).
-//
+// Hero-sized placeholder while the hero resolves. Holds the slot so rows never shift, and takes
+// launch focus so the viewport does not scroll to the first shelf and back.
 
 import UIKit
 

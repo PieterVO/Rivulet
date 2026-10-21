@@ -1,36 +1,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MediaRowMetrics.swift
-//  Rivulet
-//
-//  THE single source of tile + row metrics for every media shelf row:
-//  home/library hub rows, the watchlist row, loading skeletons, and the
-//  detail page's Related row. Layout sections AND cell-internal constraints
-//  must read from here — the sizes drifting apart across copies is exactly
-//  the bug class this file exists to kill.
-//
-//  Margin, gap and tile widths are the Apple TV app's grid (tvOS 26.5).
-//
+// The one source of tile and row metrics for every media shelf, layout and cell constraints alike.
+// Margin, gap and tile widths are the Apple TV app's grid (tvOS 26.5).
 
 import UIKit
 
 enum MediaRowMetrics {
     // MARK: The grid
     //
-    // 80 pt side margin, 40 pt between tiles, and a tile width that divides
-    // what is left by the column count: 6 across = 260 (posters), 5 = 320
-    // (Continue Watching), 3 = 560. At rest N tiles show in full and tile
-    // N + 1 shows a 40 pt sliver on the right; one step on, tile k + 1 sits
-    // where tile k was and the tile before it shows the same sliver on the left:
-    //
-    //     1920 = 2·rowLeading + N·width + (N − 1)·tileGap
-    //
-    // These are ARTWORK numbers. A cell is its lockup's FRAME, which is larger
-    // (see "Lockup frames"), so each shelf lays frames out `pitch` apart and
-    // pulls its inset and spacing in by that reserve. ShelfRowCell drives its
-    // own offset to pitch multiples, so the landings are exact.
+    // 1920 = 2·rowLeading + N·width + (N − 1)·tileGap, leaving a 40 pt sliver of tile N + 1.
+    // These are artwork numbers; a cell is its lockup's larger frame (see "Lockup frames").
 
     /// The app-wide content margin: hero, shelf headers, tile artwork, the
     /// expanded detail (`PreviewCarouselGeometry.expandedChromeInset`), popups.
@@ -126,11 +106,8 @@ enum MediaRowMetrics {
 }
 
 extension NSLayoutConstraint {
-    /// Returns self with a non-required priority. Used on cell-internal
-    /// constraints that meet TVUIKit's transient zero-width first layout pass
-    /// (TVCardView lays its content host out at width 0 before contentSize
-    /// applies) — at 999 Auto Layout compromises silently instead of spamming
-    /// "Unable to simultaneously satisfy constraints" on every cell configure.
+    /// Returns self at priority 999, for cell constraints that meet TVCardView's zero-width first
+    /// layout pass without logging unsatisfiable-constraint warnings.
     func withPriority(_ rawValue: Float) -> NSLayoutConstraint {
         priority = UILayoutPriority(rawValue)
         return self

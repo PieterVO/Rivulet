@@ -63,19 +63,8 @@ enum PlayerError: Error, Equatable, Sendable {
     case unknown(String)
     /// A failure AetherEngine classified for us (`PlaybackErrorInfo`).
     ///
-    /// `kind` is the engine's `PlaybackErrorKind.rawValue`, which upstream
-    /// documents as API and stable across releases, so it is safe to switch on
-    /// and safe to ship straight into a Sentry tag. It is carried as a String
-    /// rather than mirrored into a host enum because the engine's set is open
-    /// by design: it grows on minor releases, and an unlisted kind has to ride
-    /// through to telemetry intact rather than collapse to "unknown" the way
-    /// the substring rules below do. Only the kinds that change what the user
-    /// should do are named anywhere in this file.
-    ///
-    /// `message` is the same text `PlaybackState.error` carries. On the native
-    /// paths it is `AVPlayerItem.error.localizedDescription`, so it is in the
-    /// device's language and cannot be pattern-matched: that is precisely why
-    /// `kind` exists.
+    /// `kind` is `PlaybackErrorKind.rawValue`, stable upstream API and open-ended, so it stays a
+    /// String and reaches Sentry intact. `message` is often localized; never pattern-match it.
     case engineFailure(kind: String, message: String)
 
     /// Technical description for logging and Sentry - includes internal details

@@ -5,15 +5,8 @@
 //  SettingsCellFocusGrowthTests.swift
 //  RivuletTests
 //
-//  A settings row grows on focus by outsetting its capsule, NOT by scaling the
-//  cell. The rows are ~816pt wide and 58pt tall, so a uniform scale is wildly
-//  anisotropic in effect: the 1.04 this replaced grew the capsule 16.3pt per
-//  side horizontally and 1.3pt vertically, which reads as a sideways stretch.
-//
-//  Growth is geometry, so it gets measured rather than eyeballed: the focused
-//  capsule must equal the resting one outset by the same amount on all four
-//  sides, and must stay inside the row pitch so it never collides with the
-//  neighbouring row's capsule.
+//  A focused settings row outsets its capsule evenly on all four sides (a scale
+//  on an 816x58 row stretches sideways) and stays inside the row pitch.
 //
 
 import XCTest

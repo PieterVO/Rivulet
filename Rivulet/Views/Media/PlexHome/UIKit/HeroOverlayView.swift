@@ -1,26 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HeroOverlayView.swift
-//  Rivulet
-//
-//  Native UIKit hero overlay. Replaces the previous SwiftUI-hosted
-//  `HeroOverlayCell` so the entire UIKit Home is one focus model.
-//
-//  Composition (bottom-up):
-//    - HeroSlideView   — logo / metadata / tagline for the current slide
-//    - HeroButtonRowView — Play / Watchlist / Info / Next
-//    - paging dots     — pinned to the bottom of the overlay
-//
-//  Paging is the Apple TV app's: the old metadata leaves with its page, the
-//  new one fades in over the last 0.42 s of the 1 s slide, and the hero
-//  advances by itself every 5 s while it has focus or the page is at the top.
-//
-//  The view does NOT manage the backdrop image. The collection-view
-//  controller hosts `HeroBackdropView` as a sibling and updates it
-//  whenever this view emits `onIndexChanged`.
-//
+// Home hero overlay: HeroSlideView, HeroButtonRowView and paging dots. Paging is the Apple TV app's:
+// new metadata fades in over the last 0.42 s of a 1 s slide, auto-advancing every 5 s while focused
+// or at the top. The backdrop is a sibling `HeroBackdropView`, driven by `onIndexChanged`.
 
 import UIKit
 import Combine
@@ -454,14 +437,10 @@ final class HeroOverlayView: UIView {
         return nil
     }
 
-    // MARK: - MediaItem path (additive, for MediaLibraryViewController)
+    // MARK: - MediaItem path
 
-    /// Installs the MediaItem overlay and wires its callbacks. The PlexMetadata
-    /// path (configure(items:serverURL:authToken:initialIndex:)) is UNTOUCHED.
-    ///
-    /// The overlay is a simple self-contained UIView (MediaItemHeroOverlayView)
-    /// added as a subview pinned to self's edges. It is created lazily on first
-    /// call and reused thereafter.
+    /// Installs the MediaItem overlay (a lazily created `MediaItemHeroOverlayView` pinned to our
+    /// edges) and wires its callbacks.
     func configure(
         mediaItems: [MediaItem],
         initialIndex: Int,
@@ -517,22 +496,8 @@ final class HeroOverlayView: UIView {
 
 // MARK: - MediaItemHeroOverlayView
 
-/// Minimal hero overlay for MediaItem data. Matches the visual structure of
-/// HeroOverlayView: title/logo + metadata row + tagline, Play/Info/Next
-/// buttons, paging dots. Watchlist is a no-op stub (Task 12 wires actions).
-///
-/// Simplifications vs. the full PlexMetadata hero:
-///   - No watchlist toggle (button hidden; Task 12).
-///   - No HeroPlaySession on-demand resolution (calls onPlay immediately).
-///   - No TMDB logo upgrade (uses item.artwork.logo as-is).
-///   - No delayed metadata-swap work item (metadata updates are instant).
-///   - Logo loaded via ImageCacheManager.shared.image(for:) (not imageFullSize).
-///
-/// Preserved from the PlexMetadata hero:
-///   - 100ms slide-swap delay so art beat aligns with the backdrop crossfade.
-///   - Paging dots, advance (Next) button.
-///   - Focus forwarding to the Play button.
-///   - Identical button layout/spacing (HeroButtonRowView reused directly).
+/// Hero overlay for MediaItem data, laid out like HeroOverlayView with the same HeroButtonRowView.
+/// Play calls `onPlay` directly, without HeroPlaySession resolution.
 @MainActor
 final class MediaItemHeroOverlayView: UIView {
 

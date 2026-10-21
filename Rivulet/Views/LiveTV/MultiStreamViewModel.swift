@@ -70,17 +70,11 @@ final class MultiStreamViewModel: ObservableObject {
         }
 
         func load(url: URL, headers: [String: String]?) async throws {
-            // The same live load the fullscreen player uses, so a tile routes a
-            // URL exactly as fullscreen does. The two used to differ: a Plex
-            // direct-play grant is an HLS playlist that has to go through the
-            // engine's ingest, and a tile handed it to the raw live path, which
-            // fails closed on a playlist body (AE#140). Every channel granted
-            // direct play then played fullscreen and not in multiview.
+            // Route exactly as the fullscreen player does: a Plex direct-play
+            // grant is a playlist, which the raw live path refuses (AE#140).
             let forceEngineDemux = url.path.hasPrefix("/livetv/sessions/")
-            // The keepalive owns the tuned session from before the load, as in
-            // the fullscreen player: started after it, a load that failed left
-            // its fresh Plex grab unreported and unreleased for 300s, one per
-            // retry.
+            // Start the keepalive before the load, or a failed load leaves its
+            // Plex grab held for 300s.
             liveKeepalive.start(url: url)
             do {
                 try await aetherPlayer.loadLive(url: url, headers: headers,

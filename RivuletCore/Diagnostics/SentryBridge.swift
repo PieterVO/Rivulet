@@ -12,13 +12,8 @@
 
 import Sentry
 
-// `nonisolated` on purpose. The project compiles with MainActor default
-// isolation, so without this the whole enum is inferred @MainActor — which made
-// every capture from a non-isolated async context (the Live TV providers, any
-// URLSession continuation) an actor hop, and a hard error under full Swift 6.
-// SentrySDK is internally thread-safe and explicitly documented as callable
-// from any thread, so binding it to the main actor buys nothing and costs a hop
-// on the error path, which is exactly where we least want to perturb timing.
+// `nonisolated`: under MainActor default isolation every capture from a
+// non-isolated context would be an actor hop. SentrySDK is thread-safe.
 nonisolated enum SentryBridge {
     /// Set to true by RivuletApp right after SentrySDK.start. When the SDK was
     /// never started (no DSN configured), every call must stay clear of
@@ -86,15 +81,9 @@ nonisolated enum SentryBridge {
         #endif
     }
 
-    /// Starts a performance transaction, or returns nil when the SDK is inactive
-    /// (DEBUG, or no DSN configured). Callers hold the result optionally so the
-    /// whole measurement path compiles away to nil-checks in debug builds.
-    ///
-    /// Transactions are sampled by `options.tracesSampler` in RivuletApp, NOT by
-    /// the flat `tracesSampleRate` — named transactions we deliberately measure
-    /// stay at 1.0 while the swizzled UIViewController/HTTP transactions are
-    /// sampled down, so ambient auto-instrumentation can't crowd a small
-    /// performance quota and silently bias what lands.
+    /// Starts a performance transaction, or nil when the SDK is inactive (DEBUG or
+    /// no DSN). Sampling is `options.tracesSampler` in SentryStartup: add new
+    /// measured names to its 1.0 branch.
     static func startTransaction(name: String, operation: String) -> (any Span)? {
         #if !DEBUG
         guard isActive else { return nil }

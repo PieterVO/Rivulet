@@ -2,68 +2,22 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  AetherLoadTimeoutPolicy.swift
-//  Rivulet
-//
-//  Deadline policy for the Aether startup load, plus the sentinel error the
-//  deadline throws.
-//
-//  Issue #245: movies with TrueHD 7.1 or DTS-HD MA 7.1 audio sometimes stick
-//  on the loading spinner forever. Those codecs cannot be stream-copied, so
-//  the engine re-encodes them to FLAC while it builds the first HLS segments,
-//  which makes startup throughput-sensitive and occasionally non-terminating.
-//  The host awaited `AetherPlayer.load` bare, so a load that never returned
-//  never threw, the existing HLS fallback never ran, and the UI sat in
-//  `.loading` with no exit. The reporter's own workaround, backing out and
-//  playing again, is exactly what the fallback does automatically once the
-//  wait is bounded.
-//
-//  Kept as a separate pure type so the deadline value and, more importantly,
-//  the not-a-cancellation property of the error are testable without standing
-//  up a view model.
+//  Deadline for the Aether startup load, and the error it throws, so a load that
+//  never returns falls back to HLS instead of spinning forever (#245).
 //
 
 import Foundation
 
 enum AetherLoadTimeoutPolicy {
 
-    /// How long the host waits for `AetherPlayer.load` to return before it
-    /// gives up and falls back to the Plex HLS transcode.
-    ///
-    /// Chosen generous on purpose. The failure this bounds is an indefinite
-    /// hang, so the only cost of waiting too long is a slower recovery, while
-    /// the cost of waiting too little is cutting off a start that would have
-    /// succeeded. A remote 4K remux over a slow WAN link, with a FLAC encode
-    /// running ahead of the first segments, can legitimately take tens of
-    /// seconds to produce a playable manifest. Sixty seconds sits well past
-    /// any start we have observed succeed and well short of the point where a
-    /// user has already given up and pressed Menu.
-    ///
-    /// Budget it against what happens next: the fallback runs its own HLS
-    /// preflight, which polls up to eight times with backoff before it
-    /// concedes. A larger deadline here pushes the worst-case total wait past
-    /// two minutes, which is why this is not larger still.
+    /// How long to wait for `AetherPlayer.load` before falling back to HLS. Generous, since a
+    /// remote 4K remux with a FLAC encode can take tens of seconds; larger would push the worst
+    /// case past two minutes once the HLS preflight's own retries are added.
     static let startupLoadDeadline: TimeInterval = 60
 
-    /// Error thrown when `startupLoadDeadline` expires.
-    ///
-    /// This deliberately does NOT use `CancellationError`, and deliberately
-    /// does not carry a URL. Two traps sit behind that.
-    ///
-    /// First, the catch that drives the HLS fallback returns early for
-    /// anything `isCancellationError` recognises, because an ordinary
-    /// cancellation means the user left the player and must not trigger a
-    /// fallback or a Sentry report. A timeout is the opposite: it is a real
-    /// startup failure and it MUST reach the fallback. So the error has to be
-    /// a type that `isCancellationError` rejects, which means not
-    /// `CancellationError`, not `NSURLErrorDomain` code -999, and not
-    /// `NSCocoaErrorDomain` `NSUserCancelledError`. A plain Swift error type
-    /// bridges to `NSError` with this module's own domain, so all three of
-    /// those checks fail and the fallback runs.
-    ///
-    /// Second, stream URLs never travel to Sentry. Plex URLs carry account
-    /// tokens and IPTV paths embed credentials, so the message stays a fixed
-    /// string with no interpolated URL at all.
+    /// Thrown when `startupLoadDeadline` expires. Not a cancellation error, because the
+    /// fallback skips anything `isCancellationError` accepts. Carries no URL, since stream
+    /// URLs hold tokens and must never reach Sentry.
     struct TimedOut: Error, CustomStringConvertible {
         let seconds: TimeInterval
 

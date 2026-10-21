@@ -34,7 +34,7 @@ final class PlexDeviceDecodingTests: XCTestCase {
 
         let decoder = JSONDecoder()
 
-        // This should not throw - the fix makes `device` optional
+        // `device` is optional, so this must not throw.
         let device = try decoder.decode(PlexDevice.self, from: json)
 
         XCTAssertEqual(device.name, "Test Server")
@@ -103,7 +103,7 @@ final class PlexDeviceDecodingTests: XCTestCase {
 
         let decoder = JSONDecoder()
 
-        // Before the fix, this would fail on Index 1 -> device
+        // Index 1 has a null `device`.
         let devices = try decoder.decode([PlexDevice].self, from: json)
 
         XCTAssertEqual(devices.count, 2)

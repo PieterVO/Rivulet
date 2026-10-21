@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MetadataSourceRegistry.swift
-//  Rivulet
-//
-//  Sibling to MediaProviderRegistry for read-only catalog backends
-//  (TMDB today; IMDB/TVDB/Trakt later). Phase 2 populates this with
-//  TMDBMetadataSource at app launch.
-//
+// Read-only catalog backends (TMDB), the sibling of MediaProviderRegistry.
 
 import Foundation
 

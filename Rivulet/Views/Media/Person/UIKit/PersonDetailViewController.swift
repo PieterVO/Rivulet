@@ -1,30 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PersonDetailViewController.swift
-//  Rivulet
-//
-//  The person (cast/crew) detail page — Docs/atv_ref/actor_details_ref.JPG.
-//  A dark blue→black gradient page with a biography header (circular portrait +
-//  name + truncated bio + MORE) over horizontal poster shelves for the person's
-//  Movies and Shows.
-//
-//  Structure mirrors PlexHomeViewController's outer vertical collection: a
-//  UICollectionViewCompositionalLayout with ONE list section per row, each shelf
-//  hosted by a `ShelfRowCell` (which owns its inner horizontal collection, its
-//  own "Movies"/"Shows" header, and its self-driven focus scrolling). Unlike the
-//  home — which has a dynamic, paginated section set — this page has a FIXED set:
-//  header + Movies + Shows (a shelf is dropped when its entries are empty).
-//
-//  The vertical axis is owned by `FocusScrollControlledCollectionView`
-//  (isScrollEnabled = false; it self-drives the vertical scroll from
-//  didUpdateFocus), the same component the MediaDetail page adopts. With
-//  topSectionIndex left nil, every focused row simply centers.
-//
-//  Data comes from `PersonFilmographyProvider`; `onSelectItem` reports a tapped
-//  poster's MediaItem back to the presenter (Task 7 wires routing).
-//
+//  The cast and crew page (Docs/atv_ref/actor_details_ref.JPG): a biography header over
+//  Movies and Shows `ShelfRowCell` shelves, fed by `PersonFilmographyProvider`. Vertical
+//  focus scroll is `FocusScrollControlledCollectionView`'s, every row centred.
 
 import UIKit
 
@@ -45,11 +24,8 @@ final class PersonDetailViewController: UIViewController {
         case knownFor
     }
 
-    /// Diffable item identity. Each shelf is a SINGLE item (the ShelfRowCell
-    /// hosts the tiles in its own collection), exactly like the home rows.
-    /// `nonisolated` + `Sendable` so its Hashable conformance satisfies the
-    /// diffable data source's `Sendable` ItemIdentifierType requirement under
-    /// Swift 6 (the enclosing VC is @MainActor-isolated).
+    /// One item per shelf, as on Home. `nonisolated` and `Sendable` for the diffable
+    /// data source's Swift 6 requirement; the VC is @MainActor.
     nonisolated private struct ItemID: Hashable, Sendable {
         let section: Int
         let token: String
@@ -154,10 +130,7 @@ final class PersonDetailViewController: UIViewController {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // Prefer the header's bio panel so focus starts on the DESCRIPTION, not
-        // a poster row. The panel is focusable from first paint (it shows the
-        // loading dots until the bio arrives), so this resolves even pre-load.
-        // Fall back to the collection if the header cell isn't realized yet.
+        // Start on the bio panel, focusable from first paint; the collection if the header is not realized.
         let headerPath = IndexPath(item: 0, section: 0)
         if sections.first == .header,
            let header = collectionView.cellForItem(at: headerPath) {
@@ -243,10 +216,7 @@ final class PersonDetailViewController: UIViewController {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.clipsToBounds = false
-        // Hand the vertical focus-scroll to FocusScrollControlledCollectionView:
-        // disabling the engine's own scroll animator stops it racing the
-        // subclass's per-frame CADisplayLink driver (same as BelowFoldCollectionView).
-        // topSectionIndex stays nil so every focused row centers — no pinned top band.
+        // The engine's scroll animator would race the subclass's display-link scroll.
         collectionView.isScrollEnabled = false
         collectionView.register(PersonHeaderCell.self, forCellWithReuseIdentifier: PersonHeaderCell.reuseID)
         collectionView.register(ShelfRowCell.self, forCellWithReuseIdentifier: ShelfRowCell.reuseID)
@@ -293,12 +263,8 @@ final class PersonDetailViewController: UIViewController {
         return section
     }
 
-    /// One full-bleed ShelfRowCell per shelf. The cell hosts its own horizontal
-    /// collection (no orthogonal scrolling here) and paints its own "Movies" /
-    /// "Shows" header via `headerTitle`. Height = ShelfRowCell header (44) +
-    /// poster tile + focus-growth padding. Mirrors PlexHomeViewController's
-    /// makeHubSectionLayout, but with the title carried by the cell instead of a
-    /// boundary supplementary view.
+    /// One full-bleed ShelfRowCell per shelf, titled by the cell. Height is its header (44),
+    /// the poster tile and focus-growth padding.
     private func makeShelfSectionLayout() -> NSCollectionLayoutSection {
         let shelfHeaderHeight: CGFloat = 44   // ShelfRowCell.headerHeight
         let rowHeight = shelfHeaderHeight + MediaRowMetrics.posterHeight + MediaRowMetrics.focusGrowthPadding
@@ -370,10 +336,7 @@ final class PersonDetailViewController: UIViewController {
             guard index < entries.count else { return }
             self.onSelectItem?(entries[index].item)
         }
-        // No tile menu on filmography shelves: no reusable watchlist action
-        // builder exists for a bare MediaItem (the home VC's builders are
-        // private and tied to TMDBListItem / PlexWatchlistItem + instance
-        // state). ShelfRowCell.onLongPressItem stays unset here.
+        // No tile menu: Home's builders take watchlist item types, not a bare MediaItem.
         cell.onOffsetChanged = { [weak self] offset in
             self?.shelfOffsets[section] = offset
         }

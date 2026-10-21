@@ -140,17 +140,9 @@ actor PlexLiveTVProvider: LiveTVProvider {
             throw error
         }
 
-        // Favourites are account-level, not per-DVR, so this is ONE call for the
-        // whole lineup. Rank is array position: that is the order the user
-        // arranged, and the merged channel list is sorted by number, which would
-        // otherwise throw it away. Best effort — an account with none, or a call
-        // that fails, simply yields no Favourites tab.
-        //
-        // NOT `self.authToken`. This provider is constructed with
-        // `selectedServerToken`, and a server token is rejected by the provider
-        // hosts — the same account-vs-server trap the Discover endpoints
-        // document. Read the account token directly for this one call: they are
-        // the account's favourites, so another Home profile gets none.
+        // Favourites are account-level: one call, ranked by the user's own order.
+        // Use the account token, not `self.authToken` (a server token, which the
+        // provider hosts reject). Best effort: no favourites means no tab.
         var favouriteRanks: [String: Int] = [:]
         if let accountToken = await PlexAuthManager.shared.accountContentToken {
             let favourites = await networkManager.getFavoriteChannelIdentifiers(authToken: accountToken)
@@ -396,19 +388,10 @@ actor PlexLiveTVProvider: LiveTVProvider {
         return newURL
     }
 
-    /// Resolve a playable URL. Plex live channels go THROUGH Plex, but as a
-    /// continuous HTTP MPEG-TS stream — not HLS:
-    ///   1. POST /livetv/dvrs/{dvr}/channels/{id}/tune → livetv session uuid
-    ///   2. GET /video/:/transcode/universal/start.ts?protocol=http&
-    ///      container=mpegts&directPlay=1&directStream=1&
-    ///      path=/livetv/sessions/{uuid}&…
-    /// directPlay=1 asks the server to pass the RAW tuner TS straight through;
-    /// directStream=1 is its own fallback (remux, no re-encode — the client
-    /// profile declares the raw broadcast codecs). "Continuous" refers to the
-    /// HTTP delivery, NOT scan type: the video inside may be interlaced, which
-    /// AetherEngine deinterlaces (bwdif) after demuxing client-side — along
-    /// with the odd subtitle tracks (DVB/teletext). HDHomeRun direct URLs pass
-    /// through untouched (raw TS → same engine path).
+    /// Resolves a playable URL: tune the channel for a session uuid, then
+    /// `start.ts?protocol=http&container=mpegts&directPlay=1&directStream=1` on
+    /// that session (raw tuner TS, or a remux). Aether deinterlaces client-side.
+    /// HDHomeRun direct URLs pass through untouched.
     func resolveStreamURL(for channel: UnifiedChannel) async throws -> URL? {
         guard let base = buildStreamURL(for: channel) else { return nil }
 

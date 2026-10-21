@@ -1,26 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MediaLibrarySortControl.swift
-//  Rivulet
-//
-//  Full-width sort header cell for MediaLibraryViewController.
-//
-//  Layout: library title (left, 34pt bold) + item count (below, 17pt dimmed) and,
-//  on the right in glass style, a focusable sort button and the View menu
-//  button (outermost: Titles, Collections, Folders).
-//  The CELL itself is not focusable; only the embedded SortButtons receive focus.
-//
-//  Glass + focus appearance mirrors FocusableActionButton.swift and the
-//  AppStoreActionButtonStyle values in GlassRowStyle.swift:
-//    - resting fill: white.withAlphaComponent(0.15), border white 0.2
-//    - focused fill: .white, content inverted to black
-//    - scale: 1.0 -> 1.06 via UIFocusAnimationCoordinator
-//
-//  Both buttons open a system menu (`UIButton.menu`). Up and Down reach them
-//  only from beneath them, so a column on the left passes straight by.
-//
+//  The library grid's header: title and item count on the left, the Sort and View
+//  (Titles, Collections, Folders) menu buttons on the right. Only the buttons take focus,
+//  and Up and Down reach them only from beneath.
 
 import UIKit
 

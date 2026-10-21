@@ -12,14 +12,8 @@ import UIKit
 import Foundation
 import ImageIO
 
-/// Requested decode size for a cached image.
-///
-/// The disk cache always holds the original downloaded bytes; quality only governs how
-/// large we decode them for display. The Apple TV renders its UI into a 1080p framebuffer
-/// and the system upscales the whole frame to 4K, so 3840px (a 2x supersample of the
-/// 1920pt full-screen width) is the practical ceiling for the largest surfaces — bigger
-/// sources are decoded and then thrown away, costing CPU/heat for no visible gain. `thumb`
-/// is a 2x supersample of the ~444pt poster card: ample for rows, cheap to decode.
+/// Decode size for a cached image; the disk keeps the original bytes. tvOS renders at 1080p
+/// and upscales to 4K, so 3840 px (2x the screen width) is the ceiling; `thumb` is 2x a ~444 pt poster.
 enum ImageQuality: Sendable {
     /// Small UI: poster rows, continue-watching, cast, episode stills, logos, blurred backdrops.
     case thumb

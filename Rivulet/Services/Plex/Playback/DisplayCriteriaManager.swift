@@ -214,31 +214,9 @@ final class DisplayCriteriaManager {
         )
     }
 
-    /// Reset display criteria to default (SDR, system frame rate)
-    /// Call this when playback ends
-    ///
-    /// Unconditional on purpose, and it has to stay that way. This used to be
-    /// gated on `hasSetCriteria`, which is only ever true when *this* manager did
-    /// the writing, and nothing has called a configure entry point since
-    /// AetherEngine took over the handshake. So the early reset the player exit
-    /// fires at fade start was a silent no-op, and the only real nil write was the
-    /// engine's own inside `engine.stop()`, reached from `stopPlayback()` off
-    /// SwiftUI `.onDisappear` — i.e. after the modal is already gone. The ~1s HDMI
-    /// renegotiation therefore played out on the freshly revealed home screen no
-    /// matter how long the exit fade ran (#249). Writing nil here regardless is
-    /// what actually starts the handshake behind the black plate; the engine's
-    /// later write is then nil onto nil.
-    ///
-    /// Both callers are teardown paths, so there is no in-flight `apply()` on the
-    /// engine side for this write to race.
-    ///
-    /// - Returns: whether criteria were actually dropped, i.e. whether an HDMI
-    ///   renegotiation is now incoming. False covers Match Content being off
-    ///   (the engine's `apply()` guards on `isDisplayCriteriaMatchingEnabled` and
-    ///   writes nothing at all, so there is nothing to release), a route that
-    ///   never programmed the panel, and the second of two resets in one exit.
-    ///   The player exit fade is gated on this so users who get no handshake do
-    ///   not pay for a mask they do not need.
+    /// Resets display criteria to SDR when playback ends. Writes nil unconditionally, even
+    /// when the engine set the criteria, so the HDMI handshake starts behind the exit fade (#249).
+    /// Returns whether a renegotiation is incoming; the exit fade's mask is gated on it.
     @discardableResult
     func reset() -> Bool {
         hasSetCriteria = false

@@ -45,16 +45,9 @@ enum PlexAuthState: Equatable {
 class PlexAuthManager: ObservableObject {
     static let shared = PlexAuthManager()
 
-    /// Handoffs to whatever holds cached library / hub / metadata content.
-    ///
-    /// This manager owns identity, not content, and the content store is per
-    /// platform: tvOS has `PlexDataStore`, iOS has `IOSPlexSession`. Calling
-    /// `PlexDataStore.shared` directly from here is what kept the whole auth
-    /// stack pinned to the tvOS target. The host sets these at launch.
-    ///
-    /// `onAuthenticated` is awaited on purpose. It prefetches libraries as part
-    /// of sign-in so the sidebar renders with library tabs on its first build;
-    /// fire-and-forget would reintroduce the empty-latch it was added to fix.
+    /// Handoffs to the platform's content store (tvOS `PlexDataStore`, iOS
+    /// `IOSPlexSession`), set by the host at launch. `onAuthenticated` is awaited
+    /// so the sidebar has its library tabs on its first build.
     static var onAuthenticated: (@MainActor () async -> Void)?
     static var onSignedOut: (@MainActor () -> Void)?
 
@@ -255,18 +248,8 @@ class PlexAuthManager: ObservableObject {
                 // A profile's stored token was issued for the server it was entered on.
                 let serverChanged = selectedServerURL.map { !urlBelongs($0, to: server) } ?? false
 
-                // Flip identity + URL + token atomically once the connection
-                // is verified. Setting `selectedServer = server` eagerly
-                // (before the async test) caused a confusing UI / data-
-                // fetch mismatch on multi-server accounts: views bound to
-                // `selectedServer.name` showed the newly-picked server's
-                // name while in-flight fetches still used the previous
-                // `selectedServerURL`. On a failed connection test the
-                // same path left users staring at a "you are on server X"
-                // label while data continued to come from whichever server
-                // they'd been on before. User-visible symptom: the UI
-                // labels you as on one Plex server while the libraries
-                // and items you see come from a different one.
+                // Flip identity, URL and token together only after the connection
+                // verifies, or the UI names one server while data comes from another.
                 selectedServer = server
                 selectedServerURL = workingURL
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
@@ -304,25 +287,13 @@ class PlexAuthManager: ObservableObject {
         return await task.value
     }
 
-    /// Find the best working connection for a server.
-    ///
-    /// Launch-latency design (2026-06-10): the old implementation probed
-    /// candidates SERIALLY with a 5s timeout each — a few dead candidates
-    /// (stale local IP, unresolvable plex.direct, blocked HTTPS) meant 15-30s
-    /// of black screen before any content could fetch. Now:
-    ///  1. FAST PATH: the persisted last-known-good URL is tested first and
-    ///     used immediately when it still works (typical warm launch: <1s).
-    ///  2. Otherwise all candidate CHAINS probe in PARALLEL and the winner is
-    ///     the first success in PRIORITY order (a slow-but-better chain still
-    ///     beats a fast-but-worse one; relay only wins when everything above
-    ///     it has completed and failed). Worst case ≈ the slowest single
-    ///     chain instead of the sum of all of them.
-    ///
-    /// Chain priority (unchanged semantics from the serial ladder):
-    /// - If httpsRequired=true + local: plex.direct (valid TLS cert) > HTTP > HTTPS
-    /// - If httpsRequired=false + local: HTTP (fastest) > plex.direct
-    /// - Remote: plex.direct URLs from the API
-    /// - Relay: strictly last resort
+    /// Finds the best working connection for a server. The last-known-good URL is
+    /// tried first; otherwise every candidate chain probes in parallel and the
+    /// first success in priority order wins:
+    /// - httpsRequired + local: plex.direct > HTTP > HTTPS
+    /// - local: HTTP > plex.direct
+    /// - remote: plex.direct URLs from the API
+    /// - relay: last resort
     private func findBestConnection(for server: PlexDevice, reuseLastGood: Bool = true) async -> String? {
         // Probes carry no token; a candidate counts only when it answers as this server.
         let expectedID = server.machineIdentifier
@@ -765,13 +736,8 @@ class PlexAuthManager: ObservableObject {
         // Takes the server's DVR out of Live TV.
         LiveTVDataStore.shared.plexContentTokenChanged()
 
-        // Clear cached library / hub / metadata content from the previous
-        // session. Without this, after a sign-out + sign-in to a different
-        // server (or even the same one), the user sees the previous
-        // session's cached hubs and libraries until fresh fetches replace
-        // them — visually confusing on a multi-server account because the
-        // UI labels the connection with the new server while showing the
-        // previous server's content.
+        // Clear the previous session's cached content, or a new sign-in shows the
+        // old server's hubs under the new server's name.
         Self.onSignedOut?()
 
         state = .idle
@@ -981,17 +947,9 @@ class PlexAuthManager: ObservableObject {
             isConnected = false
             connectionError = "Cannot connect to Plex server"
 
-            // Try to find a better connection without clearing credentials
-            // This allows cached content to still be shown.
-            //
-            // Match the saved server by URL first, then by saved name as a
-            // fallback (Plex occasionally rotates a server's connection
-            // URIs, which breaks URL-matching while the name stays stable).
-            // If neither identifies the saved server, leave selection alone
-            // — the prior `?? servers.first` fallback silently swapped users
-            // to whichever server happened to be first in the account's
-            // server list, which on a multi-server account (e.g. own + shared)
-            // could pull them onto the wrong server entirely.
+            // Look for a better connection without clearing credentials, so cached
+            // content still shows. Match the saved server by URL, then by name
+            // (Plex rotates URIs); if neither matches, keep the current selection.
             do {
                 let servers = try await networkManager.getServers(authToken: token)
                 let savedName = savedServerName
@@ -1084,11 +1042,9 @@ class PlexAuthManager: ObservableObject {
         await resumeServerSelection()
     }
 
-    /// Fetch the account's servers and enter selection (or auto-select a
-    /// single server). Used at the end of PIN auth AND to recover the
-    /// account-linked-but-no-server state: a failed first connection used to
-    /// strand users on a "Connected!" dead end with no way to retry or
-    /// unlink (GitHub #224).
+    /// Fetches the account's servers and enters selection (or auto-selects a
+    /// single server). Runs after PIN auth and to recover an account linked with
+    /// no server, so a failed first connection can be retried (#224).
     func resumeServerSelection() async {
         guard let token = authToken else { return }
         do {

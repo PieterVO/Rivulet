@@ -5,14 +5,9 @@
 //  EPGGuideView.swift
 //  Rivulet
 //
-//  UHF-style Live TV guide ported from the PlexGuide (Flume) project.
-//
-//  High-performance EPG grid backed by a UIKit `UICollectionView` with a custom
-//  layout: virtualized (fast with large lineups), a sticky channel column
-//  (pinned left, scrolls vertically), a sticky time ruler (pinned top, scrolls
-//  horizontally), a single "now" line, and a fade where cells pass under the
-//  column. Adapted to Rivulet's `UnifiedChannel` / `UnifiedProgram` data and
-//  Rivulet's player (selection is handed back to SwiftUI via `onSelect`).
+//  Live TV guide grid: a virtualized UICollectionView with a sticky channel
+//  column, a sticky time ruler and a "now" line. Selection goes back to SwiftUI
+//  through `onSelect`.
 //
 
 import SwiftUI
@@ -392,27 +387,10 @@ struct EPGGuide: UIViewRepresentable {
             }
         }
 
-        /// Hold Left at the start of the timeline instead of letting it escape
-        /// to the sidebar. `apply` builds one section per channel and sorts that
-        /// channel's programmes by start time, so `item == 0` is the earliest
-        /// programme in the row: the leftmost cell. There is nothing focusable
-        /// to its left, so the focus engine walks up the chain and hands focus
-        /// to the enclosing `.sidebarAdaptable` TabView. That is the sidebar
-        /// opening on its own, which is what makes the guide feel like it
-        /// cannot be scrolled back left once the user has moved right.
-        ///
-        /// This is deliberately `shouldUpdateFocusIn` and NOT `pressesBegan`.
-        /// Siri Remote swipes arrive as indirect touches and never synthesize
-        /// arrow `UIPress` events, so a press handler would only catch the
-        /// click wheel (and a keyboard in the Simulator) and would silently do
-        /// nothing for anyone who swipes. Both input paths ultimately request a
-        /// focus update, so vetoing here covers both.
-        ///
-        /// There is also no backward scrolling to offer. `setupStartTime` pins
-        /// `timelineStart` to the current half hour and fetching only ever runs
-        /// forward, so there is no past programming loaded to reveal; scrolling
-        /// left would just expose empty grid. Do not "fix" this by allowing the
-        /// move through. The edge is a real boundary, not a missing feature.
+        /// Holds Left on a row's first programme (`item == 0`) so focus does not
+        /// escape to the sidebar. Vetoed here rather than in `pressesBegan` so
+        /// swipes are caught too. The timeline starts at the current half hour
+        /// and never loads the past, so there is nothing to the left.
         func collectionView(_ collectionView: UICollectionView,
                             shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
             if context.focusHeading == .up || context.focusHeading == .down {
@@ -861,15 +839,9 @@ final class EPGContainerView: UIView {
         }
     }
 
-    /// Symmetric boundary handoff from the top programme row back to the last
-    /// focused category pill. Called only for a declined Up press or a gated
-    /// indirect-touch Up swipe while section zero owns focus.
-    ///
-    /// Returns false when there is no realized pill to hand off to. The
-    /// remembered index survives a `reloadData()` that shortens the category
-    /// list, and `cellForItem` is nil for anything not on screen right now.
-    /// The press caller must not swallow the arrow in that case, or Up dead-ends
-    /// with no way back to the pills to refresh the remembered index.
+    /// Hands focus from the top programme row back to the last category pill.
+    /// Returns false when that pill is not on screen; the caller must then let
+    /// the press through, or Up dead-ends.
     @discardableResult
     func moveFocusToCategories() -> Bool {
         guard pendingCategoryFocusTarget == nil,

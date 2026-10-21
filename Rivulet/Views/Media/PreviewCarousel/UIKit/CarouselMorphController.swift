@@ -1,19 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  CarouselMorphController.swift
-//  Rivulet
-//
-//  Owns the SINGLE UIViewPropertyAnimator + CADisplayLink that drive the
-//  carousel expand/collapse morph. One clock owns: the collection-view
-//  layout swap (carousel <-> expanded), the backdrop panel container
-//  grow/shrink, the chrome inset tween, the hairline fade, and the
-//  corner-radius lerp.
-//  Because there is exactly one timeline, nothing can drift. See
-//  docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md
-//  and perf-spike/UIKIT_FOUNDATIONS.md §1, §5.
-//
+//  The one animator and display link behind the expand and collapse morph: layout
+//  swap, backdrop panel, chrome insets, hairline and corner radius all share its
+//  clock, so nothing drifts (perf-spike/UIKIT_FOUNDATIONS.md §1, §5).
 
 import UIKit
 
@@ -83,10 +73,7 @@ final class CarouselMorphController {
         )
         animator.addAnimations { [weak self] in
             guard let self else { return }
-            // a) Card window (cell) morph under THIS animator's curve. The
-            //    swap zeroes contentOffset; PinnableCollectionView holds it at
-            //    the centered offset (pin set by the VC for the whole morph) so
-            //    the expanded cell stays at screen 0.
+            // a) Card window, on this animator's curve. The VC's pin holds the offset.
             cv.setCollectionViewLayout(self.expandedLayout, animated: false)
             cv.layoutIfNeeded()
             // b) Backdrop centered panel container grows to fullscreen.
@@ -226,13 +213,8 @@ final class CarouselMorphController {
 
     /// The centered card's window rect in viewport (plane) coords.
     private func carouselWindow(_ index: Int, offset: CGPoint) -> CGRect {
-        // Compute the card window directly from the collection view's bounds
-        // + the carousel stride math. We CANNOT delegate to
-        // carouselLayout.cardFrame here: during collapse the active layout is
-        // still PreviewExpandedLayout, so carouselLayout.collectionView is nil
-        // and cardFrame would return .zero — which made the backdrop panel
-        // collapse to (0,0,0,0) and fly to the top-left corner. (Same stride
-        // math as PreviewCarouselLayout.cellFrame, kept in sync.)
+        // Not carouselLayout.cardFrame: mid-collapse that layout is detached and returns
+        // .zero. Keep this math in sync with PreviewCarouselLayout.cellFrame.
         guard let cv = collectionView else { return .zero }
         let geom = PreviewCarouselGeometry.self
         let centered = geom.centeredCardFrame(in: cv.bounds)

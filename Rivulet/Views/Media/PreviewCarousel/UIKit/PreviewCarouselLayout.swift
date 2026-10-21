@@ -1,25 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PreviewCarouselLayout.swift
-//  Rivulet
-//
-//  Custom UICollectionViewLayout for the preview carousel. Models
-//  every item as a fixed-width card at a fixed x position along the
-//  scroll content, then computes per-cell alpha falloff + z-order from
-//  each cell's distance to the centered viewport position.
-//
-//  The viewport center always aligns with the cell at
-//  `contentOffset.x / stride` rounded. Cells get plain
-//  UICollectionViewLayoutAttributes (frame + alpha + zIndex). The
-//  backdrop artwork (position + parallax) is owned by the VC-level
-//  BackdropPlaneView, which reads this layout's public geometry API
-//  (`cardFrame(for:)`, `parallaxOffset(for:)`, `visibleIndices(at:)`).
-//  Expanded geometry lives in PreviewExpandedLayout; the morph swaps
-//  between the two via setCollectionViewLayout(_:animated:). See
-//  docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md.
-//
+//  The carousel layout: fixed-width cards one stride apart, with alpha and z-order
+//  from each card's distance to the centre. `BackdropPlaneView` reads its geometry;
+//  the expand morph swaps to `PreviewExpandedLayout`.
 
 import UIKit
 
@@ -42,10 +26,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
-        // Every scroll position change invalidates layout so parallax
-        // and alpha track the offset continuously. The actual frames
-        // depend on the *collection view's bounds origin* (which is
-        // contentOffset), so we must recompute attrs each frame.
+        // Alpha and parallax follow contentOffset, so recompute every frame.
         return true
     }
 
@@ -81,10 +62,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
 
     // MARK: - Public geometry (consumed by BackdropPlaneView)
 
-    /// The card's frame in collection-view content space, carousel mode.
-    /// Public so the backdrop plane can position its panels to match the
-    /// card windows exactly. This is the same math as the private
-    /// `cellFrame(for:)`; exposed without the expanded short-circuit.
+    /// The card's frame in content space, for the backdrop plane's windows.
     func cardFrame(for index: Int) -> CGRect {
         return cellFrame(for: index)
     }
@@ -124,11 +102,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap
         let edgePad = PreviewCarouselGeometry.centeredHorizontalInset
 
-        // Determine which indices intersect `rect`. Widen the window
-        // by 2 cells on each side so the collection view dequeues
-        // upcoming cells *before* they're visible. This pre-warms
-        // their async image loads, so paging animations don't stall
-        // halfway through waiting for artwork to load.
+        // Two extra cells each side, dequeued early so paging never waits on artwork.
         let minIndex = max(0, Int(floor((rect.minX - edgePad) / stride)) - 2)
         let maxIndex = min(itemCount - 1, Int(ceil((rect.maxX - edgePad) / stride)) + 2)
         if minIndex > maxIndex { return [] }
@@ -147,12 +121,7 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
         guard let cv = collectionView else { return nil }
         let attrs = UICollectionViewLayoutAttributes(forCellWith: indexPath)
 
-        // Carousel-only layout. Expanded geometry lives in
-        // PreviewExpandedLayout; the morph swaps layouts via
-        // setCollectionViewLayout(_:animated:) under the morph animator.
-        // The backdrop (parallax + position) is owned by BackdropPlaneView,
-        // which reads geometry from this layout's public API — the cell
-        // only needs frame + alpha + zIndex here.
+        // Cells need only frame, alpha and zIndex; the plane owns the artwork.
         let frame = cellFrame(for: indexPath.item)
         attrs.frame = frame
 

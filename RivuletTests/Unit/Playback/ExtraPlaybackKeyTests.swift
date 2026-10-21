@@ -5,20 +5,9 @@
 //  ExtraPlaybackKeyTests.swift
 //  RivuletTests
 //
-//  Issue #255: trailers failed to play "more times than not". The play path fed
-//  an extra's `id` into /library/metadata/{id}, but Plex's IVA-supplied extras
-//  have no library ratingKey — their only handle is an absolute part path. That
-//  built a nonsense URL which 404'd, and IVA extras are the common case, hence
-//  "more times than not".
-//
-//  The regression guard is `test_ivaAssetPath_routesToDirectPartPath`: if an IVA
-//  path ever routes back to .libraryMetadata, issue #255 is back.
-//
-//  The keyShape tests matter for a second reason — extra paths carry asset
-//  identifiers, so the telemetry label must never be derived from the key's
-//  contents. That property must not regress.
-//
-//  Pure tests: no network, no view controller.
+//  IVA extras have no library ratingKey and must route to their part path
+//  (`test_ivaAssetPath_routesToDirectPartPath`, #255). The telemetry label must
+//  never come from the key's contents, which carry asset ids.
 //
 
 import XCTest

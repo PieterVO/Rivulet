@@ -1,33 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PreviewCarouselViewController.swift
-//  Rivulet
-//
-//  UIKit replacement for `PreviewOverlayHost` + the surrounding
-//  `PreviewContainerViewController` modal. Hosts a UICollectionView
-//  with a custom `PreviewCarouselLayout` that gives every cell a
-//  parallax-aware frame, then drives `contentOffset` directly via
-//  `UIViewPropertyAnimator` for paging with the exact cubic timing
-//  curve from the SwiftUI baseline.
-//
-//  Entry / dismiss morphs use a separate `morphSnapshot` view: a
-//  PreviewCardView at the same size as the source poster tile,
-//  morphed via spring to the centered carousel frame. The collection
-//  view sits behind it and is revealed by a crossfade once the
-//  morph completes.
-//  UIKit home rows can also pass snapshots for every visible source tile.
-//  Those snapshots animate into the carousel's visible card frames together,
-//  so the row reads as enlarging into the carousel instead of a modal
-//  appearing over it.
-//
-//  Visual goals:
-//   - Smooth 60fps paging with parallax (artwork lags the card).
-//   - No content swap mid-animation — every cell shows its item
-//     throughout its visible lifetime.
-//   - Entry + dismiss morphs run on Apple's shelf-tile spring.
-//
+//  The preview carousel modal: a paging card carousel over `PreviewCarouselLayout`
+//  that expands into the full detail. Entry and dismiss morph the source row's
+//  tile snapshots (or one `morphSnapshot`) to and from the card frames.
 
 import Combine
 import Sentry
@@ -62,16 +38,12 @@ final class PreviewCarouselViewController: UIViewController {
     private var hasPreparedEntrySnapshots = false
     private var didStandaloneExpand = false
 
-    /// Clipping windows wrapping each entry snapshot. The morph animates
-    /// these, not the snapshots (see EntryMorphWindowView). Parallel to
-    /// `entrySnapshots` rather than keyed by item index, so repeated indices
-    /// each keep their own window instead of one silently replacing another.
+    /// Clipping windows around each entry snapshot; the morph animates these.
+    /// Parallel to `entrySnapshots`, not keyed by index, so repeated indices each keep a window.
     private var entryMorphWindows: [(window: EntryMorphWindowView, itemIndex: Int, sourceFrame: CGRect)] = []
 
-    /// CADisplayLink-driven paging state. Replaces UIViewPropertyAnimator
-    /// because UIVPA's contentOffset interpolation doesn't trigger
-    /// per-frame layout invalidation, which breaks parallax and
-    /// off-screen cell pre-allocation.
+    /// Display-link paging state. A property animator on contentOffset skips per-frame
+    /// layout invalidation, which breaks parallax and off-screen cell allocation.
     private struct PagingAnimation {
         let startOffset: CGFloat
         let endOffset: CGFloat
@@ -82,9 +54,7 @@ final class PreviewCarouselViewController: UIViewController {
     private var pagingAnimation: PagingAnimation?
     private var displayLink: CADisplayLink?
 
-    /// Up/down swipe recognizers (touch surface). Held so the gesture delegate
-    /// can tell them apart from the horizontal paging swipes, which are claimed
-    /// unconditionally.
+    /// Held so the gesture delegate can tell them from the horizontal paging swipes.
     private var verticalSwipeRecognizers: [UISwipeGestureRecognizer] = []
     /// Whether focus rested on the details' top row when the current touch began.
     /// A long swipe from a lower row walks focus up to it mid-gesture, and must not
@@ -99,57 +69,33 @@ final class PreviewCarouselViewController: UIViewController {
     private var morphController: CarouselMorphController!
     private var collectionView: PinnableCollectionView!
 
-    /// VC-owned backdrop plane — single source of truth for artwork.
-    /// Sits behind the collection view; cells are transparent windows.
+    /// The one owner of artwork, behind the collection view; cells are transparent windows.
     private let backdropPlane = BackdropPlaneView()
 
-    /// Invisible, always-focusable anchor. The carousel has no focusable
-    /// cells (canFocusItemAt is false everywhere), and on tvOS PRESS EVENTS
-    /// ARE DELIVERED TO THE FOCUSED VIEW and climb the responder chain from
-    /// there — NOT to the first responder, and never to children of the
-    /// focused view (WWDC 2016/210; UIKIT_FOUNDATIONS §2). With nothing
-    /// focused inside this modal, Menu presses never enter our responder
-    /// chain at all, so neither the .menu gesture recognizer nor presses*
-    /// overrides ever fire — the presentation machinery handles Menu as a
-    /// default modal-dismiss one layer up. This anchor gives the focus
-    /// engine a target so the Menu press reaches our chain; the recognizer
-    /// then "begins", emits pressesCancelled up the chain (which suppresses
-    /// the system dismiss), and our handler runs collapse-vs-dismiss.
+    /// Invisible focus target. tvOS delivers presses to the focused view, and no
+    /// carousel cell is focusable, so without this Menu never reaches our chain
+    /// and the system dismisses the modal (UIKIT_FOUNDATIONS §2).
     private let focusAnchor = PreviewFocusAnchorView()
 
-    /// Temporary card view used for the source-frame → centered-frame
-    /// entry morph (and the reverse for dismiss). Sits on top of the
-    /// collection view until the entry settles, then fades out as
-    /// the real collection-view cell becomes visible underneath.
+    /// Single card used for the entry and dismiss morph when there are no row snapshots.
     private let morphSnapshot = PreviewCardView(frame: .zero)
 
-    /// Source tile snapshots captured from the presenting row. These sit above
-    /// the hidden live carousel during entry, animate to carousel card frames,
-    /// then fade out as the real backdrop plane + cells fade in.
+    /// Holds the presenting row's tile snapshots while they morph to the card frames.
     private let entrySnapshotContainer = UIView()
 
-    /// Below-fold detail surface. Sits ABOVE the collection view (which holds
-    /// the hero chrome) and wakes up only after the expand morph completes.
-    /// Hidden + non-interactive in carousel mode. Drives its own scroll
-    /// choreography; calls back via `onScrollProgress` so the VC can fade the
-    /// two layers it owns (the backdrop blur + the cell chrome).
+    /// Below-fold detail, above the collection view. Inert until the expand morph
+    /// ends; reports `onScrollProgress` so the VC fades the blur and the cell chrome.
     private let expandedDetail = ExpandedDetailContainerView()
 
-    /// Backdrop blur that fades in as the user scrolls into the below-fold.
-    /// Sits BELOW the chrome (blurs the artwork; chrome fades on top of it).
-    /// Intensity is scrubbed via a paused property animator's
-    /// `fractionComplete` (Iter 3) — NOT alpha (Apple: alpha on an effect
-    /// view artifacts).
+    /// Blur under the chrome, scrubbed by a paused animator's `fractionComplete`.
+    /// Not by alpha: alpha on an effect view artifacts.
     private let blurOverlay = UIVisualEffectView(effect: nil)
-    /// Paused animator whose `fractionComplete` is the blur intensity. Built
-    /// lazily when the blur is first armed (Iter 3).
+    /// Paused animator whose `fractionComplete` is the blur intensity; built on first arm.
     private var blurAnimator: UIViewPropertyAnimator?
 
     deinit {
-        // A UIViewPropertyAnimator THROWS in dealloc if released while still in
-        // the .active state. `blurAnimator` uses pausesOnCompletion = true, so it
-        // sits in .active (paused) for the controller's whole life — it must be
-        // stopped before the controller is torn down or the app aborts on dismiss.
+        // A property animator released while .active throws. `blurAnimator` stays
+        // paused (.active) for the VC's life, so stop it or dismiss aborts the app.
         if blurAnimator?.state == .active { blurAnimator?.stopAnimation(true) }
         onTeardown?()
     }
@@ -159,14 +105,8 @@ final class PreviewCarouselViewController: UIViewController {
         onTeardown = nil
     }
 
-    /// Whether the centered card is currently in expanded layout.
-    /// In `.expandingHero`/`.expandedHero`/`.detailsStable` this is
-    /// true. Drives the custom layout (see `PreviewCarouselLayout`)
-    /// to size the centered cell to fullscreen and hide side peeks.
-    /// The cell's existing `chromeView` is the SAME view in both
-    /// states: only its constraint constants animate (the chrome inset)
-    /// and the panel's corner radius animates to 0. No
-    /// reparenting, no second view tree, true visual continuity.
+    /// True in `.expandingHero`, `.expandedHero` and `.detailsStable`: the centered
+    /// card is full screen. The cell keeps one `chromeView`; only its insets and radius animate.
     private(set) var isExpanded: Bool = false
 
     /// True while a Down/Up below-fold scroll animation is in flight. Guards
@@ -181,10 +121,8 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Lifecycle
 
-    /// Standalone "expanded detail" mode: seeded with a single item, opens
-    /// already expanded (no carousel-stable browse, no paging), blur-fades in/out,
-    /// and Menu dismisses the whole thing. Used to show a movie/show's full detail
-    /// when drilled into (e.g. a Related poster) without building a second VC.
+    /// One item, opened already expanded with no paging, blur-faded in and out;
+    /// Menu dismisses it. The detail for a drill-in such as a Related poster.
     private let standaloneDetail: Bool
     private let blurFade = BlurFadeTransitioningDelegate()
 
@@ -218,21 +156,11 @@ final class PreviewCarouselViewController: UIViewController {
             self.transitioningDelegate = blurFade
             return
         }
-        // Keep the presenter alive behind us. The row-entry and row-exit
-        // morphs need Home visible while source tile snapshots animate into
-        // and out of the carousel. The explicit `backdrop` view below owns
-        // the black surround and fades it in/out on the morph timeline.
-        //
-        // NOTE: presentation style does NOT control Menu dismissal. Menu flows
-        // up the responder chain via pressesEnded reaching UIApplication
-        // regardless of style. We own Menu by claiming first responder
-        // (canBecomeFirstResponder + becomeFirstResponder in viewDidAppear) and
-        // absorbing the press in our handler. See §2.
+        // Over full screen keeps Home visible for the row morphs; `backdrop` owns the
+        // surround. Presentation style has no say over Menu (UIKIT_FOUNDATIONS §3).
         self.modalPresentationStyle = .overFullScreen
         self.restoresFocusAfterTransition = false
-        // No modal transition — the entry morph IS the transition.
-        // The caller presents with animated: false so viewDidAppear
-        // fires immediately for the spring animator.
+        // The entry morph is the transition: callers present with animated: false.
         self.modalTransitionStyle = .crossDissolve
     }
 
@@ -270,8 +198,7 @@ final class PreviewCarouselViewController: UIViewController {
             backdropPlane.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        // Backdrop blur sits above the plane (artwork), below the collection
-        // view (chrome). Hidden until armed by the scroll choreography (Iter 3).
+        // Above the artwork, below the chrome; hidden until the scroll arms it.
         blurOverlay.translatesAutoresizingMaskIntoConstraints = false
         blurOverlay.isUserInteractionEnabled = false
         blurOverlay.isHidden = true
@@ -317,10 +244,7 @@ final class PreviewCarouselViewController: UIViewController {
             entrySnapshotContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        // Below-fold detail surface above the collection view (chrome). Hidden
-        // and inert until the expand morph completes. Full-screen; it manages
-        // its own internal translation. onScrollProgress is wired in Iter 3 to
-        // drive the blur + cell-chrome fade.
+        // Above the chrome, inert until the expand morph completes.
         expandedDetail.translatesAutoresizingMaskIntoConstraints = false
         expandedDetail.isHidden = true
         view.addSubview(expandedDetail)
@@ -330,9 +254,7 @@ final class PreviewCarouselViewController: UIViewController {
             expandedDetail.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             expandedDetail.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        // Scroll-into-details choreography the VC owns: backdrop blur + the
-        // hero metadata (cell chrome) fade. Driven by the below-fold's scroll
-        // progress (0→1 over reserveDistance).
+        // Below-fold scroll progress (0 to 1 over reserveDistance) drives blur and chrome fade.
         expandedDetail.onScrollProgress = { [weak self] progress in
             self?.driveHeroLayers(progress)
         }
@@ -357,12 +279,11 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.onPlayTrailer = { [weak self] trailer in
             self?.presentExtraPlayer(trailer)
         }
-        // Episode description Select → reusable detail page (blur-fade in Stage 3c).
+        // Episode description Select → the episode's detail page.
         expandedDetail.onShowEpisodeDetails = { [weak self] episode in
             guard let self else { return }
-            // seriesTitle nil for now — the show name comes from the episode's
-            // fetched metadata (grandparentTitle) in Stage 3b, not the carousel's
-            // selectedIndex item (which isn't reliably the show).
+            // No seriesTitle: the page reads the show from the episode's metadata,
+            // and the carousel's selected item is not reliably the show.
             let page = MediaItemDetailPageViewController(
                 item: episode,
                 seriesTitle: nil,
@@ -370,19 +291,13 @@ final class PreviewCarouselViewController: UIViewController {
             self.present(page, animated: true)
         }
 
-        // Related poster Select → the item's FULL expanded detail (movies/shows
-        // always have trailers/extras/related below the fold), presented standalone
-        // (no carousel) with a blur-fade. NOT the episode-only "just details" page.
+        // Related poster Select → the item's full standalone detail, not the episode page.
         expandedDetail.onShowRelatedDetails = { [weak self] item in
             self?.presentStandaloneDetail(item)
         }
 
-        // Season pill Select → the season's own title-first detail page (the
-        // same page an episode's description opens), NOT another standalone
-        // carousel detail: that page re-hosted the pills over a one-season rail,
-        // so from there every season needed a click and each click stacked
-        // another carousel. Focus already switched the rail's season; the press
-        // opens the season's summary and info on top of the show.
+        // Season pill Select → the season's detail page (focus already switched the
+        // rail). A standalone carousel here would stack one per season click.
         expandedDetail.onOpenSeason = { [weak self] season in
             guard let self else { return }
             let show = self.items.indices.contains(self.selectedIndex) ? self.items[self.selectedIndex] : nil
@@ -416,30 +331,16 @@ final class PreviewCarouselViewController: UIViewController {
         morphSnapshot.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(morphSnapshot)
 
-        // Own the Menu button via a press gesture recognizer on our own
-        // view. This is the reliable mechanism (see UIKIT_FOUNDATIONS §2):
-        // a Menu press on a present()-ed modal otherwise reaches the
-        // presentation controller's dismiss path IN PARALLEL to the press
-        // responder chain — so absorbing it in pressesBegan/Ended/Cancelled
-        // is not enough (the press arrives as pressesCancelled when our
-        // collapse triggers a focus update mid-press, and the modal
-        // dismisses anyway). A .menu tap recognizer on this view intercepts
-        // the press first, letting handleMenuPress() decide collapse vs
-        // dismiss.
+        // Menu goes through a recognizer, not presses* overrides: the modal's dismiss
+        // path runs alongside the responder chain, so absorbing the press there still
+        // dismisses (UIKIT_FOUNDATIONS §2).
         let menuRecognizer = UITapGestureRecognizer(target: self, action: #selector(menuGestureFired))
         menuRecognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
         view.addGestureRecognizer(menuRecognizer)
 
-        // Swipe-to-page. Paging previously keyed ONLY off .leftArrow/.rightArrow
-        // presses, which a touch surface does not emit — a light swipe produces
-        // indirect touches plus focus-engine moves, and arrow presses come from
-        // directional CLICKS. Because the carousel is deliberately focusless
-        // (`canFocusItemAt` is false in .carouselStable), a swipe also generated
-        // no focus move, so it did nothing on any remote. These recognizers give
-        // the swipe a home. Only claimable while the carousel owns input
-        // (gated in `gestureRecognizerShouldBegin`): in the expanded/detail
-        // states the chrome action buttons ARE focusable, and a recognizer
-        // that begins cancels the focus move a swipe should make between them.
+        // Touch-surface paging: the focusless carousel gets no arrow presses from a swipe.
+        // Gated in `gestureRecognizerShouldBegin`, since a begun recognizer would cancel
+        // the focus move between the expanded chrome's buttons.
         for direction in [UISwipeGestureRecognizer.Direction.left, .right] {
             let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleCarouselSwipe(_:)))
             swipe.direction = direction
@@ -450,16 +351,8 @@ final class PreviewCarouselViewController: UIViewController {
             view.addGestureRecognizer(swipe)
         }
 
-        // Swipe-up/down. The vertical choreography (carousel → hero → details,
-        // pills → episodes, and every step back up) lived only in `pressesBegan`
-        // under .upArrow/.downArrow, so a touch-surface swipe reached none of it
-        // and the engine bonked with no candidate to move to.
-        //
-        // Unlike the horizontal case these CANNOT be claimed unconditionally:
-        // inside the details the below-fold rows ARE focusable, and the engine
-        // needs the swipe to walk between them. `gestureRecognizerShouldBegin`
-        // therefore lets each recognizer begin only for the hand-off transitions
-        // the engine cannot perform on its own.
+        // Touch twin of the vertical arrow choreography in `pressesBegan`. Begins only
+        // for hand-offs the engine cannot make; the below-fold rows need the rest.
         for direction in [UISwipeGestureRecognizer.Direction.up, .down] {
             let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleVerticalSwipe(_:)))
             swipe.direction = direction
@@ -470,20 +363,12 @@ final class PreviewCarouselViewController: UIViewController {
             verticalSwipeRecognizers.append(swipe)
         }
 
-        // Focus anchor: invisible, always-focusable, so the focus engine has
-        // a target inside the modal and Menu presses enter our responder
-        // chain (see the focusAnchor doc comment). Zero-size, behind
-        // everything; it never shows and never steals visible focus.
+        // Zero-size; see `focusAnchor`.
         focusAnchor.frame = .zero
         view.addSubview(focusAnchor)
 
-        // Issue #228: the detail is all in-memory instance state seeded once in
-        // `init`, so after the player dismissed it kept rendering the
-        // pre-playback snapshot (hero AND episode rail). `.plexDataNeedsRefresh`
-        // is the correctly-ordered signal — the player posts it only AFTER its
-        // "stopped"/markAsWatched report has had time to commit server-side, so
-        // a refetch on it reads the new state. (An `onDismiss` hook would fire
-        // ~2s too early and read stale.) Same publisher Home subscribes to.
+        // Refetch watch state after playback (#228). The player posts this once its
+        // stopped report has committed; the player's dismiss is about 2 s too early.
         NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
@@ -492,40 +377,18 @@ final class PreviewCarouselViewController: UIViewController {
             .store(in: &refreshObservers)
 
         previewCarouselLog.info("[PCV] viewDidLoad items=\(self.items.count, privacy: .public) selected=\(self.selectedIndex, privacy: .public)")
-        // NOTE: do NOT force collectionView.layoutIfNeeded() here. `view`
-        // has no real frame yet at viewDidLoad time (it's sized by the
-        // presentation controller AFTER this runs) — forcing a layout pass
-        // against a zero-width view collapses every cell's internal Auto
-        // Layout (logged "UIView-Encapsulated-Layout-Width == 0" warnings)
-        // and leaves PreviewCardView's chrome permanently mis-laid-out for
-        // that dequeue, since the diffable/flow layout caches attributes
-        // from this first (wrong) pass. The real, bounds-valid layout pass
-        // happens in viewDidLayoutSubviews(); cellForItemAt still runs
-        // synchronously there before the entry morph reads cell content.
+        // Do not force a collection layout here: `view` is still zero-sized, and cells
+        // dequeued against it keep collapsed chrome. viewDidLayoutSubviews lays out.
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // `.fullScreen` presentation runs viewDidLayoutSubviews at least
-        // once on a TRANSITIONAL pass before `view` has its real frame
-        // (zero/garbage bounds). Writing `collectionView.contentOffset` in
-        // that pass forces UICollectionView to lay out + dequeue cells
-        // against those bad bounds, which collapses every PreviewCardView's
-        // internal Auto Layout to zero width (logged as
-        // "UIView-Encapsulated-Layout-Width == 0") and corrupts that
-        // dequeue's chrome content for good — re-snapshotting it later
-        // (entry/exit morphs) just captures the corrupted, zero-sized
-        // content, which is why the carousel reads as black even though
-        // entrySnapshots/backdropPlane/alpha timing are all correct.
+        // Skip the transitional zero-bounds pass: setting contentOffset there dequeues
+        // cells with zero-width chrome for good, and the carousel morphs in black.
         guard view.bounds.width > 0, view.bounds.height > 0 else { return }
 
-        // Center the carousel on `selectedIndex` so the first frame
-        // shows the chosen item under the morph snapshot. We do this
-        // every layout pass because `collectionViewContentSize`
-        // depends on bounds and `bounds` can change (orientation,
-        // focus shifts).
-        // Not mid-page: selectedIndex is still the outgoing item, so a layout
-        // pass there snapped the glide back to it for a frame.
+        // Recenter every pass, since content size follows bounds. Not mid-page:
+        // selectedIndex is still the outgoing item and the glide would snap back.
         if pagingAnimation == nil {
             collectionView.contentOffset = layout.contentOffsetCentered(index: selectedIndex)
         }
@@ -534,8 +397,7 @@ final class PreviewCarouselViewController: UIViewController {
             syncCards()
         }
 
-        // Position the morph snapshot. Pre-entry: at the source
-        // frame. Post-entry: hidden anyway.
+        // Before entry, park the morph snapshot on the source frame.
         if !hasRunEntryMorph {
             backdrop.alpha = entrySnapshots.isEmpty ? 1 : 0
             backdropPlane.alpha = 0
@@ -546,8 +408,6 @@ final class PreviewCarouselViewController: UIViewController {
                 morphSnapshot.frame = initialSourceFrame == .zero
                     ? centeredFrameInWindow()
                     : view.convert(initialSourceFrame, from: nil)
-                // Show item[selectedIndex] in the snapshot so the morph
-                // is visually meaningful.
                 morphSnapshot.item = items.indices.contains(selectedIndex)
                     ? items[selectedIndex]
                     : nil
@@ -557,9 +417,7 @@ final class PreviewCarouselViewController: UIViewController {
             }
         }
 
-        // Standalone detail (e.g. a Related drill-in): open ALREADY expanded,
-        // once, now that bounds are valid — the blur-fade presents the expanded
-        // detail with no spring/card-grow morph.
+        // Standalone detail opens expanded once bounds are valid, with no card morph.
         if standaloneDetail, !didStandaloneExpand, view.bounds.width > 0 {
             didStandaloneExpand = true
             hasRunEntryMorph = true
@@ -595,11 +453,7 @@ final class PreviewCarouselViewController: UIViewController {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        // In the scrolled-in details state, focus lives in the real below-fold
-        // collection (focus-driven nav + auto-scroll). Otherwise focus the
-        // invisible anchor so Menu presses are delivered into our responder
-        // chain (tvOS routes presses to the FOCUSED view; without a target the
-        // modal would Menu-dismiss by default).
+        // Details: the below-fold collection. Otherwise the anchor, so Menu reaches us.
         if state.phase == .detailsStable, let env = expandedDetail.belowFoldFocusEnvironment {
             return [env]
         }
@@ -615,14 +469,10 @@ final class PreviewCarouselViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Drive focus to the anchor so the focus engine has a target inside
-        // the modal. becomeFirstResponder is kept as belt-and-suspenders but
-        // focus (not first-responder) is what makes presses reach us on tvOS.
+        // Focus, not first responder, is what routes presses here on tvOS.
         becomeFirstResponder()
-        // If focus was inside a shelf-host row (Related) before a modal, put
-        // the row back on that tile BEFORE the focus update resolves — the
-        // host cell can't be preferred directly, so the row has to be
-        // positioned and armed first. No-op unless a shelf row had focus.
+        // Re-arm a shelf row (Related) on its tile before the update resolves:
+        // the host cell cannot be preferred directly. No-op otherwise.
         expandedDetail.restoreShelfRowFocusIfNeeded()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
@@ -637,8 +487,7 @@ final class PreviewCarouselViewController: UIViewController {
         }
 
         if initialSourceFrame == .zero {
-            // No source to morph from. Reveal the collection view
-            // immediately and skip the spring.
+            // No source to morph from: reveal at once.
             morphSnapshot.isHidden = true
             backdrop.alpha = 1
             collectionView.alpha = 1
@@ -668,12 +517,7 @@ final class PreviewCarouselViewController: UIViewController {
         morpher.startAnimation()
     }
 
-    /// Refresh the `isCurrent` flag on every visible cell so the
-    /// center one (at `selectedIndex`) gets its chrome cascade and
-    /// the peeks stay bare.
-    ///
-    /// `animated: true` fades the centre's chrome in (0.5s ease-in-out);
-    /// `animated: false` snaps it.
+    /// Gives the centred cell its chrome (faded in over 0.5 s when animated) and leaves the peeks bare.
     private func updateCurrentCellChrome(animated: Bool) {
         for cell in collectionView.visibleCells {
             guard let card = cell as? PreviewCardView else { continue }
@@ -681,9 +525,7 @@ final class PreviewCarouselViewController: UIViewController {
             let shouldBeCurrent = indexPath.item == selectedIndex
             card.setIsCurrent(shouldBeCurrent, animated: animated && shouldBeCurrent)
         }
-        // Drive the below-fold peek for the centered card — it loads in WITH the
-        // chrome cascade (P2: the peek is live in carousel-stable, not just
-        // expanded). Item sync + cascade so paging snaps it out then re-cascades.
+        // The below-fold peek is live in the carousel too and cascades with the chrome.
         expandedDetail.isHidden = false
         if items.indices.contains(selectedIndex) {
             expandedDetail.item = items[selectedIndex]
@@ -693,14 +535,8 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Geometry helpers
 
-    /// Places (or re-places) the row snapshots at their source frames.
-    /// `entry.sourceFrame` was captured in WINDOW coordinates by the
-    /// presenter; converting it via `view.convert(_:from: nil)` only
-    /// resolves correctly once `view.window` is non-nil. Called from
-    /// `viewDidLayoutSubviews()`, which can fire before the view is attached
-    /// to a window (pre-presentation layout) — so this re-syncs the frames
-    /// on every pre-entry layout pass instead of computing them once and
-    /// locking in a possibly-wrong (zero/garbage) result.
+    /// Places the row snapshots at their source frames, which are in window coordinates.
+    /// Re-run on every pre-entry layout pass, since the first may come before `view.window` exists.
     private func prepareEntrySnapshotsIfNeeded() {
         guard view.window != nil else { return }
         entrySnapshotContainer.isHidden = false
@@ -856,10 +692,6 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Input handling
 
-    // Must return true so this VC can become first responder and receive
-    // pressesBegan. Without this, the collection view has no focusable
-    // items (canFocusItemAt returns false) so UIKit never installs this VC
-    // in the responder chain — Menu presses route to the presenter instead.
     override var canBecomeFirstResponder: Bool { return true }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -889,20 +721,15 @@ final class PreviewCarouselViewController: UIViewController {
             switch press.type {
             // .menu is owned by the menu gesture recognizer (see viewDidLoad).
             case .rightArrow:
-                // From an episode description, Left/Right jumps to the ADJACENT
-                // episode's thumb (the description is a per-episode drill-down,
-                // not a horizontal row). The engine can't reach the adjacent
-                // thumb on its own (it sits fully above the description), so
-                // redirect via a one-shot preferred-focus target.
+                // From an episode description, Left/Right goes to the adjacent episode's
+                // thumb, which sits above it where the engine cannot reach.
                 if state.phase == .detailsStable, expandedDetail.episodeDescriptionFocused,
                    expandedDetail.armAdjacentEpisodeThumb(forward: true) {
                     setNeedsFocusUpdate(); updateFocusIfNeeded()
                     expandedDetail.clearArmedEpisodeFocus()
                     return
                 }
-                // Only consume Left/Right to page the carousel. In the expanded
-                // hero / details the focus engine must get them so the user can
-                // move horizontally among season pills, episodes, cast, etc.
+                // Expanded, the focus engine needs Left/Right for the rows.
                 if state.isCarouselInputEnabled { pageForward(); return }
             case .leftArrow:
                 if state.phase == .detailsStable, expandedDetail.episodeDescriptionFocused,
@@ -913,10 +740,7 @@ final class PreviewCarouselViewController: UIViewController {
                 }
                 if state.isCarouselInputEnabled { pageBackward(); return }
             case .select, .playPause:
-                // Select OR Play/Pause on the centered card expands to
-                // the fullscreen detail. Matches SwiftUI's
-                // PreviewOverlayHost.swift:183-192 — both Tap and
-                // Play/Pause call expandCurrentCard().
+                // Select or Play/Pause on the centered card expands it.
                 if state.isCarouselInputEnabled {
                     expandCurrentCard()
                     return
@@ -934,35 +758,22 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Vertical navigation
     //
-    // Shared by .upArrow/.downArrow PRESSES (d-pad / clickpad clicks) and by the
-    // up/down SWIPE recognizers (touch surface, e.g. the iPhone remote), which
-    // emit no arrow presses. Both call these, so the two input paths cannot
-    // drift. Each returns true when it consumed the input; false means "not
-    // ours" — the press falls through to the focus engine, and the swipe
-    // recognizer refuses to begin so the engine sees the touches instead.
+    // Shared by arrow presses and the vertical swipes. True means consumed; false
+    // passes the press to the focus engine and keeps the swipe from beginning.
 
     /// Down: carousel → hero → below-fold details, and pills → episodes.
     @discardableResult
     private func handleDownNavigation() -> Bool {
-        // Down from the carousel expands the centered card to the hero —
-        // the mirror of Up (hero → carousel). Same action as Select, so
-        // Down walks carousel → hero → details.
         if state.isCarouselInputEnabled {
             expandCurrentCard()
             return true
         }
-        // Down from the expanded hero hands focus into the real
-        // below-fold collection (focus-driven nav + auto-scroll, which
-        // drives the hero choreography).
         if state.phase == .expandedHero {
             enterBelowFold()
             return true
         }
-        // Down from the season pills drops focus into the episodes — at
-        // the SELECTED season's first episode. The orthogonal rail was
-        // scrolled there on pill-focus, but the focus engine still
-        // remembers episode 0 / season 1; arm the preferred-focus target
-        // across this update so it enters the current season instead.
+        // Pills → the selected season's first episode. The engine still remembers
+        // season 1's episode 0, so arm the target across this update.
         if state.phase == .detailsStable, expandedDetail.focusIsOnPills {
             expandedDetail.detailsFocusTarget = .episodes
             expandedDetail.armPillEntryFocus()
@@ -976,35 +787,19 @@ final class PreviewCarouselViewController: UIViewController {
     /// Up: episodes → pills → hero → carousel.
     @discardableResult
     private func handleUpNavigation() -> Bool {
-        // Up choreography ONLY at the top of the details: pills → hero,
-        // episodes → pills. From a LOWER section (Trailers/Related/Cast/
-        // About/Info) we must NOT intercept — fall through to the focus
-        // engine so it moves focus up ONE row. (The previous version
-        // forced focus to the pills on every Up, so one Up from any lower
-        // row jumped straight to the top.)
+        // Only the top of the details is ours; from a lower row the engine moves up one row.
         if state.phase == .detailsStable {
             if expandedDetail.focusIsOnPills {
-                // Already on the season pills → Up collapses to the hero.
                 returnToHeroFromBelowFold()
                 return true
             }
             if expandedDetail.focusIsOnEpisodes {
-                // The primary row (episodes for shows, trailers/related for
-                // movies) is the anchor: Up lands here first. If it JUST
-                // took focus on THIS press (the engine moved focus up before
-                // pressesBegan ran), stick on it — only a deliberate Up from
-                // a RESTING primary row lifts to pills / collapses.
-                //  - episodeThumbJustTookFocus: within-section description→thumb
-                //    (no section change, so the section gate misses it).
-                //  - episodesJustTookFocus: a lower row → primary section
-                //    change (covers movies, where there's no episode thumb).
+                // If the engine moved focus onto the primary row on this same press,
+                // stay there; only an Up from a resting primary row lifts further.
                 if expandedDetail.episodeThumbJustTookFocus
                     || expandedDetail.episodesJustTookFocus { return true }
                 if expandedDetail.hasSeasonPills {
-                    // Episodes → lift to the pills. The pills are
-                    // non-focusable while on the episodes, so the engine
-                    // can't grab one; setting target=.pills enables them
-                    // and drives focus to the SELECTED season's pill.
+                    // The pills are unfocusable from here; the target enables them.
                     expandedDetail.detailsFocusTarget = .pills
                     setNeedsFocusUpdate(); updateFocusIfNeeded()
                 } else {
@@ -1015,11 +810,7 @@ final class PreviewCarouselViewController: UIViewController {
             // Lower section: let the focus engine move up one row.
             return false
         }
-        // Up from the expanded hero collapses to the carousel — the
-        // mirror of Down (carousel → hero → details). Same path as Menu
-        // from the hero, so Up and Back stay identical at every level.
-        // In standalone detail the hero IS the top — Up does nothing; only
-        // Back/Menu dismisses (there's no carousel to collapse to).
+        // Up from the hero is Menu's collapse. Standalone has no carousel, so Up does nothing.
         if state.phase == .expandedHero {
             if standaloneDetail { return true }
             handleMenuPress()
@@ -1030,19 +821,10 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Watch-state refresh (issue #228)
 
-    /// Re-read the centered item's watch state from the server and repaint the
-    /// two surfaces that render it: the hero chrome and the episode rail.
-    ///
-    /// Both are repainted IN PLACE rather than re-seeded. Re-assigning
-    /// `items[selectedIndex]` through the normal `item` setters would rebuild
-    /// the action row and re-apply the below-fold snapshot, and the Play pill /
-    /// an episode card is almost always the focused view when the player
-    /// dismisses back onto this surface.
+    /// Re-reads the centered item's watch state and repaints the hero and episode rail in place.
+    /// The normal setters rebuild the action row, which usually holds focus after playback.
     private func refreshWatchState() {
-        // Off-screen (something is presented over us, e.g. the episode detail
-        // page) we still refresh — it's one GET, and being right when the user
-        // comes back matters more than skipping it. But if the view has never
-        // loaded there is nothing to repaint.
+        // Runs while covered too: one GET, and right when the user comes back.
         guard isViewLoaded, items.indices.contains(selectedIndex) else { return }
         let index = selectedIndex
         let item = items[index]
@@ -1053,12 +835,10 @@ final class PreviewCarouselViewController: UIViewController {
         watchRefreshToken &+= 1
         let token = watchRefreshToken
 
-        // Episode rail first — it owns its own fetch and its own token, and it
-        // repaints only the cards whose state actually moved.
+        // The rail has its own fetch and token.
         expandedDetail.refreshWatchState()
 
-        // Hero: `fullDetail` is a single uncached metadata GET whose `.item` is
-        // a freshly-mapped MediaItem, so it carries the committed watch state.
+        // `fullDetail` is one uncached GET, so it carries the committed state.
         Task { [weak self] in
             guard let detail = try? await provider.fullDetail(for: item.ref) else { return }
             await MainActor.run {
@@ -1080,23 +860,10 @@ final class PreviewCarouselViewController: UIViewController {
 
     // MARK: - Playback
 
-    /// Launch playback for a MediaItem (episode thumb Select): resolve the
-    /// provider-agnostic MediaItem → a concrete `PlexMetadata` (with full Stream
-    /// data for DV/HDR), build the player, and present it over the carousel.
-    /// Returns to the detail when the player dismisses. No edit to the off-limits
-    /// PlexHomeViewController — the carousel presents the player itself.
-    /// Hero Play. For a show, play its on-deck episode (Plex OnDeck); a movie /
-    /// episode plays directly.
-    /// Present an item's FULL expanded detail standalone (no carousel) — reuses
-    /// this same VC in `standaloneDetail` mode. Used for Related drill-ins.
+    /// Presents an item's full detail with this VC in `standaloneDetail` mode (Related drill-ins).
     private func presentStandaloneDetail(_ item: MediaItem) {
-        // A collection tile opens the collection page. Arm the shelf row's
-        // restore first, while the tile still exists: the carousel cannot
-        // resolve focus while the page is up, and on dismissal the engine
-        // may resolve before any callback runs. The page's onDismiss re-arms
-        // and applies it, so focus returns to the tile with the row unscrolled.
-        // No focus request here: focus is still on the tile, so a request
-        // would be honoured now and spend the row's one-shot tile index.
+        // Collection tile: arm the row's restore while the tile exists, since the engine
+        // may resolve before onDismiss runs. No focus request: it would spend the one-shot index now.
         if item.kind == .collection {
             expandedDetail.restoreShelfRowFocusIfNeeded(requestingFocus: false)
             PlexHomeViewController.openCollectionIfNeeded(item, from: self) { [weak self] in
@@ -1104,10 +871,7 @@ final class PreviewCarouselViewController: UIViewController {
             }
             return
         }
-        // The standalone detail is presented .overFullScreen, so THIS controller
-        // never disappears and therefore never re-appears — viewDidAppear does
-        // not fire on the way back. Restore focus from the dismiss callback,
-        // which is the only signal the presenter gets.
+        // Over full screen, so viewDidAppear never fires on return; restore from onDismiss.
         let detail = PreviewCarouselViewController(
             items: [item],
             selectedIndex: 0,
@@ -1144,11 +908,8 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Put focus back where it was in the below-fold after returning from a
-    /// standalone detail (Related / cast filmography).
-    ///
-    /// Called from the presented VC's dismiss callback because `.overFullScreen`
-    /// means this controller's appearance methods never fire for that round trip.
+    /// Restores below-fold focus after a standalone detail, from its dismiss callback
+    /// (`.overFullScreen` skips this VC's appearance methods).
     func restoreBelowFoldFocusAfterReturn() {
         guard state.phase == .detailsStable else { return }
         expandedDetail.restoreShelfRowFocusIfNeeded()
@@ -1157,10 +918,7 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.clearArmedShelfRestore()
     }
 
-    /// Person filmography poster Select → open the item's full expanded detail.
-    /// Server-backed and metadata-only items both go through `presentStandaloneDetail`:
-    /// the carousel handles `isMetadataOnly` items already (Watchlist-primary chrome),
-    /// so a single path covers both cases.
+    /// Filmography poster Select; metadata-only items take the same path.
     private func presentPersonFilmographyItem(_ item: MediaItem) {
         presentStandaloneDetail(item)
     }
@@ -1169,9 +927,7 @@ final class PreviewCarouselViewController: UIViewController {
     /// popups but with Information / Languages / Accessibility sections.
     private func presentInfoPopup(_ detail: MediaItemDetail) {
         let content = InfoPopupContent.fullInfo(detail: detail)
-        // Force the card size (skip the scroll-content measurement, which
-        // under-reports and left the card small) — same fix as the Settings
-        // Licenses popup.
+        // Fixed size: the scroll-content measurement under-reports.
         let popup = InfoPopupViewController(content: content, width: 900, height: 900, scrollable: true)
         var top: UIViewController = self
         while let presented = top.presentedViewController { top = presented }
@@ -1203,13 +959,8 @@ final class PreviewCarouselViewController: UIViewController {
         presentPlayer(ratingKey: item.ref.itemID, resumeOffset: offsetSec > 0 ? offsetSec : nil, mediaID: sourceID)
     }
 
-    /// Resolve a Plex ratingKey → metadata → present the player. Used for the
-    /// hero/episode play AND trailer/extra playback.
-    ///
-    /// A nil `resumeOffset` means "ask the server", not "start from zero": the
-    /// metadata we fetch here is the only place a library-addressable extra's
-    /// resume point appears (issue #303 — extras always restarted), and it is
-    /// also fresher than a MediaItem's cached userState.
+    /// Fetches a Plex ratingKey's metadata and presents the player. A nil `resumeOffset`
+    /// means ask the server: the only place an extra's resume point appears (#303).
     private func presentPlayer(ratingKey: String, resumeOffset: Double?, mediaID: String? = nil) {
         Task { [weak self] in
             guard let serverURL = PlexAuthManager.shared.selectedServerURL,
@@ -1231,10 +982,7 @@ final class PreviewCarouselViewController: UIViewController {
                     return
                 }
             }
-            // `viewOffset` is ms. Gated on the shared policy rather than
-            // `> 0` so a few accidental seconds don't become a resume point
-            // and a nearly-finished extra restarts instead of resuming at
-            // the credits.
+            // `viewOffset` is ms, gated on the shared resume policy rather than `> 0`.
             let serverResume = playItem.isInProgress
                 ? playItem.viewOffset.map { Double($0) / 1000 }
                 : nil
@@ -1245,31 +993,14 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Play a trailer/extra. Extras come in two flavors and only one of them is
-    /// addressable as a library item:
-    ///
-    /// - **User-added** (disc rips): real library ratingKey. `/library/metadata/{key}`
-    ///   resolves, so these take the normal metadata-fetch path.
-    /// - **Plex IVA** (studio-supplied): NO library ratingKey. The only handle is
-    ///   `key`, an absolute part path (`/services/iva/assets/...`). Feeding that to
-    ///   `/library/metadata/{id}` builds a nonsense URL that 404s — the cause of
-    ///   issue #255, where trailers failed "more times than not" because IVA extras
-    ///   are the common case on most libraries.
-    ///
-    /// For the IVA case the part path is already directly playable, so we skip the
-    /// metadata round-trip entirely and hand ContentRouter a synthetic PlexMetadata
-    /// whose Part.key IS that path. buildDirectPlayURL then appends the token and
-    /// the aether route plays it.
+    /// Plays a trailer or extra. A user-added extra has a library ratingKey. A Plex IVA
+    /// extra has none, only `key`, an absolute part path (`/services/iva/assets/...`) that
+    /// 404s under `/library/metadata` (#255); it plays directly through a synthetic PlexMetadata.
     private func presentExtraPlayer(_ trailer: BelowFoldTrailer) {
         let key = trailer.playbackKey ?? trailer.id
         let route = ExtraPlaybackKey.route(for: key)
 
-        // Which flavor we took. PlexNetworkManager.request() already captures any
-        // resulting HTTP/transport/decode failure, but its endpoint tag normalizes
-        // on NUMERIC path segments — an IVA path has none, so those failures never
-        // grouped under /library/metadata/{id} and this bug stayed invisible in
-        // Sentry despite firing constantly. This breadcrumb is the missing context
-        // on that capture, not a second report of it.
+        // Context for the request's own Sentry capture, whose endpoint tag cannot group IVA paths.
         let crumb = Breadcrumb(level: .info, category: "playback.extra")
         crumb.message = "Playing extra"
         crumb.data = [
@@ -1330,21 +1061,12 @@ final class PreviewCarouselViewController: UIViewController {
             startOffset: resumeOffset,
             preferredMediaID: mediaID
         )
-        // Presents from the topmost VC so Play works both directly on the
-        // carousel AND from the episode detail page presented over it.
+        // From the topmost VC, so Play also works from the episode page over the carousel.
         PlayerPresenter.present(viewModel: viewModel, from: self)
     }
 
-    // NOTE: Menu is owned SOLELY by the .menu UITapGestureRecognizer
-    // installed in viewDidLoad (see UIKIT_FOUNDATIONS §2 + Apple Forums
-    // thread 42630 / openradar 25428691). We deliberately do NOT also
-    // intercept .menu in pressesEnded/pressesCancelled: doing both makes the
-    // responder-chain absorb race the recognizer, the recognizer never
-    // recognizes, the press arrives cancelled, and the presentation
-    // controller dismisses the modal anyway. With the recognizer as the
-    // single owner, it claims the press (preventing the system dismiss) and
-    // its action drives collapse-vs-dismiss. No pressesEnded/Cancelled
-    // overrides needed.
+    // Menu belongs to the recognizer alone. Do not also handle it in pressesEnded or
+    // pressesCancelled: the two race, the press arrives cancelled and the modal dismisses.
 
     // MARK: - Paging
 
@@ -1359,9 +1081,7 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Touch-surface equivalent of an .upArrow / .downArrow press. Only ever
-    /// begins for transitions `verticalSwipeWouldNavigate` vouched for, so it
-    /// can drive the same choreography the presses do.
+    /// Touch twin of an up or down arrow; begins only when `verticalSwipeWouldNavigate` agrees.
     @objc private func handleVerticalSwipe(_ gesture: UISwipeGestureRecognizer) {
         switch gesture.direction {
         case .down: handleDownNavigation()
@@ -1370,18 +1090,8 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Whether a vertical swipe in the CURRENT state is a hand-off the focus
-    /// engine cannot make by itself, and so should be claimed by the recognizer.
-    ///
-    /// This must stay conservative. In `.detailsStable` the below-fold rows are
-    /// focusable and the engine moves between them on its own; claiming the
-    /// gesture there would cancel that and break scrolling through the details.
-    /// So we claim only the boundary transitions:
-    ///   - down: carousel → hero, hero → below-fold, pills → episodes
-    ///   - up:   episodes → pills, pills → hero, hero → carousel
-    /// Everything else (a lower details row moving one row at a time) is left to
-    /// the engine, which mirrors what the arrow-press handlers already do by
-    /// falling through to `super.pressesBegan`.
+    /// True only for the boundary hand-offs the engine cannot make. Claiming any other
+    /// swipe in the details would cancel the engine's row-to-row moves.
     private func verticalSwipeWouldNavigate(_ direction: UISwipeGestureRecognizer.Direction) -> Bool {
         switch direction {
         case .down:
@@ -1415,22 +1125,13 @@ final class PreviewCarouselViewController: UIViewController {
         animatePage(toIndex: selectedIndex - 1)
     }
 
-    /// Drive `contentOffset` toward the new index across the SwiftUI
-    /// baseline cubic curve over 0.78s. Uses CADisplayLink + manual
-    /// cubic-Bezier evaluation so layout invalidation happens every
-    /// frame — required for parallax tracking and off-screen cell
-    /// pre-allocation. `UIViewPropertyAnimator` interpolating
-    /// contentOffset does not trigger per-frame layout passes.
+    /// Pages over 0.78 s on a display link, so layout invalidates every frame (see `PagingAnimation`).
     private func animatePage(toIndex newIndex: Int) {
         state.beginPaging()
         // Release the expand offset-pin so paging can move the carousel.
         collectionView.pinnedOffsetX = nil
 
-        // Pre-warm the image for the new far-edge cell so the display
-        // link's per-frame layout pass doesn't have to wait on an
-        // async fetch when the cell scrolls into view. Without this,
-        // the animation pauses ~halfway through while the dequeued
-        // cell loads its artwork.
+        // Prefetch the far-edge card's artwork, or the glide stalls halfway waiting on it.
         let direction = newIndex > selectedIndex ? 1 : -1
         let prefetchIndex = newIndex + direction * 2
         if items.indices.contains(prefetchIndex) {
@@ -1464,16 +1165,9 @@ final class PreviewCarouselViewController: UIViewController {
 
         let elapsed = CACurrentMediaTime() - anim.startTime
         let t = min(1.0, max(0.0, elapsed / anim.duration))
-        // SwiftUI baseline cubic curve: control points (0.40, 0.02)
-        // and (0.18, 1.0).
         let eased = cubicBezier(t: CGFloat(t), p1x: 0.40, p1y: 0.02, p2x: 0.18, p2y: 1.0)
         let x = anim.startOffset + (anim.endOffset - anim.startOffset) * eased
-        // setContentOffset with animated: false issues a non-animated
-        // scroll. UICollectionView responds by invalidating layout
-        // (because shouldInvalidateLayout(forBoundsChange:) returns
-        // true), which recomputes parallax + alpha for every visible
-        // cell and queries layoutAttributesForElements with the new
-        // viewport.
+        // The layout invalidates on bounds change, recomputing parallax per frame.
         collectionView.setContentOffset(CGPoint(x: x, y: 0), animated: false)
         syncCards()
 
@@ -1502,14 +1196,8 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Evaluate a 1-D cubic Bezier ease for x → y given control
-    /// points (p1x, p1y) and (p2x, p2y) (with endpoints fixed at
-    /// (0,0) and (1,1)).
-    ///
-    /// We solve for parameter `u` such that the x-coordinate of the
-    /// cubic equals `t`, then return the y-coordinate at that u.
-    /// Newton-Raphson + bisection fallback (10 iterations is plenty
-    /// for animation precision).
+    /// CSS-style cubic Bezier ease with endpoints (0,0) and (1,1): solves x(u) = t by
+    /// Newton-Raphson (10 steps, clamped) and returns y(u).
     private func cubicBezier(t: CGFloat, p1x: CGFloat, p1y: CGFloat, p2x: CGFloat, p2y: CGFloat) -> CGFloat {
         // Coefficients for x(u) = ((1-u)^3 * 0) + 3 * (1-u)^2 * u * p1x + 3 * (1-u) * u^2 * p2x + u^3 * 1
         //        = (3 p1x - 3 p2x + 1) u^3 + (-6 p1x + 3 p2x) u^2 + (3 p1x) u
@@ -1542,9 +1230,7 @@ final class PreviewCarouselViewController: UIViewController {
 
     private func handleMenuPress() {
         previewCarouselLog.info("[Menu] phase=\(String(describing: self.state.phase), privacy: .public) isExpanded=\(self.isExpanded)")
-        // Menu/Back goes up ONE level. From the scrolled-in details that's the
-        // expanded hero (NOT all the way to the carousel) — identical to Up from
-        // the season pills, so the two controls behave the same.
+        // Menu goes up one level: details to hero, like Up from the pills.
         if state.phase == .detailsStable {
             returnToHeroFromBelowFold()
             return
@@ -1555,35 +1241,19 @@ final class PreviewCarouselViewController: UIViewController {
         previewCarouselLog.info("[Menu] action=\(String(describing: action), privacy: .public)")
         switch action {
         case .dismissOverlay:
-            // Standalone detail has no carousel behind it — blur-fade dismiss
-            // (the transitioningDelegate handles it) back to the previous detail.
+            // Standalone: the transitioning delegate blur-fades back to the previous detail.
             if standaloneDetail { dismiss(animated: true) }
             else { performDismissMorph() }
         case .collapseToCarousel:
-            // Phase already transitioned to `.carouselStable` inside
-            // `state.exitAction()`. Tear down the child VC. Iter C
-            // adds the animated collapse cascade (frame shrink +
-            // chrome cross-fade); Iter B is an instant teardown.
+            // `exitAction` already moved the phase to `.carouselStable`.
             collapseExpandedCard()
         }
     }
 
     // MARK: - Expand / Collapse
 
-    /// Expand the centered card to fullscreen. State machine
-    /// transitions through `.expandingHero` → `.expandedHero`. The
-    /// custom layout reshapes the centered cell's frame to the
-    /// collection view's full bounds; the cell's chromeView mutates
-    /// its constraint constants; the panel's corner radius lerps to 0.
-    /// All happen on the morph controller's one ease-in-out animator
-    /// (`PreviewCarouselGeometry.expandAnimationDuration`).
-    ///
-    /// Critical: the cell view and the chrome view are the SAME
-    /// instances throughout — no second view tree, no reparenting,
-    /// no re-render. The animation is a constraint+frame tween on
-    /// existing views. This is what gives true visual continuity
-    /// matching SwiftUI's persistent-view-tree model.
-    ///
+    /// Expands the centered card to full screen (`.expandingHero` → `.expandedHero`) on
+    /// the morph controller's one animator. The same cell and chrome views tween; nothing is reparented.
     private func expandCurrentCard() {
         guard !isExpanded else { return }
         // A page in flight still owns selectedIndex and the outgoing card's chrome.
@@ -1596,25 +1266,13 @@ final class PreviewCarouselViewController: UIViewController {
         state.beginExpand()
         isExpanded = true
 
-        // Single-animator morph (CarouselMorphController): the cell window
-        // (layout swap to PreviewExpandedLayout), the backdrop panel
-        // container grow to fullscreen, the chrome insets, and the
-        // corner-radius lerp to 0 ALL run on one UIViewPropertyAnimator
-        // curve. Nothing can drift. See
-        // docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md.
         let cell = collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0)) as? PreviewCardView
-        // Complete the chrome cascade NOW so the metadata is fully present when
-        // the morph starts. Entry items settle before you expand them; a
-        // paged-to item expanded mid-cascade would have its metadata still
-        // fading in while the backdrop just grows — the "metadata not aligning
-        // with the background" artifact on non-first items. Snapping cancels the
-        // in-flight fade and pins alpha 1 so only position morphs.
+        // Finish the chrome cascade first, so a paged-to card's metadata is not
+        // still fading in while the backdrop grows.
         cell?.setIsCurrent(true, animated: false)
         expandedDetail.setCurrent(true, animated: false)
-        // Pin the carousel offset to the centered position for the WHOLE morph +
-        // expanded state. The layout swap's deferred contentOffset zeroing would
-        // otherwise throw the expanded cell (placed at content x = offset) off
-        // the right edge for non-first items. Cleared on collapse.
+        // Pin the offset until collapse: the layout swap's deferred offset reset would
+        // throw a non-first expanded cell off the right edge.
         collectionView.pinnedOffsetX = collectionView.contentOffset.x
         morphController.expand(centeredIndex: selectedIndex, in: view.bounds, cell: cell) { [weak self] in
             guard let self else { return }
@@ -1625,56 +1283,37 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Down from the expanded hero: hand focus into the real below-fold
-    /// collection. The focus engine moves to the first cell + auto-scrolls,
-    /// which fires the collection's scroll → drives the hero choreography.
+    /// Down from the expanded hero: slides into the below-fold details, then hands focus in.
     private func enterBelowFold() {
         guard state.phase == .expandedHero else { return }
         state.markDetailsStable()
-        // Always enter the details on the episodes (not stale on the pills from a
-        // previous pills→hero→Down round-trip).
+        // Always enter on the episodes, never stale on the pills.
         expandedDetail.detailsFocusTarget = .episodes
-        // The below-fold's scroll now drives the hero fade.
         expandedDetail.setBelowFoldScrollActive(true)
-        // Slide the episodes up (timed) WITHOUT making the collection focusable
-        // yet — otherwise the focus engine scrolls to its focused cell and
-        // fights the slide (over-scrolling past the episodes, all the way to
-        // Cast). The blur + metadata fade + logo ride this single movement.
-        // Hand focus in only once the slide settles.
+        // Focusable only after the slide: the engine's own scroll fights it and
+        // overshoots to Cast.
         expandedDetail.belowFoldCollection.slideToDetailsTop(animated: true) { [weak self] in
             guard let self else { return }
             self.expandedDetail.setBelowFoldInteractive(true)
-            // Flush layout BEFORE asking for focus. The preferred-focus target
-            // may be a deep episode in the orthogonal rail, and UIKit rejects a
-            // preferred index path whose cell isn't realized yet (it throws
-            // NSInternalInconsistencyException from _delegatePreferredIndexPath).
-            // The rail positions itself in layoutSubviews, so run that first.
+            // Lay out first: a preferred index path whose cell is not realized
+            // throws NSInternalInconsistencyException.
             self.expandedDetail.belowFoldCollection.layoutIfNeeded()
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
-            // Focus is now in the below-fold; make the faded chrome buttons
-            // non-focusable so Up from the primary row can't escape into them
-            // (which reads as "jumps back to the carousel").
+            // So Up from the primary row cannot escape into the faded chrome buttons.
             (self.collectionView.cellForItem(at: IndexPath(item: self.selectedIndex, section: 0)) as? PreviewCardView)?
                 .setChromeActionRowFocusable(false)
         }
     }
 
-    /// Up from the top of the below-fold: return focus to the hero, reset the
-    /// collection to its peek position (→ scrollProgress 0, hero un-fades).
+    /// Up from the top of the below-fold: focus back to the hero, collection back to its peek.
     private func returnToHeroFromBelowFold() {
         guard state.phase == .detailsStable else { return }
         state.returnToExpandedHero()
-        // Re-enable the chrome buttons (disabled on enterBelowFold) BEFORE the
-        // focus update, so focus can park back on the hero Play button.
+        // Before the focus update, so focus can land on the hero Play button.
         (collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0)) as? PreviewCardView)?
             .setChromeActionRowFocusable(true)
-        // Exact reverse of enterBelowFold: keep the below-fold scroll coupling LIVE
-        // so the collection's slide back to the peek rest drives the hero fade-in
-        // (blur out, chrome in, logo out, pills out) through the same single
-        // chain — scrollViewDidScroll -> driveScrollProgress -> applyHeroProgress.
-        // Make it non-focusable so focus parks on the hero anchor; the coupling is
-        // torn down only once the slide completes.
+        // The scroll coupling stays live until the slide ends, so the slide drives the hero fade-in.
         expandedDetail.setBelowFoldInteractive(false)
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
@@ -1695,9 +1334,7 @@ final class PreviewCarouselViewController: UIViewController {
         blurOverlay.isHidden = p <= 0.01
         blurAnimatorIfNeeded().fractionComplete = min(0.999, max(0.001, p))
 
-        // Metadata fades out faster than the blur fades in (gone by ~p=0.6).
-        // Carousel metadata fades out FAST + early (gone by ~p=0.4) so it
-        // clears before the top logo fades in (which starts later) — no overlap.
+        // Metadata is gone by p ≈ 0.4, before the top logo starts fading in.
         let chromeAlpha = 1 - min(1, p * 2.6)
         (collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0)) as? PreviewCardView)?
             .setHeroChromeAlpha(chromeAlpha)
@@ -1719,17 +1356,14 @@ final class PreviewCarouselViewController: UIViewController {
         return a
     }
 
-    /// Reverse of `expandCurrentCard`. Returns the centered cell to
-    /// its carousel slot, restores chrome insets, restores corner
-    /// radius, all on the same ease-in-out curve.
+    /// Reverse of `expandCurrentCard`, on the same curve.
     private func collapseExpandedCard() {
         guard isExpanded else { return }
         previewCarouselLog.info("[Collapse] BEGIN idx=\(self.selectedIndex)")
 
         isExpanded = false
 
-        // Tear down the real below-fold collection (restore the placeholder
-        // peek) before the collapse morph, and return the peek scroll to rest.
+        // Back to the placeholder peek, at rest, before the collapse morph.
         expandedDetail.hideBelowFoldCollection()
         expandedDetail.reset()
 
@@ -1738,22 +1372,13 @@ final class PreviewCarouselViewController: UIViewController {
             guard let self else { return }
             // Restore carousel-mode backdrop panels after collapse.
             self.syncCards()
-            // Focus update AFTER the morph so a focus-driven animation never
-            // runs concurrently with the morph curve.
+            // After the morph, so a focus animation never overlaps its curve.
             self.setNeedsFocusUpdate()
         }
     }
 
-    /// Dismiss the overlay. If we entered via row snapshots, reverse that
-    /// exact morph (`runRowExitMorph`) so exit mirrors entry. Otherwise the
-    /// artwork lives in the VC-owned `backdropPlane` (not in the cell), so
-    /// the old "fly a chrome-only PreviewCardView snapshot back to the
-    /// source tile" reverse-entry morph desynced: the chrome snapshot flew
-    /// off while the artwork plane sat orphaned ("metadata dismisses first,
-    /// then the carousel"). In that case we fade ALL overlay layers
-    /// together — backdrop plane (artwork), the collection view (chrome),
-    /// and the black backdrop — on ONE animator, so everything leaves in
-    /// lockstep.
+    /// Flies the cards back to their row tiles when the centred card has one on screen;
+    /// otherwise fades every layer out on one animator, since artwork and chrome live apart.
     private func performDismissMorph() {
         guard state.phase != .exiting else { return }
         // The exit flight starts from settled geometry: not mid-page, not mid-collapse.
@@ -1855,17 +1480,8 @@ final class PreviewCarouselViewController: UIViewController {
 
 extension PreviewCarouselViewController: UIGestureRecognizerDelegate {
 
-    /// Gate the swipes. On tvOS the focus engine reads the same
-    /// indirect-touch stream a recognizer does, and a recognizer that reaches
-    /// .began CANCELS the competing focus interaction. So a swipe may only be
-    /// claimed where the engine has nothing useful to do with it. Vertical:
-    /// the hand-off transitions in `verticalSwipeWouldNavigate` — anywhere
-    /// else (moving between the below-fold rows) decline and let the engine
-    /// have the touches. Horizontal: only while the carousel owns input — in
-    /// the expanded/detail states the chrome action buttons ARE focusable and
-    /// the engine needs the swipe to move focus between them. Declining must
-    /// happen here; bailing inside the handler is too late, the begun
-    /// recognizer has already stolen the gesture.
+    /// A begun recognizer cancels the engine's focus move, so decline here, never in the
+    /// handler. Vertical: `verticalSwipeWouldNavigate`. Horizontal: only while the carousel owns input.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if gestureRecognizer === verticalSwipeRecognizers.first {
             touchBeganOnDetailsTopRow = state.phase == .detailsStable
@@ -1903,44 +1519,22 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
         cell.onPlay = { [weak self] item in self?.playHeroItem(item) }
         cell.onPlayVersion = { [weak self] item, sourceID in self?.playMediaItem(item, sourceID: sourceID) }
         cell.onShowInfo = { [weak self] detail in self?.presentInfoPopup(detail) }
-        // Default to non-current; if this dequeued cell happens to be
-        // at selectedIndex (e.g. on first viewport population), the
-        // entry-morph completion or paging completion will flip it via
-        // updateCurrentCellChrome.
+        // Entry or paging completion marks the current cell via updateCurrentCellChrome.
         cell.setIsCurrent(indexPath.item == selectedIndex && hasRunEntryMorph,
                           animated: false)
         cell.setHairline(position: layout.normalizedPosition(for: indexPath.item))
         return cell
     }
 
-    // Block the focus engine from auto-scrolling the collection view
-    // — we drive scroll ourselves via animatePage so we can use the
-    // exact cubic timing curve.
+    // animatePage drives the scroll, not the focus engine.
     func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {
-        // NEVER. A focusable cell is a LEAF focus item: the engine focuses the
-        // cell and reaches its action row only through the cell's own
-        // `preferredFocusEnvironments` redirect, which a DIRECTIONAL search does
-        // not consult. So making the expanded cell focusable landed focus on
-        // Play and then killed Left/Right between the buttons on every remote —
-        // presses and swipes alike, because both are the same focus move.
-        // A NON-focusable cell is a pass-through container and the engine finds
-        // the buttons directly; the redirect still works for the driven landing.
-        // House pattern: ShelfRowCell and HeroOverlayCell both host focusable
-        // content and both return false.
-        //
-        // Focuslessness elsewhere is unaffected: the chrome is
-        // `isUserInteractionEnabled = false` in .carouselStable, and
-        // `enterBelowFold` turns the action row off so Up from the episodes
-        // can't climb back into the hero.
+        // Never: a focusable cell is a leaf, and a directional search skips its
+        // preferred-focus redirect, which kills Left/Right between the action buttons.
         return false
     }
 }
 
-/// Invisible, always-focusable anchor. Exists solely to give the tvOS focus
-/// engine a target inside the focusless preview modal so Menu presses are
-/// delivered into the VC's responder chain (presses go to the FOCUSED view
-/// on tvOS, then climb the chain). It has zero size and draws nothing, so it
-/// never shows and never competes with visible content for focus.
+/// Zero-size focus target that lets Menu presses reach the carousel's responder chain.
 final class PreviewFocusAnchorView: UIView {
     override var canBecomeFocused: Bool { true }
 }

@@ -1,40 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PlexHomeViewController.swift
-//  Rivulet
-//
-//  UIKit/TVUIKit implementation of the Plex Home screen. Mirrors the
-//  SwiftUI `PlexHomeView` feature set so it can replace it 1:1.
-//
-//  Composition:
-//    - `HeroBackdropView` (fixed): full-bleed sibling of the collection
-//      view, lifted on scroll by Apple's showcase transition.
-//    - `UICollectionView` (scrolling):
-//        * Section 0: hero overlay (SwiftUI `HeroOverlayContent` via
-//          `HeroOverlayCell` / UIHostingController) — when hero is enabled
-//        * Section 1: Continue Watching (`ContinueWatchingCell`)
-//        * Sections 2..N: Recently Added per Home library (`PosterCell`)
-//        * Section N+1: Watchlist (`WatchlistPosterCell`)
-//        * Section N+2: Personalized Recommendations (`PosterCell`)
-//
-//  Navigation:
-//    - Detail navigation is UIKit-native: standalone expanded detail /
-//      episode detail page presented from this controller. A music tile
-//      opens its Music page; in Search the host does it (`onSelectMusic`).
-//    - Preview carousel is presented as `PreviewContainerViewController`
-//      (a UIKit overFullScreen modal hosting SwiftUI `PreviewOverlayHost`)
-//      from this controller — mirrors the SwiftUI flow.
-//    - Resume-or-restart prompt is a `UIAlertController(.actionSheet)`.
-//
-//  Focus restoration:
-//    - `UICollectionView.remembersLastFocusedIndexPath = true` keeps the
-//      last focused tile in each row.
-//    - When the preview is dismissed with a `PreviewSourceTarget`, we
-//      translate that into the matching `IndexPath` and force a focus
-//      update there.
-//
+// The UIKit Home, also driving the library, Discover, Watchlist and Search surfaces by `mode`.
+// `HeroBackdropView` sits behind the collection; sections run hero, Continue Watching, Recently Added
+// per library, Watchlist, then Recommendations. Detail and the preview carousel present from here,
+// and a dismissed preview's `PreviewSourceTarget` maps back to the tile to refocus.
 
 import UIKit
 import TVUIKit
@@ -147,22 +117,18 @@ struct HomeSectionData {
     let id: HomeSectionID
     let kind: HomeSectionKind
     let title: String?
-    /// Which header style applies — SwiftUI uses two distinct ones:
-    /// InfiniteContentRow style (30pt semibold white-0.6, optional inline
-    /// count) vs WatchlistHubRow style (28pt bold white, no count).
+    /// Header style for the section (see `HubHeaderView.Style`).
     let headerStyle: HubHeaderView.Style
     /// Total item count from Plex for the "X of Y" indicator. nil when
     /// pagination hasn't loaded a total yet, which is the case for first
     /// render of every section.
     let totalSize: Int?
-    /// MediaItems for hub/recommendations/CW/grid sections. The home renders
-    /// shelves from these flat items (Stage 2 of MEDIAITEM_HOME_PLAN) instead
-    /// of materializing the heavyweight PlexMetadata at launch.
+    /// MediaItems for hub, recommendations, CW and grid sections; shelves render from these
+    /// instead of building PlexMetadata at launch.
     let items: [MediaItem]
     /// Watchlist entries for the watchlist section.
     let watchlistItems: [PlexWatchlistItem]
-    /// Hero carousel items (used by the hero overlay cell). Hero stays
-    /// PlexMetadata-backed until Stage 4.
+    /// Hero carousel items (PlexMetadata).
     let heroItems: [PlexMetadata]
     /// MediaItem-backed hero carousel items (Discover mode — TMDB-mapped).
     /// When non-empty, the hero cell uses the MediaItem configuration path
@@ -448,9 +414,7 @@ final class PlexHomeViewController: UIViewController {
     init(mode: HomeMode = .home, providerLibrary: MediaLibrary? = nil) {
         self.mode = mode
         self.providerLibrary = providerLibrary
-        // Library mode restores the user's persisted per-library sort (the
-        // same LibrarySettingsManager slot the SwiftUI PlexLibraryView used).
-        // Home mode never reads gridSort; the default is inert.
+        // Library mode restores the persisted per-library sort; Home never reads gridSort.
         if case .library(let key, _) = mode {
             self.gridSort = LibrarySettingsManager.shared.getSortOption(for: key)
         } else {
@@ -500,28 +464,16 @@ final class PlexHomeViewController: UIViewController {
     private let watchlistService = PlexWatchlistService.shared
     private let recommendationService = PersonalizedRecommendationService.shared
 
-    /// Standard tvOS frosted background (adapts to light/dark). The backmost
-    /// layer of the screen; the hero art and the collection sit in front. As
-    /// the hero art translates up on scroll it reveals this surface instead of
-    /// flat black, matching the Apple TV+ home. Stays visible when the hero is
-    /// off too.
-    /// Backmost ambient wash (artwork diffused by the frost above it);
-    /// latched once per screen — see updateAmbientIfNeeded().
+    /// Backmost ambient wash, diffused by the frost above it; latched once per screen
+    /// (see updateAmbientIfNeeded()).
     private var ambientView: AmbientBackdropView!
     private var backgroundBlurView: UIVisualEffectView!
     private var backdropView: HeroBackdropView!
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<HomeSectionID, HomeItemID>!
 
-    /// Sits at the leading edge of the collection view and absorbs
-    /// fast Left-swipe focus moves that would otherwise escape to the
-    /// sidebar mid-row. Updated in `didUpdateFocus`: when the focused
-    /// cell is at item 0 of its row (or in a non-orthogonal section),
-    /// `preferredFocusEnvironments = []` and the guide is transparent
-    /// to the engine — focus passes through to the sidebar normally.
-    /// When the focused cell is item ≥1 of a horizontal row, the guide
-    /// redirects to the cell at `indexPath.item - 1` (and we scroll
-    /// the orthogonal section so that cell is on screen).
+    /// Leading-edge guide that stops fast Left swipes escaping to the sidebar mid-row. `didUpdateFocus`
+    /// points it at `item - 1`, or leaves it empty at item 0 so focus passes to the sidebar.
     private var leftEdgeFocusGuide: UIFocusGuide!
 
     /// Full-screen state placeholder (notConnected / loading / error / empty).
@@ -564,17 +516,11 @@ final class PlexHomeViewController: UIViewController {
     private var pendingPreviewRestore: PreviewSourceTarget?
     private var shouldRestoreCollectionFocusMemoryAfterPreview = false
 
-    /// Per-section pagination state. Keyed by HomeSectionID. Mirrors the
-    /// per-row state SwiftUI InfiniteContentRow keeps locally
-    /// (items / isLoadingMore / hasReachedEnd / totalSize).
+    /// Per-section pagination state, keyed by HomeSectionID.
     private struct PaginationState {
         var loadedItems: [MediaItem]       // initial items + everything paginated in
-        /// itemIDs that arrived via loadMoreIfNeeded — the ONLY items allowed
-        /// to survive a head refresh as tail extras. Without this, any item
-        /// that fell out of the refreshed hub head (finished, dismissed,
-        /// rolled to the next episode) was indistinguishable from a
-        /// paginated-in extra and got re-appended at the tail forever —
-        /// the "old episodes at the far right of Continue Watching" bug.
+        /// itemIDs that arrived via loadMoreIfNeeded, the only items allowed to survive a head refresh
+        /// as tail extras. Without it, items that fell out of the hub head were re-appended forever.
         var paginatedKeys: Set<String> = []
         var totalSize: Int?
         var isLoadingMore: Bool
@@ -598,14 +544,9 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: Library-mode grid state
     //
-    // The grid is SPARSE: one slot per library item from the moment the
-    // first page reports the total, pages filling in as their slots display.
-    // That is what lets the alphabet bar (issue #308) jump to "Z" in a
-    // thousand-item library without loading the 940 items before it. A
-    // monotonically-increasing `gridGeneration` token is bumped on every
-    // grid reset (sort change) so an in-flight page Task discards its
-    // results if the generation advanced before the await returned —
-    // a stale page can never interleave into a fresh sort load.
+    // The grid is sparse: one slot per item once the first page reports the total, so the alphabet
+    // bar (#308) can jump without loading everything before it. `gridGeneration` bumps on every reset
+    // so an in-flight page from an older sort discards itself.
 
     /// Grid slots as rendered: Plex pages map as they land, provider pages
     /// arrive mapped. nil = not loaded yet. `totalGridCount` long once the
@@ -624,7 +565,7 @@ final class PlexHomeViewController: UIViewController {
     private var gridPagesRequested: Set<Int> = []
     /// Generation token — see the MARK comment above.
     private var gridGeneration = 0
-    /// Page size matching the SwiftUI PlexLibraryView (`pageSize = 60`).
+    /// Library grid page size.
     private let gridPageSize = 60
     /// Collection page only: page 0's outcome. An empty `gridItems` reads the
     /// same while the request is in flight, after it failed and after an
@@ -656,14 +597,9 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: Fast scroll (held Up/Down)
     //
-    // tvOS moves focus row by row for ~1.5s of a held Up/Down, then hands
-    // focus to its own fast-scroll index bar, a hidden subview of the
-    // collection, and stops issuing focus moves. This collection scrolls
-    // itself (isScrollEnabled is false, one clock), so the system's bar can
-    // move nothing. The hand-off is used as the "fast mode" signal instead:
-    // while the arrow stays down the offset is driven here at an
-    // accelerating rate, and release (or Left / Select / Menu) lands focus on
-    // the tile nearest the screen centre.
+    // After ~1.5s of a held arrow tvOS hands focus to its hidden fast-scroll index bar, which cannot
+    // scroll this self-driven collection. That hand-off is the fast-mode signal: the offset is driven
+    // here while the arrow stays down, and release lands focus on the centre tile.
 
     /// Up/Down arrow currently held, tracked at the controller so a hold that
     /// began on a tile is still known once focus sits on the hidden bar.
@@ -686,14 +622,7 @@ final class PlexHomeViewController: UIViewController {
     private var isLoadingRecommendations = false
     private var recommendationsError: String?
 
-    /// Hero gate for the current mode: `showHomeHero` AppStorage on the home,
-    /// `showLibraryHero` on a library page (both mirror the SwiftUI toggles).
-    /// Kept under the original name so every existing call site stays as-is.
-    /// The library hero defaults ON when the key has never been set (matches
-    /// SettingsView's `@AppStorage("showLibraryHero") = true` default); an
-    /// explicit user OFF is respected.
-    /// Empty-state copy for the current surface. Discover is fed by TMDB, so
-    /// telling the user their Plex library looks empty is simply wrong there.
+    /// Empty-state copy for the current surface; Discover is TMDB-fed, so it never blames the library.
     private var emptyStateMessage: String {
         switch mode {
         case .discover:
@@ -711,6 +640,8 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
+    /// Hero gate for every mode, despite the name: `showHomeHero` on Home, `showLibraryHero` (on when
+    /// never set) on a library page.
     private var showHomeHero: Bool {
         switch mode {
         case .home:
@@ -786,13 +717,8 @@ final class PlexHomeViewController: UIViewController {
         super.viewDidLoad()
         if case .library = mode { StartupTimer.mark("PlexHomeVC.viewDidLoad (library)") }
         else { StartupTimer.mark("PlexHomeVC.viewDidLoad (home)") }
-        // No opaque base behind `backgroundBlurView`: let the blur sample
-        // whatever sits behind the home view (the SwiftUI shell / system)
-        // rather than a flat colour. Search keeps the same clear root: with
-        // its three background layers (ambient/blur/backdrop) kept out of the
-        // hierarchy, a clear background lets the uniform system search
-        // surround show through seamlessly — an opaque fill there instead reads
-        // as a darker panel inset from the surround.
+        // No opaque base behind `backgroundBlurView`, so the blur samples what is behind the home. Search
+        // keeps the clear root too: an opaque fill reads as a darker panel against the system surround.
         view.backgroundColor = .clear
         // Collection page: presented over the library through
         // BlurFadeAnimator, which assumes an opaque page.
@@ -855,11 +781,8 @@ final class PlexHomeViewController: UIViewController {
                 }
             }
         case .library(let key, _):
-            // Library page: just this library's hubs. No watchlist row, no
-            // personalized recommendations, no cross-library fetches.
-            // LAUNCH-CRITICAL: paint rows from the flat MediaItem cache first
-            // (Stage 3), then refresh hubs from the network. The grid's first
-            // page loads in parallel with the hubs.
+            // Library page: only this library's hubs. Paint from the flat MediaItem cache first, then refresh
+            // from the network; the grid's first page loads in parallel.
             Task { @MainActor in
                 if await dataStore.paintLibraryItemsFromCacheIfNeeded(forKey: key) {
                     applySnapshot(animated: false)
@@ -871,8 +794,7 @@ final class PlexHomeViewController: UIViewController {
             loadGridPage(containing: 0)
             loadAlphabetIndex()
         case .discover:
-            // Discover page: the 8 TMDB curated sections + For You + hero,
-            // all fetched by the same view model the SwiftUI page used.
+            // Discover page: the 8 TMDB curated sections, For You and the hero.
             Task { @MainActor in
                 isLoadingDiscover = true
                 updateHomeState()
@@ -943,9 +865,7 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Discover mode
 
-    /// Data source for `.discover` mode — the same view model the SwiftUI
-    /// DiscoverView used (TMDB curated sections, For You, hero picks,
-    /// in-library TMDB id set). Only touched in discover mode.
+    /// Data source for `.discover` mode: TMDB curated sections, For You, hero picks, in-library ids.
     private let discoverModel = DiscoverViewModel()
     private var isLoadingDiscover = false
     /// Watchlist mode only: true while the first fetch of a cold (uncached)
@@ -994,10 +914,8 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Search mode
 
-    // Straight port of PlexSearchView's search machinery: a short debounce,
-    // token-based race protection, min 2-char query, visible-library result
-    // filtering, and recent searches persisted in UserDefaults under the SAME
-    // key the SwiftUI page used (recents carry over).
+    // Search: short debounce, token race protection, 2-char minimum, visible-library filtering, and
+    // recents in UserDefaults.
     private var searchQuery = ""
     private var searchResults: [PlexMetadata] = []
     /// Jellyfin results for the current query; mixed into Plex's groups.
@@ -1182,13 +1100,8 @@ final class PlexHomeViewController: UIViewController {
     private var filteredSearchResults: [PlexMetadata] { filterSearchResults(searchResults) }
 
     private func filterSearchResults(_ results: [PlexMetadata]) -> [PlexMetadata] {
-        // Same section-attribution predicate the Home hero and Continue
-        // Watching use — search is cross-library for the same reason (the
-        // server has no idea which libraries the client hides). Reusing it also
-        // normalizes the two spellings of a section id: Plex writes
-        // `librarySectionKey` as `/library/sections/3` while `PlexLibrary.key`
-        // is the bare `3`, so the old raw-string compare could drop every
-        // attributed result as soon as any library was hidden.
+        // The section-attribution predicate Home's hero and Continue Watching use. It also normalizes
+        // `librarySectionKey` ("/library/sections/3") against `PlexLibrary.key` ("3").
         let visibleKeys = PlexLibraryVisibilityFilter.normalizedKeySet(
             dataStore.visibleLibraries.map { $0.key }
         )
@@ -1297,9 +1210,7 @@ final class PlexHomeViewController: UIViewController {
         presentPreview(forSection: section, indexPath: indexPath)
     }
 
-    /// Library-mode data load: fetch this library's hubs (its own Continue
-    /// Watching, Recently Added, genre rows) into `dataStore.libraryHubs` —
-    /// the same store slot + network call the SwiftUI PlexLibraryView used.
+    /// Library-mode data load: this library's hubs into `dataStore.libraryHubs`.
     private func refreshThisLibraryHubs() async {
         if let library = providerLibrary {
             await refreshProviderLibrary(library)
@@ -1324,9 +1235,8 @@ final class PlexHomeViewController: UIViewController {
                 serverURL: serverURL, authToken: token, sectionId: key
             )
             dataStore.libraryHubs[key] = hubs
-            // Project to the MediaItem rail the library page now renders from
-            // (Stage 2 reads dataStore.libraryItemsByKey[key]). This also bumps
-            // libraryHubsVersion + writes the flat library cache for next launch.
+            // Project to the MediaItem rail the library page renders from; also bumps libraryHubsVersion and
+            // writes the flat library cache for next launch.
             dataStore.projectLibraryItems(forKey: key)
             libraryHubsError = nil
         } catch {
@@ -1452,15 +1362,9 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// The apply for refreshThisLibraryHubs. The Collections row has no
-    /// warm-launch cache, so it is the one row routinely inserted into, or
-    /// removed from, a live page. The page moves its own offset only on focus
-    /// changes, so a row appearing above the focused one would push the
-    /// focused tile down a whole poster row. When the row comes or goes,
-    /// shift the offset by however far the apply moved the focused section.
-    /// Its first item stands in for the focused cell: a section inserted
-    /// above moves every item below it alike, and a focused section above
-    /// the slot does not move at all.
+    /// The apply for refreshThisLibraryHubs. The Collections row has no warm cache, so it can appear or
+    /// vanish on a live page; shift the offset by however far the apply moved the focused section, or
+    /// a row inserted above pushes the focused tile down.
     private func applySnapshotKeepingFocusedRowStill() {
         // Pinned rows arrive the same way, right after it.
         func lateRows() -> [HomeSectionID] {
@@ -1619,12 +1523,8 @@ final class PlexHomeViewController: UIViewController {
         start..<max(start, min(start + returned, slotCount))
     }
 
-    /// Re-requests every loaded grid page in place. Slots are positional, so
-    /// a focused tile is reconfigured in place unless the collection shrank
-    /// below it (loadGridPage clamps that case). The collection page calls
-    /// this when a member's watch state may have changed. The generation bump
-    /// discards any page still in flight, which is in `gridPagesRequested` and
-    /// so is re-requested below.
+    /// Re-requests every loaded grid page in place, for when a member's watch state may have changed.
+    /// The generation bump drops in-flight pages, which are re-requested below.
     // ponytail: re-requests every loaded page (a library scrolled deep can hold
     // dozens); fetch only visible pages if it shows up.
     private func reloadLoadedGridPages() {
@@ -1798,9 +1698,7 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// The Plex library type ("movie", "show", ...) for the current library,
-    /// used to pick the relevant sort options. Mirrors PlexLibraryView's
-    /// `currentLibraryType`.
+    /// The current library's Plex type ("movie", "show", ...), which picks the sort options.
     private var currentLibraryType: String? {
         guard case .library(let key, _) = mode else { return nil }
         return dataStore.libraries.first(where: { $0.key == key })?.type
@@ -1861,13 +1759,9 @@ final class PlexHomeViewController: UIViewController {
         reconfigureGridSlots(0..<gridItems.count)
     }
 
-    /// Titles or Collections. Collections come whole from
-    /// `libraryCollections` in server order: no paging, no A-Z bar, and no
-    /// sort (`gridSort` is never forwarded; `sort=mediaHeight:desc` returns
-    /// an empty list). Makes no focus request: the header reconfigure
-    /// re-vends the same cell, so focus stays on the View button, and Down
-    /// enters the grid by geometry. Before the view loads it only sets the
-    /// start; the first collection list then fills the grid, or falls back.
+    /// Titles or Collections. Collections come whole in server order: no paging, A-Z bar or sort
+    /// (`sort=mediaHeight:desc` returns an empty list). No focus request: the header re-vends the same
+    /// cell, so focus stays on the View button.
     func setGridShowsCollections(_ on: Bool) {
         guard on != gridShowsCollections else { return }
         gridShowsCollections = on
@@ -1993,13 +1887,8 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Stale focus appearance (focus returning into the collection)
 
-    /// When focus leaves the entire collection (into a presented carousel, the
-    /// sidebar, etc.) the cell that held focus never receives a per-cell
-    /// unfocus event, so its TVPosterView can strand in the enlarged focused
-    /// appearance (PosterCell.resetStaleFocusAppearance handles the in-place
-    /// unfocus case, but not this one). When focus returns INTO the collection,
-    /// clear the stale appearance on every visible poster except the one focus
-    /// just landed on. Appearance-only — does not touch focusability.
+    /// Focus leaving the whole collection sends no per-cell unfocus, so a TVPosterView can stay enlarged.
+    /// When focus returns, clear that look on every visible poster but the newly focused one.
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
@@ -2017,14 +1906,9 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Initial focus (hero Play)
 
-    /// Launch focus must land on the hero's Play button, not on whatever the
-    /// engine's default pick finds first (on cold launch that was an
-    /// off-screen Continue Watching tile — focus existed but nothing visibly
-    /// focused, and Down skipped a row). Initial focus is asserted explicitly:
-    /// while this flag is set, preferredFocusEnvironments routes to the hero
-    /// cell (whose overlay chain + the secondary-button gate land on Play).
-    /// Cleared the moment the hero receives focus or the user makes any
-    /// directional move, so focus is never yanked mid-navigation.
+    /// Launch focus lands on the hero's Play, not the engine's default (an off-screen CW tile). While
+    /// set, preferredFocusEnvironments routes to the hero; cleared once the hero has focus or the user
+    /// moves.
     private var needsInitialHeroFocus = true
 
     private var heroSectionIndex: Int? {
@@ -2160,31 +2044,12 @@ final class PlexHomeViewController: UIViewController {
         backdropView.isHidden = !showHomeHero
     }
 
-    /// SwiftUI: `.padding(.top, heroActive ? 0 : 48)`. When hero is off we
-    /// give the first row some breathing room from the top edge. Also
-    /// reserves space below the connection banner when it's visible
-    /// (mirrors SwiftUI's banner positioning above the content).
+    /// Top inset: 0 with the hero, otherwise room for the first row.
     private func updateContentTopInset() {
-        // Search reads the SAFE AREA, because that is how the search controller
-        // hands us its chrome height. It does NOT size the results view below
-        // the keyboard — measured on tvOS 26.5, the view stays full screen at
-        // (0,0) 1920x1080 and publishes `safeAreaInsets.top = 306` (field
-        // 60..130, keyboard 165..231, separator 274). This page sets
-        // `contentInsetAdjustmentBehavior = .never` for the hero's full-bleed
-        // layout, so that 306 is dropped on the floor unless it is read here,
-        // and the recents row drew from y=0 straight through the keyboard.
-        // Reading only the top keeps `.never` doing its job on the sides: the
-        // chrome also publishes an 80pt left/right inset, which would shift
-        // every full-bleed row off its tuned leading margin.
-        //
-        // `viewSafeAreaInsetsDidChange` re-runs this, so the inset tracks the
-        // chrome collapsing when focus moves into the results and growing back
-        // when it returns.
-        //
-        // With no hero the first row's title IS the top of the page, and the
-        // collapsed sidebar pill draws over it (#298), so clear the pill rather
-        // than just giving the row breathing room. Search has the pill
-        // suppressed instead (`TVSidebarView`), so it needs no pill clearance.
+        // Search reads the safe area: measured on tvOS 26.5, the results view stays full screen and
+        // publishes `safeAreaInsets.top = 306` for the keyboard chrome, which `.never` would drop. Only the
+        // top is read, since the 80pt side insets would shift every row. With no hero, clear the sidebar
+        // pill (#298); Search hides the pill instead.
         var noHeroTop = ShellPillMetrics.contentClearance
         if case .search = mode { noHeroTop = view.safeAreaInsets.top }
         let topInset: CGFloat = showHomeHero ? 0 : noHeroTop
@@ -2220,10 +2085,8 @@ final class PlexHomeViewController: UIViewController {
     }
 
     private func updateBackdropForCurrentHeroItem() {
-        // Discover, provider libraries and a Home with Jellyfin signed in: hero
-        // items are MediaItem-backed, not the Plex heroItems array — without
-        // this branch the guard below NILs the backdrop (the first slide
-        // rendered with no image until paged).
+        // Discover, provider libraries and a Jellyfin Home use MediaItem hero items; without this branch
+        // the guard below clears the backdrop.
         var isMediaItemHero = providerLibrary != nil
         if case .discover = mode { isMediaItemHero = true }
         let isHomeMediaHero = { if case .home = mode { homeHeroSource != .plex } else { false } }()
@@ -2276,20 +2139,15 @@ final class PlexHomeViewController: UIViewController {
         setHeroBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster, paging: paging)
     }
 
-    /// Discover hero Play (pill in `.play` mode — library-matched items only):
-    /// opens the matched item's detail page, the same destination SwiftUI's
-    /// `onPresentPlex` pushed. Unmatched items never reach here (their pill is
-    /// the Watchlist toggle), but fall back to the carousel defensively.
+    /// Discover hero Play, shown only for library-matched items: plays the match directly, falling back
+    /// to the carousel.
     private func discoverHeroPlay(_ item: MediaItem) {
         guard let heroTMDB = discoverListItems[.hero],
               let index = heroIndex(of: item, in: heroTMDB)
         else { return }
         let tmdbItem = heroTMDB[index]
         Task { @MainActor in
-            // Matched in the library → PLAY the file directly (same path as the
-            // home hero's Play button), not the SwiftUI detail stack. Only the
-            // library-matched hero shows a Play button at all; unmatched items
-            // show Watchlist and never reach here.
+            // Matched in the library: play the file directly, like the home hero's Play.
             if let metadata = await discoverModel.libraryMatch(for: tmdbItem) {
                 playItemDirectly(metadata)
             } else {
@@ -2536,15 +2394,8 @@ final class PlexHomeViewController: UIViewController {
             // Without Plex the Plex store's error ("Not authenticated") is not
             // this Home's: a Jellyfin-only Home takes the empty state instead.
             hubsError = authManager.hasCredentials ? dataStore.hubsError : nil
-            // The home renders from the MediaItem projection (Stage 3), so
-            // "empty" must key STRICTLY off `homeItems`. Do NOT fall back to
-            // `hubs`: on a cold sign-in the `/hubs` fetch populates `hubs`
-            // before `homeItems` is projected (the projection also needs
-            // Continue Watching + per-library hubs). A `hubs`-based fallback
-            // would report not-empty while zero rows render, sending us down
-            // the content path with an empty collection — a blank, unfocusable
-            // Home that traps the focus engine. See
-            // Docs/bugs/fresh-signin-blank-home.md.
+            // "Empty" keys off `homeItems`, never `hubs`: on a cold sign-in `hubs` fills before the
+            // projection, and a hubs-based check takes the content path with no rows, a blank unfocusable Home.
             // Visible rows only: rows that are all hidden must take the empty
             // state, never the content path with nothing in it.
             hubsEmpty = dataStore.homeItems.isEmpty && jellyfin.visibleHomeRows.isEmpty
@@ -2575,12 +2426,8 @@ final class PlexHomeViewController: UIViewController {
             // empty. Giving Discover a real error state means teaching the
             // service to report one.
             hubsError = nil
-            // Empty means NOTHING to show, not "no hero". The hero picks and the
-            // curated lists come from INDEPENDENT TMDB fetches, so a hero-only
-            // failure used to hide fully-populated rows behind the empty state.
-            // That branch sets `collectionView.isHidden = true`, which left the
-            // Refresh button as the only focusable thing on the page — nothing
-            // below it, so Down did nothing.
+            // Empty means nothing to show, not "no hero": hero picks and curated lists are independent TMDB
+            // fetches, and the empty state hides the collection.
             hubsEmpty = discoverModel.heroItems.isEmpty
                 && discoverModel.forYou.isEmpty
                 && TMDBDiscoverSection.allCases.allSatisfy { discoverModel.items(for: $0).isEmpty }
@@ -2646,20 +2493,11 @@ final class PlexHomeViewController: UIViewController {
             let wasUnfocusable = collectionView.isHidden
             stateView.isHidden = true
             collectionView.isHidden = false
-            // A hidden collection view is invisible to the focus engine, so
-            // while this page was loading there was nothing on it to focus and
-            // focus parked outside it. Un-hiding does not make the engine look
-            // again — tell the shell to re-drive. The error and empty branches
-            // above have their own `setNeedsFocusUpdate()`; only the content
-            // path was silent, which is why Discover (the one surface that sits
-            // in `.loading` long enough to matter) came up dead.
+            // A hidden collection is invisible to the focus engine and un-hiding does not make it look
+            // again, so tell the shell to re-drive.
             if wasUnfocusable, case .collection = mode {
-                // Collection page: a modal, so the shell's re-drive does
-                // nothing for it (its handler no-ops once the library tab has
-                // held focus). Page 0's snapshot was applied while the
-                // collection view was hidden, so no cell existed until now:
-                // lay out, then ask for the first tile explicitly. Focus sits
-                // on this page's own anchor, so the request is honoured.
+                // Collection page: a modal, where the shell's re-drive does nothing. Page 0 was applied while
+                // hidden, so lay out and request the first tile explicitly.
                 collectionView.layoutIfNeeded()
                 if let cell = collectionView.cellForItem(at: IndexPath(item: 0, section: 0)),
                    let system = UIFocusSystem.focusSystem(for: collectionView) {
@@ -2684,17 +2522,10 @@ final class PlexHomeViewController: UIViewController {
             if showsLoading { setNeedsFocusUpdate() }
         }
 
-        // Splash handoff: the launch splash (ContentView) dismisses on
-        // dataStore.isHomeContentReady. The retired SwiftUI PlexHomeView was
-        // the only thing that ever set it true — without this, every cold
-        // launch since the UIKit cutover rode the splash's full 15s safety
-        // timeout. Ready = any SETTLED state (content, empty, error): the
-        // splash exists to cover the initial load, not to mask outcomes.
+        // Splash handoff: the launch splash dismisses on dataStore.isHomeContentReady, set on any settled
+        // state (content, empty, error). Without it the splash rides its 15s timeout.
         if hasCredentials, !(isLoadingHubs && hubsEmpty), !isWaitingForHero, !dataStore.isHomeContentReady {
-            // Deferred: updateHomeState can run inside viewDidLoad during a
-            // SwiftUI view update (the bridge's makeUIViewController), and
-            // publishing @Published state there logs "Publishing changes from
-            // within view updates" / undefined behavior.
+            // Deferred: this can run inside a SwiftUI view update, where publishing is not allowed.
             Task { @MainActor in
                 dataStore.isHomeContentReady = true
             }
@@ -2732,44 +2563,23 @@ final class PlexHomeViewController: UIViewController {
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.delegate = self
         collectionView.contentInsetAdjustmentBehavior = .never
-        // Search: tell the search controller WHICH scroll view drives its
-        // chrome. It collapses the field out of the way as the results scroll
-        // and brings it back at the top, but only if it is watching the right
-        // scroll view; the header for this API says that with none set "UIKit
-        // uses a heuristic to search for one", and that heuristic is what made
-        // the chrome collapse on the way down and never come back on the way
-        // up. Wiring it means our own scroll-to-top restores the field.
+        // Search: name the scroll view that drives the search chrome. With none set UIKit guesses, and the
+        // guess collapsed the field on the way down and never restored it.
         if case .search = mode {
             setContentScrollView(collectionView, for: .top)
         }
-        // SwiftUI: `.padding(.top, heroActive ? 0 : 48)` on the content
-        // VStack. When the hero is off, the first row (Continue Watching)
-        // gets 48pt of breathing room at the top of the scroll.
+        // No hero: 48pt of room above the first row.
         updateContentTopInset()
-        // NOT in search mode. The search page swaps its content wholesale
-        // between the prompt/recents cell and grouped result grids, so the
-        // remembered path routinely names a cell that no longer exists. When
-        // the engine tries to enter the collection with an invalid remembered
-        // path it resolves to nothing and produces NO focus update at all,
-        // which is exactly why Down off the keyboard reached the results after
-        // a search and did nothing on the empty page. Preview-dismiss focus
-        // restore is a separate mechanism (`pendingPreviewRestore`).
+        // Not in search mode: its content swaps wholesale, and an invalid remembered path makes the engine
+        // produce no focus update at all. Preview-dismiss restore uses `pendingPreviewRestore`.
         if case .search = mode {
             collectionView.remembersLastFocusedIndexPath = false
         } else {
             collectionView.remembersLastFocusedIndexPath = true
         }
         collectionView.clipsToBounds = false
-        // Take over the vertical focus-scroll. Left enabled, the focus engine
-        // runs its OWN scroll animator whenever focus moves between rows, and
-        // that animator races the per-frame CADisplayLink driver in
-        // `animateContentOffset`. Two clocks writing `contentOffset` on
-        // different curves is what reads as the "moves, then slows, then moves
-        // again" stutter. Disabling it stops the engine's focus-scroll; we
-        // drive every vertical move ourselves from `didUpdateFocusIn`. The
-        // orthogonal rows keep their own inner horizontal scroller, so Left/
-        // Right within a row is unaffected. (Same pattern the detail view uses
-        // in FocusScrollControlledCollectionView.)
+        // We drive every vertical move from `didUpdateFocusIn`. Left enabled, the engine's own scroll
+        // animator races the CADisplayLink driver in `animateContentOffset` and stutters.
         collectionView.isScrollEnabled = false
 
         // Select long-press on a grid tile → tile action menu. Our own
@@ -2966,12 +2776,7 @@ final class PlexHomeViewController: UIViewController {
         return section
     }
 
-    /// Single full-width cell for the recommendations-loading / error
-    /// inline states. SwiftUI rendering uses `padding(.horizontal,
-    /// rowHorizontalPadding=48)` + `.padding(.vertical, 24)` for loading
-    /// and `.padding(.vertical, 12)` for error -- we use 24 as the
-    /// average; the cell handles its own internal padding via its
-    /// rowStack constraints.
+    /// Single full-width cell for the recommendations loading and error states; the cell pads itself.
     private func makeRecommendationsStateLayout() -> NSCollectionLayoutSection {
         let itemSize = NSCollectionLayoutSize(
             widthDimension: .fractionalWidth(1),
@@ -3011,14 +2816,8 @@ final class PlexHomeViewController: UIViewController {
         return root.presentedViewController == nil
     }
 
-    /// One full-width ShelfRowCell per hub section. The row hosts its own
-    /// horizontal collection view and drives its own scroll — NOT an
-    /// orthogonal section. Measured behavior of the embedded orthogonal
-    /// scroller on tvOS (settle-log verified, 2026-06-10): focus landings
-    /// always pin a tile's leading edge to the raw screen edge, ignoring
-    /// section contentInsets / scroller contentInset / isScrollEnabled, so a
-    /// left-side peeking sliver is impossible and the at-rest margin is lost
-    /// on the first scroll. See ShelfRowCell for the self-driven landing math.
+    /// One full-width ShelfRowCell per hub section, scrolling itself rather than an orthogonal section
+    /// (see ShelfRowCell for why and for the landing math).
     private func makeHubSectionLayout(section: HomeSectionData, isContinueWatching: Bool) -> NSCollectionLayoutSection {
         let tileHeight: CGFloat = isContinueWatching
             ? MediaRowMetrics.cwHeight
@@ -3131,9 +2930,7 @@ final class PlexHomeViewController: UIViewController {
         let section = sectionsSnapshot[indexPath.section]
         let perfKey = "\(itemID.sectionID.raw):\(itemID.itemID)"
 
-        // Skeleton item: SwiftUI shows a placeholder card at the row's end
-        // while pagination is in flight. We add a synthetic itemID with a
-        // fixed sentinel; recognise it here and dequeue a skeleton cell.
+        // Skeleton: a sentinel itemID at the row's end while a page loads.
         if itemID.itemID == HomeItemID.skeletonSentinel {
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: PosterSkeletonCell.reuseID, for: indexPath) as! PosterSkeletonCell
             cell.configure(layout: section.kind == .continueWatching ? .continueWatching : .poster)
@@ -3295,11 +3092,8 @@ final class PlexHomeViewController: UIViewController {
     // MARK: - Data store observation
 
     private func observeDataStore() {
-        // Row content comes from the MediaItem projection now (Stage 2/3):
-        // `homeItemsVersion` drives home-mode rows, `libraryHubsVersion` drives
-        // library-mode rows (it's also bumped by projectLibraryItems). Both
-        // route through the coalescing `setNeedsSnapshotApply` so a burst of
-        // signals collapses to one apply per runloop turn (no double-paint).
+        // Rows come from the MediaItem projection: `homeItemsVersion` for Home, `libraryHubsVersion` for
+        // libraries. `setNeedsSnapshotApply` coalesces a burst into one apply per runloop turn.
         dataStore.$homeItemsVersion
             .merge(with: dataStore.$libraryHubsVersion)
             .receive(on: DispatchQueue.main)
@@ -3309,9 +3103,7 @@ final class PlexHomeViewController: UIViewController {
             }
             .store(in: &dataStoreObservers)
 
-        // `hubsVersion` no longer rebuilds rows (those come from the projection
-        // above). It still drives hero selection + state precedence: hero stays
-        // PlexMetadata-backed until Stage 4 and reads `dataStore.hubs`.
+        // `hubsVersion` drives hero selection and state precedence; the Plex hero reads `dataStore.hubs`.
         dataStore.$hubsVersion
             .merge(with: dataStore.$libraryHubsVersion)
             .receive(on: DispatchQueue.main)
@@ -3488,8 +3280,7 @@ final class PlexHomeViewController: UIViewController {
             }
             .store(in: &dataStoreObservers)
 
-        // Transient write-error toast. Mirrors SwiftUI
-        // `.watchlistToast(message: watchlistService.transientWriteError)`.
+        // Transient watchlist write-error toast.
         watchlistService.$transientWriteError
             .receive(on: DispatchQueue.main)
             .sink { [weak self] message in
@@ -3579,19 +3370,9 @@ final class PlexHomeViewController: UIViewController {
     /// tell a library-visibility change from any other defaults write.
     private var lastHomeLibraryKeys: Set<String>?
 
-    /// Re-derive the account-level (cross-library) Home content when the user
-    /// changes which libraries appear on Home.
-    ///
-    /// `LibrarySettingsManager` persists straight to UserDefaults with no
-    /// change notification of its own, and the Continue Watching row and the
-    /// hero are both filtered client-side from caches that were written under
-    /// the OLD visibility. Without this they stay wrong until the next 3-minute
-    /// poll.
-    ///
-    /// Keyed on `librariesPinnedToHome`, which is the set Home actually draws
-    /// rows from. An earlier version watched the sidebar set while the
-    /// projection ignored sidebar visibility entirely, so hiding a library
-    /// re-ran a projection that produced the same rows.
+    /// Re-derives Home's cross-library content when the libraries on Home change. `LibrarySettingsManager`
+    /// posts no notification, and CW and the hero are filtered from caches written under the old set.
+    /// Keyed on `librariesPinnedToHome`, the set Home draws rows from.
     private func reprojectIfHomeLibrariesChanged() {
         guard case .home = mode else { return }
         let keys = Set(dataStore.librariesPinnedToHome.map { $0.key })
@@ -3619,12 +3400,8 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Snapshot
 
-    /// Coalesce snapshot rebuilds. At launch 4-6 data signals fire in a burst
-    /// (cache paint -> hubsVersion, network refresh -> hubsVersion again,
-    /// continueWatchingHub, watchlistItems, hero selection...) and EACH was
-    /// triggering a full synchronous applySnapshot at 1.9-3.5s on device —
-    /// the SwiftUI home coalesced these for free, the UIKit port must do it
-    /// explicitly. One apply per main-runloop turn services the whole burst.
+    /// Coalesces snapshot rebuilds: 4-6 data signals burst at launch, each a full apply (1.9-3.5s on
+    /// device). One apply per main-runloop turn services the burst.
     private var snapshotApplyScheduled = false
     private func setNeedsSnapshotApply() {
         guard !snapshotApplyScheduled else { return }
@@ -3796,15 +3573,8 @@ final class PlexHomeViewController: UIViewController {
         )
     }
 
-    /// Bind a row's tile provider to a CAPTURED section value, so the count the
-    /// row is configured with and the array its tiles are read from are the same
-    /// snapshot. Looking the section up live in `sectionsSnapshot` on every
-    /// dequeue was a second source of truth: the inner collection's item count
-    /// comes from the row's own cached `realCount`, so once a section's items
-    /// shrank between a row's last configure and a tile being realized (a hub
-    /// refresh dropping a paginated-in extra), every index past the NEW count
-    /// vended the pagination skeleton — a stray empty placeholder mid-row, next
-    /// to tiles realized while the two counts still agreed.
+    /// Binds a row's tile provider to a captured section value, so the row's count and its tiles come
+    /// from one snapshot. A live lookup disagreed with the row's `realCount` and left skeletons mid-row.
     private func bindShelfCellProvider(_ cell: ShelfRowCell, section: HomeSectionData) {
         cell.cellProvider = { [weak self] innerCV, indexPath in
             self?.shelfItemCell(in: innerCV, at: indexPath, section: section)
@@ -3945,7 +3715,7 @@ final class PlexHomeViewController: UIViewController {
         case .hero, .watchlist, .watchlistGrid, .recommendations, .grid, .discoverList,
              .recommendationsLoading, .recommendationsError, .sortHeader,
              .searchPrompt, .searchState, .searchGrid:
-            return  // No pagination for these (matches SwiftUI hubKey == nil)
+            return  // No pagination for these (hubKey == nil)
         }
         guard itemIndex >= section.items.count - 5 else { return }
         Task { @MainActor in
@@ -4200,8 +3970,7 @@ final class PlexHomeViewController: UIViewController {
                                             sourceFrame: focusedTileFrame()), animated: false)
     }
 
-    /// Discover tile menu — mirror of SwiftUI `TMDBContextMenu`: Details when
-    /// the item is library-matched, watchlist add/remove for everything.
+    /// Discover tile menu: Details when library-matched, watchlist add or remove for everything.
     private func presentDiscoverTileMenu(sectionID: HomeSectionID, itemIndex: Int) {
         guard let tmdbItems = discoverListItems[sectionID],
               itemIndex < tmdbItems.count else { return }
@@ -4251,9 +4020,8 @@ final class PlexHomeViewController: UIViewController {
         presentTileMenu(sections: [actions])
     }
 
-    /// Watchlist tile menu. Items are `PlexWatchlistItem`s (not `MediaItem`s),
-    /// so this doesn't reuse the watched/unwatched menu: jump to details (same
-    /// as tapping the tile) and remove from the watchlist.
+    /// Watchlist tile menu: details and remove. Entries are `PlexWatchlistItem`s, so the watched menu
+    /// does not apply.
     private func presentWatchlistTileMenu(sectionID: HomeSectionID, itemIndex: Int) {
         guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id == sectionID }) else { return }
         let section = sectionsSnapshot[sectionIndex]
@@ -4351,12 +4119,8 @@ final class PlexHomeViewController: UIViewController {
             if !items.isEmpty { sections.append(.discoverHero(items: items)) }
         }
 
-        // Continue Watching + Recently-Added-per-library rows come from the
-        // MediaItem projection (`dataStore.homeItems`). The projection mirrors
-        // computeSections' old row set 1:1 (same HomeSectionID/title/
-        // isContinueWatching/hubKey/hubIdentifier), so each CachedHomeHub maps
-        // straight to a HomeSectionData — no PlexMetadata materialized here.
-        // Jellyfin's rows sit beside Plex's, paired by server (`homeRail`).
+        // CW and per-library Recently Added rows come from `dataStore.homeItems`; each CachedHomeHub maps
+        // straight to a HomeSectionData. Jellyfin's rows sit beside Plex's, paired by server (`homeRail`).
         let labelsServers = jellyfin.labelsServers
         for (hub, kind) in Self.homeRail(plex: dataStore.homeItems, jellyfin: jellyfin.visibleHomeRows) {
             let id = HomeSectionID(raw: hub.id)
@@ -4401,8 +4165,7 @@ final class PlexHomeViewController: UIViewController {
             } else if !recommendations.isEmpty {
                 sections.append(.recommendations(items: mapToMediaItems(recommendations)))
             }
-            // else: no section (matches SwiftUI's silent dropout when the
-            // user has enabled recs but the service returned nothing).
+            // else: no section when recommendations come back empty.
         }
 
         return sections
@@ -4510,16 +4273,8 @@ final class PlexHomeViewController: UIViewController {
             }
         }
 
-        // Library hub rows come from the per-library MediaItem projection
-        // (`dataStore.libraryItemsByKey[key]`), mirroring computeLibrarySections'
-        // old row set 1:1 (one row per library hub in Plex's order, de-duped by
-        // hub identity, hero/sort-header/grid excluded). No PlexMetadata
-        // materialized here.
-        //
-        // Row visibility gates ("Recent Rows" / "Discovery Rows"). Applied here,
-        // at render time, and never in `projectLibraryItems` — that writes the
-        // on-disk rail, so filtering there would persist a UI preference and a
-        // later toggle-on would repaint from the pruned cache.
+        // Library hub rows come from `dataStore.libraryItemsByKey[key]`. The Recent and Discovery Rows
+        // gates apply here at render time, never in `projectLibraryItems`, which writes the on-disk rail.
         let showRecentRows = (UserDefaults.standard.object(forKey: "showLibraryRecentRows") as? Bool) ?? true
         let showDiscoveryRows = (UserDefaults.standard.object(forKey: "showLibraryRecommendations") as? Bool) ?? true
 
@@ -4639,21 +4394,13 @@ final class PlexHomeViewController: UIViewController {
         return (hub.title ?? "").lowercased().contains("continue")
     }
 
-    /// For a section with pagination state, return the merged item list
-    /// (initial items + everything paginated in) and the current total
-    /// size if known. If the state dict has no entry yet, seed it. Operates
-    /// on `[MediaItem]`, deduping by `ref.itemID` (Stage 2).
+    /// Merged items (initial plus paginated-in) and total size for a section, seeding its state on
+    /// first use. Dedupes by `ref.itemID`.
     private func mergedItems(forSection id: HomeSectionID, initial: [MediaItem])
     -> (items: [MediaItem], totalSize: Int?) {
         if var state = paginationStates[id] {
-            // The fresh projection is ALWAYS the authoritative head; only
-            // paginated-in extras survive from the accumulated state. A hub
-            // refresh can reorder items or advance their viewOffset without
-            // changing the item SET — the old "rebuild only when initial has
-            // unseen items" subset check treated that as no-change and kept
-            // rendering the stale accumulated copy, which froze Continue
-            // Watching's order and progress no matter how fresh the data
-            // store was.
+            // The fresh projection is always the head; only paginated-in extras survive. A refresh can reorder
+            // or advance progress without changing the item set.
             let initialKeys = Set(initial.map { $0.ref.itemID })
             // An extra survives only if it was actually paginated in AND the
             // head doesn't cover it now. Items the head has since absorbed
@@ -4709,13 +4456,8 @@ final class PlexHomeViewController: UIViewController {
     private static let heroItemCap = 9
     private static let heroTMDBMinMatches = 3
 
-    /// Hero slot resolution. `.loading` keeps the hero section in the
-    /// snapshot as a fixed-height placeholder (spinner) so rows below never
-    /// shift when the trending hero lands. `.unavailable` means TMDB and the
-    /// hub fallback both resolved empty on settled hubs — the slot is given
-    /// up and selection won't re-show the placeholder (a later GUID-index
-    /// update or hub refresh can still apply content directly via
-    /// `resolveHeroWithHubFallback` / the upgrade path).
+    /// Hero slot state. `.loading` holds a fixed-height placeholder so rows never shift. `.unavailable`
+    /// gives the slot up once TMDB and the hub fallback both come back empty on settled hubs.
     private enum HeroState { case idle, loading, loaded, unavailable }
     private var heroState: HeroState = .idle
 
@@ -4734,9 +4476,8 @@ final class PlexHomeViewController: UIViewController {
     private func selectHeroItemsIfNeeded() {
         guard showHomeHero else { return }
 
-        // Hero source + cache slot per mode: the home draws from the global
-        // hubs under the "home" cache key; a library page draws from its own
-        // hubs under its library key (same scheme the SwiftUI library used).
+        // Hero source and cache slot: Home uses the global hubs under "home", a library its own hubs
+        // under its library key.
         let cacheKey: String
         let sourceHubs: [PlexHub]
         switch mode {
@@ -4747,7 +4488,7 @@ final class PlexHomeViewController: UIViewController {
             cacheKey = "home"
             sourceHubs = dataStore.hubs
         case .library(let key, _):
-            if providerLibrary != nil { return }  // MediaItem hero, Task 6
+            if providerLibrary != nil { return }  // MediaItem hero
             cacheKey = key
             sourceHubs = dataStore.libraryHubs[key] ?? []
         }
@@ -4828,19 +4569,9 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Drops hero candidates belonging to a library the user removed from Home.
-    ///
-    /// The home hero is fed by the account-level `/hubs` (cross-library by
-    /// construction) and by `LibraryGUIDIndex` trending matches (which index
-    /// every library on the server). Rivulet's shown-on-Home set is client-side
-    /// UserDefaults that Plex never sees, so neither source honours it and a
-    /// hidden library keeps supplying hero slides — visibly duplicated for
-    /// anyone running mirrored libraries. Only `PlexMetadata` carries the
-    /// section attribution, so this is the last point at which it can be
-    /// applied. Fails open on an unloaded library list; see
-    /// `PlexLibraryVisibilityFilter`.
-    ///
-    /// A library-scoped hero is already single-library, so it is left alone.
+    /// Drops hero candidates from libraries removed from Home. Neither `/hubs` nor `LibraryGUIDIndex`
+    /// knows the client-side Home set, and only PlexMetadata carries section attribution, so this is the
+    /// last place to apply it. Fails open on an unloaded library list. Library heroes are left alone.
     private func heroItemsVisibleOnHome(_ items: [PlexMetadata]) -> [PlexMetadata] {
         switch mode {
         case .home:
@@ -4880,13 +4611,8 @@ final class PlexHomeViewController: UIViewController {
         return []
     }
 
-    /// Pure async helper. Returns up to `cap` library items chosen from TMDB
-    /// trending, filtered to items the user already owns.
-    ///
-    /// `type == nil` (home): interleaves Trending Movies + Trending TV,
-    /// preserving today's behavior byte-for-byte. `type == .movie` / `.tv`
-    /// (a typed library): fetches only that single trending section, so the
-    /// hero stays pure single-type for that library.
+    /// Up to `cap` owned library items from TMDB trending. `type == nil` (Home) interleaves movies and
+    /// TV; a typed library fetches only its own type.
     static func computeTMDBHero(cap: Int, type: TMDBMediaType? = nil) async -> [PlexMetadata] {
         let indexEmpty = await LibraryGUIDIndex.shared.isEmpty
 
@@ -5125,14 +4851,8 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Direct play
 
-    /// MediaItem entry point for Continue-Watching play (tile tap + the CW
-    /// context menu's "Watch from Beginning"). The home now renders rows from
-    /// MediaItem, but the player VM + resume flow genuinely need a PlexMetadata
-    /// (Stage 4 keeps direct-play on PlexMetadata). We resolve the metadata
-    /// lazily by ratingKey — the same escape hatch the preview carousel uses at
-    /// play — then forward to the existing PlexMetadata flow. The resume-or-
-    /// restart decision is driven off the MediaItem so the prompt appears
-    /// instantly without waiting on the metadata fetch.
+    /// Continue Watching play (tile tap and "Watch from Beginning"). The player needs PlexMetadata,
+    /// resolved lazily by ratingKey; the resume prompt reads the MediaItem so it shows without waiting.
     private func playItem(_ item: MediaItem, fromBeginning: Bool = false, sourceID: String? = nil) {
         // Every Home, library and search play routes here. Only the Plex path
         // resolves a ratingKey; any other item plays through its own provider,
@@ -5206,8 +4926,7 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Mirrors the SwiftUI `playItemDirectly` flow including the
-    /// resume-or-restart prompt (when `promptResumeOrRestart` is on).
+    /// Plays a PlexMetadata item, with the resume-or-restart prompt when `promptResumeOrRestart` is on.
     private func playItemDirectly(_ item: PlexMetadata, fromBeginning: Bool = false, mediaID: String? = nil) {
         if promptResumeOrRestart,
            !fromBeginning,
@@ -5292,11 +5011,8 @@ final class PlexHomeViewController: UIViewController {
     }
 
 
-    /// Navigate to detail for a MediaItem (tile-menu "More Info" /
-    /// "Go to …") — always the UIKit surfaces: episodes and seasons get the
-    /// title-first detail page, everything else the standalone expanded detail
-    /// (the same page a hero Info press opens). The SwiftUI detail stack is not
-    /// used from the tile menu.
+    /// Detail for a MediaItem (tile-menu "More Info", "Go to"): the detail page for episodes and seasons,
+    /// the standalone expanded detail for everything else.
     private func selectMediaItem(_ item: MediaItem) {
         if item.kind == .episode || item.kind == .season {
             let page = MediaItemDetailPageViewController(
@@ -5312,14 +5028,7 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Open the new UIKit detail page (`MediaItemDetailPageViewController`) for a
-    /// hero item — the hero Info ("i") button. Mirrors how the carousel presents
-    /// the same page. Play inside the page closes it first, then routes to the
-    /// hero's normal play flow (so the player / resume prompt isn't presented
-    /// underneath the detail page).
-    /// Hero Info (all modes): the FULL expanded detail presented standalone —
-    /// the same surface the carousel's Related drill-ins open (one item,
-    /// already expanded, Menu dismisses, no collapse back to a carousel).
+    /// Hero Info: the full expanded detail, presented standalone (one item, Menu dismisses).
     private func presentDetailPage(for meta: PlexMetadata) {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return }
@@ -5405,13 +5114,8 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Preview presentation
 
-    /// Opens a collection tile on its own page. Returns false for anything
-    /// that is not a collection, so the caller carries on as before.
-    ///
-    /// The walk covers the whole modal stack, not only what sits above
-    /// `presenter`: a member's detail is presented ON TOP of the page it came
-    /// from, so the loop page → member → trailing collection tile finds the
-    /// page below it and unwinds to it instead of stacking a second one.
+    /// Opens a collection tile on its own page; false for anything else. Walks the whole modal stack, so
+    /// page, member, collection tile unwinds to the existing page instead of stacking a second.
     @discardableResult
     static func openCollectionIfNeeded(_ item: MediaItem,
                                        from presenter: UIViewController,
@@ -5482,10 +5186,8 @@ final class PlexHomeViewController: UIViewController {
         guard !pairs.isEmpty else { return }
 
         let tapped = allEntries[tappedIndex]
-        // Match on the originating watchlist entry id — robust across both
-        // library-matched (Plex ratingKey) and TMDB-only itemID encodings,
-        // and tolerant of entries that get skipped during mapping. Mirrors
-        // SwiftUI WatchlistHubRow's tap-resolution fix (commit `bb15fdb`).
+        // Match on the originating watchlist entry id, which survives both itemID encodings and skipped
+        // entries.
         let validIndex = pairs.firstIndex(where: { $0.sourceID == tapped.id }) ?? 0
         let mediaItems = pairs.map(\.item)
         let sourceItemIDs = pairs.map(\.sourceID)
@@ -5509,25 +5211,16 @@ final class PlexHomeViewController: UIViewController {
         )
     }
 
-    /// Mirrors `WatchlistHubRow.buildMediaItems(from:)` — parallel library
-    /// lookups against the GUID index, with TMDB fallback for unmatched
-    /// entries. Returns `(sourceID, item)` pairs so callers can match on
-    /// the originating watchlist entry id (see `openWatchlistPreview`).
+    /// Parallel GUID-index lookups with TMDB fallback. Returns `(sourceID, item)` pairs so callers match
+    /// on the watchlist entry id.
     private func buildWatchlistMediaItems(from entries: [PlexWatchlistItem]) async -> [(sourceID: String, item: MediaItem)] {
         let serverURL = authManager.selectedServerURL ?? ""
         let token = authManager.selectedServerToken ?? ""
         let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
 
-        // Resolve each watchlist (Discover) item to the owned local library item so the detail shows
-        // Play + server art instead of a non-playable TMDB stub (issue #188). Two layers:
-        //
-        //   1. Warm path — the in-memory LibraryGUIDIndex, matching on ANY external guid the index
-        //      holds (type-safe tmdb first, then imdb/tvdb). No network when the bulk index is loaded.
-        //   2. Cold path — the bulk index loads ~20s after launch (and not at all on the very first
-        //      launch before that fetch finishes), so until then every index lookup misses. The
-        //      server does NOT index external guids for /library/all?guid=, but it DOES match the
-        //      primary plex:// guid, which Plex shares between Discover and the local server for
-        //      agent-matched titles. Resolve that directly so ownership works on cold/first launch.
+        // Resolve each entry to the owned library item so detail offers Play (#188). Warm: LibraryGUIDIndex
+        // on any external guid. Cold (the bulk index loads ~20s after launch): PMS does not match external
+        // guids on /library/all?guid=, but it does match the shared plex:// guid, so resolve that directly.
         let lookups = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
             for (index, entry) in entries.enumerated() {
                 let guids = entry.guids
@@ -5562,13 +5255,8 @@ final class PlexHomeViewController: UIViewController {
             return out
         }
 
-        // Enrich every item with its TMDB title logo (the same source Discover uses), and for un-owned
-        // items also fetch the TMDB landscape backdrop. The UIKit preview carousel renders artwork
-        // as-is (it does not enrich items the way Discover's PreviewOverlayHost does), so the logo —
-        // and, for un-owned items, the backdrop — must be present on the MediaItem before it is shown.
-        // Owned items already carry server art; their list-level metadata lacks a clearLogo, so the
-        // TMDB logo fills that gap (withLogoIfMissing never overwrites a real Plex logo). Network runs
-        // off the main actor; MediaItems are built on it.
+        // The carousel renders artwork as-is, so add the TMDB logo to every item (withLogoIfMissing keeps
+        // a real Plex logo) and the TMDB backdrop to un-owned ones. Network runs off the main actor.
         let tmdbSource = MetadataSourceRegistry.shared.source(for: TMDBMediaMapper.providerID)
         let enriched: [Int: (item: MediaItem?, logo: URL?)] = await withTaskGroup(
             of: (Int, MediaItem?, URL?).self
@@ -6019,27 +5707,8 @@ final class PlexHomeViewController: UIViewController {
         animateContentOffset(toY: clamped)
     }
 
-    /// Scroll whatever is focused right now fully on screen.
-    ///
-    /// Driven from OUTSIDE the focus delegate on purpose. The outer collection
-    /// view's `didUpdateFocusIn` does not reliably run for a tile inside a shelf
-    /// row's nested collection view — the nested view's own delegate takes it,
-    /// and that one only drives horizontal scroll — so the self-driven vertical
-    /// scroll never happened for search results. Measured symptom: focus sat on
-    /// row 1's first tile while the page was clamped at its bottom offset (223 ==
-    /// contentSize.height - bounds.height), putting row 1 at window y=32 under a
-    /// viewport starting at 207. Focus was correct and invisible, which reads as
-    /// Down and Up both skipping the first row.
-    /// Scroll a row fully into view and hand it focus. False if it cannot.
-    ///
-    /// Needed because the engine will not move to a row that is scrolled off the
-    /// collection's top edge, and revealing a lower row necessarily pushes the
-    /// one above off: two 492pt rows do not fit an 873pt viewport. On Search that
-    /// made Up out of row 2 land on the keyboard, skipping row 1 — the engine did
-    /// move, it just picked the only thing above that was still on screen.
-    /// Section index of the currently focused item, or nil when focus is not in
-    /// this page. Resolved from the focused VIEW, not an index path: tiles in
-    /// shelf rows live in a nested collection view and never resolve to one.
+    /// Section of the focused item, nil outside this page. Read from the focused view, because shelf
+    /// tiles live in a nested collection and never resolve to an index path.
     var focusedSectionForHandoff: Int? {
         guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
               focused.isDescendant(of: collectionView)
@@ -6047,6 +5716,8 @@ final class PlexHomeViewController: UIViewController {
         return sectionIndex(forFocusedView: focused)
     }
 
+    /// Scrolls a row fully into view and hands it focus; false if it cannot. The engine will not
+    /// move to a row scrolled off the top, and two 492pt rows do not fit the 873pt Search viewport.
     func focusRow(_ target: Int) -> Bool {
         guard target >= 0, target < sectionsSnapshot.count else { return false }
         // Scroll NOT animated, and before the request: the cell has to exist and
@@ -6069,19 +5740,14 @@ final class PlexHomeViewController: UIViewController {
         return true
     }
 
+    /// Scrolls whatever is focused fully on screen. Driven from outside the focus delegate, since the
+    /// outer `didUpdateFocusIn` does not reliably run for a tile inside a shelf row's nested collection.
     func revealFocusedRowIfNeeded() {
         guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
               focused.isDescendant(of: collectionView)
         else { return }
-        // On Search, landing on the TOP row means the page belongs at its top,
-        // not merely scrolled far enough for that row to be visible.
-        //
-        // A minimal reveal leaves the row exactly where coming down from row 2
-        // put it, which is ~180pt higher than where the keyboard hand-off puts
-        // it: row 1 sat in two different places depending on how you reached it,
-        // and in the higher one it ran up under the search chrome. The hand-off
-        // down from the keyboard already scrolls to the top, so this is what
-        // makes the two directions agree.
+        // On Search the top row means the page's top, matching where the keyboard hand-off puts it;
+        // a minimal reveal leaves it ~180pt higher, under the search chrome.
         if case .search = mode, sectionIndex(forFocusedView: focused) == 0 {
             animateToContentTop()
             return
@@ -6142,11 +5808,8 @@ final class PlexHomeViewController: UIViewController {
         guard offsetLink == nil else { return }
         offsetVelocity = 0
         offsetLastTick = CACurrentMediaTime()
-        // WEAK proxy target: CADisplayLink retains its target strongly, and
-        // this VC has no deinit hook SwiftUI is guaranteed to trigger — a
-        // discarded instance (the launch double-build) with a live link would
-        // leak FOREVER, keeping its Combine observers firing and doubling
-        // every applySnapshot. The proxy self-invalidates once the VC dies.
+        // Weak proxy target: CADisplayLink retains its target, and a discarded instance with a live link
+        // would leak with its observers still firing. The proxy invalidates once the VC dies.
         let link = CADisplayLink(target: DisplayLinkProxy(self), selector: #selector(DisplayLinkProxy.tick(_:)))
         link.add(to: .main, forMode: .common)
         offsetLink = link
@@ -6327,17 +5990,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {
         guard indexPath.section < sectionsSnapshot.count else { return true }
         let kind = sectionsSnapshot[indexPath.section].kind
-        // Prompt/state cells host their own FocusableActionButtons (recents
-        // pills, Try Again). Keeping the CELL out of the focus chain does NOT
-        // let the engine reach those buttons: a collection view enumerates its
-        // focus items as CELLS, so a non-focusable cell's descendants are never
-        // offered and Down from the search keyboard found nothing to move to,
-        // with four focusable pills on screen. The cell takes focus only when
-        // it has a button, and redirects into it via
-        // `preferredFocusEnvironments`.
-        // Only as the way IN. With a button of its own focused, the full-width
-        // cell is the nearest Left candidate and redirects straight back to it,
-        // so Left never reached the shell's edge catcher.
+        // Prompt and state cells take focus only when they hold a button, and redirect into it: a collection
+        // offers its cells as focus items, so an unfocusable cell's buttons are never reached. Only on the
+        // way in, or Left from its own button bounces back and never reaches the shell's edge catcher.
         if kind == .searchPrompt || kind == .searchState,
            let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
            let cell = collectionView.cellForItem(at: indexPath), focused.isDescendant(of: cell) {
@@ -6348,23 +6003,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         return !isShelfKind(kind)
     }
 
-    /// Block Left-press focus escapes from a horizontally-scrolling row
-    /// when there are still cells to the left in the same row that have
-    /// scrolled offscreen.
-    ///
-    /// Bug: with `orthogonalScrollingBehavior = .continuous`, cells that
-    /// scroll outside the orthogonal viewport are removed from the focus
-    /// chain entirely. When the user presses Left on (say) item 8 of 20,
-    /// the focus engine doesn't see items 0–6 (offscreen, dequeued), so
-    /// it falls through to whatever is to the left of the collection
-    /// view — the sidebar. The sidebar briefly reveals before some other
-    /// focus mechanism snaps focus back. Annoying flicker.
-    ///
-    /// Fix: intercept the Left update. If the previously-focused cell is
-    /// not at item 0 of its section, block the system update and instead
-    /// scroll-to + focus the cell at `indexPath.item - 1`. The orthogonal
-    /// scroll view brings that cell back into the viewport so it can
-    /// regain focus.
+    /// Blocks a Left move that would escape to the sidebar while cells to the left in the row are
+    /// scrolled off and out of the focus chain; scrolls to and focuses `item - 1` instead.
     func collectionView(_ collectionView: UICollectionView,
                         shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
         guard context.focusHeading == .left,
@@ -6547,11 +6187,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         PreviewCarouselViewController.openShowDetail(showRef, from: self)
     }
 
-    /// Build the tile menu action groups for a cell — one sub-array per
-    /// divider-separated group. This is the CANONICAL long-press menu for
-    /// home rows + library grid — the only long-press menu in the app now
-    /// that the SwiftUI detail is gone. CW rows swap the watched
-    /// group for Remove-from-CW + Go-to-Show.
+    /// The canonical long-press menu for home rows and the library grid, one sub-array per divider group.
+    /// CW rows swap the watched group for Remove from CW and Go to Show.
     private func tileMenuSections(for item: MediaItem,
                                   isContinueWatching: Bool,
                                   shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) -> [[TileMenuAction]] {
@@ -6631,9 +6268,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // [Watch from Beginning, More Info, Go to Episode, Go to Show] | [watched state] |
         // [Refresh Metadata].
 
-        // Watch from Beginning: actually starts playback at 0:00. (The old
-        // SwiftUI menu only fired markUnwatched here without playing —
-        // misleading; the CW menu's play-from-start behavior is correct.)
+        // Watch from Beginning starts playback at 0:00.
         var first = [
             TileMenuAction(title: "Watch from Beginning",
                            systemImage: "arrow.counterclockwise") { [weak self] in
@@ -6845,9 +6480,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             if result.items.isEmpty {
                 freshState.hasReachedEnd = true
             } else {
-                // Map the page to MediaItem, then dedupe by ref.itemID
-                // (Stage 2). The SwiftUI/PlexMetadata path deduped by ratingKey;
-                // ref.itemID == ratingKey via PlexMediaMapper.item.
+                // Map the page to MediaItem, then dedupe by ref.itemID (the ratingKey).
                 let mapped = mapToMediaItems(result.items)
                 let existingKeys = Set(freshState.loadedItems.map { $0.ref.itemID })
                 let newItems = mapped.filter { item in
@@ -6869,8 +6502,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             paginationStates[sectionID] = freshState
             applySnapshot(animated: false)
         } catch {
-            // SwiftUI doesn't mark hasReachedEnd on error -- user can
-            // retry by continuing to scroll.
+            // No hasReachedEnd on error, so scrolling on retries.
             var freshState = paginationStates[sectionID] ?? state
             freshState.isLoadingMore = false
             paginationStates[sectionID] = freshState
@@ -6888,11 +6520,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
     }
 
-    /// Auto-scroll to keep the focused row visible — mirrors the SwiftUI
-    /// version's `onRowFocused` (`scrollProxy.scrollTo(rowID, anchor: .center)`).
-    /// We watch UIKit focus updates and centre the focused row in the
-    /// vertical viewport. The orthogonal (horizontal) scroll inside a row
-    /// is handled by `UICollectionView` automatically.
+    /// Centres the focused row vertically as focus moves.
     func collectionView(_ collectionView: UICollectionView,
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
@@ -6937,15 +6565,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // Focus left the page (sidebar, modal). Chrome must be back
             // before the sidebar can be interacted with.
             postFocusBelowTop(false)
-            // ...unless focus is still INSIDE the page and only the section
-            // lookup failed, which it does for a tile inside a shelf row's
-            // nested collection view. `isScrollEnabled = false` means the engine
-            // will not scroll for us, so bailing here left a focused row sitting
-            // off-screen: measured on Search with row 1 at window y=32 while the
-            // viewport starts at 207, focused and completely hidden behind the
-            // keyboard. That reads as "Down skipped the first row" when focus
-            // was on it the whole time. Reveal it from its own frame, which
-            // needs no section index.
+            // ...unless focus is inside the page and only the section lookup failed (a tile in a shelf row's
+            // nested collection). Nothing else scrolls for us, so reveal it from its own frame.
             if let next = context.nextFocusedView, next.isDescendant(of: collectionView) {
                 revealFocusedView(next)
             }
@@ -6960,23 +6581,13 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let kind: HomeSectionKind? = sectionsSnapshot.indices.contains(nextSectionIndex)
             ? sectionsSnapshot[nextSectionIndex].kind
             : nil
-        // The staged Menu back has landed; stop routing focus to the top. A
-        // directional move clears it too — if the top cell never took focus the
-        // flag would otherwise latch and yank focus back on some later,
-        // unrelated update. `needsInitialHeroFocus` additionally requires the
-        // move to start INSIDE the collection, because it is armed at launch
-        // when focus can arrive from the sidebar. This flag is only ever armed
-        // by handleMenuBack(), which already requires focus inside the
-        // collection, so that conjunct would be dead weight here.
+        // The Menu-back landed; stop routing focus to the top. A directional move clears it too, or the flag
+        // could latch and yank focus on a later update. Armed only from inside the collection.
         if wantsTopFocus, nextSectionIndex == topSectionIndex || !context.focusHeading.isEmpty {
             wantsTopFocus = false
         }
-        // Initial-hero routing ends once the hero has focus, or as soon as
-        // the user makes a directional move WITHIN the page (never yank focus
-        // mid-navigation). Directional entries from OUTSIDE (the sidebar)
-        // don't count — on a navigated-to surface like Discover that entry
-        // happens before the hero exists, and clearing on it would leave the
-        // launch focus stranded on a shelf tile.
+        // Initial-hero routing ends once the hero has focus or the user moves within the page. Entries from
+        // the sidebar don't count: on Discover they arrive before the hero exists.
         if needsInitialHeroFocus {
             let prevInside = context.previouslyFocusedView?.isDescendant(of: collectionView) == true
             // The loading placeholder parks focus but must not consume the
@@ -7056,15 +6667,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             return
         }
         let target = IndexPath(item: indexPath.item - 1, section: indexPath.section)
-        // Point the guide at the previous cell if it's already on screen.
-        // Critically: DO NOT preemptively scroll the row to bring the
-        // target into view -- that runs on every focus update (including
-        // Right / Up / Down moves) and produces a "row keeps re-centering
-        // under you" effect. UICollectionView prefetch usually keeps the
-        // adjacent cell warm anyway; if it doesn't, the guide will fail
-        // open (no redirect) and the system falls back to the existing
-        // `shouldUpdateFocusIn:` block in commit `d181fd1` which handles
-        // the discrete-Left case.
+        // Point the guide at the previous cell if it is on screen. Do not scroll the row to bring it in:
+        // this runs on every focus update and keeps re-centering the row. Otherwise `shouldUpdateFocusIn`
+        // handles the Left.
         if let cell = collectionView.cellForItem(at: target) {
             leftEdgeFocusGuide.preferredFocusEnvironments = [cell]
         } else {
@@ -7079,15 +6684,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         if let nextIndexPath = context.nextFocusedIndexPath {
             return nextIndexPath.section
         }
-        // `nextFocusedIndexPath` comes back nil at the collection level for two
-        // cases here: (1) the hero, whose focusable Play/Info buttons live in a
-        // SwiftUI subview rather than the cell itself, and (2) cells inside the
-        // orthogonal (continuous) rows, which don't resolve to a collection-level
-        // index path. Walk the focused view's superview chain to its enclosing
-        // collection-view cell and read its section. This matters now that
-        // `isScrollEnabled = false` hands us the vertical focus-scroll: the
-        // engine no longer masks a nil section by scrolling on its own, so a
-        // Down/Up move between orthogonal rows would otherwise fail to centre.
+        // `nextFocusedIndexPath` is nil for the hero (its buttons live in a subview) and for shelf-row
+        // tiles, so read the section from the focused view's enclosing cell. Without it, Up and Down
+        // between rows would fail to centre, since nothing else scrolls the page.
         return sectionIndex(forFocusedView: context.nextFocusedView)
     }
 
@@ -7109,10 +6708,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 // MARK: - Staged Menu back (issue #19)
 
 extension PlexHomeViewController: MenuBackHandling {
-    /// Stage 1: a Menu press from below the top row snaps the page back to its
-    /// top row instead of opening the sidebar. At the top row this declines, so
-    /// the system performs its native sidebar reveal (stage 2), and from there
-    /// `TVSidebarView.onExitCommand` returns to Home (stage 3).
+    /// A Menu press below the top row snaps the page back to it. At the top row this declines, so the
+    /// system reveals the sidebar, and `TVSidebarView.onExitCommand` returns to Home from there.
     func handleMenuBack() -> Bool {
         // Collection page mid blur-fade: asked before the library under it,
         // whose tile may still hold focus. Drop the press. Before the window
@@ -7145,19 +6742,8 @@ extension PlexHomeViewController: MenuBackHandling {
         return true
     }
 
-    /// Ride the page back to its top on the shared focus-scroll curve.
-    ///
-    /// The Search hand-off calls this when focus returns to the keyboard:
-    /// reaching a lower row leaves the page scrolled, and the search controller
-    /// does not scroll it back when its chrome grows again, so the rows sat over
-    /// the re-expanded keyboard. Animated rather than snapped because it plays
-    /// alongside the keyboard's own expansion, and `FocusScrollMotion.ease` is
-    /// the same curve as every other scroll on the page. The instant version
-    /// below cannot be used here: it reads as a jump before the keyboard opens.
-    ///
-    /// Safe to animate, unlike the focus-driven callers, because focus is on its
-    /// way OUT of the collection — there is no passing row for the engine to
-    /// re-resolve onto mid-flight.
+    /// Animates the page to its top on the shared focus-scroll curve, for the Search hand-off: it plays
+    /// alongside the keyboard expanding. Safe to animate because focus is leaving the collection.
     func animateToContentTop() {
         let top = -collectionView.adjustedContentInset.top
         guard abs(collectionView.contentOffset.y - top) > 1 else { return }
@@ -7175,14 +6761,8 @@ extension PlexHomeViewController: MenuBackHandling {
         collectionView.layoutIfNeeded()
     }
 
-    /// Scroll to the top row and mark it as the preferred focus target, WITHOUT
-    /// requesting a focus update.
-    ///
-    /// Split out because the requester is not always this controller.
-    /// `setNeedsFocusUpdate()` is ignored unless the environment asking for it
-    /// currently CONTAINS focus, so when Search hands off from the keyboard the
-    /// request has to come from `SearchContainerViewController` (which contains
-    /// both the keyboard and this page) while the aim is set here.
+    /// Scrolls to the top row and marks it the preferred focus target without requesting an update, for
+    /// a requester that contains focus (`SearchContainerViewController`).
     func aimFocusAtTopRow() {
         scrollToContentTop()
 
@@ -7195,16 +6775,8 @@ extension PlexHomeViewController: MenuBackHandling {
         }
     }
 
-    /// Snap to the top row and put focus there.
-    ///
-    /// The jump is deliberate. While the page is scrolled deep the top row's
-    /// cell has been recycled, so focus cannot be routed to a cell that does
-    /// not exist yet — and animating there first loses the race: the focus
-    /// engine re-resolves mid-flight, lands on whatever row is passing, and
-    /// scrolls that back into view (the page ends up one row higher instead of
-    /// at the top). Setting the offset and laying out first creates the cell,
-    /// so the focus request has somewhere to land. The scroll the viewer sees
-    /// is drawn over the jump afterwards (`playReturnToTopSlide`).
+    /// Snaps to the top row and focuses it. The jump is deliberate: animating loses to the engine, which
+    /// re-resolves mid-flight onto a passing row. `playReturnToTopSlide` draws the visible scroll after.
     private func returnToTopRow() {
         let travel = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
         let before = collectionView.snapshotView(afterScreenUpdates: false)
@@ -7212,8 +6784,7 @@ extension PlexHomeViewController: MenuBackHandling {
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
         playReturnToTopSlide(from: before, travel: travel)
-        // The hero's buttons live in a SwiftUI subview that may not be
-        // focusable until the next runloop turn; re-assert once it is.
+        // The hero's buttons may not be focusable until the next runloop turn; re-assert once they are.
         DispatchQueue.main.async { [weak self] in
             self?.nudgeInitialHeroFocusIfNeeded()
         }

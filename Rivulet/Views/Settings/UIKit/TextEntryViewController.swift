@@ -5,16 +5,9 @@
 //  TextEntryViewController.swift
 //  Rivulet
 //
-//  Text entry for a Settings row. Like tvOS Settings, it opens the system
-//  keyboard at once and Menu goes straight back to the row; the keyboard's
-//  only header is the field's placeholder, so the row's description panel
-//  carries any examples. A field with suggestions instead shows its own page
-//  (title, message, field, suggestion pills, one button), since the keyboard
-//  has nowhere to put them.
-//
-//  Commit vs cancel is explicit: the button or the keyboard's return key calls
-//  `onCommit` with the final text; Menu calls `onCancel`. The caller only
-//  writes on commit.
+//  Text entry for a Settings row: opens the system keyboard at once, as tvOS
+//  Settings does, or a page of its own when the field has suggestions. Return
+//  or the button calls `onCommit`, Menu calls `onCancel`.
 //
 
 import UIKit

@@ -1,30 +1,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  EpisodePicker.swift
-//  Rivulet
-//
-//  Which episode does "Play" mean when the user presses it on a season or a
-//  show? Shared by the carousel hero and the home hero so both agree.
-//
+// Which episode Play means on a season or show. Shared by the carousel and home heroes.
 
 import Foundation
 
 enum EpisodePicker {
 
-    /// The episode Play should start, given a season's episodes in server order.
-    ///
-    /// A season has no playable media of its own, so pressing Play on one has to
-    /// resolve to an episode:
-    ///
-    /// 1. An episode already in progress (`viewOffset > 0` and unwatched) —
-    ///    the user is midway through it, so resume rather than skip past.
-    /// 2. Otherwise the first **unplayed** episode.
-    /// 3. Otherwise (the whole season is watched) the first episode, so Play
-    ///    restarts the season rather than doing nothing.
-    ///
-    /// Returns nil only when `episodes` is empty.
+    /// The episode Play starts in a season: the one in progress, else the first unplayed,
+    /// else the first (a watched season restarts). Nil only when `episodes` is empty.
     static func firstUnplayed(in episodes: [MediaItem]) -> MediaItem? {
         let ordered = inPlaybackOrder(episodes)
         return ordered.first(where: { $0.userState.isInProgress })
@@ -32,16 +16,9 @@ enum EpisodePicker {
             ?? ordered.first
     }
 
-    /// The episode a Play press on `item` should start. `nil` if it can't be
-    /// resolved (no provider data), in which case the caller plays `item` as-is.
-    ///
-    ///  - movie / episode: plays itself (returned unchanged).
-    ///  - show: its Plex OnDeck episode; if nothing's started, the first
-    ///    season's first unplayed episode.
-    ///  - season: that season's first unplayed episode.
-    ///
-    /// Shared by the carousel's Play button and its title, so the title can
-    /// never disagree with what Play does.
+    /// What Play on `item` starts: itself for a movie or episode, On Deck for a show (else the
+    /// first season's pick), the pick for a season. Nil means the caller plays `item` as-is.
+    /// The Play button and its title both use it, so they always agree.
     static func resolvePlayTarget(
         for item: MediaItem, provider: MediaProvider
     ) async -> MediaItem? {
@@ -91,10 +68,7 @@ enum EpisodePicker {
         return "Play" + code
     }
 
-    /// Sort by season then episode number when those are present, so a caller
-    /// that hands us an unordered array still gets S01E01 before S01E02. Items
-    /// missing a number keep their relative position at the end (Plex normally
-    /// returns children already ordered; this is belt-and-braces).
+    /// Sorts by season then episode; an item missing either number keeps its server position.
     static func inPlaybackOrder(_ episodes: [MediaItem]) -> [MediaItem] {
         episodes.enumerated().sorted { lhs, rhs in
             let l = (lhs.element.seasonNumber, lhs.element.episodeNumber)
@@ -108,15 +82,8 @@ enum EpisodePicker {
 }
 
 extension MediaUserState {
-    /// Started but not finished. Plex marks an episode played via `viewCount`,
-    /// and keeps a resume position in `viewOffset` independently, so an item can
-    /// legitimately be both played and have an offset (a rewatch in progress).
-    /// "In progress" means the user has somewhere to resume TO and hasn't
-    /// finished it, which is why this is the one place that adds `!isPlayed`:
-    /// On Deck has to move past an episode the user has already finished.
-    ///
-    /// No runtime is available on this type, so this takes the position-only
-    /// overload of `WatchProgressPolicy.hasResumePoint`.
+    /// A resume point and not played. The one place that adds `!isPlayed`, so On Deck moves
+    /// past a finished episode. Position-only check: this type has no runtime.
     var isInProgress: Bool {
         WatchProgressPolicy.hasResumePoint(offsetSeconds: viewOffset) && !isPlayed
     }

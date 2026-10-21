@@ -5,14 +5,8 @@
 //  HomePromotedHubRowsTests.swift
 //  RivuletTests
 //
-//  Home renders the Plex server's promoted hub set (`/hubs`) rather than a row
-//  set Rivulet composes. `PlexDataStore` is a `private init()` singleton wired
-//  to shared network/cache/auth managers, so `projectHomeItems()` is not
-//  reachable from a unit test (same constraint `HomeRecentlyAddedCarryOverTests`
-//  documents). The two decisions in that loop that can actually be wrong are
-//  factored out as pure statics, and those are what these cover.
-//
-//  Both are grounded in a live PMS 1.43.3 `/hubs` response.
+//  Home renders the server's promoted `/hubs` set. Covers the two pure decisions
+//  factored out of `projectHomeItems()`, grounded in a PMS 1.43.3 response.
 //
 
 import XCTest

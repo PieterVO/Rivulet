@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PosterSkeletonCell.swift
-//  Rivulet
-//
-//  Loading-placeholder cell for the end of a paginating hub row, in both
-//  poster (portrait + title placeholder rows) and Continue Watching
-//  (landscape) variants. The placeholder rests where the tile's artwork does.
-//
-//  Two sizing modes are supported via `configure(isContinueWatching:)`:
-//   - false: portrait poster + two title placeholder rows
-//   - true:  wide landscape card, no title rows
-//
+// Loading placeholder at the end of a paginating hub row, resting where the tile's artwork does.
+// `configure(isContinueWatching:)` picks a portrait poster with two title rows or a landscape card.
 
 import UIKit
 

@@ -1,20 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  RecommendationsStateCell.swift
-//  Rivulet
-//
-//  Full-width loading / error state for the Personalized Recommendations
-//  row.
-//
-//   - Loading:  spinner + "Building Personalized Recommendations" +
-//               "This may take a moment"
-//   - Error:    yellow warning triangle + "Personalized Recommendations
-//               Unavailable" + error message + "Retry" button
-//
-//  When populated, the section uses standard PosterCells instead.
-//
+// Full-width loading and error state for the Personalized Recommendations row.
 
 import UIKit
 

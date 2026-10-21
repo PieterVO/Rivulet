@@ -1,23 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  BelowFoldCollectionView.swift
-//  Rivulet
-//
-//  The focus-driven below-fold for the expanded detail: a compositional
-//  UICollectionView (vertical sections, each an orthogonal horizontal row).
-//  Sections this pass: Episodes, Related, Cast & Crew (season pills are a
-//  follow-up). Fed by BelowFoldContentLoader. The outer vertical
-//  scrollViewDidScroll drives the hero choreography via `onScroll`
-//  (contentOffset.y + adjustedContentInset.top). See
-//  perf-spike/EXPANDED_DETAIL_CONVERSION_SPIKE.md §1.
-//
-//  Coexistence: this lives inside ExpandedDetailContainerView, hidden in
-//  carousel-stable, and is cross-faded in AFTER the expand morph completes
-//  (never on the morph clock — §6). At rest its episodes row peeks at the
-//  bottom (large top content inset), matching the placeholder peek position.
-//
+//  The detail's below-fold rows: a compositional collection of horizontal sections fed by
+//  BelowFoldContentLoader. Its vertical scroll drives the hero fades through `onScroll`; at
+//  rest a large top inset leaves the primary row peeking at the bottom.
 
 import UIKit
 
@@ -102,10 +88,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// Which sub-target of the focused episode card is focused (thumb vs
     /// description). Set from the cell's focus reporting.
     private(set) var focusedEpisodeKind: EpisodeFocusKind = .none
-    /// When the episode thumb most recently took focus. Up that lands on the
-    /// thumb within the same-press window (coming up from the description or a
-    /// lower row) must STICK on the thumb; only a deliberate Up from a resting
-    /// thumb lifts to the season pills.
+    /// When the episode thumb last took focus; see `episodeThumbJustTookFocus`.
     private var lastThumbFocusTime: CFTimeInterval = 0
 
     private var collectionView: FocusScrollControlledCollectionView!
@@ -144,20 +127,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
         collectionView = FocusScrollControlledCollectionView(frame: bounds, collectionViewLayout: makeLayout())
         collectionView.topBand = Self.detailsTopY
-        // Disable the collection's own (vertical) scrolling so the focus engine
-        // can't spin up its centering "focus scroll animator". We drive all
-        // vertical scroll ourselves (slide on entry, didUpdateFocus per section).
-        // Orthogonal (horizontal) row scrolling is a separate inner scroller.
+        // We drive vertical scroll, so the engine's centring focus-scroll animator stays off.
         collectionView.isScrollEnabled = false
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         collectionView.backgroundColor = .clear
         collectionView.delegate = self
         collectionView.contentInsetAdjustmentBehavior = .never
         collectionView.showsVerticalScrollIndicator = false
-        // OFF: "remember last focused" would win over indexPathForPreferredFocusedView
-        // and the geometric Down entry, so Down from a season pill snapped focus
-        // back to the remembered episode (season 1 ep0). Without it, Down enters
-        // the current season's first episode (nearest-visible / preferred index).
+        // Off: it beats the preferred index path, so Down from a pill would land on season 1.
         collectionView.remembersLastFocusedIndexPath = false
         collectionView.register(EpisodeCollectionCell.self, forCellWithReuseIdentifier: EpisodeCollectionCell.reuseID)
         collectionView.register(SeasonDividerCell.self, forCellWithReuseIdentifier: SeasonDividerCell.reuseID)
@@ -184,14 +161,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("BelowFoldCollectionView is not Storyboard-backed") }
 
-    /// Forward focus into the collection (the engine finds the first focusable cell).
-    ///
-    /// EXCEPT when restoring into a shelf-host row (Related) after a modal: that
-    /// row is one cell wrapping its own collection, so it cannot be expressed
-    /// through `indexPathForPreferredFocusedView` — returning the host path
-    /// makes the nested collection restart at item 0. Prefer the host CELL
-    /// directly instead, and its own `preferredFocusEnvironments` (armed by
-    /// `restoreShelfRowFocusIfNeeded`) lands the tile that had focus.
+    /// The collection, or when restoring a shelf row (Related) the host cell itself, whose
+    /// armed `preferredFocusEnvironments` lands the tile. Its index path would restart at item 0.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         if let shelf = armedShelfRestoreCell { return [shelf] }
         return [collectionView]
@@ -225,12 +196,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     private func makeLayout() -> UICollectionViewCompositionalLayout {
         let layout = UICollectionViewCompositionalLayout { [weak self] index, env in
             guard let self, self.sectionKinds.indices.contains(index) else { return nil }
-            // The FIRST section is the "primary peek row" — Episodes for shows,
-            // Related for movies. A large TOP inset on it provides the carousel-
-            // stable peek (it peeks at the bottom) AND the scroll distance that
-            // drives the Down slide + backdrop blur + chrome fade. Without this on
-            // the first section, movies (Trailers first) had a tiny inset, so the
-            // slide barely moved and the blur/fade never triggered.
+            // The first section's large top inset is both the peek and the scroll
+            // distance the Down slide and hero fades ride on.
             let isPrimary = (index == 0)
             let peek = max(0, self.bounds.height - Self.episodePeek - Self.detailsTopY)
             switch self.sectionKinds[index] {
@@ -265,13 +232,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     sectionBottomInset: 96
                 )
             case .related, .collection:
-                // The collection row shares this: on a movie with no trailers
-                // or extras it is the primary peek row, so it needs the same lift.
-                // Home-identical shelf: one full-width ShelfRowCell hosting
-                // the posters (margin, peek, pitch landings).
-                // As the primary row, lift the section by its own header (+ the
-                // section's 8pt pad) so the 40pt peek strip is POSTER, like the
-                // episodes row — the "Related" title rides just above it.
+                // As the primary row (also the collection row's case), lift by the header
+                // and 8 pt pad so the 40 pt peek strip shows posters, not the title.
                 let relatedLift = ShelfRowCell.headerHeight + 8
                 return self.homeShelfHostSection(
                     topInset: isPrimary ? max(0, peek - relatedLift) : 0,
@@ -298,11 +260,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         return layout
     }
 
-    /// One full-width item hosting a ShelfRowCell (the Related row). NOT an
-    /// orthogonal section — the shelf cell drives its own horizontal scroll
-    /// with the home shelf's exact geometry and landings. The item spans the
-    /// whole (panel + overshoot) collection width; panel alignment happens
-    /// inside the cell via panelOvershoot.
+    /// One full-width ShelfRowCell, not an orthogonal section, so the row scrolls and lands
+    /// exactly like Home's. Alignment happens inside the cell via panelOvershoot.
     private func homeShelfHostSection(topInset: CGFloat = 0,
                                       sectionBottomInset: CGFloat = 56) -> NSCollectionLayoutSection {
         // The ShelfRowCell draws its own header (self-aligned with the tiles),
@@ -345,13 +304,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         return section
     }
 
-    /// The episode rail's section. A custom group instead of `shelfSection`'s
-    /// repeating item because the rail mixes widths: full episode cards plus
-    /// slim season dividers. Frames are computed eagerly from `cachedEpisodes`
-    /// (the provider closure re-runs on every data-driven invalidation), so
-    /// layout attributes — and everything that reads them: the orthogonal
-    /// season scroll, pill alignment, initial-episode landing — stay exact,
-    /// which estimated self-sizing would not guarantee.
+    /// A custom group, since episode cards and season dividers differ in width. Frames come
+    /// eagerly from `cachedEpisodes`, so season scrolls and landings read exact attributes.
     private func episodesRailSection(topInset: CGFloat, sectionBottomInset: CGFloat) -> NSCollectionLayoutSection {
         let gap = Self.episodeGap
         var frames: [CGRect] = []
@@ -516,13 +470,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         }
     }
 
-    /// One body for both poster shelves (Collection, Related) so they cannot
-    /// drift. Every tile, the trailing collection tile included, opens through
-    /// `onShowRelatedDetails`; `presentStandaloneDetail` routes a collection
-    /// to its page. The content token hashes each tile's ratingKey and watch
-    /// state, so a watch-state refresh reloads the row (under the shelf's
-    /// cross-dissolve) only when a glyph moved. The row keeps its horizontal
-    /// offset across that reload and across host-cell reuse.
+    /// Both poster shelves (Collection, Related); every tile opens through `onShowRelatedDetails`.
+    /// The content token hashes ratingKeys and watch state, so a refresh reloads only when a glyph moved.
     private func configurePosterShelf(_ cell: ShelfRowCell,
                                       section: BelowFoldSectionKind,
                                       title: String,
@@ -575,10 +524,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.ingest(content)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
-            // CHAINED (not a racing Task): the full content advisory is fetched
-            // AFTER ingest, so it can't be clobbered by `ingest` overwriting
-            // `self.detail` with the partial. Render already happened at
-            // applySnapshot, so this is still non-blocking. Patch the About cell.
+            // Chained after ingest, which would otherwise overwrite it with the partial detail.
             let advisory = await self.loader.loadAdvisory(for: item)
             guard self.loadToken == token, let advisory else { return }
             self.applyContentAdvisory(advisory)
@@ -644,17 +590,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         }
     }
 
-    /// Re-read the episode rail's watch state from the server and repaint the
-    /// cards in place (issue #228: the rail kept rendering the pre-playback
-    /// snapshot after the player dismissed).
-    ///
-    /// Deliberately NOT a re-`configure`: the diffable identifiers are
-    /// `.episode(ratingKey)`, so a plain re-apply is an empty diff and the
-    /// cells never redraw. Instead the fresh items are swapped into
-    /// `episodesByID` and the same identifiers are `reconfigureItems`-ed, which
-    /// re-runs `cellForItemAt` on the EXISTING cells — no insert/delete, so the
-    /// focus engine keeps whatever is focused. `allEpisodes` is an uncached GET,
-    /// so this always reads the committed server state.
+    /// Re-reads the rail's watch state (#228) and reconfigures the same identifiers in place.
+    /// A re-apply is an empty diff and never redraws; reconfiguring keeps focus.
     func refreshWatchState() {
         guard let item = configuredItem else { return }
         let showRef: MediaItemRef?
@@ -664,10 +601,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         default: showRef = nil
         }
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
-        // Its OWN token, not `loadToken`: bumping that one would invalidate an
-        // in-flight `configure`. Both the refresh token AND the load token are
-        // checked on landing, so a refresh is dropped if a newer refresh or ANY
-        // configure has started since.
+        // Its own token, so it cannot cancel a `configure`; landing checks both.
         refreshToken &+= 1
         let refresh = refreshToken
         let load = loadToken
@@ -699,10 +633,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     private var refreshToken: UInt64 = 0
 
-    /// Swap refreshed Collection members and Related items into their stores
-    /// and reconfigure the two shelf host cells in place, which re-runs
-    /// `configurePosterShelf` on the EXISTING cells. The collection row keeps
-    /// its title and trailing tile from the load: only watch state is news.
+    /// Reconfigures the two shelf cells in place with refreshed items; only watch state is news.
     // ponytail: a refresh never adds or removes a row, so a collection or
     // Related row that appears or empties between load and refresh waits for
     // the next open; insert/delete with a focus hand-off if that ever matters.
@@ -770,11 +701,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
         var entries: [String: CastEntry] = [:]
         cachedCastOrder = []
-        // Dedup by id: two credits can collapse to the same identifier (e.g. the
-        // same name in the same role, "cast:Mike Desilets-(voice)-"). Appending
-        // both would feed duplicate identifiers into the diffable snapshot and
-        // trip NSDiffableDataSourceSnapshot's uniqueness assertion (RIVULET-4R).
-        // First occurrence wins, keeping order and entry data consistent.
+        // Two credits can share an identifier, which trips the snapshot's uniqueness
+        // assertion (RIVULET-4R). First occurrence wins.
         var seenCastIDs = Set<String>()
         for d in content.directors {
             let id = "dir:\(d.id)"
@@ -797,11 +725,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         collectionRow = content.collection
         shelfOffsets = [:]
 
-        // Publish the seasons once everything else is ingested, so a handler that
-        // reads back from this view sees a consistent state. The loader has
-        // already resolved which season to open on (the item's own for a season
-        // page, the parent for an episode, the first for a show), so there is
-        // nothing for the container to re-derive — or to re-fetch.
+        // Last, so a handler reading back sees consistent state. The loader picked the season.
         let selectedSeasonIndex = content.selectedSeason
             .flatMap { sel in content.seasons.firstIndex(where: { $0.ref.itemID == sel.ref.itemID }) } ?? 0
         onSeasonsLoaded?(content.seasons, selectedSeasonIndex)
@@ -885,12 +809,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         collectionView.topSectionIndex = sectionKinds.isEmpty ? nil : 0
     }
 
-    /// Reset scroll to the rest (peek) position — used on collapse. Rest offset
-    /// is -contentInset.top (= -detailsTopY); the episodes peek at the bottom via
-    /// the episodes-section top inset.
-    /// Scroll the episode rail so the first episode of the given season sits at
-    /// the leading edge — ATV+ jumps the rail to that season when its pill is
-    /// focused. Focus stays on the pill (this only moves the orthogonal scroller).
+    /// Scrolls the rail to the season's first episode, as Apple's does on pill focus. Focus stays put.
     func scrollEpisodesToSeason(seasonRefID: String) {
         guard let epSection = sectionKinds.firstIndex(of: .episodes) else { return }
         guard let itemIdx = cachedEpisodes.firstIndex(where: {
@@ -902,11 +821,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         scrollOrthogonalEpisodes(toItem: itemIdx, epSection: epSection, animated: true)
     }
 
-    /// On load, position the rail at the carousel item's own episode (or, for a
-    /// season, that season's first episode) and make it the initial focus target,
-    /// so opening an episode/season lands on its season in view — not season 0/1.
-    /// The actual positioning is done in `layoutSubviews` (instant, before the
-    /// first render) so the user never sees it scroll there.
+    /// Targets the item's own episode (a season's first), positioned in `layoutSubviews` before first render.
     func scrollToInitialEpisode(item: MediaItem) {
         guard let epSection = sectionKinds.firstIndex(of: .episodes) else { return }
         let targetIdx: Int?
@@ -998,19 +913,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// contentInset.top, so the focus engine aligns the focused episode here.
     static let detailsTopY: CGFloat = 230
 
-    /// The `onScroll` value when the episodes sit at their details-rest (topBand)
-    /// position — i.e. where the season-pills row is at its resting Y. Above this
-    /// the pills scroll UP with the rail; below it (entry/collapse) they follow it
-    /// down. Equals the episodes section's top inset (the carousel peek).
+    /// The `onScroll` value at the details rest, where the pills sit at their resting Y.
     var detailsRestOff: CGFloat { max(0, bounds.height - Self.episodePeek - Self.detailsTopY) }
 
     /// Whether focus is on the episodes (top) row vs a lower section. Drives the
     /// Up handler: episodes → pills; lower section → let the engine move up.
     var focusIsOnEpisodes: Bool { collectionView.focusedCellIsTopSection }
-    /// True briefly after the episode thumb took focus (same-press guard for the
-    /// thumb → season-pills lift). Covers BOTH coming up from a lower row AND
-    /// coming up from the description (a within-row move the section-based guard
-    /// `episodesJustTookFocus` misses).
+    /// Same-press guard for the thumb-to-pills lift; also covers description to thumb,
+    /// which `episodesJustTookFocus` misses.
     var episodeThumbJustTookFocus: Bool { CACurrentMediaTime() - lastThumbFocusTime < 0.06 }
     /// True while focus is on an episode description (vs a thumb). The VC uses
     /// this to redirect Left/Right to the adjacent episode's thumb.
@@ -1040,10 +950,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         while isDivider(targetItem) { targetItem += forward ? 1 : -1 }
         guard targetItem >= 0, targetItem < count else { return false }
         armedEpisodeFocusIndexPath = IndexPath(item: targetItem, section: epSection)
-        // No manual scroll: the engine scrolls the orthogonal row to the focused
-        // thumb itself (minimal scroll-to-visible). There's a slight "catch-up"
-        // beat when the target was off-screen — a known polish item; a deferred
-        // (non-forced) focus update may coordinate the scroll better. Revisit.
+        // The engine scrolls the row; an off-screen target shows a slight catch-up beat.
         return true
     }
 
@@ -1054,10 +961,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// episodes→pills jump against the same-press arrival from a lower row.
     var episodesJustTookFocus: Bool { collectionView.topSectionJustTookFocus }
 
-    /// Timed slide of the episodes UP to the details-top position. Driven by a
-    /// CADisplayLink (see animateOffsetY) so scrollViewDidScroll fires per frame
-    /// and the hero choreography (blur + metadata fade + logo) rides this single
-    /// movement in lockstep. Completion fires at the end.
+    /// Slides the episodes up to the details top on the display link (see `offsetLink`).
     func slideToDetailsTop(animated: Bool, completion: (() -> Void)? = nil) {
         // Scroll so the first episode lands at detailsTopY — which is the focus
         // engine's preferred position (contentInset.top == detailsTopY), so
@@ -1077,11 +981,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     // MARK: - One-clock vertical scroll (CADisplayLink)
 
-    // UIView.animate { contentOffset = } fires scrollViewDidScroll only ONCE
-    // (with the final value) — verified by trace — so a hero fade riding the
-    // scroll delegate would SNAP. A CADisplayLink that sets contentOffset every
-    // frame fires scrollViewDidScroll per frame, so the rail slide and the hero
-    // fade run on a SINGLE clock, in lockstep (the one-morph-one-clock rule).
+    // UIView.animate on contentOffset fires scrollViewDidScroll once (traced), so the
+    // hero fade would snap. Setting it per frame keeps the slide and fade on one clock.
     private var offsetLink: CADisplayLink?
     private var offsetStartY: CGFloat = 0
     private var offsetTargetY: CGFloat = 0
@@ -1126,10 +1027,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     // MARK: - Season-pill → episodes focus entry
 
-    /// The selected season's first episode, updated on each pill scroll. When the
-    /// user presses Down from the season pills, focus must land on THIS episode —
-    /// not the collection's remembered index path (still episode 0 / season 1),
-    /// which would snap the rail back and re-select season 1.
+    /// Where Down from the pills lands, updated on each pill scroll.
     private var currentSeasonFirstEpisode: IndexPath?
     /// Armed (by the Down-from-pills handler) only for the synchronous focus
     /// update, so normal episode navigation still uses the remembered index path.
@@ -1145,10 +1043,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     // MARK: - UICollectionViewDelegate
 
-    /// Episodes and trailers host their own focusable subviews (thumb +, for
-    /// episodes, the description). The cell itself must be non-focusable so the
-    /// focus engine targets those subviews directly — giving episodes two focus
-    /// stops and trailers one (the thumb). All other sections stay whole-cell.
+    /// Episode and trailer cells are unfocusable so the engine targets their thumb
+    /// (and an episode's description) directly.
     func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {
         switch dataSource.itemIdentifier(for: indexPath) {
         case .episode, .trailer, .extra: return false
@@ -1174,20 +1070,11 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         onScroll?(max(0, off))
     }
 
-    /// If focus was inside a shelf-host row (Related) when a modal went up,
-    /// put that row back on the tile it was on and arm it as the focus target.
-    ///
-    /// Must run BEFORE the focus update resolves. `indexPathForPreferredFocusedView`
-    /// can't do this itself: it's a pure query called mid-update, and returning
-    /// the host cell's path would hand focus to the nested collection, which
-    /// restarts at item 0.
+    /// Puts a shelf row (Related) back on its tile and arms it, before the focus update
+    /// resolves; `indexPathForPreferredFocusedView` is a pure query and cannot.
     func restoreShelfRowFocusIfNeeded(requestingFocus: Bool = true) {
-        // The collection's last focused index path names the ROW (a shelf row is
-        // ONE cell, so every tile in it shares that path); the tile index lives
-        // on the row itself (`lastFocusedItemIndex`). Do not pick the first
-        // visible shelf with a tile index instead: `ShelfRowCell` clears it only
-        // in `prepareForReuse`, so with Collection and Related both on screen
-        // the row focus left earlier can still carry one and win.
+        // The path names the row; the tile is the row's `lastFocusedItemIndex`. Do not pick
+        // any shelf with a tile index: a stale one survives until `prepareForReuse`.
         guard let path = collectionView.lastFocusedIndexPath,
               let shelf = collectionView.cellForItem(at: path) as? ShelfRowCell,
               let item = shelf.lastFocusedItemIndex else { return }
@@ -1214,11 +1101,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     func clearArmedShelfRestore() { armedShelfRestoreCell = nil }
 
     func indexPathForPreferredFocusedView(in collectionView: UICollectionView) -> IndexPath? {
-        // Order matters: the armed/pending targets are one-shot intents for a
-        // specific interaction and must win. `lastFocusedIndexPath` is the
-        // last-resort restore after a modal (playing a trailer, an extra, or
-        // anything on Related) — without it the engine picks for itself and
-        // lands on item 0 of the first row.
+        // One-shot targets first; `lastFocusedIndexPath` is the after-modal fallback.
         let candidate = armedEpisodeFocusIndexPath
             ?? pendingInitialFocus
             ?? (pillEntryArmed ? currentSeasonFirstEpisode : nil)
@@ -1227,21 +1110,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         return realizedFocusTarget(candidate, in: collectionView)
     }
 
-    /// UIKit requires that this delegate return an index path whose CELL EXISTS
-    /// right now — not merely a valid data-source index. Episodes live in an
-    /// orthogonal scrolling section, so a target deep in the rail (say episode
-    /// 22) has no cell until that part of the rail is scrolled into view, and
-    /// returning it raises:
-    ///
-    ///     NSInternalInconsistencyException: no cell for index path {0, 21} —
-    ///     the collection view's delegate must return an index path for a valid
-    ///     UICollectionViewCell
-    ///
-    /// So: drop paths that are stale or not yet realized, and return nil to let
-    /// the focus engine pick. This is a pure query — UIKit calls it mid focus
-    /// update, so it must not scroll, lay out, or mutate our tracking state.
-    /// Realizing the cell is the job of `pendingInitialScroll` in
-    /// `layoutSubviews`, which runs before focus is handed in.
+    /// Nil unless the path's cell exists now: an unrealized one throws
+    /// NSInternalInconsistencyException. Called mid-update, so it must not scroll or mutate state.
     private func realizedFocusTarget(_ indexPath: IndexPath, in collectionView: UICollectionView) -> IndexPath? {
         // Stale across a snapshot change — the item may no longer exist at all.
         guard dataSource.itemIdentifier(for: indexPath) != nil else { return nil }
@@ -1249,17 +1119,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // stretch is scrolled in. Preferring an unrealized path is the crash.
         guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
 
-        // A shelf-host row (Related) is ONE full-width cell hosting its own
-        // nested collection, so this index path identifies the ROW, not the
-        // tile that was focused. Preferring the host hands focus to the nested
-        // collection, which starts over at its first item — and because Related
-        // sits below the primary peek row, the resulting focus scroll reads as
-        // "focus jumped up to Trailers". Restore inside the row instead.
-        // (This method is a pure query — see the note above — so returning the
-        // host cell's path is not an option and neither is scrolling the row
-        // here. `restoreShelfRowFocusIfNeeded` does that work before the focus
-        // update, and by the time we're asked the row is already positioned;
-        // the nested cell's own preferredFocusEnvironments then lands the tile.)
+        // A shelf row's path would restart its tiles at item 0;
+        // `restoreShelfRowFocusIfNeeded` restores it instead.
         if cell is ShelfRowCell { return nil }
         return indexPath
     }

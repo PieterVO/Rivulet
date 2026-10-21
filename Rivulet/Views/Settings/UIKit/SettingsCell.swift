@@ -64,13 +64,9 @@ final class SettingsHeaderCell: UICollectionViewCell {
 final class SettingsCell: UICollectionViewCell {
     static let reuseID = "SettingsCell"
 
-    /// How far the capsule grows on EVERY side when focused. Measured off tvOS
-    /// Settings at 4K: its rows go from 780.0 x 66.5pt at rest to 788.0 x 74.5pt
-    /// focused, i.e. exactly 4pt on all four sides.
-    ///
-    /// A scale factor cannot reproduce that, which is why this is an outset in
-    /// points: a row here is ~816pt wide and 58pt tall, so the `scale 1.04` this
-    /// replaced grew it 16.3pt per side horizontally against 1.3pt vertically.
+    /// Focus growth per side, an outset because a scale factor cannot match it.
+    /// Measured off tvOS Settings at 4K: 780.0 x 66.5pt at rest, 788.0 x 74.5pt
+    /// focused, so 4pt on all four sides.
     private static let focusOutset: CGFloat = 4
     /// Resting inset of the capsule inside the 64pt row height.
     private static let restingInsetY: CGFloat = 3

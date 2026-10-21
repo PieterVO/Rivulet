@@ -1,22 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  BelowFoldContentLoader.swift
-//  Rivulet
-//
-//  Loads the below-fold detail content (seasons, episodes, cast/crew, related)
-//  for the UIKit expanded detail. Decoupled from any view — it just fetches
-//  through the agnostic `MediaProvider` and returns a value.
-//
-//  The host (container / VC) calls `load(for:detail:)` when its item is set,
-//  then feeds the result into EpisodeCell / SeasonPillView / CastCell /
-//  PosterCell. Wiring that into the container is a later, runtime-verified
-//  step; this loader is independently testable.
-//
-//  The collection row and Related come from the same `related(for:kind:)`
-//  call.
-//
+//  Fetches the below-fold content (seasons, episodes, cast, collection, related) through
+//  `MediaProvider`. No view state, so it is testable alone.
 
 import Foundation
 
@@ -39,10 +25,7 @@ struct BelowFoldContent: Sendable {
     /// Full detail for the About + Information/Languages/Accessibility block
     /// (genres, contentRating, rating, studios, mediaSources, synopsis, year).
     var detail: MediaItemDetail?
-    /// The SHOW's detail when the opened item is an episode/season. The About
-    /// card always describes the SHOW (the episode specifics live in the chrome
-    /// at the top), while Languages/Accessibility stay episode-level (the file).
-    /// nil for movies and show-level details (use `detail`).
+    /// The show's detail for an episode or season, since About describes the show; nil otherwise.
     var showDetail: MediaItemDetail?
 
     var hasEpisodes: Bool { !episodes.isEmpty }
@@ -55,21 +38,15 @@ struct BelowFoldTrailer: Hashable, Sendable {
     let artworkURL: URL?
     let durationFormatted: String?
     var subtype: ExtraSubtype = .unknown
-    /// Plex's handle for actually PLAYING this extra, which is not always the
-    /// same thing as `id`. User-added (disc-ripped) extras carry a real library
-    /// ratingKey; Plex's own IVA-supplied extras carry only a `key` path like
-    /// `/services/iva/assets/...`. Feeding the latter to /library/metadata/{id}
-    /// 404s, which is what made trailer playback fail more often than not.
+    /// What plays this extra: a library ratingKey, or for a Plex IVA extra its
+    /// `/services/iva/assets/...` path, which 404s under /library/metadata.
     var playbackKey: String?
 }
 
 @MainActor
 final class BelowFoldContentLoader {
 
-    /// Load all below-fold content for `item`. `detail` (if the chrome already
-    /// fetched it) supplies cast/directors without a second round-trip; if nil,
-    /// it's fetched here. Any sub-fetch failure degrades to empty for that
-    /// section rather than failing the whole load.
+    /// Pass the chrome's `detail` to skip refetching it. A failed sub-fetch empties only its section.
     func load(for item: MediaItem, detail: MediaItemDetail?) async -> BelowFoldContent {
         var content = BelowFoldContent()
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
@@ -105,8 +82,7 @@ final class BelowFoldContentLoader {
         content.trailers = allExtras.filter { $0.isTrailer }.map(makeTrailer)
         content.extras = allExtras.filter { !$0.isTrailer }.map(makeTrailer)
 
-        // Seasons + episodes (TV route), keyed off the item kind exactly like
-        // the SwiftUI loaders.
+        // Seasons and episodes, by item kind.
         switch item.kind {
         case .show:
             content.seasons = (try? await provider.children(of: item.ref)) ?? []

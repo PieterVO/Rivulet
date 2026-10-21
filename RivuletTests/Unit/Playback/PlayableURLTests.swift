@@ -5,23 +5,8 @@
 //  PlayableURLTests.swift
 //  RivuletTests
 //
-//  Issue #255 follow-up. The same defect fixed in ContentRouter existed in the
-//  provider-abstraction layer, built by string interpolation instead:
-//
-//      URL(string: "\(serverURL)\(part.key)?X-Plex-Token=\(token)")
-//
-//  When the key carries its own query string (IVA extras arrive as
-//  /services/iva/assets/.../video.mp4?fmt=4&bitrate=5000) that yields TWO '?',
-//  so the token is absorbed into the last parameter's value —
-//  "bitrate=5000?X-Plex-Token=TOK" — and never authenticates. The server sees
-//  an unauthenticated request rather than a malformed path, so this fails
-//  differently from the ContentRouter case but from the identical cause.
-//
-//  The load-bearing assertion throughout is that X-Plex-Token survives as a
-//  REAL query item. A URL that merely looks right but whose token is buried in
-//  another value is the exact bug.
-//
-//  Pure tests: no network.
+//  `X-Plex-Token` must survive as a real query item when a Part key carries its
+//  own query, instead of being absorbed into the last value (#255).
 //
 
 import XCTest

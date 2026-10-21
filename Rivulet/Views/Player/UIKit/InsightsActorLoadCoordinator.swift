@@ -5,14 +5,8 @@
 //  InsightsActorLoadCoordinator.swift
 //  Rivulet
 //
-//  Stale-load guard for the in-panel actor view (Docs/superpowers/plans/
-//  2026-07-07-insights-in-panel-actor.md, Task B). Selecting a cast member
-//  kicks an async `PersonFilmographyProvider.load`; if the user backs out to
-//  the cast list or picks a different actor before it resolves, the late
-//  result must be dropped rather than overwriting whatever the panel is
-//  showing now. A monotonic token is the whole mechanism: each new selection
-//  (or a return-to-list) bumps the counter, and a load result is only applied
-//  if its token is still the current one when it completes.
+//  Stale-load guard for the in-panel actor view: each selection or return to the
+//  list bumps a token, and a filmography load applies only if its token is current.
 //
 
 import Foundation

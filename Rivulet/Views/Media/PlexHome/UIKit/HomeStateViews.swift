@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HomeStateViews.swift
-//  Rivulet
-//
-//  Top-level home-state placeholder views — shown when there is no
-//  content to render (no Plex connection, loading, error, empty), plus
-//  the transient watchlist toast.
-//
-//  States: not-connected, loading, error, empty, and the watchlist toast.
-//
+// Home placeholder states (not connected, loading, error, empty) and the watchlist toast.
 
 import UIKit
 
@@ -162,9 +153,7 @@ final class HomeStateView: UIView {
 
 // MARK: - Watchlist toast
 
-/// Transient pill shown at the bottom of the home when a watchlist write
-/// reverts. Mirror of `WatchlistToastModifier` — bottom-anchored,
-/// rounded-pill background, ease-in-out fade in/out.
+/// Bottom pill shown when a watchlist write reverts.
 @MainActor
 final class WatchlistToastView: UIView {
 
@@ -209,10 +198,7 @@ final class WatchlistToastView: UIView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Show the toast with `message`. If `message` is nil, hide. Visible
-    /// for ~2.5s by default, then fades out (matches SwiftUI's
-    /// auto-clear behaviour when `transientWriteError` resets to nil
-    /// via the service's clearTransientError timer).
+    /// Shows `message` for about 2.5s, or hides the toast when nil.
     func show(message: String?, autoHideAfter: TimeInterval = 2.5) {
         hideWorkItem?.cancel()
         guard let message else {
@@ -239,6 +225,4 @@ final class WatchlistToastView: UIView {
     }
 }
 
-// The connection-error banner that used to live here is gone: it reserved
-// 120pt of the home's `contentInset.top`, so every row jumped down when the
-// connection check resolved. Offline is announced by `ConnectionAlert` now.
+// No connection banner here: one in `contentInset.top` made every row jump. `ConnectionAlert` covers offline.

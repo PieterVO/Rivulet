@@ -1,25 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  EpisodeCell.swift
-//  Rivulet
-//
-//  A fixed-width episode card: thumbnail (with duration badge, watch-progress
-//  bar, watched tag) over a description block (episode label / title /
-//  summary). Reusable standalone UIView with `configure(...)`; can be hosted
-//  in the below-fold episode row now and wrapped in a UICollectionViewCell
-//  when the below-fold becomes a compositional collection.
-//
-//  Faithful to the SwiftUI source: cardWidth 340, thumbHeight 192, corner 16,
-//  white-0.08 card fill, the duration/progress/watched overlays, and the
-//  description typography (label 15 medium uppercase white-0.6, title 20 bold,
-//  summary 16 white-0.7 / 3 lines).
-//
-//  Focus is exposed via setFocused(...): subtle whole-card scale plus built-in
-//  liquid-glass surfaces on the thumbnail and metadata. No custom border or
-//  hand-drawn reflection is used.
-//
+//  An episode (or trailer) card: thumbnail with duration, progress and watched overlays
+//  over a description block. An episode has two focus stops: the thumb plays, the description opens details.
 
 import UIKit
 import TVUIKit
@@ -29,11 +12,7 @@ import TVUIKit
 /// single-target (`.thumb` only).
 enum EpisodeFocusKind { case none, thumb, description }
 
-/// The thumbnail card as a first-class focus target. `TVCardView` already gives
-/// the native tvOS focus motion (parallax + scale + edge sheen); this subclass
-/// adds Select delivery and focus reporting so the thumb can be one of the two
-/// episode focus stops. Select on tvOS is caught in `pressesEnded(.select)` (a
-/// bare control's `primaryActionTriggered` is unreliable here).
+/// A TVCardView thumbnail that reports focus and delivers Select.
 final class EpisodeThumbCardView: TVCardView {
     var onSelect: (() -> Void)?
     /// (isFocused, nextFocusedView, coordinator)
@@ -44,13 +23,7 @@ final class EpisodeThumbCardView: TVCardView {
         onFocusChange?(context.nextFocusedView === self, context.nextFocusedView, coordinator)
     }
 
-    // Consume the Select press in BOTH began/ended so the focused card owns the
-    // press cycle — otherwise pressesEnded(.select) is not reliably delivered
-    // (mirrors AboutCardControl).
-    // TVCardView cancels the Select press internally between pressesBegan and
-    // pressesEnded (the Ended becomes pressesCancelled), so an Ended-based
-    // handler never runs. Fire onSelect on pressesBegan — the only event that is
-    // reliably delivered to a focused TVCardView.
+    // Fire on pressesBegan: TVCardView turns the Select's Ended into a Cancelled.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if presses.contains(where: { $0.type == .select }) { onSelect?(); return }
         super.pressesBegan(presses, with: event)
@@ -65,10 +38,7 @@ final class EpisodeThumbCardView: TVCardView {
 /// `isFocusEligible` (true for episodes, false for trailers — trailers keep a
 /// single thumb stop). Select opens the episode detail page.
 final class EpisodeDescriptionView: UIView {
-    /// Gated: focusable only while this episode is the active row (its thumb or
-    /// description holds focus), so Up coming from a lower section skips straight
-    /// to the thumb instead of landing here. The thumb is the row anchor; the
-    /// description is reachable only by pressing Down from the thumb.
+    /// Focusable only while this episode holds focus, so Up from below lands on the thumb.
     var isFocusEligible = false
     var onSelect: (() -> Void)?
     /// (isFocused, nextFocusedView, coordinator)
@@ -164,18 +134,11 @@ final class EpisodeCell: UIView {
 
     private func commonInit() {
         translatesAutoresizingMaskIntoConstraints = false
-        // ATV+: no card background — a clean rounded thumbnail over plain
-        // metadata; only the FOCUSED episode gets a metadata box (set in
-        // setFocused). clipsToBounds stays false so the 1.05 focus scale and the
-        // box aren't clipped.
+        // No card background, as Apple's; unclipped so the focus scale and metadata box show.
         backgroundColor = .clear
         clipsToBounds = false
 
-        // Thumbnail — TVCardView gives Apple's native tvOS focus motion
-        // (parallax + scale + the specular edge sheen). Image + overlays go in
-        // card.contentView so they ride the focus motion (same as the home-screen
-        // ContinueWatchingCell). The card draws its own rounded shape; the
-        // contentView background is the placeholder grey behind the image.
+        // Image and overlays go in contentView so they ride the card's focus motion.
         thumbnailCard.translatesAutoresizingMaskIntoConstraints = false
         thumbnailCard.contentSize = CGSize(width: Self.cardWidth + MediaRowMetrics.focusGrowth, height: Self.thumbHeight)
         thumbnailCard.contentView.backgroundColor = UIColor(white: 0.15, alpha: 1)
@@ -355,10 +318,7 @@ final class EpisodeCell: UIView {
             subtypeIcon.widthAnchor.constraint(equalToConstant: 22),
             subtypeIcon.heightAnchor.constraint(equalToConstant: 22),
 
-            // Description block: its LEFT edge (and the focus glass that fills it)
-            // sits on the shared content edge = the thumbnail's leading. The text
-            // is indented inside by the block's inner padding, like the pill
-            // capsule. No left bleed into the margin.
+            // The block's edge sits on the thumbnail's leading; its text is padded inside.
             descriptionBlock.topAnchor.constraint(equalTo: thumbnailCard.bottomAnchor, constant: 8),
             descriptionBlock.leadingAnchor.constraint(equalTo: leadingAnchor),
             descriptionBlock.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -386,10 +346,7 @@ final class EpisodeCell: UIView {
     // MARK: - Configure
 
     func configure(episode: MediaItem, showSeasonPrefix: Bool = false) {
-        // Episodes have two focus stops: thumb (play) + description (details).
-        // The description starts gated OFF; it becomes focusable only once the
-        // thumb takes focus (see applyReachability), so the first focus into the
-        // row lands on the thumb and Up-from-below skips the description.
+        // The description starts unfocusable; see applyReachability.
         subtypeIcon.isHidden = true
         splitFocus = true
         descriptionBlock.isFocusEligible = false
@@ -402,10 +359,7 @@ final class EpisodeCell: UIView {
         ratingBadge.text = episode.contentRating
         ratingBadge.isHidden = (episode.contentRating ?? "").isEmpty
 
-        // Bottom-left corner state. In-progress takes precedence: an episode
-        // with an active resume point shows the progress bar + runtime, never
-        // the watched glyph (Plex shows one or the other). Watched-and-finished
-        // shows the rewatch glyph in that corner instead of the runtime badge.
+        // A resume point outranks the watched glyph, as in Plex.
         let inProgress = (episode.watchProgress.map { $0 > 0 && $0 < 1 }) ?? false
         let showGlyph = episode.isWatched && !inProgress
 
@@ -450,10 +404,7 @@ final class EpisodeCell: UIView {
         }
     }
 
-    /// Trailers reuse the exact same card (TVCardView thumbnail + sheen + glass
-    /// focus panel) as episodes so the two rows read as one design. A trailer has
-    /// no episode number, summary, date, or rating — those are hidden and the
-    /// block hugs thumbnail + title. Duration shows in the same on-thumbnail badge.
+    /// The same card with only thumbnail, title and duration, so both rows read as one design.
     func configure(trailer: BelowFoldTrailer) {
         // Trailers keep a single focus stop on the thumb (no description target).
         splitFocus = false
@@ -497,14 +448,8 @@ final class EpisodeCell: UIView {
 
     // MARK: - Focus visuals
 
-    /// Drive the metadata glass from the two sub-target focus states. The
-    /// THUMBNAIL focus motion (parallax/scale + edge sheen) is owned by the
-    /// TVCardView and animates itself; here we only drive the metadata box:
-    ///   - description focused  → full frosted glass box (ATV+ "selected" look).
-    ///   - thumb focused, episode → subtle companion tint (shows the metadata is
-    ///     part of the same card) but NOT the glass.
-    ///   - thumb focused, trailer → full frosted box (single-target legacy look).
-    ///   - neither focused      → clear.
+    /// Metadata box: full glass when the description (or a trailer's thumb) is focused,
+    /// a faint tint for an episode's focused thumb, clear otherwise.
     private func updateDescriptionGlass(_ coordinator: UIFocusAnimationCoordinator?) {
         let apply = { [self] in
             if descFocused {
@@ -535,12 +480,8 @@ final class EpisodeCell: UIView {
         return UIBlurEffect(style: .regular)
     }
 
-    /// Gate the description's focusability so Up from a lower section skips it
-    /// and lands on the thumb. The description is focusable only while this
-    /// episode is the active row: its thumb or description holds focus, OR the
-    /// focus is moving INTO this cell (next focus target is inside it — this
-    /// keeps it eligible across the thumb→description hand-off, avoiding a race
-    /// where the thumb's loss callback fires before the description's gain).
+    /// The description is focusable while this episode holds focus or focus is moving into it;
+    /// the second case covers the thumb's loss firing before the description's gain.
     private func applyReachability(next: UIView?) {
         guard splitFocus else { descriptionBlock.isFocusEligible = false; return }
         let stayingInside = next.map { $0.isDescendant(of: self) } ?? false

@@ -5,23 +5,10 @@
 //  SensitiveDataRedactor.swift
 //  Rivulet
 //
-//  Strips credentials out of anything on its way to a diagnostics sink.
-//
-//  Plex authenticates with `X-Plex-Token` as a URL QUERY PARAMETER, not a
-//  header, so any URL we log or attach to an error event carries a working
-//  credential for that user's Plex account. IPTV/Xtream providers are worse:
-//  their M3U and EPG URLs commonly carry `username`/`password` in the query.
-//
-//  Two things reach Sentry, and both need covering:
-//    1. Values we attach ourselves (`scope.setExtra(url.absoluteString, ...)`).
-//    2. Events the SDK builds itself — `enableCaptureFailedRequests` attaches
-//       the failing request URL, and NSError descriptions embed the URL too.
-//  Call sites can only fix (1), so the real guarantee is the `beforeSend` hook
-//  in RivuletApp, which runs this over every outgoing event. Call sites are
-//  still cleaned up so we don't ship secrets to a sink that merely scrubs them.
-//
-//  `nonisolated` to match SentryBridge: this runs on the error path from any
-//  isolation context and must not cost an actor hop.
+//  Strips credentials from anything bound for a diagnostics sink: Plex's
+//  `X-Plex-Token` query parameter and IPTV `username`/`password`. The guarantee
+//  is SentryStartup's `beforeSend`, which runs this over every event, SDK-built
+//  ones included. `nonisolated` so the error path costs no actor hop.
 //
 
 import Foundation

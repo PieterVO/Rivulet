@@ -615,14 +615,9 @@ extension PlexMetadata {
         return String(token)
     }
 
-    /// For an episode, the SHOW's external IDs read only from the grandparent /
-    /// parent guid STRINGS. It deliberately does NOT read this item's `Guid`
-    /// array: on an episode that array holds the EPISODE's own ids
-    /// (e.g. tmdb://<episodeId>), and using them as a show id sends a wrong,
-    /// non-existent id to Insights. Legacy agents (thetvdb://77921/…,
-    /// themoviedb://<showId>/…) put a usable inline show id in grandparentGuid;
-    /// modern plex:// guids carry none, so the caller must fetch the show's own
-    /// metadata to get its external ids.
+    /// For an episode, the show's external IDs, read only from the grandparent and
+    /// parent guid strings: the item's own `Guid` array holds episode ids. Modern
+    /// plex:// guids carry none, so the caller fetches the show's metadata.
     var showExternalIDs: ShowExternalIDs {
         var tmdb: Int?
         var tvdb: Int?

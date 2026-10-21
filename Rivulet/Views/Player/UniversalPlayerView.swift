@@ -51,14 +51,9 @@ final class RemoteInputHandler: ObservableObject {
 
     var onAction: ((PlaybackInputAction, PlaybackInputSource) -> Void)?
 
-    // The host's own responder chain handles every input tvOS ALSO delivers as
-    // a `UIPress`: clickpad clicks (arrow and select presses), a game
-    // controller's d-pad and B, a keyboard's arrows and Escape. Acting on the
-    // GameController copy too made one click land zero, one or two skips, so
-    // this handler acts only on what has no UIPress: clickpad rotation,
-    // shoulder buttons, X, a gamepad's A and the keyboard's Space / Return / I.
-    // A and Return still double as Select presses (so they toggle playback here
-    // and the controls in the host), as they always have.
+    // Acts only on input with no `UIPress` copy (clickpad rotation, shoulders,
+    // X, A, Space / Return / I); the host's responder chain handles the rest,
+    // and acting on both made one click skip zero, one or two times.
 
     /// The monitoring handler, so the VOD container can ask where the finger
     /// rested before a click without owning GameController itself (its
@@ -240,14 +235,8 @@ final class RemoteInputHandler: ObservableObject {
                 // visible as a click that arrived.
                 InputProbe.gamepad("micro buttonA \(pressed ? "down" : "up")")
 
-                // Physical state first, before any gate. The gates below used
-                // to return before this, and they are not symmetric in time: an
-                // Up/Down click that raises the rail passes the gate on the way
-                // down and hits it on the way up. That stranded `isButtonDown`
-                // true, which froze the tracked touch position (clickpad
-                // rotation went dead) until some later click happened to
-                // release ungated, and that click then skipped in whatever
-                // direction was frozen, not the one the user clicked.
+                // Physical state first, before any gate: a gate can pass the
+                // down and block the up, stranding `isButtonDown` true.
                 self.isButtonDown = pressed
                 if pressed { Self.lastClickpadDownAt = CACurrentMediaTime() }
                 // The click itself is the host's: it arrives as an arrow or
@@ -491,15 +480,8 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
         case .seekRelative(let seconds):
             guard vm.postVideoState == .hidden else { return }
             if vm.isScrubbing && vm.scrubSpeed != 0 && source != .mpRemoteCommand {
-                // Active shuttle: a plain click bumps/steps-down the
-                // multiplier via ShuttleGrammar, same grammar as a
-                // long-press nudge. See F1 in final-branch-review.md —
-                // clicks must be able to reach the bump, not just holds.
-                // Excluded for .mpRemoteCommand: MPRemoteCommand skipForward/
-                // skipBackward also emit .seekRelative(±N) (NowPlayingService),
-                // and an external skip arriving mid-shuttle should keep its
-                // nudge-by-N magnitude rather than bump the multiplier. See R1
-                // in final-branch-review.md.
+                // Active shuttle: a click bumps the multiplier, as a hold does.
+                // Not for MPRemoteCommand skips, which keep their nudge-by-N.
                 let wasScrubbing = vm.isScrubbing
                 let speedBefore = vm.scrubSpeed
                 vm.scrubInDirection(forward: seconds > 0)
@@ -520,14 +502,8 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
             } else {
                 Task { await vm.seekRelative(by: seconds) }
             }
-            // REFRESH the auto-hide timer when the chrome is already up; do not
-            // SUMMON it. A single click with the rail closed is a skip, not a
-            // request for chrome. This ran unconditionally, so every skip from a
-            // hidden-chrome state raised the rail, and raising it flips
-            // `controlsFocusActive`, which disarms the container's own Left/Right
-            // recognizers — so the click after a skip did nothing. That is the
-            // "sometimes it skips, sometimes it opens the rail, sometimes
-            // nothing happens" sequence, and it is one bug, not three.
+            // Refresh the auto-hide timer when the chrome is up; a skip never
+            // summons it, or the next click lands on the rail instead of skipping.
             if vm.showControls { vm.showControlsTemporarily() }
 
         case .seekAbsolute(let time):
@@ -1118,17 +1094,8 @@ extension UniversalPlayerView {
     }
 }
 
-/// Player error overlay with explicit default focus.
-///
-/// Lifted out of `UniversalPlayerView.errorView` so it can carry its own
-/// `@FocusState` and per-button `.focused()` bindings — without that, the
-/// error buttons were technically reachable from the Siri Remote (clicks
-/// fired their actions) but never visually highlighted, leaving the user
-/// unable to tell which button they were about to press. The visual
-/// highlight is driven off the outer `@FocusState` rather than
-/// `AppStoreButtonStyle`'s broken internal `@FocusState`, which doesn't
-/// reliably reflect the button's true focus state when wrapped in a
-/// `ButtonStyle.makeBody`.
+/// Player error overlay with explicit default focus. The highlight reads its own
+/// `@FocusState`, since `AppStoreButtonStyle`'s does not track focus inside `makeBody`.
 @MainActor
 private struct PlayerErrorOverlay: View {
     let error: PlayerError

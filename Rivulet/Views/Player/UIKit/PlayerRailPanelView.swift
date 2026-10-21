@@ -5,34 +5,16 @@
 //  PlayerRailPanelView.swift
 //  Rivulet
 //
-//  The one floating glass popup shared by every rail button. Cloned from
-//  AVKit's tvOS 26 tool menus (`AVUnifiedPlayerContextMenuView`, measured
-//  with DEBUG `AVKitScrubProbe`, RIVULET_SCRUBPROBE=menus): a 54pt-radius
-//  glass platter whose bottom-right corner sits 20.5pt above its button's
-//  top-right, growing out of that corner on a spring while its content
-//  fades in. Menu dismisses; content owns its own internal focus.
+//  The one floating glass popup shared by every rail button, cloned from AVKit's
+//  tvOS 26 tool menus (measured with DEBUG `AVKitScrubProbe`). Menu dismisses;
+//  content owns its own internal focus.
 //
 
 import UIKit
 
-/// Conformed to by rail-panel content that has its own internal Menu
-/// handling (e.g. `InsightsPanelContainerView`'s return from an actor to
-/// the cast) rather than always wanting Menu to close the whole
-/// panel outright.
-///
-/// tvOS delivers presses to the FOCUSED view and bubbles them UP the
-/// responder chain (first-responder status is irrelevant while something is
-/// focused). While the panel is open its focus fence keeps focus inside it,
-/// so `.menu` lands on `PlayerRailPanelView.pressesBegan` — an ancestor of
-/// every focused descendant — before it could ever reach
-/// `PlayerContainerViewController`. That override, and (for the
-/// focus-outside-panel edge case) `handleMenuButton()`, both consult this
-/// protocol first and only dismiss the whole panel if the content declines.
-///
-/// The content itself can't own this in its own `pressesBegan`: in states
-/// where nothing inside the content is focusable, focus falls onto the
-/// panel view itself, and a press delivered to the panel never visits its
-/// CHILDREN — bubbling goes up, not down.
+/// Rail-panel content with its own Menu handling (Insights going back from an
+/// actor to the cast). The panel asks it before dismissing; the content cannot
+/// use its own `pressesBegan`, since focus may sit on the panel itself.
 protocol RailPanelMenuHandling {
     /// Return true if this content fully handled Menu itself (e.g. animated
     /// back to a sub-list) and the panel should stay open. Return false to
@@ -75,22 +57,11 @@ final class PlayerRailPanelView: UIView {
 
     var onDismiss: (() -> Void)?
 
-    /// Fired whenever this panel consumes a `.menu` press (whether the
-    /// content handled it internally or the panel dismissed). tvOS ALSO
-    /// processes Menu through a system gesture recognizer that races
-    /// responder-chain consumption and calls `dismiss(animated:)` on the
-    /// presenting VC — the host uses this hook to arm its block-next-dismiss
-    /// guard so that system echo doesn't peel a second layer (it used to be
-    /// invisibly absorbed because the panel was already dismissing; now that
-    /// Menu can leave the panel open, it must be blocked explicitly).
+    /// Fired whenever this panel consumes a `.menu` press. The host arms its
+    /// block-next-dismiss guard, since tvOS also echoes Menu as `dismiss(animated:)`.
     var onMenuHandled: (() -> Void)?
 
-    /// Gives the hosted content first refusal on Menu — see
-    /// `RailPanelMenuHandling`'s doc comment for why this exists. Called
-    /// from this panel's own `pressesBegan` (the live path while focus is
-    /// inside the panel) and from
-    /// `PlayerContainerViewController.handleMenuButton()` (the edge case
-    /// where a Menu press arrives with focus outside the panel).
+    /// Gives the hosted content first refusal on Menu (see `RailPanelMenuHandling`).
     func contentHandlesMenuPress() -> Bool {
         (content as? RailPanelMenuHandling)?.handleMenuPress() ?? false
     }

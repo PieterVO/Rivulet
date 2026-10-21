@@ -109,29 +109,10 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
 enum CaptionAppearance {
 
     /// Clamps a MediaAccessibility relative-character-size value to a usable font scale.
-    ///
-    /// `MACaptionAppearanceGetRelativeCharacterSize` already returns the size as a
-    /// multiplicative scale factor (1.0 at the default), NOT an offset — so it is
-    /// used directly. A non-positive value means "unset"; treat that as 1.0.
-    ///
-    /// The API does not return a continuous value. Measured on tvOS 26.5 by
-    /// writing `MACaptionCharScale` into caption profiles and reading it back,
-    /// it QUANTISES to five buckets — 0.35, 0.6, 1.0, 1.5, 2.0 — and reports
-    /// 1.0 for anything outside that range. So the bounds below are only a
-    /// sanity net; they can never actually bind. 0.35 is the smallest bucket,
-    /// not "the smallest caption size", and reading it as the latter is what
-    /// mis-calibrated `CaptionOverlayView.Metrics.fontHeightFraction` (#299).
-    ///
-    /// The quantised value is the RIGHT one to render from, despite being lossy:
-    /// AVKit quantises too. "Large Text" (stored 1.75) and "Outline Text"
-    /// (stored 1.5) both report 1.5 and both render at exactly the same size,
-    /// measured identically to the pixel. So no raw-pref reading is needed, and
-    /// none should be added.
-    ///
-    /// What this value is NOT is a multiplier. AVKit's size is not linear in it
-    /// — see `CaptionOverlayView.Metrics.sizeLadder`, which maps each reported
-    /// value to a measured fraction of presentation height. Multiplying by this
-    /// number directly is ~11% short everywhere except the default.
+    /// The API returns a scale (1.0 default, non-positive means unset), quantised on
+    /// tvOS 26.5 to 0.35, 0.6, 1.0, 1.5, 2.0, so these bounds never bind. AVKit renders
+    /// from the same buckets, but not linearly: map through
+    /// `CaptionOverlayView.Metrics.sizeLadder`, never multiply by this (#299).
     static func fontScale(forRelativeSize relative: CGFloat) -> CGFloat {
         guard relative > 0 else { return 1.0 }
         return min(max(relative, 0.25), 4.0)
@@ -144,18 +125,8 @@ enum CaptionAppearance {
     static func current() -> CaptionStyle {
         var behavior = MACaptionAppearanceBehavior.useValue
 
-        // Foreground color + opacity. `behavior` is an OUT param: each call
-        // overwrites it to report whether the returned value is forced by the
-        // user (.useValue) or may yield to the content (.useContentIfAvailable).
-        // Read it straight after the COLOUR call — that read is the "Video
-        // Override" state for text colour, and the opacity call below
-        // immediately clobbers it.
-        // Each `allowsContent*` below is captured IMMEDIATELY after its own
-        // call, because every MediaAccessibility read overwrites `behavior`.
-        // They gate the content styling the engine now delivers (5.26.0:
-        // bold / italic / underline / strikethrough / font / size on
-        // SubtitleTextRun) the same way `allowsContentColor` has always gated
-        // colour: content wins only where the user allows it to.
+        // `behavior` is an out param that every MediaAccessibility read overwrites,
+        // so each `allowsContent*` is captured right after its own call.
         func contentMayOverride() -> Bool { behavior == .useContentIfAvailable }
 
         let fgUnmanaged = MACaptionAppearanceCopyForegroundColor(.user, &behavior)

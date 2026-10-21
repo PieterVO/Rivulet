@@ -5,10 +5,8 @@
 //  InsightsShowIDResolutionTests.swift
 //  RivuletTests
 //
-//  Covers the client-side show-TMDB-id resolution that feeds Insights for TV
-//  episodes. The bug this guards against: episodes carry a plex:// or tvdb://
-//  grandparent guid (not tmdb://), so the old direct extraction returned nil
-//  and Insights silently bailed — never fetching or requesting generation.
+//  Client-side show TMDB id resolution for TV episodes, whose grandparent guid
+//  is plex:// or tvdb://, not tmdb://.
 //
 
 import XCTest

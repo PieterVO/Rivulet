@@ -5,19 +5,10 @@
 //  HomeCollectionPinsTests.swift
 //  RivuletTests
 //
-//  Collections pinned to Home in Rivulet (P2 of the collections spec).
-//
-//  The store is JSON in UserDefaults under a per-profile key, so these tests
-//  point `selectedPlexUserId` at throwaway ids and restore it afterwards. The
-//  projection's per-pin decision is a pure static because `PlexDataStore` is a
-//  private-init singleton (the constraint `HomePromotedHubRowsTests`
-//  documents).
-//
-//  Rating keys and titles come from the home PMS 1.43.4: James Bond is
-//  collection 9144 in Movies, Dr. No (55929) is its first member, Newly
-//  Released is 118573. The library uuids are fake on purpose: the test host is
-//  the app, its `PlexDataStore` reacts to `changedNotification`, and a real
-//  uuid would make a signed-in simulator fetch and draw the test pins.
+//  Collections pinned to Home in Rivulet, stored per profile in UserDefaults.
+//  Keys come from the home PMS 1.43.4 (James Bond 9144, Dr. No 55929, Newly
+//  Released 118573). Library uuids are fake so a signed-in simulator doesn't
+//  fetch and draw the test pins.
 //
 
 import XCTest

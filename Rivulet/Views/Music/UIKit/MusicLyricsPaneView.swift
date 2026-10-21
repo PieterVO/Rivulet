@@ -5,12 +5,9 @@
 //  MusicLyricsPaneView.swift
 //  Rivulet
 //
-//  Now Playing's lyrics: 76pt bold lines from x 840 that scroll with the song,
-//  the sung lyric bright, the ones ahead dim and the ones behind gone. Plex
-//  times whole lines, so the highlight is per line. Never focusable: the page's
-//  hidden-controls anchor browses the lines through `step`, the drag calls and
-//  `commitSelection`.
-//  Constants and timings are Apple Music's on tvOS 26.
+//  Now Playing's lyrics, highlighted per line because Plex times whole lines.
+//  Never focusable: the page's anchor browses them through `step`, the drag
+//  calls and `commitSelection`. Constants and timings are Apple Music's on tvOS 26.
 //
 
 import UIKit

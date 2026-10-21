@@ -53,15 +53,8 @@ enum PlexMediaMapper {
         )
     }
 
-    /// `isPlayed` means FULLY watched, and Plex expresses that differently for
-    /// containers than for leaves.
-    ///
-    /// On a show or season, `viewCount` is an aggregate over watched children,
-    /// not a boolean — a season with 2 of 8 episodes watched reports
-    /// `viewCount == 2`, so `viewCount > 0` marked the whole season played.
-    /// Containers are only watched when every episode is
-    /// (`viewedLeafCount >= leafCount`), the same rule `PlexMetadata.isWatched`
-    /// uses.
+    /// Fully watched. On a show or season `viewCount` counts watched episodes, so a
+    /// container is watched only when `viewedLeafCount >= leafCount` (as `PlexMetadata.isWatched`).
     private static func isFullyWatched(_ meta: PlexMetadata) -> Bool {
         if meta.type == "show" || meta.type == "season" {
             guard let total = meta.leafCount, total > 0 else { return false }
@@ -88,15 +81,8 @@ enum PlexMediaMapper {
         return URL(string: "\(serverURL)\(path)\(separator)X-Plex-Token=\(authToken)")
     }
 
-    /// Build a tokenized URL for a PLAYABLE Plex key (a Part key, an extra key).
-    ///
-    /// Distinct from `artworkURL` because a playable key can carry its own query
-    /// string — Plex's IVA extras arrive as
-    /// `/services/iva/assets/715933/video.mp4?fmt=4&bitrate=5000`. Interpolating
-    /// `"...\(key)?X-Plex-Token=..."` around that produces TWO '?', so the token
-    /// is absorbed into the last parameter's value (`bitrate=5000?X-Plex-Token=…`)
-    /// and never authenticates. Split the key and merge instead, matching
-    /// ContentRouter.buildDirectPlayURL.
+    /// Tokenized URL for a playable key (Part, extra). The key can carry its own query
+    /// (IVA extras: `video.mp4?fmt=4&bitrate=5000`), so the token is merged into it, not appended.
     static func playableURL(_ key: String?, serverURL: String, authToken: String) -> URL? {
         guard let key, !key.isEmpty else { return nil }
         guard var components = URLComponents(string: serverURL) else { return nil }
@@ -423,11 +409,8 @@ enum PlexMediaMapper {
         }
         let allExtras = meta.allExtras
 
-        // Trailer button: first trailer. Disc rips (Kino Lorber, Criterion, etc.)
-        // often bundle trailers for other films, so ideally we'd title-match, but
-        // Plex doesn't include Media[].Part[] on extras in the metadata response
-        // (hasLocalFile is always false), so we can't distinguish IVA streams from
-        // local files at this layer. Use first trailer as-is for now.
+        // First trailer. Disc rips bundle other films' trailers, but extras carry no
+        // Media[].Part[] here, so IVA and local trailers cannot be told apart.
         let trailerURL: URL? = allExtras
             .first(where: { ExtraSubtype.from(subtype: $0.subtype, extraType: $0.extraType).isTrailer })
             .flatMap { $0.key }

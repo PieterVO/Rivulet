@@ -23,8 +23,7 @@ enum PlexUserRating {
         return userRating / starScale
     }
 
-    /// A favorite is a rating above three stars. It used to be any rating at
-    /// all, which marked a one-star pan as a favorite.
+    /// A favorite is a rating above three stars, so a one-star pan isn't one.
     static func isFavorite(_ userRating: Double?) -> Bool {
         (stars(userRating) ?? 0) > favoriteStarThreshold
     }

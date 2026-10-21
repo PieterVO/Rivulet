@@ -1,20 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HeroOverlayCell.swift
-//  Rivulet
-//
-//  Thin `UICollectionViewCell` wrapper around the native UIKit
-//  `HeroOverlayView`. Previously hosted SwiftUI `HeroOverlayContent` via
-//  `UIHostingController`; replaced because the SwiftUI/UIKit focus
-//  boundary at the hero's edge caused the focus engine to drop requests
-//  trying to move down from the hero buttons to Continue Watching.
-//
-//  Cell itself never accepts focus (`canBecomeFocused = false`) and
-//  forwards `preferredFocusEnvironments` to the overlay so the focus
-//  engine sees the Play / Watchlist / Info / Next buttons directly.
-//
+// Cell wrapper around `HeroOverlayView`. Never focusable itself; forwards
+// `preferredFocusEnvironments` so the engine sees the hero buttons directly.
 
 import UIKit
 
@@ -60,8 +48,7 @@ final class HeroOverlayCell: UICollectionViewCell {
         let onFocusEntered: (() -> Void)?
     }
 
-    /// MediaItem-based configuration. Additive path — PlexMetadata path above is
-    /// unchanged. Used by MediaLibraryViewController when config.showHero is true.
+    /// MediaItem configuration, used by MediaLibraryViewController when `config.showHero` is set.
     struct MediaItemConfiguration {
         let items: [MediaItem]
         let initialIndex: Int

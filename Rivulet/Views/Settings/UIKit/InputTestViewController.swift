@@ -5,21 +5,10 @@
 //  InputTestViewController.swift
 //  Rivulet
 //
-//  Settings → About → Run Input Test. Walks the user through the presses in
-//  `InputTestScript`, records what each one actually delivered, and ships the
-//  transcript as one Sentry event so a reported remote problem can be traced
-//  without asking for a screenshot.
-//
-//  It handles no input of its own. `InputProbe` observes the
-//  `MenuPressInterceptor` `sendEvent` swizzle, which sees a press before any
-//  responder or gesture recognizer, so this controller only subscribes. That is
-//  what lets it record presses the focus engine would otherwise swallow — the
-//  whole bug class here is presses that do nothing.
-//
-//  Menu is the exception: it closes the screen, so it is owned with a press-typed
-//  tap recognizer over a focusable card, the same pattern as the other modals.
-//  A focusless modal is never sent Menu at all (the system dismisses one layer
-//  up), which would lose the transcript.
+//  Settings → About → Run Input Test: walks through `InputTestScript`, records
+//  what each press delivered via `InputProbe`, and sends the transcript to Sentry.
+//  Menu closes it through a tap recognizer on a focusable card, because a
+//  focusless modal is never sent Menu and the transcript would be lost.
 //
 
 import UIKit

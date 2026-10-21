@@ -168,14 +168,9 @@ final class TrackMergeTests: XCTestCase {
 
     // MARK: - Invariant 3: streams only one side knows about don't shift anything
 
-    /// THE BUG THE ORDINAL APPROACH WOULD HAVE HAD.
-    ///
-    /// Plex emits EIA-608 closed captions baked into the video stream as their
-    /// own `Part.Stream` entry (`embeddedInVideo`, which is why `PlexStream._id`
-    /// is optional). FFmpeg surfaces no separate AVStream for them, so the engine
-    /// never reports one. Counting ordinals would shift every real subtitle by
-    /// one and mislabel the entire list. Joining on stream index just doesn't
-    /// match the phantom.
+    /// Plex lists baked-in EIA-608 captions as their own stream, which the engine
+    /// never reports. Joining on stream index ignores that phantom; ordinals
+    /// would shift every subtitle by one.
     func testPlexEmbeddedCCPseudoStreamDoesNotShiftTheMerge() {
         // Container: video=0, audio=1, subs at 2/3/4.
         // Plex ALSO lists a baked-in CC stream, which has no container index of

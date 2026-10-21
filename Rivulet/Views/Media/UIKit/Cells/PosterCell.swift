@@ -1,42 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PosterCell.swift
-//  Rivulet
-//
-//  Poster-style hub cell (Recently Added rows, Personalized Recommendations).
-//  Wraps `TVPosterView` for native tvOS focus motion (parallax, scale, glow).
-//
-//  Caption (`title` / `subtitle`) is intentionally nil. When set,
-//  `TVPosterView` reserves bottom space for the on-focus caption block
-//  even while the caption is hidden, which compresses the image area and
-//  visibly crops the bottom of 2:3 Plex posters. SwiftUI MediaPosterCard
-//  doesn't render a caption either; the title surfaces in the preview
-//  overlay / detail view instead.
-//
-//  Overlay subviews (watched badge, in-progress info bar, failure icon)
-//  live in a sibling `overlayContainer` view that:
-//    * matches the poster's image surface
-//    * applies its own 20pt corner mask so the watched corner-tag clips
-//      to the same rounded edge as the poster image
-//    * tracks the cell's focus state and applies the same scale
-//      transform `TVPosterView` uses for the image (so overlays grow
-//      with the poster instead of staying static during focus zoom)
-//
-//  Earlier attempts to host overlays inside `posterView.contentView` or
-//  `posterView.imageView` either produced invisible badges (Apple's
-//  internal layout doesn't render subviews on the imageView) or didn't
-//  inherit clipping correctly. The sibling-with-matching-transform
-//  approach is reliable on both counts.
-//
-//  In-progress composition matches Continue Watching exactly (per user
-//  direction): a MediaProgressInfoBar (play.fill icon + 44pt capsule
-//  progress + "S1, E2 . 35m" info text) directly over the art — no dark
-//  gradient/scrim behind it (removed 2026-06-10; it read as a bad shadow).
-//  Only renders when `0 < item.watchProgress < 1`. Watched and
-//  unwatched items show no bottom bar.
-//
+// Poster hub cell wrapping `TVPosterView` for native focus motion.
+// Caption stays nil: a set caption reserves bottom space even while hidden and crops 2:3 posters.
+// Overlays sit in a sibling `overlayContainer` that copies the poster's mask and focus scale,
+// because subviews added to `posterView.imageView` do not render.
 
 import UIKit
 import TVUIKit
@@ -47,10 +15,7 @@ final class PosterCell: UICollectionViewCell {
 
     private let posterView = TVPosterView()
 
-    /// Sibling of `posterView` that hosts overlays. Has its own rounded
-    /// mask so the corner-tag clips to the same shape as the poster; its
-    /// transform is kept in sync with the posterView's focus zoom in
-    /// `didUpdateFocus`.
+    /// Hosts the overlays; its transform follows the poster's focus zoom in `didUpdateFocus`.
     private let overlayContainer = UIView()
 
     private let watchedBadge = PosterWatchedBadge()
@@ -58,8 +23,7 @@ final class PosterCell: UICollectionViewCell {
     private let failureIcon = UIImageView()
     private let progressInfoBar = MediaProgressInfoBar()
 
-    /// Apple-style "watched" indicator, bottom-left (same slot as the play
-    /// icon + progress bar). Replaces the old top-trailing corner checkmark.
+    /// Apple-style watched glyph, bottom-left (the progress bar's slot).
     private let watchedGlyph = WatchedGlyphView()
 
     /// Glass card shown in place of the bare `TVPosterView` gray while the
@@ -70,11 +34,8 @@ final class PosterCell: UICollectionViewCell {
     private let loadingSpinner = UIActivityIndicatorView(style: .large)
     /// Delays the spinner so a fast cache hit doesn't flash it on scroll.
     private var spinnerDelayTask: Task<Void, Never>?
-    /// ATV+ legibility band: bottom-quarter blur under the info bar.
-    /// Toggled together with `progressInfoBar` (in-progress items only).
-    /// LAZY: a UIVisualEffectView per cell was a measured chunk of the
-    /// 5s launch dataSource.apply (40-60 instances realized per apply);
-    /// most posters are not in-progress and never need one.
+    /// Bottom-quarter blur under the info bar, in-progress items only. Created lazily:
+    /// a UIVisualEffectView per cell was a measured part of the launch snapshot apply.
     private var bottomInfoBlur: BottomInfoBlurView?
 
     @discardableResult
@@ -128,9 +89,7 @@ final class PosterCell: UICollectionViewCell {
         // Stable identifier for focus diagnostics / UI automation.
         accessibilityIdentifier = "hub.poster.cell.9f27c1"
 
-        // No resting drop shadow: the ATV+ reference (Docs/atv_ref/
-        // below_home_hero_ref.md) floats cards directly over the page
-        // background — focus chrome is image-bound, no dark halo.
+        // No resting drop shadow, matching the Apple TV app.
 
         posterView.translatesAutoresizingMaskIntoConstraints = false
         posterView.image = Self.blankArtwork
@@ -144,10 +103,7 @@ final class PosterCell: UICollectionViewCell {
         overlayContainer.layer.cornerCurve = .continuous
         contentView.addSubview(overlayContainer)
 
-        // Glass placeholder (backmost): covers TVPosterView's bare gray while
-        // the artwork loads, and hosts the failure icon on a genuine miss. A
-        // neutral dark fill (slightly above the page background) + a hairline
-        // edge reads as a calm card, not Apple's lighter empty-poster gray.
+        // Placeholder (backmost): covers TVPosterView's bare gray while artwork loads.
         placeholderPanel.translatesAutoresizingMaskIntoConstraints = false
         placeholderPanel.isUserInteractionEnabled = false
         placeholderPanel.backgroundColor = UIColor(white: 0.12, alpha: 1.0)
@@ -168,7 +124,7 @@ final class PosterCell: UICollectionViewCell {
         progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
         overlayContainer.addSubview(progressInfoBar)
 
-        // Watched badge: top-trailing, 10pt inset (mirrors SwiftUI `.padding(10)`).
+        // Watched badge: top-trailing, 10pt inset.
         watchedBadge.translatesAutoresizingMaskIntoConstraints = false
         watchedBadge.isHidden = true
         overlayContainer.addSubview(watchedBadge)
@@ -205,10 +161,7 @@ final class PosterCell: UICollectionViewCell {
             overlayContainer.leadingAnchor.constraint(equalTo: posterView.imageView.leadingAnchor),
             overlayContainer.trailingAnchor.constraint(equalTo: posterView.imageView.trailingAnchor),
 
-            // Info bar pinned to the bottom of the overlay container
-            // (= bottom of the poster). Insets match ContinueWatchingCell
-            // (16 leading / 15 bottom) so the two read identically. The blur
-            // band's constraints live in ensureBottomInfoBlur (lazy).
+            // Insets match ContinueWatchingCell (16 leading, 15 bottom).
             progressInfoBar.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 16),
             progressInfoBar.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -16),
             progressInfoBar.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor, constant: -15),
@@ -256,25 +209,14 @@ final class PosterCell: UICollectionViewCell {
                 : .identity
         }, completion: { [weak self] in
             guard let self, !nowFocused else { return }
-            // TVPosterView owns its focus scale and shrinks via its own
-            // coordinated unfocus animation — which sometimes does NOT reset
-            // (the poster stays enlarged with the engine reporting it
-            // unfocused, so no further event will fix it). Once the focus
-            // animation settles, enforce the unfocused end state ourselves.
+            // TVPosterView's own unfocus sometimes leaves the poster enlarged; enforce the end state.
             self.resetStaleFocusAppearance()
         })
     }
 
-    /// Force-clear a stale focused appearance. TVPosterView owns its focus
-    /// scale and the remote-tilt motion effects; both are torn down by its own
-    /// coordinated unfocus animation, which sometimes never runs (e.g. focus
-    /// left the whole collection into a presented carousel) — the poster
-    /// strands enlarged AND keeps parallax-wiggling with the remote while the
-    /// engine reports it unfocused, so no further event will fix it. Clear any
-    /// leftover scale transform and strip motion effects from the poster's
-    /// view tree directly. No-ops if the cell is (or became) focused — the
-    /// unfocus-completion trigger can land after focus has already returned to
-    /// this cell, and must not wipe a live focused appearance.
+    /// Clears a focused look TVPosterView left behind: its unfocus animation sometimes never runs
+    /// (focus left into a presented carousel), stranding the scale and parallax. No-op while focused,
+    /// since the completion can fire after focus has returned.
     func resetStaleFocusAppearance() {
         guard !isFocused else { return }
         func clear(_ v: UIView) {
@@ -458,8 +400,7 @@ final class PosterCell: UICollectionViewCell {
         spinnerDelayTask = nil
     }
 
-    /// Full Plex-type failure icon switch, including music types.
-    /// Mirror of SwiftUI `MediaPosterCard.iconForType` (all types).
+    /// Failure icon for every Plex type, music included.
     private func failureIconImage(for item: PlexMetadata) -> UIImage? {
         let name: String
         switch item.type {
@@ -564,7 +505,6 @@ final class PosterCell: UICollectionViewCell {
         hideWatchedIndicators()
     }
 
-    /// Mirror of SwiftUI `MediaPosterCard.isFullyWatched`.
     private func isFullyWatched(_ item: PlexMetadata) -> Bool {
         guard let viewCount = item.viewCount, viewCount > 0 else { return false }
         if let progress = item.watchProgress, progress > 0, progress < 1 {
@@ -672,9 +612,7 @@ final class PosterCell: UICollectionViewCell {
 
 // MARK: - Unwatched-count badge
 
-/// Top-trailing blue pill showing the unwatched-episode count for an in-progress
-/// TV show. The fully-watched state is now shown by a bottom-left rewatch glyph
-/// (`WatchedGlyphView`), Apple-style — not by this badge.
+/// Top-trailing blue pill with an in-progress show's unwatched-episode count.
 @MainActor
 final class PosterWatchedBadge: UIView {
     enum Style {

@@ -111,13 +111,9 @@ final class MusicNowPlayingBridge {
 
     // MARK: - Remote Commands
 
-    /// Music's half of the one shared command center: next/previous, shuffle
-    /// and repeat on; the video player's skip and seek off (their handlers do
-    /// nothing without a video, and left enabled they compete with
-    /// next/previous for the system's transport buttons). `NowPlayingService.attach` claims
-    /// the other half. Both used to be set once, at each service's first use,
-    /// so whichever player started second kept its layout for the whole
-    /// session: after the first film, Music's next/previous stayed disabled.
+    /// Music's half of the shared command center: next/previous, shuffle and repeat on, the
+    /// video skip and seek off (they would compete for the transport buttons).
+    /// `NowPlayingService.attach` claims the other half; each claims on every start.
     func claimRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
         center.nextTrackCommand.isEnabled = true

@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  InputConfig.swift
-//  Rivulet
-//
-//  Shared constants for remote/controller/keyboard input behavior.
-//
+// Shared constants for remote, controller and keyboard input.
 
 import Foundation
 
@@ -15,19 +10,9 @@ enum InputConfig {
     static let seekCoalesceInterval: TimeInterval = 0.05
     static let actionDedupeWindow: TimeInterval = 0.08
     static let transportDedupeWindow: TimeInterval = 0.35
-    /// A single directional press-and-hold can be observed by TWO independent
-    /// detectors at the same ~0.4s threshold — a GameController hold timer
-    /// (.siriMicroGamepad, via an async hop) and a UIKit press path (.irPress).
-    /// Both emit `.scrubNudge`, and the async skew routinely pushes them >0.08s
-    /// apart, so each was bumping the shuttle a level (a single hold jumping
-    /// 2x→4x on its own). This wider CROSS-SOURCE window coalesces the two into
-    /// one hold entry, while deliberate same-source re-clicks (which bump on
-    /// purpose) are never deduped because they share a source. Sized above the
-    /// observed skew but below a human's fastest deliberate double-click.
-    ///
-    /// No player has two press detectors any more (`RemoteInputHandler` acts
-    /// only on input with no UIPress), but an MPRemoteCommand seek can still
-    /// pair with a press.
+    /// Cross-source window that merges two `.scrubNudge`s from one hold (a press plus an
+    /// MPRemoteCommand seek) so the shuttle steps once. Same-source re-clicks are never
+    /// deduped. Above the async skew, below a fast deliberate double-click.
     static let scrubNudgeDedupeWindow: TimeInterval = 0.25
     static let blockDismissTimeout: TimeInterval = 0.3
 

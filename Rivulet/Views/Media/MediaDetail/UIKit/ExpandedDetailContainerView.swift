@@ -1,34 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  ExpandedDetailContainerView.swift
-//  Rivulet
-//
-//  The below-fold detail surface for the UIKit preview carousel. Owned by
-//  `PreviewCarouselViewController`, it sits above the collection view (which
-//  holds the hero chrome) and below nothing else.
-//
-//  P2 lifecycle: this surface is active in BOTH carousel-stable and expanded
-//  states. In carousel-stable it shows the episode PEEK for the centered card
-//  (cascading in WITH the chrome/metadata, snapping out + re-cascading as you
-//  page). Expanding just grows the hero above it; the peek stays put (its
-//  bottom is already at the screen bottom in both states). Pressing Down then
-//  scrolls the below-fold up, fading the hero and revealing the seasons header.
-//
-//  Layers it owns: the content translation, the header-reserve growth, the
-//  episode-peek cascade, the seasons-header + small-logo crossfades. Layers it
-//  does NOT own (the backdrop blur + hero chrome fade) live in the VC and are
-//  driven from `onScrollProgress`.
-//
-//  Single clock (UIKIT_FOUNDATIONS §6): `scrollOffset` is the only scroll
-//  timeline; `apply()` fans it out in one pass. The episode-peek cascade is a
-//  separate, chrome-synced timeline (page changes, not scroll).
-//
-//  This session: TV route with INERT placeholders (episode card row + season
-//  pill bar). Real cells + focus-driven scrolling come later. See
-//  docs/superpowers/specs/2026-06-01-uikit-expanded-detail-belowfold-design.md.
-//
+//  The carousel's below-fold detail, above the hero chrome. In the carousel it shows the
+//  centred card's episode peek, cascading with the chrome; Down scrolls it up over the hero.
+//  The VC owns the blur and chrome fade, driven from `onScrollProgress`.
 
 import UIKit
 
@@ -38,10 +13,7 @@ final class ExpandedDetailContainerView: UIView {
 
     private(set) var scrollOffset: CGFloat = 0
 
-    /// Distance over which the hero→details fades complete (SwiftUI parity).
-    // The episode slide travels ~800pt (peek → details). Scale progress over
-    // most of that so the blur/fade/logo ride the whole movement, not just the
-    // first fraction of it.
+    /// Distance over which the hero fades complete: most of the ~800 pt episode slide.
     static let reserveDistance: CGFloat = 600
 
     /// Down-press target: scroll past saturation to bring the below-fold up.
@@ -70,11 +42,6 @@ final class ExpandedDetailContainerView: UIView {
     /// gap = thinner/lower peek (visible peek ≈ shelfPeek − peekTopGap), without
     /// moving the metadata. Tuned so episodes show as a shallow bottom strip.
     private static let peekTopGap: CGFloat = 75
-    /// Episode-peek horizontal insets. Carousel-stable aligns to the inset card
-    /// (left with the metadata, right clipped at the card edge); expanded goes
-    /// near-full-bleed. The inset animates on expand (driven by the VC, Step 3).
-    /// Carousel-stable: clip spans the card width so the 4 thumbs center
-    /// within the card.
     /// Vertical slack inside the season-pill scroller so a focused pill's 1.05
     /// scale isn't clipped by the scroller's bounds.
     private static let seasonPillFocusPad: CGFloat = 8
@@ -128,11 +95,8 @@ final class ExpandedDetailContainerView: UIView {
         didSet { applyPillFocusability() }
     }
 
-    /// Pills are focusable ONLY while the user is in the pill row. When focus is
-    /// on the episodes they are non-focusable, so the focus engine's spatial Up
-    /// move finds no pill and stays put; the Up handler then sets the target to
-    /// .pills (enabling them here) and drives focus straight to the SELECTED
-    /// pill — no intermediate wrong-pill landing.
+    /// Pills are focusable only while targeted, so Up from the episodes cannot land on
+    /// the wrong pill; the Up handler targets them and focuses the selected one.
     private func applyPillFocusability() {
         let on = detailsFocusTarget == .pills
         for pill in seasonPills where pill.focusEnabled != on { pill.focusEnabled = on }
@@ -142,10 +106,7 @@ final class ExpandedDetailContainerView: UIView {
     private(set) var focusIsOnPills = false
     var hasSeasonPills: Bool { !seasonPills.isEmpty }
 
-    /// True while focus is on the episodes (top) row — as opposed to a lower
-    /// section (Trailers/Related/Cast/About/Info). The Up handler only routes to
-    /// the season pills from the episodes; from a lower row it lets the focus
-    /// engine move up one row instead of jumping to the pills.
+    /// True while focus is on the top (episodes) row, the only row Up lifts to the pills from.
     var focusIsOnEpisodes: Bool { belowFoldCollection.focusIsOnEpisodes }
 
     /// Re-arm focus inside a shelf-host row (Related) after a modal. No-op
@@ -160,10 +121,7 @@ final class ExpandedDetailContainerView: UIView {
         belowFoldCollection.clearArmedShelfRestore()
     }
 
-    /// True briefly after the episode thumb took focus. The Up handler uses this
-    /// to keep focus on the thumb when it just landed there (coming up from the
-    /// description or a lower row); only a deliberate Up from a resting thumb
-    /// lifts to the season pills.
+    /// True briefly after the episode thumb took focus, so the Up that landed there does not lift further.
     var episodeThumbJustTookFocus: Bool { belowFoldCollection.episodeThumbJustTookFocus }
 
     /// True while focus is on an episode description (the VC redirects Left/Right
@@ -219,12 +177,8 @@ final class ExpandedDetailContainerView: UIView {
     private var clipLeadingConstraint: NSLayoutConstraint!
     private var clipTrailingConstraint: NSLayoutConstraint!
 
-    /// On expand the whole below-fold is translated left by this `pull` so the
-    /// rail's leading lines up with the expanded metadata. That shift would pull
-    /// the right edge IN by the same amount, so the collection is made `pull`
-    /// wider on the right to compensate — content then reaches the screen edge.
-    /// The rail rests untransformed under the collapsed metadata, so the
-    /// carousel state needs no shift of its own.
+    /// On expand the below-fold shifts left by this so the rail meets the expanded metadata;
+    /// the collection is this much wider on the right so content still reaches the edge.
     private static var belowFoldExpandPull: CGFloat {
         BelowFoldCollectionView.rowLeading - PreviewCarouselGeometry.expandedChromeInset
     }
@@ -270,10 +224,7 @@ final class ExpandedDetailContainerView: UIView {
         belowFoldPage.backgroundColor = .clear
         contentView.addSubview(belowFoldPage)
 
-        // Fixed top overlay (screen top), NOT in the scrolling content — it
-        // crossfades in as you enter the details and pins at the top while the
-        // episodes/related/cast scroll under it (Apple TV+). Brought to front
-        // after the collection is added.
+        // A fixed overlay at the screen top that the rows scroll under, as Apple's does.
         smallTitleLogo.translatesAutoresizingMaskIntoConstraints = false
         smallTitleLogo.contentMode = .scaleAspectFit
         smallTitleLogo.alpha = 0
@@ -283,17 +234,10 @@ final class ExpandedDetailContainerView: UIView {
         seasonsHeader.translatesAutoresizingMaskIntoConstraints = false
         seasonsHeader.alpha = 0
         addSubview(seasonsHeader)
-        // A show can have more seasons than fit the screen (~8). The scroller is
-        // what makes the overflow reachable at all: UIScrollView is a
-        // UIFocusItemScrollableContainer, so the engine treats pills outside the
-        // visible window as focus candidates and scrolls them in itself.
+        // A scroll view makes pills past the screen edge (~8 fit) focus candidates.
         seasonPillScroll.translatesAutoresizingMaskIntoConstraints = false
         seasonPillScroll.showsHorizontalScrollIndicator = false
-        // We own the focus scroll (same call as the below-fold collection): the
-        // engine's own focus-scroll animator only ever does a minimal
-        // scroll-to-visible, which leaves the NEXT pill off-window and hands the
-        // engine an episode as the best Left/Right candidate. `revealSeasonPill`
-        // keeps both neighbours on-window instead.
+        // `revealSeasonPill` scrolls instead: the engine's minimal scroll leaves the next pill off-window.
         seasonPillScroll.isScrollEnabled = false
         seasonsHeader.addSubview(seasonPillScroll)
         seasonPillRow.translatesAutoresizingMaskIntoConstraints = false
@@ -308,12 +252,7 @@ final class ExpandedDetailContainerView: UIView {
             seasonPillScroll.leadingAnchor.constraint(equalTo: seasonsHeader.leadingAnchor),
             seasonPillScroll.trailingAnchor.constraint(equalTo: seasonsHeader.trailingAnchor),
             seasonPillScroll.heightAnchor.constraint(equalTo: pillContent.heightAnchor),
-            // Full-bleed window (the header spans the screen), so the pills
-            // scroll off the real edges like the episode rows do. The content
-            // edge is a pad INSIDE the content instead: the first pill rests on
-            // the shared content line and the last one ends on it. Keeping it as
-            // content — not `contentInset` — leaves the resting offset at 0
-            // rather than -inset.
+            // The margin is padding inside the content, not `contentInset`, so the resting offset stays 0.
             seasonPillRow.leadingAnchor.constraint(equalTo: pillContent.leadingAnchor, constant: PreviewCarouselGeometry.expandedChromeInset),
             seasonPillRow.trailingAnchor.constraint(equalTo: pillContent.trailingAnchor, constant: -PreviewCarouselGeometry.expandedChromeInset),
             // Vertical pad keeps the pills' 1.05 focus scale off the clip edge;
@@ -378,9 +317,7 @@ final class ExpandedDetailContainerView: UIView {
             episodesTrailingConstraint,
             episodesClip.heightAnchor.constraint(equalToConstant: 203),
 
-            // Carousel-stable: exactly 4 thumbs, CENTERED in the card (no edge
-            // peek). The expanded state (Step 3) widens the clip and shifts the
-            // row to reveal the n−1 / n+1 edges.
+            // Four thumbs centred in the card; expanding widens the clip to the n−1 / n+1 edges.
             episodesRow.centerXAnchor.constraint(equalTo: episodesClip.centerXAnchor),
             episodesRow.topAnchor.constraint(equalTo: episodesClip.topAnchor),
             episodesRow.bottomAnchor.constraint(equalTo: episodesClip.bottomAnchor),
@@ -389,13 +326,7 @@ final class ExpandedDetailContainerView: UIView {
             // aligned with them. +20pt below the logo (which ends at y150) for a
             // gap between the title logo and the season pills.
             seasonsHeader.topAnchor.constraint(equalTo: topAnchor, constant: 170 - Self.seasonPillFocusPad),
-            // The season-pill CAPSULE left edge sits on the shared content edge
-            // (same X as the thumbnails / headers / hero metadata). The pill text
-            // is naturally indented inside the capsule, matching the ATV+ ref.
-            // Edge to edge: the scroller needs a bounded window (without one the
-            // row just runs off-screen), and the pills bleed off the real screen
-            // edges like the episode rows. Their content edge comes from the
-            // row's own leading/trailing pad inside the scroller.
+            // Edge to edge, so the pills bleed off the screen like the episode rows.
             seasonsHeader.leadingAnchor.constraint(equalTo: leadingAnchor),
             seasonsHeader.trailingAnchor.constraint(equalTo: trailingAnchor),
             // No fixed height/width — the pill row hugs the header (equality pins
@@ -404,16 +335,10 @@ final class ExpandedDetailContainerView: UIView {
 
         buildPlaceholderSections()
 
-        // The real episode collection is the SINGLE rail (unified): it shows in
-        // BOTH carousel-stable (episodes peeking, non-interactive) and expanded
-        // (focusable). Alpha is cascade-driven like the chrome. The old grey
-        // placeholder peek is retired (kept hidden so the morph code compiles).
+        // The collection is the one rail in both states; this placeholder stays hidden.
         episodesClip.isHidden = true
 
-        // Card-width clip around the rail. The collection inside is pinned to
-        // SELF (full-screen), so the episodes keep their screen position; only
-        // the clip changes — card width in carousel-stable (edge episodes
-        // hidden behind the card border), full-screen on expand (revealed).
+        // Card width in the carousel, full screen on expand; the rail inside never moves.
         belowFoldClip.translatesAutoresizingMaskIntoConstraints = false
         belowFoldClip.clipsToBounds = true
         addSubview(belowFoldClip)
@@ -452,10 +377,7 @@ final class ExpandedDetailContainerView: UIView {
 
     // MARK: - Below-fold collection (real content, expanded state)
 
-    /// Only drive the hero fade while the user is actually scrolling INSIDE the
-    /// below-fold. The collection emits transient scroll events while it's being
-    /// revealed/laid out (content inset + offset settling), and those must NOT
-    /// fade the chrome — otherwise the metadata flashes out during the expand.
+    /// Gates the hero fade, so the collection's settling scrolls during reveal do not flash the metadata out.
     private var belowFoldScrollActive = false
 
     /// Enable/disable the below-fold → hero-fade coupling. The VC enables it on
@@ -466,11 +388,7 @@ final class ExpandedDetailContainerView: UIView {
         if !active { applyHeroProgress(fromOffset: 0) }
     }
 
-    /// Drive the hero choreography from the collection's scroll offset. The
-    /// collection owns its own scrolling, so unlike `apply()` this does NOT
-    /// translate the content or grow the reserve — it only fans the progress
-    /// out to the hero fades (blur + chrome via `onScrollProgress`, small logo,
-    /// seasons header).
+    /// Fans the collection's scroll progress out to the hero fades; unlike `apply()` it moves no content.
     func driveScrollProgress(fromCollectionOffset off: CGFloat) {
         guard belowFoldScrollActive else { return }
         applyHeroProgress(fromOffset: off)
@@ -480,12 +398,7 @@ final class ExpandedDetailContainerView: UIView {
         scrollOffset = off
         smallTitleLogo.alpha = belowFoldTitleOpacity
         seasonsHeader.alpha = scrollProgress
-        // The title logo + season pills are overlays, but should
-        // scroll WITH the rail rather than float in place: translate them by the
-        // rail's offset past the details-rest position, so they ride up and out
-        // as the user scrolls into the lower rows (and follow the episodes down
-        // on entry/collapse). This runs synchronously inside the scroll
-        // animation, so it animates in sync with the rail.
+        // The logo and pills ride the rail's offset past its details rest, inside the scroll animation.
         let dy = belowFoldCollection.detailsRestOff - off
         let scroll = CGAffineTransform(translationX: 0, y: dy)
         seasonsHeader.transform = scroll
@@ -493,22 +406,14 @@ final class ExpandedDetailContainerView: UIView {
         onScrollProgress?(scrollProgress)
     }
 
-    /// Reveal the real below-fold for the current item, cross-fading from the
-    /// placeholder peek. Called from the expand-morph completion (post-morph,
-    /// so it never rides the morph clock — §6).
-    /// On expand completion: keep the rail visible + load cast/related (episodes
-    /// were loaded in carousel-stable). It stays NON-interactive in expanded-hero
-    /// so Down from the action row bubbles to the VC's pressesBegan
-    /// (→ enterBelowFold); interactivity is enabled in setBelowFoldInteractive
-    /// once the user actually enters. No cross-fade — it's the same rail.
+    /// After the expand morph: loads cast and related. Stays non-interactive so Down
+    /// from the action row reaches the VC; `setBelowFoldInteractive` enables it on entry.
     func revealBelowFoldCollection() {
         guard let item else { return }
         setBelowFoldScrollActive(false)
         belowFoldCollection.onEpisodesApplied = nil
         belowFoldCollection.alpha = 1
-        // Installed BEFORE configure, which is what fires it: the loader's own
-        // season fetch now feeds the pills, where
-        // populateSeasonPills used to run a second /children of its own.
+        // Before configure, which fires it: the loader's season fetch feeds the pills.
         belowFoldCollection.onSeasonsLoaded = { [weak self] seasons, selectedIndex in
             self?.applySeasons(seasons, selectedIndex: selectedIndex)
         }
@@ -558,19 +463,11 @@ final class ExpandedDetailContainerView: UIView {
         maxScrollOffset = max(0, contentView.bounds.height - bounds.height)
     }
 
-    // MARK: - Expand inset (driven by the VC during the morph — Step 3)
+    // MARK: - Expand inset (driven by the VC during the morph)
 
-    /// Morph the episode peek between carousel and expanded. Carousel: clip =
-    /// card width, the 6-thumb row centered so only the middle 4 show. Expand:
-    /// clip widens to full-bleed (the outer thumbs' edges peek in as n-1/n+1)
-    /// and the thumbs elongate slightly. The morph controller calls this inside
-    /// its animator + layoutIfNeeded so it rides the one clock.
+    /// Widens the episode clip from card width to full bleed. Called inside the morph animator.
     func setExpanded(_ expanded: Bool) {
-        // The episode rail tracks the metadata pull on expand: shift left so its
-        // leading (card inset + carousel chrome inset) lines up with the expanded
-        // metadata (expandedChromeInset). Rides the morph animator (the morph
-        // controller calls this inside its UIViewPropertyAnimator), so it's a
-        // smooth coordinated pull — not a jump.
+        // Follows the metadata's pull to `expandedChromeInset`.
         belowFoldCollection.transform = expanded
             ? CGAffineTransform(translationX: -Self.belowFoldExpandPull, y: 0) : .identity
 
@@ -610,10 +507,7 @@ final class ExpandedDetailContainerView: UIView {
 
     // MARK: - Episode-peek cascade (chrome-synced; page changes, not scroll)
 
-    /// Cascade the episode peek in/out to match the centered card. The VC calls
-    /// this alongside the cell chrome cascade: `true` on page-settle (cascade
-    /// in), `false` once it has paged away (snap out). Mirrors the chrome's
-    /// 0.5s fade so the episodes "load in with the metadata".
+    /// Fades the episode peek in with the chrome's 0.5 s cascade, or snaps it out after paging away.
     func setCurrent(_ current: Bool, animated: Bool) {
         cascadeToken &+= 1
         let token = cascadeToken
@@ -693,10 +587,7 @@ final class ExpandedDetailContainerView: UIView {
         belowFoldCollection.refreshWatchState()
     }
 
-    /// Swap in a re-fetched copy of the SAME item (new watch state, same ref)
-    /// without re-running the episode load. `item`'s `didSet` would otherwise
-    /// rebuild the rail from scratch; here only the stored value moves so the
-    /// host can hand the fresh item back out (`onSelectSynopsis`, etc.).
+    /// Stores a re-fetched copy of the same item without the `didSet` rail rebuild.
     func updateItemInPlace(_ refreshed: MediaItem) {
         guard let current = item, current.ref == refreshed.ref else { return }
         isSwappingItemInPlace = true
@@ -708,10 +599,7 @@ final class ExpandedDetailContainerView: UIView {
         // Load the centered item's episodes into the single rail (episodes-only
         // in carousel-stable; cast/related are added on expand).
         if let item { belowFoldCollection.configureEpisodesOnly(item: item) }
-        // The previous item's pills describe a different show; they
-        // rebuild from the loader's seasons on reveal (onSeasonsLoaded). The
-        // episodes-only peek load does not fetch seasons, so nothing refills
-        // them before then.
+        // Clear the old show's pills; onSeasonsLoaded refills them on reveal.
         applySeasons([], selectedIndex: 0)
 
         logoLoadToken &+= 1
@@ -785,12 +673,7 @@ final class ExpandedDetailContainerView: UIView {
     // MARK: - Placeholder sections (TV route, inert)
 
     private func buildPlaceholderSections() {
-        // Episode peek: 6 16:9 thumbs, NO title. The row is centered in the
-        // card-width clip; with gap 75 only the MIDDLE 4 (thumbs 2–5) fall
-        // inside the clip — thumbs 1 and 6 sit fully outside. So carousel shows
-        // 4 centered (first visible thumb near the metadata's left edge, which aligns
-        // there). On expand the clip widens to full-bleed and thumbs 1/6 peek
-        // in as n-1/n+1.
+        // Six 16:9 thumbs centred in the card clip, so only the middle four show.
         episodesRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         thumbWidthConstraints.removeAll()
         peekThumbImageViews.removeAll()
@@ -819,19 +702,11 @@ final class ExpandedDetailContainerView: UIView {
 
     // MARK: - Season pills
 
-    /// Fetch the show's seasons and populate the pill row (real labels, the
-    /// current season highlighted). Empty/single-season shows show no pills.
-    /// Arm/disarm the below-fold so a Down-from-pills focus update lands on the
-    /// SELECTED season's first episode (not the remembered episode / season 1).
-    /// Armed only across the synchronous focus update the VC performs on Down.
+    /// Armed across the VC's Down-from-pills focus update, so it lands on the selected season's first episode.
     func armPillEntryFocus() { belowFoldCollection.pillEntryArmed = true }
     func disarmPillEntryFocus() { belowFoldCollection.pillEntryArmed = false }
 
-    /// Apply the loader's seasons to the pills.
-    ///
-    /// Called from `onSeasonsLoaded`, which fires as soon as the below-fold
-    /// loader has the seasons — it already resolved which one to open on, so
-    /// there is nothing to re-derive here and no second `/children` fetch.
+    /// Applies the loader's seasons, with the one to open on already resolved.
     func applySeasons(_ seasons: [MediaItem], selectedIndex: Int) {
         seasonItems = seasons
         setSeasonPills(seasons.map { SeasonPillView.seasonLabel(for: $0) },
@@ -864,20 +739,14 @@ final class ExpandedDetailContainerView: UIView {
                 // Every pill focus scrolls the row, season change or not — the
                 // next press needs its neighbour already on-window.
                 self.revealSeasonPill(i, animated: true)
-                // Only a CHANGE of season scrolls the rail. Returning UP to the
-                // pill of the season the episodes are ALREADY showing must not yank
-                // the rail back to that season's first episode — leave the user
-                // where they were. (selectedSeasonIndex tracks the focused episode.)
+                // Only a change of season scrolls the rail; returning to the current one leaves it.
                 guard i != self.selectedSeasonIndex else { return }
                 self.selectSeasonPill(i)   // highlight + current season follow focus
                 if i < self.seasonRefIDs.count {
                     self.belowFoldCollection.scrollEpisodesToSeason(seasonRefID: self.seasonRefIDs[i])
                 }
             }
-            // SELECT (press) opens that season's own detail page. Focus already
-            // switched the rail's season, so the press is spare here. Unwired, it
-            // falls back to re-affirming the season in the rail. Entering the
-            // episodes is still done with Down.
+            // Select opens the season's page; unwired, it re-affirms the season in the rail.
             pill.onSelected = { [weak self] in
                 guard let self else { return }
                 if let onOpenSeason = self.onOpenSeason, i < self.seasonItems.count {
@@ -907,22 +776,13 @@ final class ExpandedDetailContainerView: UIView {
         if !focusIsOnPills { revealSeasonPill(index, animated: true) }
     }
 
-    /// Scroll a pill into the scroller's window, WITH both neighbours.
-    ///
-    /// Revealing only the focused pill is not enough: the focus engine picks the
-    /// next Left/Right target from what is on-window, so a neighbour sitting
-    /// outside the scroller leaves an episode below as the best candidate and a
-    /// sideways press drops out of the row (#261). Keeping n±1 on-window means
-    /// the engine never has to look outside the pills.
+    /// Scrolls a pill on-window with both neighbours, or a sideways move can pick an episode below (#261).
     private func revealSeasonPill(_ index: Int, animated: Bool) {
         guard index >= 0, index < seasonPills.count else { return }
         layoutIfNeeded()
         let lo = max(0, index - 1)
         let hi = min(seasonPills.count - 1, index + 1)
-        // Ask for the content margin alongside the pills, so a landing at either
-        // end of the row leaves the same content margin the shelf rows rest
-        // on instead of putting the pill flush against the screen edge (where
-        // its 1.05 focus scale gets shaved).
+        // Include the content margin, so an end pill's 1.05 focus scale is not shaved at the screen edge.
         let rect = seasonPillScroll.convert(
             seasonPills[lo].frame.union(seasonPills[hi].frame), from: seasonPillRow
         ).insetBy(dx: -PreviewCarouselGeometry.expandedChromeInset, dy: 0)
@@ -937,11 +797,7 @@ final class ExpandedDetailContainerView: UIView {
         seasonPillScroll.setContentOffset(CGPoint(x: min(max(0, x), limit), y: 0), animated: animated)
     }
 
-    /// A Left/Right press on the pills must never leave the row. The engine
-    /// resolves a sideways move against whatever is on-window, and at the ends of
-    /// the row that can be an episode below — the "focus jumps down even though I
-    /// pressed left" report on #261. `revealSeasonPill` keeps a real pill in
-    /// range; this refuses the fallback outright.
+    /// Left/Right on the pills never leaves the row; at the row's ends the engine would pick an episode (#261).
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
         if focusIsOnPills,
            context.focusHeading == .left || context.focusHeading == .right,

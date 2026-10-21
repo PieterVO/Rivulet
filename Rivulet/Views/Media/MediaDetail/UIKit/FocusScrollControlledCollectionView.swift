@@ -1,28 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  FocusScrollControlledCollectionView.swift
-//  Rivulet
-//
-//  The default focus engine CENTERS the focused cell but races/drifts as it does
-//  it. So we take over the vertical focus-scroll: the collection's
-//  `isScrollEnabled = false` stops the engine's own focus-scroll animator (and
-//  the offset drift when focus moves to external views like the season pills),
-//  and on each focus change we drive the offset ourselves.
-//
-//  Scroll model (matches the home screen / the ATV+ detail refs):
-//   - The TOP section (episodes, section 0) pins under the fixed logo + season
-//     pills at `topBand` — that landing is also the hero-fade rest position.
-//   - Every other focused row CENTERS vertically. The clamp to [minY, maxY]
-//     makes the very top/bottom rows sit naturally (above/below center) rather
-//     than centering — exactly the "centered except the top and bottom ones"
-//     behavior. (Centering needs LESS scroll than top-pinning, so the lower
-//     rows actually come into view instead of running off the bottom.)
-//
-//  Horizontal navigation within an orthogonal row is unaffected — that's the
-//  section's own inner orthogonal scroller.
-//
+//  A collection that drives its own vertical focus scroll; the engine's drifts. With
+//  `isScrollEnabled = false`, the top section pins at `topBand` and every other row
+//  centres, clamped to the content, as on Home and Apple's detail page.
 
 import UIKit
 
@@ -37,46 +18,27 @@ final class FocusScrollControlledCollectionView: UICollectionView {
     /// focus leaves the collection. Used to track which episode/season is current.
     var onFocusedIndexPath: ((IndexPath?) -> Void)?
 
-    /// Whether focus is currently on the TOP section (the episodes row). The Up
-    /// handler uses this to decide: from the episodes, Up goes to the season
-    /// pills; from a LOWER section, Up must fall through to the focus engine so it
-    /// moves up one row (rather than jumping straight to the pills).
+    /// Focus is on the top section, the only one Up lifts to the pills from.
     private(set) var focusedCellIsTopSection = false {
         didSet { if focusedCellIsTopSection && !oldValue { lastTopFocusTime = CACurrentMediaTime() } }
     }
     private var lastTopFocusTime: CFTimeInterval = 0
-    /// True for a brief window after focus first lands on the episodes row. The
-    /// focus engine moves a lower row → episode ~4ms BEFORE pressesBegan fires on
-    /// the same Up press, so without this the Up handler would see "on episodes"
-    /// and immediately jump to the pills (the "sometimes falls through to pills"
-    /// bug). A later, deliberate Up (outside the window) does go to the pills.
+    /// The engine moves focus onto the episodes about 4 ms before pressesBegan sees the same
+    /// Up, so this window keeps that press from also lifting to the pills.
     var topSectionJustTookFocus: Bool { CACurrentMediaTime() - lastTopFocusTime < 0.06 }
 
-    /// Section index of the episodes row (the "top section"). Set by the owner
-    /// after each snapshot. Keying off the SECTION (not the cell class) matters
-    /// because trailers now reuse `EpisodeCollectionCell` too — a class check
-    /// would mis-tag a focused trailer as "on episodes" and send Up to the pills.
+    /// Set by the owner per snapshot. A section, not a cell class: trailers reuse `EpisodeCollectionCell`.
     var topSectionIndex: Int?
 
-    /// True while the focused view is an episode DESCRIPTION (vs a thumb). When
-    /// true, every episode description becomes focusable so Left/Right moves
-    /// between adjacent descriptions; when false they stay gated so Up coming up
-    /// from a lower row skips them and lands on the thumb. Computed from the
-    /// authoritative focused view (no per-cell race).
+    /// While a description has focus, every description is focusable for Left/Right;
+    /// otherwise they stay gated so Up from below lands on the thumb.
     private(set) var focusedViewIsEpisodeDescription = false
     /// Index path of the focused episode cell (top section), or nil. Used to
     /// redirect Left/Right from a description to the adjacent episode's thumb.
     private(set) var focusedEpisodeIndexPath: IndexPath?
 
-    /// Index path of the last cell focused ANYWHERE in this collection, kept
-    /// across a modal presentation so focus can return to it.
-    ///
-    /// The carousel sets `restoresFocusAfterTransition = false` and this
-    /// collection sets `remembersLastFocusedIndexPath = false` — both
-    /// deliberate — so nothing else remembers where focus was. Playing a
-    /// trailer therefore came back to item 0 of the first row. Unlike
-    /// `focusedEpisodeIndexPath` this is NOT cleared when focus leaves the
-    /// collection: leaving is exactly when it has to survive.
+    /// The last focused cell, kept across a modal. Nothing else remembers it here (both
+    /// system restores are off on purpose), and it survives focus leaving the collection.
     private(set) var lastFocusedIndexPath: IndexPath?
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
@@ -85,11 +47,7 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         onFocusedIndexPath?(ctx?.nextFocusedIndexPath)
         focusedViewIsEpisodeDescription = context.nextFocusedView is EpisodeDescriptionView
 
-        // Drive the vertical scroll off the focused VIEW, not the index path:
-        // cells inside orthogonal compositional sections don't resolve to a
-        // nextFocusedIndexPath at the collection level (it comes back nil), but
-        // context.nextFocusedView is always the real focused view. Walk up to its
-        // enclosing cell and center it (the top section pins under the logo).
+        // From the focused view: in orthogonal sections nextFocusedIndexPath is nil.
         guard let nextView = context.nextFocusedView,
               nextView.isDescendant(of: self),
               let cell = enclosingCell(of: nextView) else {
@@ -100,23 +58,12 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         let frame = cell.convert(cell.bounds, to: self)   // content coordinates
         let minY = -adjustedContentInset.top
         let maxY = max(minY, contentSize.height - bounds.height + adjustedContentInset.bottom)
-        // Top section = section 0 by index. (Not `cell is EpisodeCollectionCell`
-        // — trailers reuse that same cell class.) For shelf-host cells (Related
-        // rendered as a single full-width ShelfRowCell), the focused view is a
-        // nested subview and indexPath(for:) returns nil — walk up to the direct
-        // UICollectionViewCell child of self to resolve the section.
-        // Resolve against the cell THIS collection owns. The previous walk-up
-        // stopped at the first enclosing UICollectionView, which for a shelf
-        // host is the row's OWN nested collection — so Related never resolved
-        // and `lastFocusedIndexPath` was never recorded for it.
+        // A shelf row's focused tile belongs to its nested collection, so resolve the cell this one owns.
         let cellIndexPath = indexPath(for: cell) ?? ownedCell(containing: nextView)?.indexPath
         let isTop = topSectionIndex != nil && cellIndexPath?.section == topSectionIndex
         focusedCellIsTopSection = isTop
         focusedEpisodeIndexPath = isTop ? cellIndexPath : nil
-        // Remember where focus was for restoration after a modal (the player).
-        // Recorded here because this is the one place the index path is already
-        // resolved for EVERY row shape, including the shelf-host walk-up above
-        // that plain `indexPath(for:)` returns nil for.
+        // The one place the path is resolved for every row shape.
         if let cellIndexPath { lastFocusedIndexPath = cellIndexPath }
         let targetY = isTop ? (frame.minY - topBand) : (frame.midY - bounds.height / 2)
         let clamped = max(minY, min(targetY, maxY))
@@ -125,12 +72,8 @@ final class FocusScrollControlledCollectionView: UICollectionView {
 
     // MARK: - Per-frame scroll driver
 
-    // `UIView.animate { contentOffset = }` only animates the PRESENTATION layer —
-    // the model offset jumps to the target immediately, so the collection recycles
-    // cells based on the final offset and a row that ends up off-screen has its
-    // cells removed at once (the "row pops before it scrolls out" jank). A
-    // CADisplayLink advancing the real contentOffset per frame recycles cells
-    // progressively, so rows slide out smoothly.
+    // UIView.animate jumps the model offset at once, so a row ending off-screen loses its
+    // cells before it slides out. Advancing the real offset per frame recycles gradually.
     private var scrollLink: CADisplayLink?
     private var scrollStartY: CGFloat = 0
     private var scrollTargetY: CGFloat = 0
@@ -175,12 +118,7 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         return nil
     }
 
-    /// The cell of THIS collection that contains `view`.
-    ///
-    /// `enclosingCell` returns the FIRST cell walking up, which for a shelf-host
-    /// row (Related) is the inner `PosterCell` belonging to the row's own nested
-    /// collection — `indexPath(for:)` then returns nil because that cell isn't
-    /// ours. Keep walking until we find a cell this collection actually owns.
+    /// The cell of this collection containing `view`, walking past a shelf row's nested cells.
     func ownedCell(containing view: UIView) -> (cell: UICollectionViewCell, indexPath: IndexPath)? {
         var v: UIView? = view
         while let cur = v, cur !== self {

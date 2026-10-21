@@ -2,22 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  ExtraPlaybackKey.swift
-//  Rivulet
-//
-//  Issue #255: trailers failed to play "more times than not". Extras come in two
-//  flavors and only one is addressable as a library item:
-//
-//    - User-added (disc rips): carry a real library ratingKey.
-//    - Plex IVA (studio-supplied): NO library ratingKey. The only handle Plex
-//      gives is `key`, an absolute part path like /services/iva/assets/...
-//
-//  The play path fed the extra's `id` straight into /library/metadata/{id}. For
-//  IVA extras that builds a nonsense URL which 404s, and since IVA extras are the
-//  common case on most libraries, most trailers failed. Which flavor an extra is
-//  decides how it must be played, so that decision lives here as a pure function.
-//
-//  Pure: no network, no UIKit.
+//  Decides how an extra plays (#255). User-added extras have a library ratingKey;
+//  Plex IVA trailers have none, only an absolute part `key` like /services/iva/assets/...,
+//  so /library/metadata/{id} 404s for them.
 //
 
 import Foundation

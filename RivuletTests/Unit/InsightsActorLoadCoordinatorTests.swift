@@ -5,12 +5,8 @@
 //  InsightsActorLoadCoordinatorTests.swift
 //  RivuletTests
 //
-//  Unit coverage for the stale-load guard behind the in-panel actor view
-//  (Docs/superpowers/plans/2026-07-07-insights-in-panel-actor.md, Task B).
-//  `InsightsActorLoadCoordinator` owns a monotonic selection token so a slow
-//  `PersonFilmographyProvider.load` that resolves after the user has moved on
-//  (picked another actor, or backed out to the cast list) is dropped instead
-//  of clobbering the panel with stale data.
+//  `InsightsActorLoadCoordinator`'s selection token: a slow filmography load
+//  that resolves after the user moved on is dropped.
 //
 
 import XCTest

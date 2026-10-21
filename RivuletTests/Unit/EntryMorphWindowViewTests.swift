@@ -5,9 +5,8 @@
 //  EntryMorphWindowViewTests.swift
 //  RivuletTests
 //
-//  Regression cover for the row -> carousel entry morph squashing the poster.
-//  Pins the aspect-fill geometry and the interpolation invariant the fix
-//  leans on (see EntryMorphWindowView).
+//  The row-to-carousel entry morph must not squash the poster: pins the
+//  aspect-fill geometry and interpolation invariant EntryMorphWindowView uses.
 //
 
 import XCTest

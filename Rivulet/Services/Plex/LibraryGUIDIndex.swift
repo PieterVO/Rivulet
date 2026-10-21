@@ -48,25 +48,9 @@ actor LibraryGUIDIndex {
     /// run, so overlapping triggers don't repeat identical work.
     private(set) var generation = 0
 
-    /// Whether a network rebuild saw every library section, every page, all the
-    /// way through. Only a complete build is allowed to overwrite the disk cache.
-    ///
-    /// This exists because a truncated snapshot is indistinguishable from a good
-    /// one once it has been written: `DiskCache` stores only a version, a date and
-    /// the items, so the next launch's `hydrateFromDisk()` will load a half-built
-    /// index and treat it as authoritative. The failure is completely silent. The
-    /// user just sees fewer "in your library" badges, a thinner TMDB hero, and
-    /// Discover items that will not resolve to something playable, with no error
-    /// anywhere. Worse, the damage outlives the network blip that caused it: every
-    /// subsequent launch starts from the degraded snapshot until a fully successful
-    /// rebuild happens to land. A single timed-out page at offset 5000 of a 12,000
-    /// item library is enough to do this.
-    ///
-    /// So the rule is: a partial build may update the in-memory index, because
-    /// partial data still beats nothing for the current launch, but it must never
-    /// touch disk. Do not collapse this into a defaulted parameter. Every caller
-    /// has to say which it has, precisely so a new call site cannot quietly inherit
-    /// "complete" and reintroduce the silent corruption.
+    /// Whether a rebuild saw every section and page. Only a complete build may write the disk
+    /// cache: a truncated snapshot loads next launch as authoritative and the gap persists.
+    /// A partial build still updates memory. Keep this a required parameter, not a default.
     enum Completeness: Sendable {
         /// Every visible section returned every page without error. Safe to persist.
         case complete

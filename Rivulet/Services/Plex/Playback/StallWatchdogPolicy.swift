@@ -2,18 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  StallWatchdogPolicy.swift
-//  Rivulet
-//
-//  Pure decision for whether the Aether stall watchdog is allowed to kick a
-//  session (seek + play) after it has been buffering for the recovery delay.
-//
-//  Issue #247: a session the user PAUSED reported buffering once the tvOS
-//  screensaver came up, the watchdog's kick fired 20s later, and the media
-//  restarted under the screensaver. Two things were missing. The watchdog
-//  never asked whether the user was trying to watch, and the screensaver is a
-//  foreground-INACTIVE state, not a background transition, so none of the
-//  background teardown/restore machinery covers it. Both are inputs here.
+//  Whether the Aether stall watchdog may kick (seek + play) a session that has been
+//  buffering. It must not kick a paused session or one under the screensaver, which is
+//  foreground-inactive rather than backgrounded (#247).
 //
 
 import Foundation
@@ -43,16 +34,8 @@ enum StallWatchdogPolicy {
 
     /// Whether the armed watchdog may actually kick, re-evaluated at fire time.
     ///
-    /// The recovery delay is long enough that the world changes underneath it:
-    /// the user can pause, or the screensaver can take over, in the 20s between
-    /// arming and firing. A kick is a seek + `play()`, which on the Aether route
-    /// can also rebuild the whole session (`play()` runs a pending foreground
-    /// reload), so firing it against a paused or inactive app is exactly the
-    /// visible restart of #247.
-    ///
-    /// - Parameter applicationState: `UIApplication.shared.applicationState`.
-    ///   Only `.active` qualifies: `.inactive` is the screensaver / Control
-    ///   Center / incoming-alert case, and `.background` is a torn-down engine.
+    /// The user can pause or the screensaver can start in the 20 s before it fires, and a kick
+    /// may rebuild the session. Only `.active` qualifies (`.inactive` is the screensaver).
     static func shouldKick(
         userIntendsToPlay: Bool,
         playbackState: UniversalPlaybackState,

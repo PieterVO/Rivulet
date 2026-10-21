@@ -1,27 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  SearchCells.swift
-//  Rivulet
-//
-//  Full-width cells for the UIKit search surface (PlexHomeViewController
-//  in `.search` mode):
-//
-//   - SearchRecentsCell: the empty-query state — a left-aligned "Recently
-//     Searched" row of the items you last opened from search (#292).
-//   - SearchStateCell: inline searching / error / no-results states.
-//     Port of PlexSearchView.loadingView / errorView / noResultsView.
-//
-//  Both cells are non-focusable containers (canFocusItemAt false in the
-//  controller); their interactive content (recent cards, Try Again) are
-//  FocusableActionButtons, which the engine focuses directly.
-//
-//  The section that hosts the recents cell is still called `.searchPrompt`
-//  (24 references). It no longer renders a prompt: the centred magnifier and
-//  "Search Your Libraries" went with the Apple TV layout, so an empty-query
-//  screen with no recents yet is deliberately blank.
-//
+// Full-width cells for `.search` mode: SearchRecentsCell (the empty-query "Recently Searched" row,
+// #292) and SearchStateCell (searching, error, no results). Both are unfocusable containers; their
+// FocusableActionButtons take focus. `.searchPrompt` hosts the recents and is blank with none.
 
 import UIKit
 
@@ -46,13 +28,8 @@ final class SearchRecentsCell: UICollectionViewCell {
         static let posterToText: CGFloat = 20
         static let cardRadius: CGFloat = 20
         static let posterRadius: CGFloat = 6
-        /// Gap below the keyboard's separator line.
-        ///
-        /// The search controller already sizes the results view to the area
-        /// below its chrome, leaving ~43pt of its own, so this is the remainder
-        /// needed to match the Apple TV app's ~57pt. It is the ONLY top spacing
-        /// now: the page's `contentInset.top` is 0 in search mode, because 48
-        /// there plus 48 here stacked into a 139pt gap.
+        /// Gap below the keyboard's separator: the search controller leaves ~43pt, this adds the rest of
+        /// the Apple TV app's ~57pt. The only top spacing; `contentInset.top` is 0 in search mode.
         static let topPadding: CGFloat = 17
         static let headerToRow: CGFloat = 16
     }
@@ -177,13 +154,8 @@ final class SearchRecentsCell: UICollectionViewCell {
         cardScroll.layoutIfNeeded()
     }
 
-    /// One Recently Searched card: poster, title, "Movie · 1977".
-    ///
-    /// `.glass` focus rather than the pill inversion the recents pills used:
-    /// a card carries artwork, and a white fill with inverted text under a
-    /// full-colour poster reads as a rendering bug.
-    ///
-    /// Returns the poster view so the caller can fill it asynchronously.
+    /// One Recently Searched card: poster, title, "Movie · 1977". `.glass` focus, since a white
+    /// inversion under a colour poster reads as a bug. Returns the poster view to fill async.
     private static func makeCard(for item: MediaItem) -> (FocusableActionButton, UIImageView) {
         let button = FocusableActionButton()
         button.focusStyle = .glass

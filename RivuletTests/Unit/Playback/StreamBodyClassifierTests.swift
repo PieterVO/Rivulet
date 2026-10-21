@@ -5,18 +5,9 @@
 //  StreamBodyClassifierTests.swift
 //  RivuletTests
 //
-//  RIVULET-19: the aether route fails at engine open with AVERROR_INVALIDDATA,
-//  meaning the demuxer read bytes it could not parse as media. The classifier
-//  identifies what those bytes actually were so one release settles which
-//  non-media body dominates.
-//
-//  The most load-bearing tests here are the security ones at the bottom. This
-//  diagnostic runs against arbitrary direct-play and IPTV origins whose error
-//  bodies can echo a working `X-Plex-Token` or a credential-bearing path, so the
-//  guarantee that nothing derived from the body reaches the summary string is
-//  the property that must never regress.
-//
-//  Pure tests: no network, no view model.
+//  Classifies the non-media bytes behind AVERROR_INVALIDDATA (RIVULET-19). The
+//  security tests at the bottom guard that nothing from the body, which can echo
+//  a token or credentials, reaches the summary string.
 //
 
 import XCTest

@@ -174,19 +174,9 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
     let scannedAt: Int?
     let Location: [PlexLibraryLocation]?
 
-    /// The user's pin state for this library, straight from `/library/sections`.
-    /// This is Plex's own per-user setting, the one the Plex app's "Pin to
-    /// home" / "Hide" controls write:
-    ///
-    ///   0 (or absent) — pinned: contributes a row to Home
-    ///   1             — hidden from Home, still listed in the sidebar
-    ///   2             — hidden from Home AND from the sidebar
-    ///
-    /// Verified against a live PMS 1.43.3: `hidden == 0` correlates exactly with
-    /// having a hub promoted to Home. All six pinned libraries had one, all
-    /// seven unpinned had none.
-    /// Defaulted so the memberwise init stays source-compatible with the
-    /// fixtures that predate this field.
+    /// The user's Plex pin state for this library, from `/library/sections`:
+    /// 0 or absent pinned to Home, 1 hidden from Home, 2 hidden from Home and the
+    /// sidebar. PMS 1.43.3: `hidden == 0` matches having a hub on Home exactly.
     var hidden: Int?
 
     /// Whether the user pinned this library to their Plex home screen.
@@ -287,18 +277,9 @@ nonisolated struct PlexHub: Codable, Identifiable, Hashable, Sendable {
 
     // MARK: - State-change equality
 
-    /// Whether two hubs' item lists represent the *same displayed state*.
-    ///
-    /// This is the single source of truth for "did anything the UI renders
-    /// change?" on a hub refresh. It compares each item's `ratingKey`,
-    /// `viewOffset` (resume position) **and** `viewCount` (watched state) in
-    /// order. `ratingKey` alone is not enough: resuming an item that's already
-    /// in the list advances only its `viewOffset`, and a stale-offset check
-    /// silently freezes Continue Watching progress bars.
-    ///
-    /// Both the global `/hubs` refresh and the `/hubs/continueWatching` refresh
-    /// in `PlexDataStore` route their equality checks through here so the two
-    /// paths can never drift apart again.
+    /// Whether two hubs' item lists show the same state: `ratingKey`, `viewOffset`
+    /// and `viewCount` in order. Comparing keys alone freezes Continue Watching
+    /// progress bars. Both `PlexDataStore` hub refreshes use this.
     nonisolated static func metadataStateEqual(_ lhs: [PlexMetadata]?, _ rhs: [PlexMetadata]?) -> Bool {
         let l = lhs ?? []
         let r = rhs ?? []

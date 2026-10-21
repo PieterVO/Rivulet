@@ -42,13 +42,8 @@ class PlexDataStore: ObservableObject {
     @Published var libraryHubs: [String: [PlexHub]] = [:]
     @Published var isLoadingLibraryHubs = false
 
-    /// Library keys whose most recent hub fetch THREW (timeout, transport
-    /// error, server 500). Distinguishes the two meanings a nil
-    /// `libraryHubs[key]` otherwise conflates: "never loaded" vs. "tried and
-    /// failed". `projectHomeItems()` needs the difference — a failed library
-    /// must carry its previously-projected Recently Added row over rather than
-    /// silently drop the shelf (GitHub #236). Cleared per key on a successful
-    /// fetch, and wholesale on sign-out / profile switch.
+    /// Library keys whose last hub fetch threw, which a nil `libraryHubs[key]`
+    /// cannot tell apart from never loaded. Cleared on success, sign-out and profile switch.
     private var libraryHubFetchFailures: Set<String> = []
 
     /// First page of each pinned collection (see `HomeCollectionPins`), keyed
@@ -63,22 +58,12 @@ class PlexDataStore: ObservableObject {
     /// Increments when library hubs content changes
     @Published private(set) var libraryHubsVersion: UUID = UUID()
 
-    // MARK: - MediaItem home projection (Stage 1 — additive, no consumer yet)
-    //
-    // A lightweight, `MediaItem`-based mirror of the home/library hub rows,
-    // derived from `hubs` + `continueWatchingHub` + `libraryHubs` by
-    // `projectHomeItems()` / `projectLibraryItems(forKey:)` to EXACTLY match
-    // the row set `PlexHomeViewController.computeSections()` /
-    // `computeLibrarySections()` produce. Nothing renders from these yet; a
-    // later stage will swap the home over to them to avoid materializing ~116
-    // 65-field `PlexMetadata` at launch (see
-    // `perf-spike/MEDIAITEM_HOME_PLAN.md`). Produced OFF the launch-critical
-    // path (only on the deferred network-refresh assignments).
+    // MARK: - MediaItem home projection
+    // `MediaItem` rows built by `projectHomeItems()` / `projectLibraryItems(forKey:)`,
+    // so Home never materializes the full `PlexMetadata` hubs at launch.
 
-    /// Home-surface projection (mirrors `computeSections()` row order:
-    /// Continue Watching, then Recently Added per home library). Hero,
-    /// watchlist and recommendations rows are intentionally excluded — they
-    /// do not originate from the hub store this projection mirrors.
+    /// Home's hub rows: Continue Watching, then each pinned library's promoted
+    /// hubs. Hero, watchlist and recommendations come from their own services.
     @Published private(set) var homeItems: CachedHomeRail = []
 
     /// Bumped whenever `homeItems` changes (the projection's content version,
@@ -220,31 +205,11 @@ class PlexDataStore: ObservableObject {
         !visibleMusicLibraries.isEmpty
     }
 
-    /// The libraries that contribute a Home row, in the order Home draws them.
-    /// See `projectHomeItems`. Two gates, and both have to pass:
-    ///
-    /// 1. Plex's own pin (`isPinnedToHome`, the server-side `hidden` field) says
-    ///    which libraries Plex itself would put on Home. Rivulet can subtract
-    ///    from that set but never add to it, which keeps the library set a
-    ///    single source of truth. `HomeRowSettings` applies the same rule to
-    ///    rows, with one user-created exception: a collection pinned with
-    ///    `HomeCollectionPins` adds a row inside its library's block, and only
-    ///    for a library this gate already lets through.
-    /// 2. The sidebar toggle in Settings → Libraries. One "hidden" means hidden:
-    ///    a library you switched off leaves the sidebar, the hero AND its Home
-    ///    rows together. It used to leave only the first two, so hiding a
-    ///    library still left "Recently Added in <it>" sitting on Home.
-    ///
-    /// The ORDER comes free with gate 2, and has to be this device's. Plex's own
-    /// rule is "the order of pinned items in your home sidebar controls the
-    /// order of content on your Home screen", and that sidebar order is per app
-    /// install, never server-side (see `LibrarySettingsManager.isLibraryVisible`
-    /// for the measurement). `/library/sections` order is the server's, which is
-    /// why issue #295 saw the right rows in the wrong order. `visibleLibraries`
-    /// is already sorted by the order the user sets in Settings → Libraries, so
-    /// deriving from it makes Rivulet follow the same rule Plex does. It
-    /// defaults to the server's order until they reorder anything, since
-    /// `syncOrderWithLibraries` seeds `libraryOrder` in fetch order.
+    /// The libraries that contribute Home rows, in Home's order: pinned by Plex
+    /// (`isPinnedToHome`) and visible in Settings > Libraries. Rivulet can drop
+    /// a Plex-pinned library but never add one.
+    /// Order is this device's sidebar order, as Plex's own rule says; it is
+    /// never server-side, and `/library/sections` order is wrong (#295).
     var librariesPinnedToHome: [PlexLibrary] {
         visibleMediaLibraries.filter { $0.isPinnedToHome }
     }
@@ -427,14 +392,9 @@ class PlexDataStore: ObservableObject {
         }
     }
 
-    /// Immediate stale-while-revalidate when the app returns to the
-    /// foreground: the poll timers resume on `didBecomeActive` but their
-    /// FIRST tick is a full interval away (30s / 3min), so without this a
-    /// return from background shows whatever the home looked like when the
-    /// app was suspended. CW always re-checks (small payload, equality-gated);
-    /// the fat `/hubs` fetch only re-runs when older than its poll interval.
-    /// Skipped on the launch activation (`didCompleteInitialHubFetch` false)
-    /// so it never contends the launch-critical first paint.
+    /// Refresh on return to foreground, since the resumed timers' first tick is a full
+    /// interval away. Continue Watching always re-checks; `/hubs` only when older than its
+    /// interval. Skipped on launch activation so it never contends with first paint.
     private func refreshOnForegroundReturn() async {
         guard didCompleteInitialHubFetch, isInForeground, !isPlaybackActive else { return }
         await pollContinueWatching()
@@ -503,24 +463,10 @@ class PlexDataStore: ObservableObject {
         await refreshLibraryHubsIfContentAdded()
     }
 
-    /// Home's "Recently Added <Library>" rows are projected from `libraryHubs`,
-    /// and nothing ever refreshed that dictionary: `loadLibraryHubsIfNeeded`
-    /// only fetches libraries it has no hubs for, and the 3-minute poll covers
-    /// `/hubs` + `/hubs/continueWatching` only. So a title added after launch
-    /// showed up on the library page (which fetches its own) but not on Home
-    /// until the app was relaunched (GitHub #315).
-    ///
-    /// Re-pulling every library's hub payload on the 30s tick is far too fat,
-    /// so this polls the newest item instead and only pays for the hub refetch
-    /// when that item changes. Measured against the reference PMS 1.43.4:
-    /// `/library/recentlyAdded` capped to one item is 1.7KB / ~140ms, versus
-    /// ~100KB for a single library's promoted hubs.
-    ///
-    /// The two obvious-looking cheaper signals on `/library/sections` are both
-    /// wrong, measured on the same server: a section's `updatedAt` was six
-    /// months stale with items added that morning, and its `scannedAt` is a
-    /// scheduled-scan stamp that moves on every library at once whether or not
-    /// anything was added.
+    /// Refetches `libraryHubs` when the server's newest item changes, so Home picks up
+    /// titles added after launch (#315). The one-item `/library/recentlyAdded` probe is
+    /// 1.7 KB against ~100 KB per library's hubs (PMS 1.43.4). Why the section
+    /// timestamps don't work: CLAUDE.md, "Plex server API gotchas".
     private func refreshLibraryHubsIfContentAdded() async {
         guard didCompleteInitialHubFetch,
               let serverURL = authManager.selectedServerURL,
@@ -865,10 +811,7 @@ class PlexDataStore: ObservableObject {
                 self.isLoadingHubs = false
             }
             await cacheManager.cacheHubs(fetchedHubs)
-            // Stage 1: refresh the additive MediaItem projection now that
-            // hubs / continueWatchingHub changed. Off the launch-critical path
-            // (this is the deferred network refresh) and a no-op for consumers
-            // until a later stage renders from it.
+            // Hubs or Continue Watching changed: re-project Home.
             projectHomeItems()
             // The fetch returned cleanly: the server connection is up. A still
             // empty Home from here on is genuine, not the post-sign-in race.
@@ -905,16 +848,9 @@ class PlexDataStore: ObservableObject {
         }
     }
 
-    /// Refresh *only* the Continue Watching hub (`/hubs/continueWatching`), not
-    /// the fat global `/hubs` payload. This is the fast-poll path: Continue
-    /// Watching is the only Home row that meaningfully changes on a 30s cadence
-    /// (resume position advances, items reorder as you watch), whereas Recently
-    /// Added / genre rows barely move. Polling just this small hub keeps the row
-    /// fresh without re-pulling the ~395KB `/hubs` response 6× as often.
-    ///
-    /// Reuses the same fetch call, equality gate, and projection as the full
-    /// path (`fetchHubsFromServer`) so the two can't diverge. A thrown fetch is
-    /// swallowed (keep the current hub) exactly as the full path does.
+    /// The 30 s fast poll: refreshes only `/hubs/continueWatching`, the one row that moves
+    /// that often, instead of the ~395 KB `/hubs`. Same fetch, equality gate and projection
+    /// as `fetchHubsFromServer`.
     private func fetchContinueWatchingOnly(serverURL: String, token: String) async {
         lastContinueWatchingFetchAt = Date()
         let userId = profileManager.selectedUserId
@@ -1047,9 +983,7 @@ class PlexDataStore: ObservableObject {
             if librariesNeedingFetch.count < librariesToFetch.count {
                 libraryHubsVersion = UUID()
                 isLoadingLibraryHubs = false
-                // Stage 1: refresh the additive MediaItem projection — the
-                // home's "Recently Added <Library>" rows are derived from
-                // libraryHubs, plus each library's own page projection.
+                // Home rows and library pages both derive from libraryHubs.
                 projectAllLoadedItems()
             }
 
@@ -1115,7 +1049,7 @@ class PlexDataStore: ObservableObject {
 
             libraryHubsVersion = UUID()
             isLoadingLibraryHubs = false
-            // Stage 1: final projection refresh after all library hubs land.
+            // Final projection once every library's hubs have landed.
             projectAllLoadedItems()
 
             // Pinned collections load in their own task. The projection above
@@ -1146,32 +1080,14 @@ class PlexDataStore: ObservableObject {
         await loadLibraryHubsIfNeeded()
     }
 
-    /// Fetches the first page of every pinned collection (see
-    /// `HomeCollectionPins`) into `pinnedCollectionItems`. Callers project
-    /// afterwards; this never touches `homeItems`.
-    ///
-    /// Only pins whose library is a video library pinned to Home are
-    /// requested. That filter is load-bearing: without it one server's pins
-    /// are requested against another, answer 404, and are pruned below.
-    ///
-    /// Per pin: success stores the page, even an empty one. A 404 unpins,
-    /// because PMS answers 404 for a deleted collection and for one this
-    /// profile can no longer see (measured on PMS 1.43.4), so the pin could
-    /// never render again. Any other error keeps the last-known items.
-    ///
-    /// The results belong to the pin store and token that asked. If either
-    /// changed while the requests were out, everything is dropped: the new
-    /// profile's dictionary must not take the old one's pages, and an old
-    /// profile's 404 must not unpin the new profile's pin of the same
-    /// collection (`HomeCollectionPins.unpin` acts on the CURRENT profile).
-    ///
-    /// The profile half compares `HomeCollectionPins.storageKey` (derived from
-    /// UserDefaults `selectedPlexUserId`), not `profileManager.selectedUserId`.
-    /// The manager's value is nil on every cold launch until the deferred
-    /// `fetchHomeUsers` restore lands (10 to 28s), so `nil != X` dropped fresh
-    /// results whenever the restore arrived mid-fetch. The pin store key is what
-    /// the pins were read from, so it is the right identity, and it also covers
-    /// the first sign-in (base key to `_user_{id}`).
+    /// Fetches the first page of each pinned collection into `pinnedCollectionItems`;
+    /// callers project afterwards. Only pins in this server's Home video libraries are
+    /// asked for, or another server's pins answer 404 and get pruned.
+    /// A 404 unpins: PMS 1.43.4 answers 404 for a deleted collection and for one this
+    /// profile cannot see. Any other error keeps the last items.
+    /// Results are dropped if the pin store key or token changed mid-fetch. The key is
+    /// `HomeCollectionPins.storageKey`, not `profileManager.selectedUserId`, which is nil
+    /// on cold launch until `fetchHomeUsers` lands (10 to 28 s).
     func loadPinnedCollections(serverURL: String, token: String) async {
         let pinStoreKey = HomeCollectionPins.storageKey
         let libraryUUIDs = Set(librariesPinnedToHome.filter(\.isVideoLibrary).map(\.uuid))
@@ -1228,17 +1144,9 @@ class PlexDataStore: ObservableObject {
         Set((libraryHubs[key] ?? []).filter { $0.promoted == true }.compactMap(\.key))
     }
 
-    /// Apply one library's hub-fetch outcome. Success stores the hubs and
-    /// clears any prior failure mark; failure (nil) leaves the last-known hubs
-    /// in place and marks the key so `projectHomeItems()` carries that
-    /// library's Recently Added row over instead of dropping it.
-    ///
-    /// The disk write is here because it is the one place every successful hub
-    /// fetch passes through. It used to live only in `startBackgroundPrefetch`,
-    /// which writes each library's file once and then skips on `hasHubsCache`
-    /// forever, so the cache froze at whatever the first launch saw while the
-    /// in-memory copy moved on. Every later cold launch then painted Recently
-    /// Added from that frozen file until the network refresh landed (#315).
+    /// Applies one library's hub-fetch outcome. Success stores the hubs and clears
+    /// the failure mark; failure (nil) keeps the last-known hubs and marks the key.
+    /// The disk write lives here because every successful fetch passes through (#315).
     private func noteLibraryHubFetchResult(key: String, hubs: [PlexHub]?) async {
         guard let hubs else {
             libraryHubFetchFailures.insert(key)
@@ -1266,81 +1174,17 @@ class PlexDataStore: ObservableObject {
         SentryBridge.addBreadcrumb(breadcrumb)
     }
 
-    // MARK: - MediaItem home projection (Stage 1 — additive, no UI consumer)
-    //
-    // `projectHomeItems()` builds `homeItems` to mirror EXACTLY the row set
-    // that `PlexHomeViewController.computeSections()` produces for `.home`
-    // mode, so a later stage can rebuild identical sections from this flat
-    // `MediaItem` projection instead of the heavyweight `PlexMetadata` hubs.
-    //
-    // 1:1 mapping of computeSections() (PlexHomeViewController.swift:1589):
-    //   • Hero row              — EXCLUDED. Hero items come from a separate
-    //     selection (`selectHeroItemsIfNeeded`), not the hub store, so they
-    //     are not part of this hub projection. A later stage's hero stays on
-    //     its own path.
-    //   • Continue Watching     — `continueWatchingHub` when it has Metadata.
-    //         id = HomeSectionID.hub(cw.id).raw  ("hub:<cw.id>")
-    //         title = cw.title ?? "Continue Watching"
-    //         isContinueWatching = true
-    //         hubKey = cw.key ?? cw.hubKey ; hubIdentifier = cw.hubIdentifier
-    //   • Recently Added rows   — one per `librariesForHomeScreen` (same order),
-    //     taking that library's first hub matching `isRecentlyAdded`, when it
-    //     has Metadata.
-    //         id = HomeSectionID.hub("<library.key>:recent").raw
-    //         title = recent.title (the server's own, localized)
-    //         isContinueWatching = false
-    //         hubKey = recent.key ?? recent.hubKey ; hubIdentifier = recent.hubIdentifier
-    //   • Watchlist / Recommendations — EXCLUDED. Both come from services
-    //     (`PlexWatchlistService` / `PersonalizedRecommendationService`), not
-    //     the hub store; they remain on their own paths in a later stage.
-    //
-    // Item de-dupe mirrors computeSections' end-to-end identity: it keys
-    // diffable items by `meta.ratingKey` and drops repeats (applySnapshot,
-    // PlexHomeViewController.swift:1561-1566). Here we de-dupe the mapped
-    // `MediaItem`s by `ref.itemID` (== ratingKey via PlexMediaMapper.item),
-    // keeping first occurrence. We do NOT apply the per-row pagination
-    // `mergedItems` accumulation (that's runtime VC state, not part of the
-    // initial server projection) — `totalSize` is therefore left nil until a
-    // later stage threads pagination through; the initial render set matches.
+    // MARK: - Home projection
+    // Builds `homeItems`, which Home and Settings read.
     func projectHomeItems() {
-        // Home is the user's Plex home, reproduced from the server's own state.
-        //
-        // TWO server-side fields decide it, and both arrive on endpoints this
-        // store already fetches. Verified against a live PMS 1.43.3:
-        //
-        //   1. WHICH LIBRARIES contribute — `PlexLibrary.hidden` from
-        //      `/library/sections`. 0 = pinned to Home, 1 = hidden from Home,
-        //      2 = hidden from Home and the sidebar. This is what the Plex app's
-        //      "Pin to home" control writes. On the reference server the six
-        //      `hidden == 0` libraries were exactly the six with a Home-promoted
-        //      hub, and the seven hidden ones had none.
-        //
-        //   2. WHICH HUB inside a pinned library — `PlexHub.promoted` from
-        //      `/hubs/sections/{key}`. Exactly one hub per library carries it
-        //      (`movie.recentlyadded.1`, `tv.recentlyadded.2`, …); every other
-        //      hub in the same response has it absent. It is the section
-        //      endpoint's spelling of `promotedToOwnHome` from `.../manage`, NOT
-        //      of `promotedToRecommended` (which is true for nearly everything).
-        //
-        // The obvious-looking source, the global `/hubs` payload, is the WRONG
-        // one and is what this projection used to read. `/hubs` is a legacy
-        // aggregate: it collapses every movie library into one cross-library
-        // "Recently Added Movies" row, and it carries a `home.playlists` row
-        // that the Plex app never shows. The Plex app calls
-        // `/hubs/promoted?contentDirectoryID={key}&pinnedContentDirectoryID={csv}`
-        // once per pinned library and concatenates; scoping by
-        // `contentDirectoryID` is precisely what drops `home.playlists`.
-        // Reading `promoted` off the per-library hubs Rivulet already has gives
-        // the same row set without the extra N requests.
-        //
-        // Continue Watching stays first and comes from `/hubs/continueWatching`,
-        // which is the MERGED hub: on the reference server it held 18 of the 19
-        // items in the union of `home.continue` (in-progress) and `home.ondeck`
-        // (next up), so the two collapse into one row rather than duplicating
-        // most of a shelf. Plex has no flag for that; it has this endpoint.
-        //
-        // The old app-composed row set is kept below, commented, until this has
-        // had a real look on device.
+        // Home mirrors the server's own state. Measured on PMS 1.43.3:
+        // - `PlexLibrary.hidden` (/library/sections) picks libraries: 0 pinned to Home,
+        //   1 hidden from Home, 2 hidden from Home and the sidebar ("Pin to home").
+        // - `PlexHub.promoted` (/hubs/sections/{key}) is set on exactly one hub per
+        //   library. It is `promotedToOwnHome`, not `promotedToRecommended`.
+        // - Global `/hubs` is the wrong source: it merges movie libraries into one
+        //   row and adds `home.playlists`, which the Plex app never shows.
+        // - `/hubs/continueWatching` is the merged in-progress + On Deck hub.
         var rail: CachedHomeRail = []
         var carriedContinueWatching = false
 
@@ -1418,12 +1262,8 @@ class PlexDataStore: ObservableObject {
             }
         }
 
-        // An empty projection is only allowed to replace a populated Home once a
-        // fetch has actually completed. Before that the sources are empty
-        // because nothing has landed yet, and blanking the rail here is
-        // permanent: `setHomeItems` re-persists it, so one early call would bake
-        // an empty Home into every subsequent warm launch (the trap #236 hit).
-        // A carried Continue Watching row is not something that landed.
+        // An empty rail replaces Home only after a fetch completes: `setHomeItems`
+        // persists it, so an early call would bake an empty Home into warm launches (#236).
         guard rail.count > (carriedContinueWatching ? 1 : 0) || didCompleteInitialHubFetch else { return }
 
         setHomeItems(rail)
@@ -1433,18 +1273,9 @@ class PlexDataStore: ObservableObject {
     /// it gets the backdrop-and-logo resume tiles and its items come from the
     /// dedicated fast-refresh fetch.
     ///
-    /// Matched on the identifier alone. The obvious-looking alternative, testing
-    /// the `/hubs` row against `continueWatchingHub`'s identifier so the server
-    /// names its own row, is WRONG: the two endpoints do not agree. `/hubs`
-    /// calls it `home.continue` and `/hubs/continueWatching` calls itself
-    /// `continueWatching`, so comparing them matched nothing, `isContinueWatching`
-    /// came out false, and the row rendered as an ordinary poster shelf.
-    ///
-    /// On Deck is deliberately IN the family. Plex has folded the two concepts
-    /// together (the server's own `OnDeckWindow` / `OnDeckLimit` prefs are
-    /// labelled "Continue Watching"), the rows share most of their items, and
-    /// `/hubs/continueWatching` returns the merge. The projection emits the
-    /// first family member and drops the rest, so they collapse into one row.
+    /// Matched on the identifier: `/hubs` says `home.continue` where
+    /// `/hubs/continueWatching` says `continueWatching`, so comparing the two never matches.
+    /// On Deck is in the family because `/hubs/continueWatching` already merges it.
     nonisolated static func isContinueWatchingFamily(hubIdentifier: String?) -> Bool {
         let id = (hubIdentifier ?? "").lowercased()
         guard !id.isEmpty else { return false }
@@ -1453,12 +1284,8 @@ class PlexDataStore: ObservableObject {
 
     /// A hub key the pagination path can actually call, or nil.
     ///
-    /// Most `/hubs` rows carry no `hubKey` and a `key` that is a literal id list
-    /// (`/library/metadata/209601,209469,…`), which is a metadata fetch, not a
-    /// hub endpoint. Handing that to `loadMoreIfNeeded` would page against the
-    /// wrong URL and re-append the items already on screen. Returning nil turns
-    /// pagination off for the row instead, which is correct rather than merely
-    /// safe: the row is the fixed set the server promoted.
+    /// Most `/hubs` rows have no `hubKey` and a `key` that is an id list
+    /// (`/library/metadata/209601,209469,…`); paging that re-appends the same items.
     private func paginableHubKey(_ hub: PlexHub) -> String? {
         Self.paginableHubKey(hubKey: hub.hubKey, key: hub.key)
     }
@@ -1471,113 +1298,14 @@ class PlexDataStore: ObservableObject {
         return nil
     }
 
-    // MARK: - Superseded: app-composed Home rows
-    //
-    // Rivulet's own Home composition, replaced by the promoted-hub projection
-    // above. Kept commented rather than deleted while the server-driven set is
-    // evaluated on device; delete once it has stuck.
-    //
-    // private func projectHomeItemsAppComposed() {
-    //     var rail: CachedHomeRail = []
-    //
-    // Continue Watching
-    //
-    //     // `/hubs/continueWatching` is an ACCOUNT-level endpoint: one flat list
-    //     // spanning every library on the server, with no way to scope the
-    //     // request. Rivulet's shown-on-Home set is client-side UserDefaults that
-    //     // Plex never sees, so a library the user removed from Home still
-    //     // contributes rows here. Filter before `makeCachedHub`, because mapping
-    //     // to `MediaItem` discards the section attribution the predicate needs.
-    //     // Fails open on an unloaded library list / unattributed item — see
-    //     // `PlexLibraryVisibilityFilter`.
-    //     let homeLibraryKeys = librariesForHomeScreen.map { $0.key }
-    //     if let cw = continueWatchingHub,
-    //        let items = cw.Metadata, !items.isEmpty,
-    //        case let visible = PlexLibraryVisibilityFilter.filter(items, toLibraryKeys: homeLibraryKeys),
-    //        !visible.isEmpty {
-    //         rail.append(makeCachedHub(
-    //             id: "hub:\(cw.id)",
-    //             title: cw.title ?? "Continue Watching",
-    //             isContinueWatching: true,
-    //             hubKey: cw.key ?? cw.hubKey,
-    //             hubIdentifier: cw.hubIdentifier,
-    //             metas: visible
-    //         ))
-    //     } else if !hasFetchedContinueWatching,
-    //               let existingCW = homeItems.first(where: { $0.isContinueWatching }) {
-    //         // Stage-3 ordering guard: `continueWatchingHub` is fetched on a
-    //         // separate path and is nil for a beat after a warm launch. A
-    //         // projection triggered before it lands (e.g. the deferred
-    //         // library-hubs cache projection) must NOT drop the Continue
-    //         // Watching row the launch cache-paint already showed — carry the
-    //         // existing projected CW row over until the network refresh
-    //         // replaces it with fresh metadata.
-    //         //
-    //         // Gated on `hasFetchedContinueWatching`: once a fresh fetch HAS
-    //         // completed for the current user, nil/empty means this user has no
-    //         // Continue Watching — carrying the row past that point made a
-    //         // stale CW row (from a previous account/profile) self-perpetuating,
-    //         // because setHomeItems() re-persists whatever the rail contains.
-    //         rail.append(existingCW)
-    //     }
-    //
-    //     // Recently Added per home library (same order as librariesForHomeScreen)
-    //     for library in librariesForHomeScreen {
-    //         let rowID = Self.recentlyAddedRowID(forLibraryKey: library.key)
-    //         if let hubs = libraryHubs[library.key],
-    //            let recent = hubs.first(where: { isRecentlyAddedHub($0) }),
-    //            let items = recent.Metadata, !items.isEmpty {
-    //             rail.append(makeCachedHub(
-    //                 id: rowID,
-    //                 // The SERVER's title, not one composed here. PMS localizes
-    //                 // hub titles from the request's `Accept-Language`, which
-    //                 // URLSession already sends from the device locale, so this
-    //                 // row arrives correctly worded and in the viewer's language
-    //                 // for free. Composing `"Recently Added " + library.title`
-    //                 // threw that away and pasted an English prefix onto the
-    //                 // user's own library name, so a French viewer read
-    //                 // "Recently Added Films" while Continue Watching beside it
-    //                 // read "Continuer à regarder" (issue #276). Verified
-    //                 // against a live PMS 1.43.3: `Accept-Language: fr-FR` on
-    //                 // `/hubs/sections/{key}` returns "Récemment ajouté dans
-    //                 // Movies", and the library name stays untranslated because
-    //                 // it is the user's own.
-    //                 title: recent.title ?? "Recently Added \(library.title)",
-    //                 isContinueWatching: false,
-    //                 hubKey: recent.key ?? recent.hubKey,
-    //                 hubIdentifier: recent.hubIdentifier,
-    //                 metas: items
-    //             ))
-    //         } else if Self.shouldCarryOverRecentlyAddedRow(
-    //             hubs: libraryHubs[library.key],
-    //             fetchFailed: libraryHubFetchFailures.contains(library.key)
-    //         ), let existing = homeItems.first(where: { $0.id == rowID }) {
-    //             // Same guard as Continue Watching above, per library: a
-    //             // library whose hub fetch threw or has not landed yet must NOT
-    //             // lose the Recently Added row the cache-paint already showed.
-    //             // Dropping it here is permanent, not transient — setHomeItems()
-    //             // re-persists the rail, so one timed-out fetch would bake the
-    //             // missing shelf into every subsequent warm launch (GitHub #236).
-    //             //
-    //             // Only a library that ANSWERED — hubs present, no recentlyAdded
-    //             // hub or an empty one — correctly projects no row.
-    //             rail.append(existing)
-    //         }
-    //     }
-    //
-    //     setHomeItems(rail)
-    // }
-
-    /// `projectHomeItems` for a single library page — mirrors
-    /// `PlexHomeViewController.computeLibrarySections()` (one row per library
-    /// hub in Plex's order, de-duped by hub identity; hero / sort-header /
-    /// grid are not hub rows and are excluded). Stored in `libraryItemsByKey`.
+    /// One library page's hub rows, in Plex's order and de-duped by hub identity,
+    /// stored in `libraryItemsByKey`.
     func projectLibraryItems(forKey key: String) {
         var rail: CachedHomeRail = []
         var seenIDs = Set<String>()
         for hub in libraryHubs[key] ?? [] {
             guard let items = hub.Metadata, !items.isEmpty else { continue }
-            // Identical hub-identity chain + de-dupe to computeLibrarySections.
+            // Same hub-identity chain and de-dupe as computeLibrarySections.
             let hubID = hub.hubIdentifier ?? hub.key ?? hub.hubKey ?? hub.title ?? "row"
             guard seenIDs.insert(hubID).inserted else { continue }
             rail.append(makeCachedHub(
@@ -1596,37 +1324,29 @@ class PlexDataStore: ObservableObject {
         Task { await cacheManager.cacheLibraryItems(rail, forLibrary: key) }
     }
 
-    /// Assigns `homeItems`, bumps `homeItemsVersion`, persists, and emits the
-    /// Stage-1 parity log. Centralized so every projection path is identical.
+    /// Assigns `homeItems`, bumps `homeItemsVersion`, and persists the rail.
     private func setHomeItems(_ rail: CachedHomeRail) {
         homeItems = rail
         homeItemsVersion = UUID()
         let totalItems = rail.reduce(0) { $0 + $1.items.count }
-        // Stage-1 parity probe (cheap; left in deliberately so a device run can
-        // sanity-check the projected row/item counts against computeSections).
         print("📦 [MediaItemProjection] homeItems rows=\(rail.count) items=\(totalItems)")
         Task { await cacheManager.cacheHomeItems(rail) }
     }
 
-    /// Stage-3 launch fast-paint: assigns `homeItems` + bumps the version from
-    /// the on-disk MediaItem cache WITHOUT re-writing it (the rail came from
-    /// the cache, so re-caching would be redundant disk I/O on the launch path).
+    /// Launch fast-paint from the on-disk cache, without writing it back.
     private func setHomeItemsFromCache(_ rail: CachedHomeRail) {
         homeItems = rail
         homeItemsVersion = UUID()
     }
 
-    /// Stage-3 library launch fast-paint: assigns one library's projection
-    /// from the on-disk cache without re-writing it.
+    /// Library launch fast-paint from the on-disk cache, without writing it back.
     private func setLibraryItemsFromCache(_ rail: CachedHomeRail, forKey key: String) {
         libraryItemsByKey[key] = rail
         libraryHubsVersion = UUID()
     }
 
-    /// Stage-3: paint a single library page's rows from the flat MediaItem
-    /// cache (`getCachedLibraryItems`). Returns true if a non-empty cache was
-    /// painted. Used by the library-mode launch path to avoid the heavyweight
-    /// [PlexHub] decode before first paint.
+    /// Paints a library page from the MediaItem cache, skipping the [PlexHub]
+    /// decode before first paint. Returns true if a non-empty cache was painted.
     func paintLibraryItemsFromCacheIfNeeded(forKey key: String) async -> Bool {
         if let existing = libraryItemsByKey[key], !existing.isEmpty { return true }
         guard authManager.selectedServerToken != nil else { return false }
@@ -1636,12 +1356,8 @@ class PlexDataStore: ObservableObject {
         return true
     }
 
-    /// Maps a hub's `[PlexMetadata]` → `[MediaItem]` and de-dupes by
-    /// `ref.itemID` (the Plex ratingKey), mirroring computeSections' item
-    /// identity de-dupe. providerID/serverURL/authToken are obtained exactly
-    /// as the home VC's cell/preview path does
-    /// (PlexHomeViewController.swift:2048-2050): primary provider id with a
-    /// `plex:<serverURL>` fallback, and the selected server URL + token.
+    /// Maps a hub's `[PlexMetadata]` to `[MediaItem]`, de-duped by ratingKey.
+    /// Provider id, server URL and token come the same way the home VC's cells get them.
     private func makeCachedHub(
         id: String,
         title: String,
@@ -1687,34 +1403,20 @@ class PlexDataStore: ObservableObject {
     /// `PlexHomeViewController.computeHubBackedHero(from:)` so warm launches
     /// can start the hero image load without decoding the full `[PlexHub]`
     /// cache first.
-    /// Replica of `PlexHomeViewController.isRecentlyAdded(_:)` — the home
-    /// projection must select the SAME "Recently Added" hub per library.
+    /// Same test as `PlexHomeViewController.isRecentlyAdded(_:)`.
     private func isRecentlyAddedHub(_ hub: PlexHub) -> Bool {
         let id = hub.hubIdentifier?.lowercased() ?? ""
         let title = hub.title?.lowercased() ?? ""
         return id.contains("recentlyadded") || title.contains("recently added")
     }
 
-    /// Stable projection row id for a library's "Recently Added" shelf. Shared
-    /// by the fresh-projection and carry-over paths so they can never disagree
-    /// about which cached row belongs to which library.
+    /// Stable row id for a library's Recently Added shelf.
     nonisolated static func recentlyAddedRowID(forLibraryKey key: String) -> String {
         "hub:\(key):recent"
     }
 
-    /// Whether a library that produced no usable Recently Added hub this pass
-    /// should keep its previously-projected row (GitHub #236).
-    ///
-    /// The distinction that matters is whether the library ANSWERED:
-    /// - `hubs == nil` — never loaded, or loaded and threw. Either way we know
-    ///   nothing about this library's content, so dropping its shelf would be
-    ///   an assertion we can't back. Carry over.
-    /// - `fetchFailed` — the last fetch threw. `hubs` may still hold a stale
-    ///   non-nil payload from an earlier pass, so nil-ness alone misses this.
-    ///   Carry over.
-    /// - otherwise — the server answered with this library's hubs and they
-    ///   contain no non-empty recentlyAdded hub. The library is genuinely
-    ///   empty (or has the row disabled server-side); omit it.
+    /// Whether a library with no usable Recently Added hub keeps its last row (#236).
+    /// Only a library that answered drops it; `hubs` can hold a stale payload after a failed fetch.
     nonisolated static func shouldCarryOverRecentlyAddedRow(hubs: [PlexHub]?, fetchFailed: Bool) -> Bool {
         hubs == nil || fetchFailed
     }
@@ -1723,17 +1425,8 @@ class PlexDataStore: ObservableObject {
     /// `HomeCollectionPins`). Plain values so it can be tested.
     nonisolated enum PinRowDecision { case render, carryOver, omit }
 
-    /// - A hub Plex already promotes for the same collection wins (P1).
-    /// - `fetched == nil` means not fetched this session. The row already in
-    ///   `homeItems` (warm-launch cache or an earlier pass) carries over:
-    ///   `projectHomeItems` runs from the Continue Watching poll before the pin
-    ///   loader finishes, and `setHomeItems` re-persists whatever it gets, so
-    ///   dropping the row here would wipe the pin from the next warm launch
-    ///   (the #236 trap).
-    /// - Fetched and empty: no members right now. Omit the row; the pin stays,
-    ///   since a smart collection can refill.
-    ///
-    /// No hidden branch: pins are never `HomeRowSettings` hide toggles.
+    /// A hub Plex already promotes for the collection wins. Not fetched yet: keep the cached
+    /// row, since `setHomeItems` persists the rail (#236). Fetched empty: omit, keep the pin.
     nonisolated static func pinRowDecision(
         isPromotedDuplicate: Bool,
         fetched: [PlexMetadata]?,
@@ -1878,11 +1571,8 @@ class PlexDataStore: ObservableObject {
     }
 
     private func continueWatchingHubsAreEqual(_ lhs: PlexHub?, _ rhs: PlexHub?) -> Bool {
-        // Delegate to the shared per-item comparison so this path can't drift
-        // from `hubsAreEqual`. Comparing ratingKeys alone (the old behaviour)
-        // ignored `viewOffset`, which froze Continue Watching progress bars
-        // after a refresh — the item set was unchanged so the refreshed hub was
-        // judged "equal" and never re-published.
+        // Compares per-item state, not just ratingKeys, so a `viewOffset` change repaints
+        // the progress bars. Shared with `hubsAreEqual`.
         PlexHub.metadataStateEqual(lhs?.Metadata, rhs?.Metadata)
     }
 
@@ -1973,10 +1663,7 @@ class PlexDataStore: ObservableObject {
             libraryHubsVersion = UUID()
         }
 
-        // Stage 1: keep the additive MediaItem projection consistent with the
-        // optimistic watch-state edit (off the launch-critical path — this is
-        // a user-action update, not launch). Only re-project the surfaces that
-        // actually changed.
+        // Re-project only the surfaces the watch-state edit touched.
         if didUpdateHubs {
             projectHomeItems()
         }
@@ -2239,9 +1926,7 @@ class PlexDataStore: ObservableObject {
             return
         }
 
-        // Source from the dedicated /hubs/continueWatching hub — the same source
-        // the in-app Continue Watching row trusts. The old global-/hubs scrape
-        // dropped movies (GitHub #194); the dedicated hub returns movies + episodes.
+        // /hubs/continueWatching, as the in-app row uses. Global /hubs drops movies (#194).
         let metadata = continueWatchingHub?.Metadata ?? []
         let baseItems = TopShelfMapper.items(from: metadata, serverURL: serverURL, token: token, limit: 5)
 

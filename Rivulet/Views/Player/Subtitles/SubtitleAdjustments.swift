@@ -5,16 +5,9 @@
 //  SubtitleAdjustments.swift
 //  Rivulet
 //
-//  User-tunable subtitle timing and placement, surfaced as steppers inside
-//  the OSD Subtitles panel (VOD rail and Live TV rail).
-//
-//  Both adjustments are STICKY PER MEDIA: keyed by the Plex ratingKey for VOD
-//  and the channel id for Live TV, so one channel can hold +3.0s and sit two
-//  units higher while another stays at the defaults. Both default to 0.
-//
-//  Height is stored as whole units of `heightUnitPt`, clamped to
-//  ±`heightUnitMax`, and does NOT move a cue that carries its own placement —
-//  an authored position must not drift with an app-level offset.
+//  Subtitle delay and height steppers for the VOD and Live TV Subtitles panels.
+//  Both are sticky per media (ratingKey or channel id) and default to 0. Height
+//  does not move a cue that carries its own placement.
 //
 
 import Foundation
@@ -98,16 +91,8 @@ enum SubtitleAdjustments {
     /// spans the screen's bottom `PlayerRailView.railHeight` (340) points.
     static let railTopFromScreenBottom: CGFloat = 340
 
-    /// The margin a caption keeps off whatever it rests above, as a fraction
-    /// of the PICTURE height — the bottom of the picture with the rail hidden,
-    /// the top of the rail with it showing. One number for both, so captions
-    /// keep the same visual distance either way.
-    ///
-    /// Measured against the picture rather than the screen so letterboxed
-    /// content keeps its captions on the image instead of dropping them into
-    /// the black bar, and so the placement holds at any presentation size.
-    /// Tuned against AVPlayer's own placement (a two-line caption centres at
-    /// roughly 8% of picture height).
+    /// The margin a caption keeps off the picture bottom, or the rail top when
+    /// the rail is up, as a fraction of picture height. Tuned against AVPlayer.
     static let bottomMarginFraction: CGFloat = 0.06
 
     /// The lowest a caption may sit while the rail is showing. Lives here
@@ -122,12 +107,7 @@ enum SubtitleAdjustments {
         units == 0 ? "0" : String(format: "%+d", units)
     }
 
-    /// Extra bottom padding for the subtitle overlays, derived from the stored
-    /// units. Hosts pass the raw units to the overlays, which convert here, so
-    /// the units→points rule lives in one place.
-    ///
-    /// Applied to the DEFAULT caption band only. A cue carrying its own
-    /// placement is exempt — see `AetherSubtitleOverlayView.placedCue`.
+    /// Extra bottom padding for the default caption band, from the stored units.
     static func heightOffset(forUnits units: Int) -> CGFloat {
         CGFloat(clampUnits(units)) * heightUnitPt
     }

@@ -5,22 +5,10 @@
 //  SentryEventRedaction.swift
 //  Rivulet
 //
-//  The `beforeSend` scrub. Walks every field of an outgoing Sentry event and
-//  strips credentials out of it.
-//
-//  This exists because redacting at the call site is necessary but NOT
-//  sufficient. Two of the fields below are populated by the SDK itself and are
-//  unreachable from app code:
-//
-//    • `event.request.url` / `.queryString` — attached by
-//      `enableCaptureFailedRequests` (off since logs replaced it), which
-//      captures the failing request URL verbatim, token and all.
-//    • `event.exceptions[].value` — the NSError description. Foundation embeds
-//      the failing URL in `NSURLErrorFailingURLStringErrorKey`, and any custom
-//      error whose message interpolates a URL lands here too.
-//
-//  So this hook is the actual guarantee, and the call-site cleanups are defense
-//  in depth. See SensitiveDataRedactor for what counts as a secret and why.
+//  The `beforeSend` scrub: strips credentials from every field of an outgoing
+//  event, including the SDK-filled ones app code can't reach (`request.url`,
+//  and exception values, where NSError embeds the failing URL).
+//  SensitiveDataRedactor defines what counts as a secret.
 //
 
 import Foundation

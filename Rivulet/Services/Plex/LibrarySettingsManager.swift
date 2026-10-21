@@ -80,23 +80,8 @@ class LibrarySettingsManager: ObservableObject {
         self.libraryOrder = []
         self.librarySortOptions = [:]
 
-        // PRIVACY: this singleton initializes before the Plex profile
-        // resolves. If we loaded the BASE keys here, a Plex Home /
-        // multi-profile account (whose real hidden set lives under
-        // `<key>_user_<id>`) would get an EMPTY hidden set at launch, so
-        // `isLibraryVisible` would report every library — including
-        // private ones the profile hid — as visible until the async
-        // per-user load lands. That race fails OPEN and leaks private
-        // libraries into the launch list.
-        //
-        // The last-selected profile id is, however, already persisted
-        // synchronously by PlexUserProfileManager (it restores from the
-        // same key). Seed `currentUserId` from it so the FIRST load below
-        // reads the correct per-user keys immediately — no race, no
-        // network wait. `nil` (never selected a profile ⇒ legit
-        // single-user / no Plex Home) keeps the base keys, which are
-        // authoritative there. `onProfileSwitched` still corrects this if
-        // the profile changes in-session.
+        // Privacy: seed the persisted profile id so the first load reads that profile's
+        // keys. Base keys here would show its hidden libraries until the profile resolves.
         currentUserId = userDefaults.object(forKey: persistedSelectedUserIdKey) as? Int
 
         // Load settings for current user (if any)
@@ -185,22 +170,9 @@ class LibrarySettingsManager: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// Check if a library is visible
-    /// Sidebar visibility is THIS DEVICE'S own preference, deliberately.
-    ///
-    /// There is no Plex-side sidebar pin list to follow. Measured against a live
-    /// PMS 1.43.3 and plex.tv: the server exposes no pin field, plex.tv exposes
-    /// no pinned-sources endpoint, and `/hubs/promoted` returns the same rows
-    /// whatever `pinnedContentDirectoryID` you pass it. The client PASSES that
-    /// parameter, which is the tell: the server has to be told, because it does
-    /// not know. Every Plex app keeps its own pinned list, so "the user's Plex
-    /// sidebar" is not one thing to match.
-    ///
-    /// `PlexLibrary.hidden` is NOT it. On the reference account Audio Books
-    /// (`hidden == 1`) was pinned while musicDemo (`hidden == 0`) was not, so
-    /// the two are independent. `hidden` governs HOME (see
-    /// `PlexDataStore.projectHomeItems`), which IS account-level and shared, and
-    /// that is the one Rivulet follows.
+    /// Sidebar visibility is this device's preference. Plex keeps sidebar pins per app: PMS 1.43.3
+    /// and plex.tv expose no pin list, and `/hubs/promoted` ignores `pinnedContentDirectoryID`.
+    /// `PlexLibrary.hidden` is the Home pin, independent of the sidebar.
     func isLibraryVisible(_ libraryKey: String) -> Bool {
         !hiddenLibraryKeys.contains(libraryKey)
     }
@@ -226,19 +198,8 @@ class LibrarySettingsManager: ObservableObject {
 
     // MARK: - Home Screen Visibility
     //
-    // There is no separate shown-on-Home set any more. `librariesShownOnHome`,
-    // `homeVisibilityConfigured`, `isLibraryShownOnHome`, `setLibraryShownOnHome`
-    // and `initializeHomeVisibility` all lived here with NO writer anywhere in
-    // the app: the UIKit settings migration deleted the SwiftUI page that was
-    // their only caller, so the flag never flipped and the whole concept
-    // degraded to `isLibraryVisible`. Worse, anyone carrying
-    // `homeVisibilityConfigured = true` from a build before that migration was
-    // left with a frozen set they could no longer edit.
-    //
-    // Home visibility is now the sidebar toggle plus Plex's own pin; see
-    // `PlexDataStore.librariesPinnedToHome`. Per-row control is
-    // `HomeRowSettings`. Do not add a third one. The stale UserDefaults keys are
-    // dropped in `pruneRetiredHomeVisibilityKeys` below.
+    // Home visibility is the sidebar toggle plus Plex's pin (`PlexDataStore.librariesPinnedToHome`),
+    // and per-row control is `HomeRowSettings`. Do not add a third.
 
     /// Move a library in the order list
     /// - Parameters:

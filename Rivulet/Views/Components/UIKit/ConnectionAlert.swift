@@ -5,19 +5,9 @@
 //  ConnectionAlert.swift
 //  Rivulet
 //
-//  How the app says "the server is gone". Cached content keeps rendering and
-//  we tell the user once, with the app's standard popup card.
-//
-//  This replaces `ConnectionErrorBannerView`, which reserved 120pt of
-//  `contentInset.top` on the home. The connection check resolves a second or
-//  two after content renders, so every row jumped down 120pt mid-session, and
-//  its Retry button was a focusable island floating outside the collection
-//  view. A modal costs the layout nothing.
-//
-//  Two entry points:
-//  - `presentOnceIfOffline` — unprompted, once per outage.
-//  - `allowPlayback` — gates the one thing that genuinely cannot work from
-//    cache. Browsing cached metadata is fine and is deliberately not gated.
+//  How the app says "the server is gone": cached content keeps rendering and a
+//  popup says so once per outage (`presentOnceIfOffline`). A modal, not a
+//  banner, so the layout never shifts. `allowPlayback` gates playback only.
 //
 
 import UIKit

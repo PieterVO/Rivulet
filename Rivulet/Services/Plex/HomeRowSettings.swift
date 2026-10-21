@@ -1,33 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 //
-//  HomeRowSettings.swift
-//  Rivulet
-//
-//  Which Home rows this device hides, and which collections it pins.
-//
-//  Home's row SET comes from the Plex server (pinned libraries → hubs flagged
-//  `promoted`; see `PlexDataStore.projectHomeItems`). This is the local
-//  subtractive filter on top: an Apple TV in the living room is a different
-//  context from a phone, and a viewer may want fewer rows here than their Plex
-//  account asks for everywhere.
-//
-//  The hide list is subtractive ON PURPOSE. It can hide a row Plex offers; it
-//  can never invent one Plex does not. That keeps a single source of truth for
-//  what a row IS and what it is called, and it means a stored preference can
-//  never resurrect a row for a library the user has since unshared or deleted.
-//
-//  Local pins (`HomeCollectionPins`, below) are the one user-created exception:
-//  a collection pinned from a library's tile menu adds a row inside that
-//  library's Home block. A pin never adds a library, and a pin whose library is
-//  gone, unshared or on another server never matches, so the no-resurrection
-//  property still holds.
-//
-//  Rows are keyed by Plex's `hubIdentifier` (`movie.recentlyadded.1`,
-//  `tv.recentlyadded.2`, `continueWatching`), which is stable across refreshes
-//  and carries the library's section id, so two libraries' Recently Added rows
-//  are distinct keys. A key for a row that stops being offered simply never
-//  matches again; it is inert rather than wrong, so there is nothing to prune.
+//  Which Home rows this device hides, and which collections it pins. The row set
+//  comes from the server (`PlexDataStore.projectHomeItems`); hiding can only remove
+//  rows. Rows are keyed by `hubIdentifier`, which carries the section id, so a key
+//  for a row no longer offered just stops matching.
 //
 
 import Foundation
@@ -42,15 +19,8 @@ enum HomeRowSettings {
 
     private static var defaults: UserDefaults { .standard }
 
-    /// Namespaced PER PLEX HOME PROFILE, the same way `LibrarySettingsManager`
-    /// namespaces its own keys.
-    ///
-    /// Load-bearing on a shared server. Home rows are derived from the signed-in
-    /// account's pinned libraries, so two profiles on one Apple TV see different
-    /// rows; a single global key would let one profile's hidden rows suppress
-    /// another's, and the identifiers collide because they carry the section id
-    /// rather than the account. Mirrors the key
-    /// `PlexUserProfileManager` writes (`selectedPlexUserId`).
+    /// Per Plex Home profile, keyed off `selectedPlexUserId`: identifiers carry the
+    /// section id, not the account, so one global list would cross profiles.
     private static var hiddenKey: String {
         guard let userId = defaults.object(forKey: "selectedPlexUserId") as? Int else {
             return hiddenBaseKey
@@ -87,19 +57,9 @@ enum HomeRowSettings {
     }
 }
 
-/// Collections the user pinned to Home from a library's tile menu. The one
-/// user-created exception to the subtractive rule above (see the file header).
-///
-/// Scoped by library uuid rather than server. `PlexAuthManager.selectedServer`,
-/// and with it the machine id, is nil after a warm launch that restores only
-/// URL and token, while `PlexLibrary.uuid` is always present. Matching on it
-/// keeps pins to the current server and leaves a pin for a deleted or unshared
-/// library inert.
-///
-/// Stored as a JSON array per Plex Home profile, keyed like
-/// `HomeRowSettings.hiddenKey`. `PlexDataStore` fetches each pin's first page
-/// (`loadPinnedCollections`) and draws it after its library's own rows
-/// (`projectHomeItems`).
+/// Collections pinned to Home from a library's tile menu: the one way to add a row, and only
+/// inside a library Plex already puts on Home. Scoped by library uuid, because
+/// `selectedServer` is nil after a warm launch. Stored as JSON per Plex Home profile.
 enum HomeCollectionPins {
 
     /// `nonisolated` because the target defaults to MainActor, and the pin

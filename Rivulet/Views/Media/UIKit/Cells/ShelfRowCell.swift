@@ -1,32 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  ShelfRowCell.swift
-//  Rivulet
-//
-//  One horizontal shelf row (Continue Watching / Recently Added /
-//  Recommendations / Watchlist) hosting its own horizontal collection view.
-//
-//  Why not an orthogonal compositional section: measured behavior of the
-//  embedded orthogonal scroller on tvOS (settle-log verified, 2026-06-10) is
-//  that focus-driven landings always pin a tile's leading edge to the RAW
-//  screen edge — section contentInsets, scroller contentInset, and
-//  isScrollEnabled are all ignored or reverted by the layout. That makes a
-//  tile peeking in from the left geometrically impossible and loses the
-//  at-rest margin on the first scroll.
-//
-//  Here the row owns its scroll instead (isScrollEnabled = false, offsets
-//  driven from didUpdateFocus — the same pattern as the detail page's
-//  FocusScrollControlledCollectionView, applied horizontally). Every resting
-//  position is exact:
-//
-//      contentOffset.x = firstVisibleColumn × pitch
-//
-//  which, on the grid in MediaRowMetrics (1920 = 2·margin + N·art + (N−1)·gap),
-//  rests N tiles on the grid with the margin intact, a sliver of the next tile
-//  on the right, and tile k+1 landing exactly where tile k was.
-//
+// One horizontal shelf row hosting its own collection view. Not an orthogonal section: measured
+// on tvOS, its focus landings pin a tile to the raw screen edge and ignore every inset. The row
+// scrolls itself from didUpdateFocus (contentOffset.x = firstVisibleColumn × pitch), so tiles rest
+// on the MediaRowMetrics grid.
 
 import UIKit
 
@@ -84,13 +62,8 @@ final class ShelfRowCell: UICollectionViewCell {
     /// Reports resting offsets so the owner can restore them across reuse.
     var onOffsetChanged: ((CGFloat) -> Void)?
 
-    /// Index of the tile that currently holds focus inside this row, or nil if
-    /// focus is elsewhere or has landed on the skeleton placeholder. The owning
-    /// controller needs this to service a Play/Pause press: unlike Select and
-    /// long-press, a Play/Pause press is delivered to the focused view and
-    /// bubbles up to the outer view controller, so there is no per-tile
-    /// callback to hang the lookup off. The controller has to pull the focused
-    /// index out of whichever row owns it.
+    /// Focused tile index in this row, nil off-row or on the skeleton. Play/Pause bubbles to the
+    /// owning controller with no per-tile callback, so the controller reads it from here.
     func focusedItemIndex() -> Int? {
         guard let indexPath = TileLongPress.focusedCell(in: rowCollectionView),
               indexPath.item < realCount
@@ -176,15 +149,9 @@ final class ShelfRowCell: UICollectionViewCell {
 
     private var displayCount: Int { realCount + (hasSkeleton ? 1 : 0) }
 
-    /// True while a `performBatchUpdates` animation is still running.
-    /// `reloadData()` inside that window strands the cells the batch just
-    /// inserted: they keep their old index in the collection's realized map
-    /// and are never re-vended. That is how the pagination skeleton froze
-    /// mid-row. A hub lands with one item, the row inserts the skeleton at the
-    /// tail, the page arrives a moment later, and the reload that should have
-    /// replaced the skeleton runs while its insert is still animating. The row
-    /// ends up reporting the right counts and the right items while still
-    /// showing a placeholder over one of them.
+    /// True while a `performBatchUpdates` animation runs. `reloadData()` inside that window
+    /// strands the cells the batch inserted (they are never re-vended), which froze the
+    /// pagination skeleton mid-row.
     private var batchUpdateInFlight = false
     /// A reload that arrived mid-batch, run once the batch completes.
     private var deferredApply: (() -> Void)?
@@ -344,15 +311,8 @@ final class ShelfRowCell: UICollectionViewCell {
         }
     }
 
-    /// Single-tile removal without nuking focus: delete the tile at the
-    /// captured index inside a batch update so the survivors slide over to
-    /// fill the gap. UIKit keeps focus coherent through a batch delete (it
-    /// tracks the focused cell across the update, landing on the slot's new
-    /// occupant when the focused tile itself was deleted) — which a
-    /// crossfade reload does not: the reload re-binds cell instances and
-    /// strands focus on whatever cell object the engine was holding. Falls
-    /// back to a plain reload when the caller's expectation doesn't match
-    /// the collection's actual shape (racing refresh).
+    /// Removes one tile with a batch delete, which keeps focus coherent where a crossfade reload
+    /// strands it. Falls back to a plain reload when the counts disagree (a racing refresh).
     func animateRemoval(at index: Int, newRealCount: Int, newSkeleton: Bool, contentToken: Int) {
         let oldReal = realCount
         let oldSkeleton = hasSkeleton
@@ -595,14 +555,8 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
         displayCount
     }
 
-    /// The pagination skeleton is OURS to place, not the provider's. It is
-    /// defined as the one slot past `realCount` — the same `realCount` that
-    /// sizes the section — so it can only ever be the trailing tile. The owner
-    /// used to make this call from its own live section lookup, which is a
-    /// second count: when the two disagreed for even one layout pass, whatever
-    /// tile happened to be realized in that pass came back a skeleton and stuck
-    /// there mid-row (the row never reloads while its content token is
-    /// unchanged), beside items that were still perfectly tappable.
+    /// The skeleton is the one slot past `realCount`, the same count that sizes the section, so it
+    /// is always the trailing tile. Do not ask the owner: a second count stuck skeletons mid-row.
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         if hasSkeleton, indexPath.item >= realCount {
             let cell = collectionView.dequeueReusableCell(
@@ -640,11 +594,8 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
         onLongPressItem?(indexPath.item)
     }
 
-    /// The one driver of horizontal scroll: shift the window only as far as
-    /// needed to keep the focused tile inside the N fully-visible columns
-    /// (ATV+ feel — no scroll while moving within view, a one-pitch shift
-    /// when crossing the window edge). Driven with the shared
-    /// FocusScrollMotion settle so it matches the vertical row scroll.
+    /// The one driver of horizontal scroll: shifts one pitch only when focus crosses the edge of the
+    /// N visible columns, on the shared FocusScrollMotion settle.
     func collectionView(_ collectionView: UICollectionView,
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {

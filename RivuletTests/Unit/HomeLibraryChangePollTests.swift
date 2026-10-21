@@ -5,16 +5,8 @@
 //  HomeLibraryChangePollTests.swift
 //  RivuletTests
 //
-//  GitHub #315: Home's "Recently Added" rows come from `libraryHubs`, which was
-//  only ever fetched for libraries that had no hubs yet, so a title added after
-//  launch never appeared until the app was relaunched. The 30s poll now watches
-//  the newest item on `/library/recentlyAdded` and refetches the hubs only when
-//  that item's identity moves.
-//
-//  `PlexDataStore` is a `private init()` singleton wired to the shared network /
-//  cache / auth managers, so the poll itself is not reachable from a unit test.
-//  The change token is factored out as a pure static, and that is what these
-//  cover.
+//  The change token behind Home's 30s Recently Added poll (#315): the newest
+//  `/library/recentlyAdded` item's identity, factored out of `PlexDataStore`.
 //
 
 import XCTest

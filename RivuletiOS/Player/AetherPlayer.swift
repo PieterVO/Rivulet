@@ -5,12 +5,9 @@
 //  AetherPlayer.swift
 //  Rivulet iOS
 //
-//  Touch-first host for AetherEngine, used for both Live TV and Plex VOD on
-//  iOS. It shares no code with the tvOS player of the same name: that one
-//  conforms to PlayerProtocol and is driven by the UIKit focus chrome, this one
-//  is a plain ObservableObject read by SwiftUI. Two files rather than one
-//  because shared code carries no platform conditionals (see CLAUDE.md,
-//  Platform Boundary). This is the only iOS file that names engine types.
+//  Touch-first AetherEngine host for iOS Live TV and VOD, an ObservableObject
+//  read by SwiftUI. Separate from the tvOS player of the same name, and the only
+//  iOS file that names engine types.
 //
 
 @preconcurrency import AVFoundation

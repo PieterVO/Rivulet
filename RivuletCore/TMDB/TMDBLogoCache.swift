@@ -5,15 +5,9 @@
 //  TMDBLogoCache.swift
 //  Rivulet
 //
-//  Resolves and caches TMDB clear-logo artwork URLs. Backed by memory + disk
-//  caches and inflight-request dedup so the Discover hero slide and the
-//  preview-overlay prefetch ring can both ask for the same logo without
-//  duplicating work.
-//
-//  Entries store the TMDB relative path (e.g. `/abc.png`), not a full URL,
-//  so changing the CDN size or base doesn't invalidate the cache. A
-//  resolved `nil` (confirmed "no logo") is itself a cache hit — repeat
-//  calls for the same id don't refetch.
+//  Resolves and caches TMDB clear-logo URLs (memory, disk, inflight dedup).
+//  Entries store the relative path, so a CDN size change keeps the cache, and a
+//  confirmed "no logo" is itself a hit.
 //
 
 import Foundation

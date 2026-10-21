@@ -1,47 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  LiveJoinTelemetry.swift
-//  Rivulet
-//
-//  Measures how long a Live TV channel takes to reach first frame, split into
-//  the phases that actually compose it, and reports them as a Sentry
-//  performance transaction.
-//
-//  WHY THIS EXISTS
-//  ---------------
-//  AetherEngine 5.19.0 added `LoadOptions.liveJoinProfile = .fastZap`, which
-//  shrinks the loopback's TARGETDURATION so the RFC 8216bis live-edge holdback
-//  (>= 3 x TARGETDURATION) the first manifest waits on shrinks with it. Upstream
-//  measured first frame at +2.0s with it vs +20.0s without, on a strict-realtime
-//  origin with a 1s GOP.
-//
-//  Whether that helps Rivulet depends on two things nobody has measured:
-//    1. WHICH ROUTE a channel takes. `liveJoinProfile` is read at exactly one
-//       place in the engine (building the loopback segment producer) and is
-//       inert on `nativeRemoteHLS`, where AVPlayer talks to the origin directly.
-//    2. WHICH PHASE actually dominates. Join time is serial: the Plex tune +
-//       decision handshake, then the engine's demux probe (this app allows a 5MB
-//       / 5s budget), then the holdback fill. `.fastZap` only addresses the last
-//       one.
-//
-//  So we measure the split and infer, because the engine does NOT expose
-//  TARGETDURATION or GOP: a loopback p50 near 18-20s means the holdback
-//  dominates and `.fastZap` has real headroom; near 8s means handshake and probe
-//  dominate and it does not.
-//
-//  TWO HARD CONSTRAINTS
-//  --------------------
-//  - NO URLs LEAVE THE DEVICE. Xtream-style IPTV stream URLs embed credentials
-//    in the path (`/live/user/pass/id.ts`). Only derived categorical values are
-//    sent: route, source kind, outcome, bucketed duration.
-//  - HOST-SIDE WALL CLOCK ONLY. Never enrich these spans from
-//    `engine.diagnostics.liveTelemetry`: that sampler does synchronous XPC on the
-//    main thread and is the known cause of this app's hangs (AetherEngine#134).
-//    It carries no TARGETDURATION anyway, so it would buy a hang risk for
-//    nothing.
-//
+// Times a Live TV join to first frame, split into resolve (Plex tune and
+// decision), engine load and first frame, as the Sentry `live.join` transaction.
+// No URL leaves the device: Xtream paths embed credentials, so only categories are sent.
+// Do not read `engine.diagnostics.liveTelemetry` here: it does sync XPC on main (AetherEngine#134).
 
 import Foundation
 import Sentry

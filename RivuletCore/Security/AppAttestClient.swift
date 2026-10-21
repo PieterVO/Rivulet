@@ -5,26 +5,9 @@
 //  AppAttestClient.swift
 //  Rivulet
 //
-//  Proves to our Cloudflare Workers that a request came from the genuine
-//  Rivulet app on genuine Apple hardware.
-//
-//  Why this exists: anything the app can *send* (a bundle id, a baked-in API
-//  key, an HMAC secret) ships inside the binary and is extractable, so a fork
-//  could copy it. App Attest is the only mechanism on tvOS where the credential
-//  is unforgeable: the private key is generated inside the Secure Enclave and
-//  never leaves it, and Apple itself signs a certificate binding that key to
-//  OUR bundle id and team id. A fork has a different bundle/team, so Apple will
-//  not vouch for it, and no amount of source copying changes that.
-//
-//  Two phases:
-//    - attest  (once per device, ever) — mint a Secure Enclave key, get Apple
-//      to certify it, register the public key with the Worker.
-//    - assert  (every request)         — sign the request with that key.
-//
-//  Failure is ALWAYS soft. If attestation can't complete (no network, Apple's
-//  service is down, or we're in the Simulator where there is no Secure Enclave)
-//  we still send the request, just unsigned. The Worker decides what to do with
-//  that. An attestation bug must cost us a locked endpoint, never a bricked app.
+//  Proves to our Cloudflare Workers that a request came from the genuine app on
+//  Apple hardware: attest once per device, then sign every request with the
+//  Secure Enclave key. Failure is soft: the request goes out unsigned.
 //
 
 import Foundation
@@ -126,14 +109,9 @@ actor AppAttestClient {
         }
     }
 
-    /// The Worker told us it doesn't know this key. Discard it and re-enroll on
-    /// the next request.
-    ///
-    /// `ifCurrent` is the key the failed request actually signed with. When a
-    /// burst of requests fails together, every one of them would otherwise
-    /// discard whatever key an earlier failure had already re-enrolled, and each
-    /// re-enrollment costs a round trip to Apple's attestation service. Naming
-    /// the key makes all but the first discard a no-op.
+    /// The Worker doesn't know this key: discard it and re-enroll on the next request.
+    /// `ifCurrent` names the key the failed request used, so a burst of failures
+    /// re-enrolls once instead of discarding each other's new keys.
     func invalidateKey(ifCurrent used: String? = nil) {
         if let used, used != keyId { return }
         keyId = nil

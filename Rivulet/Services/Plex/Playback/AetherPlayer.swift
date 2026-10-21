@@ -2,23 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  AetherPlayer.swift
-//  Rivulet
-//
-//  PlayerProtocol-conforming adapter around AetherEngine.
-//
-//  Rivulet's only player: VOD and Live TV (one instance per grid slot).
-//  Video must be displayed through `bind(view:)` / AetherVideoSurfaceView —
-//  the engine attaches the active backend's layer itself (AVPlayerLayer on
-//  the native path, AVSampleBufferDisplayLayer on the software path).
-//  `currentAVPlayer` is still republished for non-render uses (mute
-//  reapplication, item-level metadata observation).
-//
-//  Aether handles HDR10+ dynamic metadata preservation, HLG signaling,
-//  EAC3+JOC Atmos stream-copy through MKV, and DV P5/P8.1 via dvh1+dvcC
-//  in HLS-fMP4 sample entries. DV P7 plays as HDR10 base only. Routing
-//  decisions live in ContentRouter; this adapter just bridges the engine
-//  surface.
+//  PlayerProtocol adapter around AetherEngine, for VOD and each Live TV slot. Video
+//  renders through `bind(view:)` / AetherVideoSurfaceView; `currentAVPlayer` is
+//  republished only for mute and item metadata. HDR and DV handling: CLAUDE.md, "HDR / DV".
 //
 
 import AVFoundation
@@ -40,7 +26,7 @@ final class AetherPlayer: PlayerProtocol {
 
     /// Re-publishes AetherEngine.currentAVPlayer so the host player view can
     /// rebind its .player on every internal Aether reload (audio-track
-    /// switch / background reopen). Documented at AetherEngine.swift:1225.
+    /// switch / background reopen). Documented in AetherEngine.swift.
     @Published private(set) var currentAVPlayer: AVPlayer?
 
     /// Mute state for the underlying AVPlayer. Tracked so it survives Aether's
@@ -154,16 +140,9 @@ final class AetherPlayer: PlayerProtocol {
     /// background timestamp so the teardown-drain wait still applies.
     private var pendingReloadSince: Date?
 
-    /// Warm the opening bytes of a source the engine is not playing yet, so a
-    /// later `load()` of that URL skips the cold open's two-to-three sequential
-    /// round trips (AetherEngine 7.7.0).
-    ///
-    /// The URL and headers are the adoption key and must be byte-identical to
-    /// the ones the load will carry, or the bytes are fetched and never taken.
-    /// Needs no engine instance, so a host warms while its player is still on
-    /// the current item. Best-effort by contract: it declines rather than
-    /// queues when the origin has no free request slot, and the bytes live in
-    /// memory only until adopted or dropped under pressure.
+    /// Warms a source's opening bytes so a later `load()` skips the cold open's round trips.
+    /// URL and headers must be byte-identical to the load's, or the bytes are never adopted.
+    /// Best-effort: declines when the origin has no free request slot.
     static func prewarm(url: URL, headers: [String: String]) async {
         let report = await AetherEngine.prewarm(url: url, httpHeaders: headers)
         if let declined = report.declined {
@@ -214,16 +193,8 @@ final class AetherPlayer: PlayerProtocol {
             }
             .store(in: &cancellables)
 
-        // Subtitle lookups ride the clock's SOURCE axis, which upstream
-        // documents as the value to use for the subtitle overlay. It is NOT
-        // interchangeable with currentTime:
-        //  - On zero-based sources (VOD) the two match in steady play, but
-        //    sourceTime holds the ON-SCREEN frame while a seek is in flight,
-        //    so cues don't flash the scrub target's text (engine #49).
-        //  - On live / mid-stream-joined sources (a tuner TS) sourceTime is
-        //    offset by the session zero (engine #107): cue PTS arrive on the
-        //    source axis (~8996s) while currentTime is elapsed (~0s), so
-        //    matching against currentTime shows no subtitles at all.
+        // Subtitles use sourceTime, not currentTime: it holds the on-screen frame during a
+        // seek (engine #49), and on live sources cue PTS are on the source axis (engine #107).
         engine.clock.$sourceTime
             .receive(on: DispatchQueue.main)
             .sink { [weak self] t in
@@ -423,25 +394,8 @@ final class AetherPlayer: PlayerProtocol {
         if combined != isBuffering { isBuffering = combined }
     }
 
-    /// Map the engine's state, carrying its own classification of a failure
-    /// rather than re-deriving one from the message.
-    ///
-    /// `errorInfo` is nil only if the engine cleared it between publishing the
-    /// error and this call, which the paired read in `wireUpPublishers` makes
-    /// unreachable in practice. `.unknown` stays as the honest answer for that
-    /// case: it is what we actually know.
-    /// Wrap a failed `engine.load` in the engine's OWN classification.
-    ///
-    /// AetherEngine assigns `errorInfo` immediately before the throw reaches
-    /// us, so take it. This is the RIVULET-19 site: `String(describing:)` of an
-    /// engine error is the un-matchable string the host's substring classifier
-    /// was guessing at, and since 6.29.0 the engine splits the two failures
-    /// that were indistinguishable inside it (an origin answering with an HTTP
-    /// status, vs a body that genuinely is not media — both used to surface as
-    /// FFmpeg's "Invalid data found when processing input").
-    ///
-    /// Both load paths funnel through here: live and VOD had the same three
-    /// lines, and a fix in one of them is a fix owed to the other.
+    /// Wraps a failed `engine.load` (live and VOD) in the engine's own classification.
+    /// `errorInfo` is set just before the throw and tells an HTTP error from a non-media body.
     private func loadFailure(from error: Error) -> PlayerError {
         if let info = engine.errorInfo {
             return .engineFailure(kind: info.kind.rawValue, message: info.message)
@@ -449,6 +403,8 @@ final class AetherPlayer: PlayerProtocol {
         return .loadFailed(String(describing: error))
     }
 
+    /// Maps the engine's state, keeping its failure classification. A nil `errorInfo`
+    /// on `.failed` maps to `.unknown`.
     private static func translate(_ s: PlaybackState,
                                   errorInfo: PlaybackErrorInfo?) -> UniversalPlaybackState {
         switch s {
@@ -498,9 +454,7 @@ final class AetherPlayer: PlayerProtocol {
             languageCode: t.language,
             codec: t.codec,
             isDefault: t.isDefault,
-            // The engine reads the container's disposition bits and DOES report
-            // these. They were previously dropped on the floor here, which is
-            // why the app believed only Plex knew a track was forced.
+            // The engine reports these from the container's disposition bits.
             isForced: t.isForced,
             isHearingImpaired: t.isHearingImpaired,
             isCommentary: t.isCommentary,
@@ -599,16 +553,8 @@ final class AetherPlayer: PlayerProtocol {
         }
     }
 
-    /// Rebuild the torn-down session at the preserved playhead.
-    ///
-    /// The reload is bounded and its failure is recoverable, because this is the
-    /// only way back into a session the engine tore down. An unbounded
-    /// fire-and-forget rebuild leaves the player wedged: the reload of a
-    /// connection that went stale across a multi-hour sleep can hang the same
-    /// way a cold start can (#245), and with `pendingReloadSince` already
-    /// consumed, every later Play press just called `engine.play()` on a session
-    /// with no player item. Exiting the player and replaying from the library
-    /// was the only way out.
+    /// Rebuilds the torn-down session at the preserved playhead. Bounded, and a failure
+    /// re-arms the retry, since a stale connection can hang the reload as at cold start (#245).
     private func startForegroundReload(since: Date) {
         guard !foregroundReloadInFlight else { return }
         foregroundReloadTask?.cancel()
@@ -744,18 +690,6 @@ final class AetherPlayer: PlayerProtocol {
         )
     }
 
-    /// Live TV load. Sets `isLive` so the engine treats the source as live
-    /// (live-edge tracking, reconnect behavior, and seeks confined to the
-    /// rewind window set below). HLS sources use
-    /// `nativeRemoteHLS` so AVPlayer plays the remote playlist directly (no
-    /// demuxer probe / loopback — "HLS straight to AVPlayer"); everything else
-    /// (raw MPEG-TS, etc.) goes through the engine's demux/remux to a loopback
-    /// HLS stream. Either way the engine publishes `currentAVPlayer` for the
-    /// AVKit OSD. No start position (live).
-    /// `forceEngineDemux` disables the native-HLS shortcut so the engine's own
-    /// demuxer opens the playlist instead — used as a fallback when AVPlayer's
-    /// native path fails against a server (e.g. a Plex transcode session that
-    /// rejects AVPlayer's request pattern).
     /// What a live load is for.
     enum LiveLoadRole {
         /// The one channel on screen: full rewind window, and the software
@@ -821,6 +755,9 @@ final class AetherPlayer: PlayerProtocol {
         if let sample = capture.sample() { LiveAVTelemetry.report(sample) }
     }
 
+    /// Live TV load. HLS sources go to AVPlayer directly (`nativeRemoteHLS`), anything else
+    /// through the engine's remux. `forceEngineDemux` makes the engine open the playlist, the
+    /// fallback when a server rejects AVPlayer's request pattern.
     func loadLive(url: URL, headers: [String: String]?, forceEngineDemux: Bool = false,
                   role: LiveLoadRole = .fullscreen) async throws {
         finishAVCapture()
@@ -863,20 +800,8 @@ final class AetherPlayer: PlayerProtocol {
                 // captions on 801 without that flag, so auto-detect returns nothing.
                 // Region-default to 801 for AU, otherwise auto-detect.
                 teletextPage: Self.regionTeletextPage(),
-                // Broadcast H.264 routinely mis-signals interlaced content as
-                // progressive (codecpar fieldOrder=0; MBAFF is only flagged
-                // per-frame), which routes it down the engine's NATIVE path with
-                // no deinterlacer — visible combing. Ask for the software path on
-                // live demux sessions: bwdif deinterlaces genuinely interlaced
-                // frames and passes true progressive through untouched.
-                //
-                // ...but only where the channel is known to need it. PMS reports
-                // the scan type on the tune, so the answer is known before the
-                // load (see `needsDeinterlacing`). Every other source is left to
-                // the engine's own check, which reads the SPS for exactly this
-                // mis-signalling (#150).
-                // The engine ignores this on the native-HLS shortcut, which never
-                // enters the demux dispatch.
+                // Software path (bwdif) only where PMS's tune says the channel is interlaced;
+                // the engine's SPS check covers other sources (#150). Ignored on native HLS.
                 preferredDecodePath: (role == .fullscreen && !nativeRemoteHLS && Self.needsDeinterlacing(url))
                     ? .software : .automatic
             )
@@ -907,19 +832,8 @@ final class AetherPlayer: PlayerProtocol {
         userIntendsToPlay = true
         pendingReloadSince = nil
         do {
-            // A Plex direct-play part key is an HLS PLAYLIST
-            // (/livetv/sessions/{uuid}/{consumer}/index.m3u8), not the raw
-            // transport stream the engine's raw live path expects. Handing it
-            // an m3u8 body fails closed by design (AE#140), and the host's
-            // fallback then re-tuned and landed on nativeRemoteHLS — so every
-            // granted direct play was quietly played by AVPlayer, which cannot
-            // decode mp2 or DVB teletext. Those two are the entire reason for
-            // wanting direct play here, so the grant was being thrown away.
-            //
-            // HLSLiveIngestReader demuxes the playlist's underlying MPEG-TS, so
-            // teletext and broadcast audio reach the engine and our own caption
-            // renderer. It is also why this route costs ONE tune: the old path
-            // needed a second grab to discover it had to fall back.
+            // A Plex direct-play part key is an HLS playlist, which the raw live path
+            // rejects (AE#140). HLSLiveIngestReader demuxes its MPEG-TS so mp2 and teletext survive.
             if usesHLSIngest {
                 // The reader does its own HTTP on its own session, so the
                 // headers have to be handed to it here: `LoadOptions.httpHeaders`
@@ -1003,17 +917,9 @@ final class AetherPlayer: PlayerProtocol {
 
     /// Whether this live source has to take the deinterlacing path.
     ///
-    /// Reads `rivuletLiveScanType`, which `PlexLiveTVProvider` puts on the URL
-    /// from the tune response — the same carry-on-the-URL trick the keepalive's
-    /// ratingKey uses, so nothing has to be threaded through LiveTVDataStore.
-    ///
-    /// **Absence means no.** A missing scan type used to force the software
-    /// path, which put every Dispatcharr and playlist channel (none carries
-    /// one) on it. Measured on an Apple TV 4K (2nd gen) with a 4K60 HEVC
-    /// channel: the layer dropped about 14 frames a second, the decoder fell
-    /// further behind every second, and a HomePod played the sound about 3s
-    /// late. The engine's own dispatch catches mis-signalled interlaced H.264
-    /// from the SPS (#150), so only Plex's explicit answer overrides it.
+    /// Reads `rivuletLiveScanType`, which `PlexLiveTVProvider` puts on the URL from the tune.
+    /// A missing scan type means no: software decode of 4K60 HEVC drops ~14 fps on an
+    /// Apple TV 4K (2nd gen).
     static func needsDeinterlacing(_ url: URL) -> Bool {
         guard let scan = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "rivuletLiveScanType" })?.value?
@@ -1069,31 +975,11 @@ final class AetherPlayer: PlayerProtocol {
         externalSubtitles: [SidecarSubtitle] = [],
         isLive: Bool = false
     ) async throws {
-        // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
-        // DTS-HD MA, MP3, Opus). FLAC encode is ~3x realtime on A15 vs
-        // EAC3's ~0.5x realtime, so segment production keeps up with
-        // AVPlayer's HLS pipeline on high-bitrate 4K content.
-        //
-        // Tradeoff: needs a sink that accepts multichannel LPCM over
-        // HDMI (Denon / Marantz / NAD AVRs). On AirPlay-to-HomePod or
-        // stereo-LPCM-only routes the multichannel LPCM downmixes to
-        // stereo, but the encode-throughput win is still worth it.
-        //
-        // subtitleLanguageHintsByStreamIndex is accepted for call-site
-        // compatibility but unused: upstream 4.8.0 has no per-stream
-        // language-hint parameter. preferredSubtitleLanguages (below)
-        // is the supported replacement for steering initial subtitle
-        // selection.
-        // isLive: engine auto-detection is deliberately disabled upstream
-        // (VOD MKVs with broken duration headers are too common), so the
-        // host must declare live sources. Enables the engine's live path:
-        // clock live-edge tracking, LiveReloadPolicy reconnect, and
-        // seek(to:) becoming a no-op (this load sets no rewind window;
-        // `loadLive` does).
-        // externalSubtitles: registered at load (not addExternalSubtitleTrack)
-        // so the engine can also serve them as native WebVTT renditions if
-        // that path is ever enabled; httpHeaders nil inherits the media's
-        // own LoadOptions headers (same Plex auth).
+        // .lossless: FLAC for non-stream-copy audio, ~3x realtime on A15 against EAC3's
+        // ~0.5x, so 4K segments keep up. Needs a multichannel LPCM sink; others downmix.
+        // subtitleLanguageHintsByStreamIndex is unused (the engine has no such parameter).
+        // isLive must be declared: the engine does not auto-detect live (broken MKV durations).
+        // externalSubtitles: nil httpHeaders inherits the media's Plex auth headers.
         var options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
@@ -1442,23 +1328,6 @@ final class AetherPlayer: PlayerProtocol {
 
     // MARK: - Advanced stats (Info popup "stats for nerds" tab)
 
-    /// Full "stats for nerds" snapshot for the Info popup's Advanced tab.
-    /// Truthful and engine-sourced — nothing here is synthesized or guessed;
-    /// every field is nil unless AetherEngine actually exposes it.
-    ///
-    /// Folds the two human-readable decoder labels (always readable while a
-    /// session is active) with a 1:1 copy of the engine's 1 Hz `LiveTelemetry`
-    /// (`engine.diagnostics.liveTelemetry`, sampled automatically on native
-    /// load — this method starts no sampler, it is a pure read):
-    ///  - `backend` ← `engine.activeVideoDecoder`, e.g. "VideoToolbox HEVC
-    ///    (HW)", "dav1d AV1 (SW)". The engine's own string already
-    ///    distinguishes HW/SW.
-    ///  - `audioBridge` ← `engine.activeAudioDecoder`, e.g.
-    ///    "Stream-copy (EAC3+JOC Atmos)", "TrueHD → FLAC bridge".
-    ///  - all remaining fields ← `LiveTelemetry`, which is nil while idle /
-    ///    before the first sample and on the `hls`/AVPlayer-bypass path (no
-    ///    loopback pipeline). Its own fields are path-asymmetric, so the
-    ///    Advanced view prunes absent rows rather than showing placeholders.
     /// Map the engine's `AudioDelivery` to a stats row, or nil to omit the row.
     ///
     /// Switched exhaustively with no `default` on purpose: this file is the only
@@ -1487,6 +1356,8 @@ final class AetherPlayer: PlayerProtocol {
         engine.prepareForItemReplacement()
     }
 
+    /// Info popup Advanced tab snapshot, read straight from the engine: decoder labels plus
+    /// its 1 Hz `LiveTelemetry`, which is nil while idle and on the `hls` route. Starts no sampler.
     func advancedStats() -> AetherAdvancedStats {
         let t = engine.diagnostics.liveTelemetry
         return AetherAdvancedStats(

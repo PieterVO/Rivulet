@@ -1,22 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MediaItemDetailPageViewController.swift
-//  Rivulet
-//
-//  A reusable, title-first detail page for any MediaItem (episode, movie, show).
-//  Layout follows Docs/atv_ref/episode_details_ref.JPG (hero) and
-//  episode_details_bottom_ref.JPG (Information / Languages / Accessibility
-//  columns). Reached by a blur-fade from the carousel detail's episode
-//  description; Menu/Back returns.
-//
-//  Stage 3a: the hero. Hero order matches the reference:
-//    show title (small) · episode title (large) · genre · rating ·
-//    "S2, E1: synopsis" · date · runtime + capability badges ·
-//    Play + Watched + Watchlist (+ Go to Show on an episode).
-//  Below-fold info columns (3b) and the custom blur-fade (3c) land next.
-//
+//  The title-first detail page for any MediaItem (Docs/atv_ref/episode_details_ref.JPG,
+//  episode_details_bottom_ref.JPG), blur-faded in over the carousel; Menu returns.
 
 import Combine
 import UIKit
@@ -572,10 +558,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     }
 
     private func applyDetail(_ detail: MediaItemDetail, fallbackGenres: [String]) {
-        // This page is seeded from a snapshot that can already be stale on open
-        // (marked watched from a tile menu, then opened before the hub refresh
-        // lands). `detail` is a fresh server read, so spend it on the watch bits
-        // too rather than issuing a second GET for them.
+        // The seed can be stale on open; `detail` is a fresh read, so reuse it.
         applyWatchState(from: detail.item)
         setGenres(detail.genres.isEmpty ? fallbackGenres : detail.genres)
         infoColumns.configure(detail: detail)
@@ -616,11 +599,8 @@ final class MediaItemDetailPageViewController: UIViewController {
 
     // MARK: - Watch-state refresh (issue #228)
 
-    /// Re-read this item's watch state after playback and repaint the two bits
-    /// that show it: the Watched glyph and the Play / Resume label. Driven by
-    /// `.plexDataNeedsRefresh`, which the player posts only once its final
-    /// progress report has had time to commit server-side — an `onDismiss`
-    /// hook would fire ~2s early and read the stale value.
+    /// Repaints the Watched glyph and Play label on `.plexDataNeedsRefresh`, posted once
+    /// the player's last report has committed (dismiss is about 2 s too early).
     private func refreshWatchState() {
         guard isViewLoaded, !item.isMetadataOnly, let provider else { return }
         watchRefreshToken &+= 1
@@ -650,13 +630,8 @@ final class MediaItemDetailPageViewController: UIViewController {
     private var watchRefreshToken: UInt64 = 0
     private var refreshObservers = Set<AnyCancellable>()
 
-    /// Local mirror of the resume point, so the pill can repaint the moment the
-    /// user acts instead of waiting on the server round-trip (the same reason
-    /// `isWatched` is mirrored). Seeded from the item, re-seeded by every
-    /// refresh, zeroed by a Mark as Watched.
-    ///
-    /// A resume point outranks the watched flag (a resumable rewatch reads
-    /// "Resume", not "Play Again"): `EpisodePicker.playTitle` owns that order.
+    /// Local resume point, like `isWatched`, so the pill repaints without a round trip.
+    /// `EpisodePicker.playTitle` ranks it above the watched flag.
     private var resumeOffset: TimeInterval = 0
 
     private var playPillTitle: String {
@@ -668,10 +643,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private func toggleWatched() {
         isWatched.toggle()
         setCircleIcon(watchedButton, isWatched ? "checkmark.circle.fill" : "checkmark")
-        // Plex drops the resume point on both scrobble and unscrobble (the same
-        // thing `PlexDataStore.updateItemWatchStatus` does locally), so the pill
-        // stops offering a resume that no longer exists. Issue #270: it used to
-        // keep saying "Resume" with nothing left to resume to.
+        // Plex drops the resume point on scrobble and unscrobble (#270).
         resumeOffset = 0
         playTitleLabel?.text = playPillTitle
         let target = isWatched
@@ -679,10 +651,7 @@ final class MediaItemDetailPageViewController: UIViewController {
             guard let self, let provider = self.provider else { return }
             if target { try? await provider.markPlayed(self.item.ref) }
             else { try? await provider.markUnplayed(self.item.ref) }
-            // Same repaint the player uses on dismissal: every surface showing
-            // this item's watch state re-reads it (this page included, so a
-            // failed mark falls back to server truth), and Home drops or
-            // restores the Continue Watching tile.
+            // Every surface re-reads, this page too, so a failed mark falls back to the server.
             NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
         }
     }
@@ -796,10 +765,8 @@ private final class PaddedLabel: UILabel {
 
 // MARK: - Blur-fade transition
 
-/// Present: the carousel behind blurs in while the detail page fades in.
-/// Dismiss: the reverse — page fades out as the carousel sharpens back.
-/// Shared by the episode detail page AND the standalone (no-carousel) expanded
-/// detail mode of PreviewCarouselViewController.
+/// Blurs what is behind while the page fades in, and the reverse on dismiss. Also used
+/// by the carousel's standalone detail.
 final class BlurFadeTransitioningDelegate: NSObject, UIViewControllerTransitioningDelegate {
     func animationController(forPresented presented: UIViewController, presenting: UIViewController, source: UIViewController) -> UIViewControllerAnimatedTransitioning? {
         BlurFadeAnimator(presenting: true)

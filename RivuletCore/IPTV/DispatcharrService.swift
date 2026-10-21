@@ -19,14 +19,9 @@ actor DispatcharrService {
     let baseURL: URL
     let apiToken: String?
 
-    /// Dispatcharr channel profile to scope the playlist and guide to, or nil for
-    /// every channel. In Dispatcharr this is a PATH segment, not a query item and
-    /// not something the API token implies: `apps/output/urls.py` routes
-    /// `^m3u(?:/(?P<profile_name>[^/]+))?/?$`, and `generate_m3u` only filters on
-    /// `channelprofilemembership__channel_profile` when that segment is present.
-    /// The API key does not scope the playlist (the output endpoints do not
-    /// even authenticate), so without this segment the server correctly returns
-    /// every channel regardless of which profiles exist. See GitHub issue #246.
+    /// Dispatcharr channel profile for the playlist and guide, or nil for every
+    /// channel. It is a path segment (`m3u/<profile>`); the API key does not scope
+    /// output (#246).
     let channelProfile: String?
 
     let session: URLSession
@@ -62,15 +57,8 @@ actor DispatcharrService {
         return DispatcharrService(baseURL: url, apiToken: apiToken, channelProfile: profile)
     }
 
-    /// Separates a pasted address into the server base URL and, when the user
-    /// pasted a full endpoint, the channel profile that followed it.
-    ///
-    /// We still have to cut `/output/m3u` and `/output/epg` off the base so the
-    /// later `appendingPathComponent` calls do not double them up, but the
-    /// trailing segment after the endpoint is a Dispatcharr channel profile name
-    /// and is now kept rather than thrown away. Do not "simplify" this back to a
-    /// plain prefix truncation: discarding that segment is the bug behind
-    /// issue #246.
+    /// Splits a pasted address into the server base URL and the channel profile
+    /// after `/output/m3u` or `/output/epg`. Keep that trailing segment (#246).
     static func splitEndpointPath(from urlString: String) -> (baseURL: String, channelProfile: String?) {
         // Clean up the URL string
         var cleanedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -237,12 +225,8 @@ actor DispatcharrService {
         return request
     }
 
-    /// How Dispatcharr wants `token` presented. Its API authenticates an API
-    /// key (what its UI generates, sent as `X-API-Key`) or a JWT access token
-    /// (`Authorization: Bearer`). It has never accepted DRF's
-    /// `Authorization: Token`, which is what this used to send; nobody noticed
-    /// because the playlist and guide are not authenticated at all (they are
-    /// allowed by network), and nothing else here called the API.
+    /// How Dispatcharr wants `token` presented: an API key as `X-API-Key`, or a
+    /// JWT as `Authorization: Bearer`. It never accepts DRF's `Authorization: Token`.
     static func authorizationHeader(for token: String) -> (field: String, value: String)? {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -328,19 +312,9 @@ extension DispatcharrService {
         Self.outputURL(base: baseURL, kind: "epg", channelProfile: channelProfile)
     }
 
-    /// Builds an output endpoint URL, appending the channel profile as its own
-    /// path segment when one is set. Dispatcharr scopes a playlist by profile
-    /// only through this segment, so a profile that is set but not appended has
-    /// no effect at all.
-    ///
-    /// `appendingPathComponent` performs the encoding: it escapes a space as
-    /// `%20` and leaves already-legal path characters alone, so a profile named
-    /// "Kids TV" yields `/output/m3u/Kids%20TV`. Interpolating the name into a
-    /// string instead would emit a raw space and produce a URL that fails to
-    /// construct.
-    ///
-    /// With no profile set this returns exactly `base/output/<kind>`, byte for
-    /// byte what every existing source already requests.
+    /// Builds an output endpoint URL, with the channel profile as its own path
+    /// segment. `appendingPathComponent` escapes the name ("Kids TV" becomes
+    /// `Kids%20TV`); with no profile this is `base/output/<kind>`.
     static func outputURL(base: URL, kind: String, channelProfile: String?) -> URL {
         let url = base.appendingPathComponent("output/\(kind)")
         guard let profile = normalizedProfile(channelProfile) else { return url }

@@ -1,27 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  InputTestScript.swift
-//  Rivulet
-//
-//  The prompted remote-input test (issues #212, #232, #305): a fixed list of
-//  presses to ask for, and the pure state machine that matches what actually
-//  arrived against what was asked.
-//
-//  Nothing here reads input. `InputProbe` already records every `UIPress` phase
-//  at the `MenuPressInterceptor` `sendEvent` swizzle — the one layer earlier
-//  than any responder or gesture recognizer — so this test SUBSCRIBES to that
-//  and adds no input plumbing of its own. That is also why it works at all: the
-//  bug class under test is presses that do nothing, and a press the focus
-//  engine swallows is still recorded there.
-//
-//  Select and Menu are deliberately NOT prompted (the user had to navigate here,
-//  so those work by construction) but they ARE recorded when they arrive: on a
-//  third-party remote a working OK says nothing about a Back mapped to some
-//  other code, and on a clicks-only Siri Remote the arrows are edge clicks while
-//  Select is a centre click — different hardware, different answer.
-//
+// The prompted remote-input test (#212, #232, #305): the presses to ask for and the pure
+// state machine matching what arrived. Input comes from `InputProbe`, which sees presses the
+// focus engine swallows. Select and Menu are recorded but not prompted.
 
 import Foundation
 

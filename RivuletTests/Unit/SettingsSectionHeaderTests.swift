@@ -5,14 +5,8 @@
 //  SettingsSectionHeaderTests.swift
 //  RivuletTests
 //
-//  Appearance groups its rows with Apple-TV-style captions. A caption is a
-//  SettingsRowItem, not a real collection-view section, so the one thing that
-//  must never regress is focusability: a focusable caption would swallow a row's
-//  focus slot, land the description panel on an id with no descriptor, and
-//  Select would do nothing.
-//
-//  Also pins the Live TV move: those three rows have exactly one home, and their
-//  ids/keys are unchanged so SettingsDescriptors still resolves them.
+//  Appearance's section captions are rows and must never be focusable, or they
+//  take a row's focus slot. Also pins the Live TV rows' one home and their ids.
 //
 
 import XCTest

@@ -1,41 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  DirectionalInputBinding.swift
-//  Rivulet
-//
-//  One call gives a FOCUSLESS surface every remote transport for directional
-//  input.
-//
-//  tvOS delivers directional input on two disjoint paths: d-pad clicks,
-//  clickpad-edge clicks, IR/CEC remotes, and keyboard arrows arrive as
-//  discrete arrow `UIPress`es, while Siri Remote and iPhone-Remote
-//  touch-surface swipes arrive as `.indirect` `UITouch` streams and NEVER as
-//  arrow presses. A focusless surface that installs only one path is dead to
-//  half the remotes in the field. This binding installs BOTH:
-//
-//  - per-direction arrow-press taps, plus optional native long-press holds
-//    (tap requires the long to fail)
-//  - per-direction `UISwipeGestureRecognizer`s constrained to `.indirect`
-//    touches with `allowedPressTypes = []` (a tvOS swipe recognizer otherwise
-//    waits on a `.select` press)
-//
-//  and funnels both into one tap callback per direction, so a surface cannot
-//  adopt one transport without the other.
-//
-//  FOCUSLESS surfaces only. On a surface with focusable content the focus
-//  engine already translates every remote's swipes and clicks into focus
-//  moves, and a swipe recognizer that reaches `.began` CANCELS the competing
-//  focus interaction — installing this there steals navigation from every
-//  touch remote. A single invisible focus anchor (the focusless-modal
-//  pattern) is fine; sibling focus targets are not. If the host surface is
-//  only sometimes focusless, mount the binding only during that state.
-//
-//  The focusless form claims its swipes unconditionally unless `swipeGate` is
-//  given: that is for a surface that hands a direction's touches to another
-//  recognizer in some state.
-//
+// Gives a focusless surface both remote transports for directional input:
+// arrow-press taps (and optional holds) plus `.indirect` swipes, funneled into one callback.
+// Focusless surfaces only: a swipe that begins cancels the focus engine's move.
+// See CLAUDE.md, "Remote Input".
 
 import UIKit
 
@@ -78,12 +47,8 @@ final class DirectionalInputBinding: NSObject {
 
     private var directionByRecognizer: [ObjectIdentifier: Direction] = [:]
 
-    /// Installs recognizers for `directions` on `view`. Directions listed in
-    /// `holds` also get a long-press recognizer whose `.began` fires `onHold`
-    /// (their taps then only fire on release before the hold threshold) and
-    /// whose release fires `onHoldEnd`. With a `swipeGate`, a swipe it declines
-    /// never begins. Keep the binding alive for the life of the view (store it on the
-    /// owning controller).
+    /// Directions in `holds` also get a long press (`onHold`, `onHoldEnd`); their taps
+    /// fire only on a release before the threshold. Keep the binding alive with the view.
     init(
         view: UIView,
         directions: [Direction],
@@ -124,17 +89,9 @@ final class DirectionalInputBinding: NSObject {
         }
     }
 
-    /// Swipe-only, GATED variant for a FOCUSABLE surface whose press half
-    /// already lives in a responder-chain `pressesBegan` override (the
-    /// correct press pattern there: the focus engine acts first and only
-    /// declined presses bubble). Recognizers for indirect touches route
-    /// through the focused view's chain, so these fire only while focus is
-    /// on or inside `view`. The gate runs in `gestureRecognizerShouldBegin`
-    /// — a declined swipe stays with the focus engine, so `shouldHandle`
-    /// must claim exactly the moves the engine cannot perform (the same
-    /// predicates the press override uses). This variant exists because the
-    /// iPhone Remote emits NO arrow presses at all: without a swipe path a
-    /// press-only hand-off is a hard wall for it.
+    /// Swipe-only variant for a focusable surface whose presses go through a
+    /// `pressesBegan` override. `shouldHandle` runs before the swipe begins and must
+    /// claim only the moves the focus engine cannot make (reuse the press predicate).
     init(
         gatedSwipesOn view: UIView,
         directions: [Direction],

@@ -5,10 +5,8 @@
 //  RootShellHost.swift
 //  Rivulet
 //
-//  SwiftUI seam for the UIKit navigation shell. TVSidebarView mounts this in
-//  place of the old TabView(.sidebarAdaptable); tab content is still built by
-//  TVSidebarView, which decides per tab whether the content is a plain UIKit
-//  view controller or needs hosting (see `contentViewController(for:)`).
+//  SwiftUI seam for the UIKit navigation shell, mounted by TVSidebarView, which
+//  still builds each tab's content (see `contentViewController(for:)`).
 //
 
 import SwiftUI

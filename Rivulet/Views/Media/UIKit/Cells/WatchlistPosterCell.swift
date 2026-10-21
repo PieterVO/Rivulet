@@ -1,23 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  WatchlistPosterCell.swift
-//  Rivulet
-//
-//  Poster tile for the Watchlist hub row on the UIKit home. Mirrors
-//  SwiftUI `WatchlistTile` (`WatchlistHubRow.swift:237-290`):
-//   - poster image surface, 20pt rounded-rect mask, .continuous corner curve
-//   - no resting drop shadow (ATV+ ref: cards float clean over the background)
-//   - `.hoverEffect(.highlight)` approximated via `TVPosterView` focus motion
-//   - placeholder when no posterURL: dark gradient + film/tv SF symbol
-//     (32pt light, white-0.3)
-//
-//  Caption (`title` / `subtitle`) is intentionally nil — see comment in
-//  `PosterCell.swift` for the rationale (TVPosterView reserves bottom
-//  caption space that crops 2:3 posters; SwiftUI WatchlistTile doesn't
-//  render a caption either).
-//
+// Poster tile for the Watchlist hub row: 20pt continuous mask, `TVPosterView` focus motion,
+// and a film/tv symbol placeholder when there is no poster. Caption stays nil, as in `PosterCell`.
 
 import UIKit
 import TVUIKit
@@ -53,8 +38,7 @@ final class WatchlistPosterCell: UICollectionViewCell {
         contentView.clipsToBounds = false
         clipsToBounds = false
 
-        // No resting drop shadow (ATV+ reference: cards float clean over the
-        // page background; see Docs/atv_ref/below_home_hero_ref.md).
+        // No resting drop shadow, matching the Apple TV app.
 
         posterView.translatesAutoresizingMaskIntoConstraints = false
         posterView.image = PosterCell.blankArtwork
@@ -113,8 +97,7 @@ final class WatchlistPosterCell: UICollectionViewCell {
     }
 
     func configure(item: PlexWatchlistItem) {
-        // Pick the SF Symbol that matches the watchlist type — `film` for
-        // movies, `tv` for shows. Mirrors SwiftUI `WatchlistTile.placeholder`.
+        // `film` for movies, `tv` for shows.
         let iconName = item.type == .movie ? "film" : "tv"
         let icon = UIImage(systemName: iconName)?
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 32, weight: .light))

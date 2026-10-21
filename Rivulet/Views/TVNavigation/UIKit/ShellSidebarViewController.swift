@@ -48,10 +48,8 @@ private enum Metrics {
     static let avatarFocusGrowth: CGFloat = 4
     /// The TV app's profile header band: the first tab sits 125pt below the list top.
     static let profileBandHeight: CGFloat = 125
-    /// USER-VERIFIED on screen: the single spring crossfade reads nearly
-    /// identical to the system morph; a literal three-phase re-timing from
-    /// the 120fps frame analysis read distinctly WORSE and was reverted.
-    /// Trust the A/B eyeball over tile-level frame forensics here.
+    /// One spring crossfade, checked by eye against the system morph. A
+    /// three-phase timing from 120fps frame analysis looked worse on screen.
     static let morphDuration: TimeInterval = 0.45
     static let morphDamping: CGFloat = 0.9
     static let dimAlpha: CGFloat = 0.35

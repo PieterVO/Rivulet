@@ -5,17 +5,8 @@
 //  HomeRecentlyAddedCarryOverTests.swift
 //  RivuletTests
 //
-//  GitHub #236: a library whose hub fetch times out must keep the Recently
-//  Added shelf the cache-paint already showed, because `setHomeItems()`
-//  re-persists the projected rail — dropping the row once bakes it out of
-//  every subsequent warm launch. Only a library that ANSWERED with no
-//  recentlyAdded content may project no row.
-//
-//  `PlexDataStore` is a `private init()` singleton wired to shared network /
-//  cache / auth managers, so `projectHomeItems()` itself is not reachable from
-//  a unit test without a substantial DI refactor. The carry-over DECISION is
-//  factored out as a pure static, which is the part with the interesting
-//  behaviour, and that is what these cover.
+//  A library whose hub fetch times out keeps its cached Recently Added row; only
+//  a library that answered with no content may drop it (#236).
 //
 
 import XCTest

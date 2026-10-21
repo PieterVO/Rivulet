@@ -5,11 +5,9 @@
 //  MarkerSkipOutcomeTests.swift
 //  RivuletTests
 //
-//  Pure-logic tests for MarkerSkipPolicy: whether pressing a skip pill
-//  seeks or finishes playback. Issue #231 — "Skip Credits" seeked to the
-//  last frame and parked there forever because AetherEngine converts a
-//  seek landing inside its end-of-media epsilon into `.paused` and
-//  withholds the terminal `.ended`.
+//  MarkerSkipPolicy: whether a skip pill seeks or finishes playback. A seek
+//  inside AetherEngine's end-of-media epsilon parks as `.paused` and never
+//  reports `.ended` (#231).
 //
 
 import XCTest

@@ -5,16 +5,9 @@
 //  AetherSubtitleCue.swift
 //  Rivulet
 //
-//  Rivulet-side subtitle cue bridged from AetherEngine.SubtitleCue.
-//
-//  AetherEngine's SubtitleCue cannot be named inside the Rivulet module:
-//  AetherEngine is both the module and a class, so `AetherEngine.SubtitleCue`
-//  parses as a nested-type lookup on the class and fails, while the
-//  unqualified `SubtitleCue` resolves to Rivulet's own text-only cue
-//  type. So AetherPlayer converts Aether's cues into this type at the engine
-//  boundary (inside a closure where the element type is inferred). Unlike
-//  Rivulet's `SubtitleCue`, this carries BOTH text and bitmap (PGS/DVB)
-//  bodies, matching AetherEngine and preserving bitmap subtitle support.
+//  Rivulet-side subtitle cue (text and bitmap bodies), converted from the engine's
+//  cue in AetherPlayer. `AetherEngine.SubtitleCue` cannot be named here: the module
+//  and a class share the name, and bare `SubtitleCue` is Rivulet's text-only type.
 //
 
 import CoreGraphics
@@ -34,12 +27,8 @@ struct AetherSubtitleCue: Identifiable {
     /// Text dialogue, or a positioned bitmap (PGS / DVB / DVD).
     enum Body {
         case text(String)
-        /// Text carrying the CONTENT's own per-run colour (WebVTT `<c>`
-        /// classes, teletext colour codes). Whether a run's colour is painted
-        /// or replaced by the user's caption colour is the RENDERER's call —
-        /// see `CaptionStyle.allowsContentColor`, which mirrors the system's
-        /// "Video Override" setting. The cue always carries what the content
-        /// said; the renderer decides whether the user overrode it.
+        /// Text with the content's own per-run styling. The renderer decides,
+        /// per `CaptionStyle.allowsContent*`, whether to paint it.
         case styledText([StyledRun])
         /// `position` is the bitmap's origin+size in [0, 1] of the source
         /// video frame; the overlay multiplies by the on-screen video rect.
@@ -51,16 +40,8 @@ struct AetherSubtitleCue: Identifiable {
         case assEvents(String)
     }
 
-    /// One run of a styled text cue, mirroring AetherEngine's
-    /// `SubtitleTextRun`. Every field is CONTENT-specified styling; nil /
-    /// false means the content was silent and the renderer uses the system
-    /// caption value. Whether a content value is painted at all is the
-    /// renderer's call, per attribute, against the matching
-    /// `CaptionStyle.allowsContent*` (the system "Video Override" states).
-    ///
-    /// The engine parses these out of the ASS event line libavcodec produces
-    /// for every text format, so SRT, WebVTT, teletext and ASS all arrive
-    /// here through one path (AE 5.26.0).
+    /// One run of a styled text cue, mirroring AetherEngine's `SubtitleTextRun`.
+    /// nil or false means the content was silent and the system value applies.
     struct StyledRun: Hashable {
         var text: String
         var color: UIColor?
@@ -70,20 +51,12 @@ struct AetherSubtitleCue: Identifiable {
         var isStruckThrough: Bool = false
         /// Face the content asked for (ASS `\fn`, SRT `<font face=>`).
         var fontName: String?
-        /// Size the content asked for (ASS `\fs`), in ASS play-resolution
-        /// points — a RELATIVE hint, not a pixel size, so the renderer scales
-        /// it against the script's nominal size rather than using it directly.
+        /// Size the content asked for (ASS `\fs`), relative to the script's nominal size.
         var fontSize: Int?
     }
 
-    /// Placement the content asked for (ASS `\an` / `\pos`), mirroring
-    /// AetherEngine's `SubtitleTextPlacement`. nil for nearly every cue,
-    /// meaning the host places it in its usual band.
-    ///
-    /// There is NO system caption setting for position, so no Video Override
-    /// gate applies — a content position is always honoured, and the user's
-    /// Height stepper deliberately does not move it (a sign pinned to the top
-    /// of frame must not drift with an app-level offset).
+    /// Placement the content asked for (ASS `\an` / `\pos`); nil means the usual
+    /// band. Always honoured, and the Height stepper does not move it.
     struct TextPlacement: Hashable {
         /// ASS numpad alignment: 1 bottom-left through 9 top-right, 5 centred.
         var alignment: Int?
@@ -92,18 +65,8 @@ struct AetherSubtitleCue: Identifiable {
         var position: CGPoint?
     }
 
-    /// Stable content identity: `(startTime, endTime, body)`.
-    ///
-    /// `id` is NOT usable as an identity. It originates from AetherEngine's
-    /// `EmbeddedSubtitleDecoder.nextCueID`, a per-decoder-instance monotonic
-    /// counter starting at 0. Every seek makes the drainer reset the decoder
-    /// (`.resetAndDecode`), so ids restart at 0 and collide with unrelated
-    /// older cues still sitting in the engine's `subtitleCues` array — which
-    /// hands SwiftUI duplicate `ForEach` identities.
-    ///
-    /// Content identity also collapses the engine's re-decode duplicates
-    /// (identical start + end + body) while keeping genuine simultaneous
-    /// speakers (identical start, DIFFERENT text) distinct.
+    /// Content identity: collapses the engine's re-decode duplicates while
+    /// simultaneous speakers (same start, different text) stay distinct.
     var contentKey: ContentKey {
         ContentKey(startTime: startTime, endTime: endTime, body: body, placement: placement)
     }

@@ -1,23 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HeroButtonRowView.swift
-//  Rivulet
-//
-//  Native UIKit version of `HeroButtonRow`. Four focusable buttons:
-//
-//    [ Play ] [ 🔖 ] [ ⓘ ] [ › ]
-//
-//  Focus styling mirrors the SwiftUI `AppStoreActionButtonStyle`:
-//    - unfocused: white-20% background + real Liquid Glass (UIGlassEffect)
-//      overlay + white-20% 0.5pt stroke, scale 1.0
-//    - focused: solid white background, no stroke, Apple's 10 pt growth
-//    - pressed: -5% scale
-//
-//  Animation: spring(response 0.25, damping 0.8) for focus,
-//             spring(response 0.15, damping 0.9) for press.
-//
+// The hero's four buttons: Play, Watchlist, Info, Next.
+// Unfocused: white 20% fill, UIGlassEffect, 0.5pt stroke. Focused: solid white, 10 pt growth.
+// Pressed: -5% scale. Springs: focus (0.25, 0.8), press (0.15, 0.9).
 
 import UIKit
 
@@ -148,13 +134,8 @@ final class HeroButtonRowView: UIView {
         return super.preferredFocusEnvironments
     }
 
-    /// Land-on-Play gate (house pattern — same as
-    /// MediaDetailChromeView.setActionRowFocusable and the season-pill gate):
-    /// container preferredFocusEnvironments does NOT redirect a DIRECTIONAL
-    /// focus entry — the engine's geometric search finds buttons directly. So
-    /// while focus lives outside the hero, the secondary buttons are removed
-    /// from focus candidacy and Play is the only possible landing. The hero
-    /// overlay re-enables them once focus is inside (Left/Right then works).
+    /// Land-on-Play gate: `preferredFocusEnvironments` does not redirect a directional entry, so
+    /// the secondary buttons stay unfocusable until focus is inside the hero.
     func setSecondaryButtonsFocusable(_ on: Bool) {
         watchlistButton.isFocusEnabled = on
         infoButton.isFocusEnabled = on

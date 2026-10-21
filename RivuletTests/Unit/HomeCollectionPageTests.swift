@@ -5,15 +5,9 @@
 //  HomeCollectionPageTests.swift
 //  RivuletTests
 //
-//  The collection page is PlexHomeViewController in `.collection` mode: one
-//  `.grid` section under the collection's title. The supplementary header
-//  takes its style from the section's `headerStyle`, so a titled grid must
-//  carry the Watchlist page's title style. The untitled library grid keeps
-//  the row style it has always had.
-//
-//  `gridSlotRange` is the write range for a loaded page. A reload can land
-//  after the collection shrank below the page's start, and an unclamped
-//  `start..<end` then traps with "Range requires lowerBound <= upperBound".
+//  The collection page (PlexHomeViewController in `.collection` mode): a titled
+//  grid takes the Watchlist title style, and `gridSlotRange` clamps a page that
+//  lands after the collection shrank, which would otherwise trap.
 //
 
 import XCTest

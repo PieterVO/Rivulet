@@ -213,26 +213,15 @@ final class BIFFilmstripTests: XCTestCase {
                         "lookup at 24s should resolve to the nearest surviving frame by real time (timestamp 1 / 10s), not an array-position guess")
     }
 
-    /// Regression test for the walk-through finding: a BIF whose real-time
-    /// coverage is shorter than the media's full duration (generation
-    /// truncated, or produced against a stale duration) used to produce
-    /// several identical tail tiles — every requested time past the BIF's
-    /// last frame clamped to the same `frames.count - 1` index in
-    /// `frameIndex(at:)`. `frameIndices(forTimes:bif:)` must spread those
-    /// overshooting requests across the BIF's own covered range instead.
+    /// A BIF shorter than the media must spread overshooting requests across its
+    /// own range in `frameIndices(forTimes:bif:)`, not clamp them all to one tail tile.
     func testFrameIndicesSpreadsOvershotTailAcrossAvailableFrames() {
         // 60 frames at 10s spacing = 590s of real coverage (frame N's real
         // time is N * 10s, so the last frame, index 59, covers 590s).
         let bif = BIFData(data: makeBIF(frameCount: 60, intervalMs: 10_000))!
 
-        // Simulate a 23-minute (1380s) episode's evenly spaced samples
-        // (`duration * (i + 0.5) / count` construction) reaching well
-        // beyond the BIF's 590s of real coverage. Hand-verified split:
-        // samples 0...4 (up to
-        // 517.5s) are in-range; samples 5...11 (7 samples, 632.5s onward)
-        // overshoot. The last in-range sample (517.5s) resolves to frame
-        // index 52, leaving indices 53...59 (exactly 7) unused — enough to
-        // give every overshot sample its own distinct frame.
+        // A 1380 s episode's evenly spaced samples overshoot the BIF's 590 s.
+        // Samples 0...4 are in range (last at frame 52); 5...11 take frames 53...59.
         let count = 12
         let duration: TimeInterval = 1380
         let times = (0..<count).map { duration * (Double($0) + 0.5) / Double(count) }
@@ -244,19 +233,15 @@ final class BIFFilmstripTests: XCTestCase {
         XCTAssertEqual(Array(indices.prefix(inRangeCount)), [6, 17, 29, 40, 52].map { Optional($0) },
                        "in-coverage samples resolve normally, unaffected by the tail remap")
 
-        // Without the fix, every one of these would resolve to the same
-        // clamped final index (59). With it, the tail spreads across the
-        // frames left unused by the in-range samples: 53...59.
+        // The tail spreads across the frames the in-range samples left unused,
+        // instead of clamping to 59.
         let tailIndices = indices.dropFirst(inRangeCount).compactMap { $0 }
         XCTAssertEqual(tailIndices, [53, 54, 55, 56, 57, 58, 59],
                        "each overshot tail sample should land on a distinct, increasing BIF frame ending at the true final frame")
     }
 
-    /// When the tail overshoots by more samples than there are unused
-    /// frames left to spread across, several tail positions must still
-    /// collapse onto the same frame — there is no more real data to show —
-    /// but the fix must not regress into resolving to something other than
-    /// the true final frame, and must never crash on the degenerate ranges.
+    /// With no unused frames left, tail samples collapse onto the true final frame
+    /// and degenerate ranges don't crash.
     func testFrameIndicesTailWithNoHeadroomStillEndsOnFinalFrame() {
         // 10 frames = 90s of coverage. The 9th (last-in-range) sample sits
         // right at frame 9 already, leaving zero frames of headroom for the

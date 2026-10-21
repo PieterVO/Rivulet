@@ -5,13 +5,8 @@
 //  PostVideoOverlayView.swift
 //  Rivulet
 //
-//  The end-of-episode "Up Next" card: a glass card that slides in from the
-//  right over the still-playing credits, with the next episode, the autoplay
-//  countdown ring, and Play Next / Dismiss. Back slides it away.
-//
-//  The view IS the card's footprint (the container pins it to the trailing
-//  edge): anything larger above the player's content anchor would make the
-//  anchor unfocusable while the card slides out.
+//  The end-of-episode Up Next card, sliding in over the credits. The view is
+//  exactly the card's footprint: anything larger would occlude the content anchor.
 //
 
 import UIKit

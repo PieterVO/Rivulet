@@ -301,11 +301,9 @@ protocol LiveTVProvider: Sendable {
     /// Build the stream URL for a channel (may add auth tokens, etc.)
     func buildStreamURL(for channel: UnifiedChannel) -> URL?
 
-    /// Resolve a PLAYABLE stream URL, performing any server-side session setup
-    /// first (e.g. the Plex Live TV tune step for cloud-EPG/DVB DVRs). Defaults
-    /// to `buildStreamURL(for:)` for providers with directly playable URLs.
-    /// Throws when that setup fails, so the player can say why (a refused Plex
-    /// tune); `try?` keeps the old nil-on-failure behavior.
+    /// Resolves a playable stream URL, doing any server-side setup first (the Plex
+    /// tune for cloud-EPG and DVB DVRs). Defaults to `buildStreamURL(for:)`.
+    /// Throws when setup fails so the player can say why.
     func resolveStreamURL(for channel: UnifiedChannel) async throws -> URL?
 
     /// Channel logos discovered in the EPG/XMLTV data, keyed by unified channel

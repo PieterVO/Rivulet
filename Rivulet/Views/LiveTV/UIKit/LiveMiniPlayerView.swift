@@ -5,14 +5,9 @@
 //  LiveMiniPlayerView.swift
 //  Rivulet
 //
-//  The channel that keeps playing, with its sound, in the corner of the guide
-//  after Back (issue #318). It shows a session handed over by the full-screen
-//  player; nothing here tunes or loads. Selecting the same channel in the
-//  guide hands the session back full screen.
-//
-//  Not focusable unless `isFocusable`: the guide and What's On make it a focus stop, so
-//  Menu from the grid has somewhere to come back to. It never sits over a
-//  focus target.
+//  The channel that keeps playing in the guide's corner after Back (#318), on a
+//  session handed over by the full-screen player; nothing here tunes. Focusable
+//  only with `isFocusable`, and it never sits over a focus target.
 //
 
 import UIKit

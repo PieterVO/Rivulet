@@ -5,19 +5,10 @@
 //  PlexWatchlistAPI.swift
 //  Rivulet
 //
-//  HTTP layer for the Plex Discover Watchlist.
-//
-//  Two host families are involved:
-//
-//  - `discover.provider.plex.tv` serves the watchlist itself
-//    (`/library/sections/watchlist/all`) AND the actions
-//    (`/actions/addToWatchlist`, `/actions/removeFromWatchlist`).
-//    Container pagination headers are NOT accepted on the watchlist endpoint.
-//
-//  - `metadata.provider.plex.tv` serves the discover-side metadata, including
-//    the matches lookup needed to resolve an external GUID (tmdb://, imdb://,
-//    tvdb://) to a Plex Discover ratingKey. The action endpoints want THAT
-//    ratingKey, not the external GUID.
+//  HTTP layer for the Plex Discover Watchlist. `discover.provider.plex.tv` serves
+//  the list and the add/remove actions (no container paging headers);
+//  `metadata.provider.plex.tv` resolves an external GUID to the Discover
+//  ratingKey the actions want.
 //
 
 import Foundation
@@ -98,13 +89,8 @@ final class PlexWatchlistAPI: PlexWatchlistAPIProtocol, Sendable {
     private func fetchPage(token: String, start: Int) async throws -> WatchlistPage {
         let url = discoverHost.appendingPathComponent("library/sections/watchlist/all")
         var components = URLComponents(url: url, resolvingAgainstBaseURL: true)!
-        // Container-Start is what makes Container-Size stick on Plex (the same
-        // pairing rule the PMS endpoints follow); size alone is honoured here
-        // too, but both are sent so the offset is never ambiguous.
-        //
-        // includeGuids=1 is required — without it, the `Guid` array is
-        // omitted from the response and we can't resolve items to tmdb:// for
-        // library matching or context-menu navigation.
+        // Container-Start makes Container-Size stick. includeGuids=1, or the
+        // `Guid` array is omitted and items can't be matched by tmdb://.
         components.queryItems = [
             URLQueryItem(name: "includeGuids", value: "1"),
             URLQueryItem(name: "X-Plex-Container-Start", value: "\(start)"),

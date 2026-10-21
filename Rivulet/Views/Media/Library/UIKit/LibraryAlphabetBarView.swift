@@ -1,21 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  LibraryAlphabetBarView.swift
-//  Rivulet
-//
-//  The A–Z strip on the library grid's right margin (issue #308). Focusing a
-//  letter jumps the grid to it. Each letter is a plain focusable view, so
-//  Up/Down walks the strip and Right from the last grid column enters it, on
-//  every remote type. The owner shows it only while focus is in the grid and
-//  draws the large letter indicator itself.
-//
-//  This view is exactly the strip's column, nothing wider. The focus engine's
-//  occlusion test is geometric, not hit-test based: a transparent full-bleed
-//  view above the grid made every tile "visually occluded" and unfocusable
-//  (UIFocusDebugger said so), which no hitTest override can undo.
-//
+//  The library grid's A to Z strip (#308). Focusing a letter jumps the grid to it. Keep the
+//  view exactly the strip's width: focus occlusion is geometric, so anything wider blocks the tiles.
 
 import UIKit
 
@@ -30,13 +17,8 @@ final class LibraryAlphabetBarView: UIView {
     /// Fires when focus enters or leaves the strip.
     var onFocusContainmentChanged: ((Bool) -> Void)?
 
-    /// The letter covering the focused grid tile. Drawn bright in the strip
-    /// so the strip always says where you are, and the one Right from the
-    /// grid lands on: while focus is outside the strip only this letter is
-    /// focusable, so a directional entry cannot land on whichever letter is
-    /// geometrically nearest and jump the grid somewhere unrelated. Once
-    /// inside, every letter is focusable. (Container `preferredFocusEnvironments`
-    /// is ignored by directional searches; gating `canBecomeFocused` is not.)
+    /// The focused tile's letter, drawn bright. From outside the strip it is the only focusable
+    /// letter, so Right lands on it; directional searches ignore `preferredFocusEnvironments`.
     var entryIndex: Int? {
         didSet {
             for (index, letter) in letterViews.enumerated() { letter.isCurrent = index == entryIndex }
@@ -44,11 +26,7 @@ final class LibraryAlphabetBarView: UIView {
         }
     }
 
-    /// Catches Right from the grid anywhere along the strip's height and
-    /// hands it to the current letter, so entry never depends on the engine
-    /// choosing an off-axis letter by itself. Full height, so it is never an
-    /// Up/Down candidate; inert while the strip has focus, so Up/Down inside
-    /// it pass straight through.
+    /// Full-height catcher handing Right from the grid to the current letter; inert while the strip has focus.
     private let entryGuide = UIFocusGuide()
 
     static let width: CGFloat = 44

@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HeroSlideView.swift
-//  Rivulet
-//
-//  UIKit per-slide hero content: logo (or fallback serif title), metadata
-//  row (type · genre · rating-badge) and a single-sentence tagline. Mirror
-//  of SwiftUI `HeroSlideContent`.
-//
-//  Logo image swaps with a brief crossfade (0.22s) on slide change so the
-//  beat lines up with `HeroOverlayView.displayedIndex` and the backdrop's
-//  own crossfade.
-//
+// Per-slide hero content: logo or serif title, metadata row and a one-line tagline. The 0.22s logo
+// crossfade keeps time with `HeroOverlayView.displayedIndex` and the backdrop.
 
 import UIKit
 
@@ -60,9 +50,7 @@ final class HeroSlideView: UIView {
         logoImageView.translatesAutoresizingMaskIntoConstraints = false
         logoImageView.setContentHuggingPriority(.required, for: .horizontal)
 
-        // Fallback title (serif heavy, two lines max).
-        // SwiftUI uses `.font(.system(size: 72, weight: .heavy, design: .serif))`.
-        // UIFont system fonts gain `.serif` via UIFontDescriptor.withDesign.
+        // Fallback title: 72pt heavy serif, two lines max.
         let baseFont = UIFont.systemFont(ofSize: 72, weight: .heavy)
         if let serifDescriptor = baseFont.fontDescriptor.withDesign(.serif) {
             fallbackTitleLabel.font = UIFont(descriptor: serifDescriptor, size: 72)
@@ -127,10 +115,7 @@ final class HeroSlideView: UIView {
 
     func configure(item: PlexMetadata?, serverURL: String, authToken: String,
                    animated: Bool, manageAlpha: Bool = true, onReady: (() -> Void)? = nil) {
-        // Snapshot the CURRENT state before we mutate anything — so the
-        // fade-out has the old content to anim against. SwiftUI's
-        // `.transition(.opacity)` is symmetric: old fades out as new
-        // fades in. Just fading the new in would snap the old away.
+        // Snapshot the current content first so the old fades out as the new fades in.
         let snapshot: UIView?
         if animated, bounds.width > 0, bounds.height > 0 {
             snapshot = self.snapshotView(afterScreenUpdates: false)
@@ -249,7 +234,7 @@ final class HeroSlideView: UIView {
         }
     }
 
-    // MARK: - Metadata helpers (mirror SwiftUI versions)
+    // MARK: - Metadata helpers
 
     private func metaLine(for item: PlexMetadata) -> String? {
         var parts: [String] = []

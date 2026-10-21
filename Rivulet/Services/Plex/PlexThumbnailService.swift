@@ -69,26 +69,9 @@ final class PlexThumbnailService {
         return nil
     }
 
-    /// Resolves one BIF frame index per requested time, aligned 1:1 with
-    /// `times`.
-    ///
-    /// `times` may be evenly-spaced samples across the FULL media duration,
-    /// but Plex's BIF index can cover a shorter real-time span than the
-    /// media itself (generation truncated, or produced against a stale
-    /// duration). Naively passing every time through `BIFData.frameIndex(at:)`
-    /// doesn't error for times past the BIF's last real frame — it clamps
-    /// to `frames.count - 1` — so every tail sample past that point silently
-    /// collapses onto the SAME final frame, which would read as several
-    /// identical thumbnails for a long tail (e.g. a chapterless episode
-    /// whose BIF stops well short of the runtime).
-    ///
-    /// Times inside BIF coverage resolve normally. Times past coverage are
-    /// remapped directly in FRAME-INDEX space (not re-derived as times and
-    /// re-rounded — the tail's real-time span can be too narrow relative to
-    /// the BIF's own sampling interval for a time-space remap to land on
-    /// distinct rounded indices) — spread evenly across whatever indices
-    /// remain unused between the last in-range frame and the final frame,
-    /// so the tail shows real, distinct frames instead of repeating one.
+    /// One BIF frame index per time, aligned with `times`. A Plex BIF can stop short of the
+    /// runtime, and `frameIndex(at:)` clamps, so tail times would all show the last frame.
+    /// Times past coverage are spread in frame-index space over the remaining frames.
     nonisolated static func frameIndices(forTimes times: [TimeInterval], bif: BIFData) -> [Int?] {
         guard !bif.frames.isEmpty, !times.isEmpty else { return times.map { _ in nil } }
         let interval = TimeInterval(bif.intervalMs) / 1000.0
@@ -340,19 +323,9 @@ nonisolated struct BIFData: Sendable {
 
     /// Nearest frame index for a playback time.
     ///
-    /// Fast path (O(1)): valid ONLY when timestamps are dense frame numbers
-    /// (`frames[i].timestamp == i`, so `frames.last.timestamp == count - 1`).
-    /// Then the index is `time / interval` directly.
-    ///
-    /// Fallback path (O(log n)): Plex also ships BIFs whose timestamps are
-    /// STRIDED — e.g. `0, 2, 4, … , 1416` for 709 frames (each frame's real
-    /// time is `timestamp * interval`, spaced ~2s even though intervalMs=1000).
-    /// There `time / interval` runs out of frames at ~half the runtime and
-    /// clamps every later scrub onto the final (credits) frame. The same
-    /// happens when the parser drops a malformed frame and array position
-    /// desyncs from timestamp. In both cases binary-search `frames` (which
-    /// stays timestamp-sorted by construction) by real time so each thumbnail
-    /// re-times to its true position and the whole timeline is covered.
+    /// `time / interval` when timestamps are dense frame numbers. Otherwise binary-search by
+    /// real time: Plex ships strided BIFs (`0, 2, 4, …` for intervalMs=1000), and a dropped
+    /// frame desyncs position from timestamp.
     func frameIndex(at time: TimeInterval) -> Int? {
         guard !frames.isEmpty else { return nil }
         let interval = TimeInterval(intervalMs) / 1000.0

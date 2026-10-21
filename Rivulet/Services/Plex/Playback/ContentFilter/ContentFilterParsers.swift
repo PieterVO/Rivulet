@@ -2,22 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  ContentFilterParsers.swift
-//  Rivulet
-//
-//  Parsers for imported, time-coded filter lists:
-//    - MCF  (Movie Content Filter, text/mcf+vtt): an open, WebVTT-based format
-//           where each cue line is `category=severity[=channel][ # comment]`.
-//           Spec: moviecontentfilter.com/specification
-//    - EDL  (Edit Decision List): the simple `start end action` format written
-//           by cleanvid, the Kodi mute-profanity add-on and MovieContentFilter's
-//           own EDL export, and used by Kodi/Comskip/MythTV for skip + mute.
-//
-//  The MCF parser reuses the app's existing VTTParser to read cue timings, then
-//  interprets each cue's text as a filter directive — so we get robust WebVTT
-//  timestamp handling for free.
-//
-//  Everything here is nonisolated: lists are parsed off the main actor.
+//  Parsers for imported filter lists: MCF (text/mcf+vtt, cue text is
+//  `category=severity[=channel]`, spec at moviecontentfilter.com/specification) and
+//  EDL (`start end action`). MCF timings come from VTTParser. Nonisolated, parsed off main.
 //
 
 import Foundation
@@ -99,14 +86,8 @@ nonisolated enum MCFFilterParser {
     /// `VTTParser`; each line of a cue is one `category=severity[=channel]`
     /// span, optionally followed by ` # comment`.
     ///
-    /// An MCF file's START/END header marks where the film material begins and
-    /// ends, and every cue is timed on that scale. Hand-made files use real
-    /// times. moviecontentfilter.com's own `.mcf` download does not: it rescales
-    /// the title onto 00:00:00.000–99:59:59.999 and leaves the player to map it
-    /// back using the release's own start and end, which Rivulet can't know.
-    /// Applied as-is it would mute and skip at the wrong moments, so such a
-    /// file throws `.unsynchronized`. That site's EDL export takes the release's
-    /// start and end and is the precise route.
+    /// Throws `.unsynchronized` for a file rescaled onto 0 to 99:59:59.999 (moviecontentfilter.com's
+    /// `.mcf` download), which needs the release's start and end to map back. Its EDL export works.
     static func parse(_ content: String, mediaDuration: TimeInterval? = nil) throws -> ContentFilterList {
         if let end = declaredEnd(in: content), !fitsRelease(end: end, mediaDuration: mediaDuration) {
             throw ContentFilterParseError.unsynchronized

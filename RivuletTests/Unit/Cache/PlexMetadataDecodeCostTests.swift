@@ -4,20 +4,9 @@
 import XCTest
 @testable import Rivulet
 
-/// Guards the cost of decoding a launch-sized `[PlexMetadata]` payload.
-///
-/// A device launch logged `decodedCache(home_hero_items_cache_v1.json) read=0ms
-/// decode=1033ms bytes=16245`, which reads as "PlexMetadata is too expensive to
-/// decode on the launch path". It is not. Measured here (Apple TV sim, Release
-/// semantics): first-ever decode of one entry 0.98ms, warm 0.09ms, nine entries
-/// 0.40ms — so one-time `Decodable` witness warmup is ~0.9ms and the whole
-/// payload parses in well under a millisecond. The device's 1033ms was wall
-/// clock on a contended thread, not work. `CacheManager.decodedCache` now logs
-/// cpu alongside wall so the two can never be confused again.
-///
-/// What this test is FOR: PlexMetadata has ~63 properties and ~15 nested types.
-/// If someone adds a hand-written `init(from:)`, a `DateFormatter` per field, or
-/// another nesting level, this fires before it reaches the launch path.
+/// Guards the cost of decoding a launch-sized `[PlexMetadata]` payload: well
+/// under a millisecond in the simulator. Fires if a hand-written `init(from:)`,
+/// per-field formatter or extra nesting level makes decoding expensive.
 final class PlexMetadataDecodeCostTests: XCTestCase {
 
     /// One realistic hero-shaped entry: the nested containers are what make the

@@ -1,24 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PersonHeaderCell.swift
-//  Rivulet
-//
-//  The biography header for the person detail page (Docs/atv_ref/
-//  actor_details_ref.JPG): a true-circle portrait on the LEFT, the person's
-//  name (large semibold white) + a muted, truncated biography on the RIGHT,
-//  with an uppercase MORE affordance under the bio when it overflows.
-//
-//  The cell itself is non-focusable; the BIO is wrapped in a focusable glass
-//  panel (a reused FocusableActionButton, so Select handling matches the rest
-//  of the detail chrome). The whole description block is the affordance — the
-//  focus engine can land on it from an Up press off the poster rows, and Select
-//  opens the full-bio popup. A "MORE" hint shows inside the panel only when the
-//  bio overflows. The portrait loads via ImageCacheManager the same way
-//  CastCell does. Background is clear so the controller's blue→black gradient
-//  (or blurred title backdrop) shows through.
-//
+//  The person page's header: a circular portrait, the name and a truncated bio. The bio
+//  sits in a focusable glass panel whose Select opens the full bio; MORE shows on overflow.
 
 import UIKit
 
@@ -44,10 +28,7 @@ final class PersonHeaderCell: UICollectionViewCell {
     private let portraitImageView = UIImageView()
     private let fallbackIcon = UIImageView()
     private let nameLabel = UILabel()
-    /// The whole bio is one focusable glass panel (the affordance the focus
-    /// engine lands on from an Up press off the rows). Reuses FocusableActionButton
-    /// for proven Select handling, but we override its focus appearance to glass
-    /// (subtle fill + scale + border) instead of the white-pill invert.
+    /// A FocusableActionButton for its Select handling, in the glass focus style.
     private let bioPanel = FocusableActionButton()
     private let bioLabel = UILabel()
     private let moreLabel = UILabel()
@@ -111,10 +92,7 @@ final class PersonHeaderCell: UICollectionViewCell {
         nameLabel.numberOfLines = 1
         headerContent.addSubview(nameLabel)
 
-        // The bio panel: a focusable glass surface holding the bio text + an
-        // optional MORE hint. Always focusable when a bio exists (the focus
-        // engine lands on it from an Up press off the poster rows); Select opens
-        // the full-bio popup. Glass focus style — content stays white.
+        // Bio text plus an optional MORE hint.
         bioPanel.translatesAutoresizingMaskIntoConstraints = false
         bioPanel.focusStyle = .glass
         bioPanel.backgroundColor = UIColor.white.withAlphaComponent(0.06)
@@ -150,10 +128,7 @@ final class PersonHeaderCell: UICollectionViewCell {
         loadingSpinner.hidesWhenStopped = true
         bioPanel.addSubview(loadingSpinner)
 
-        // headerContent: fixed width = portrait + gap + text column, centered in
-        // contentView. Self-sizes vertically by hugging the taller of portrait /
-        // text column (>= constraints). The bottom pin is what lets the
-        // compositional layout engine measure the estimated-height section.
+        // Fixed width, centred; the bottom pin lets the estimated-height section measure it.
         let containerWidth = Self.portraitSize + 36 + Self.textColumnMaxWidth
         NSLayoutConstraint.activate([
             // Container anchors
@@ -238,11 +213,7 @@ final class PersonHeaderCell: UICollectionViewCell {
         self.fullBiography = bio
         bioLabel.text = bio.isEmpty && !isLoading ? "No biography available." : bio
 
-        // Three states:
-        //   loading            → panel visible, dots, no bio/MORE (focusable)
-        //   loaded, has bio     → panel visible, bio (+ MORE if it overflows)
-        //   loaded, no bio      → panel visible with a placeholder, so the page
-        //                         always has a focus target even with no rows
+        // The panel always shows (dots, bio, or a placeholder), so the page always has a focus target.
         if isLoading {
             bioPanel.isHidden = false
             loadingSpinner.startAnimating()

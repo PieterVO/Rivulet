@@ -5,16 +5,9 @@
 //  CaptionSizingTests.swift
 //  RivuletTests
 //
-//  Pins the caption point size to what AVKit actually renders, because the app
-//  reimplements Apple's caption renderer and nothing else checks the match.
-//
-//  Reference values were measured on the tvOS 26.5 simulator: an
-//  AVPlayerViewController captioning Apple's bipbop test stream, with the same
-//  cue string drawn alongside at known point sizes through the same
-//  MediaAccessibility font descriptor, compared by ink width in one screenshot.
-//
-//  Issue #299 shipped for five builds because the constant was calibrated at a
-//  single point in the multiplier's range. These cases cover both ends.
+//  Pins caption point size to what AVKit renders, at both ends of the size range
+//  (#299). Measured on the tvOS 26.5 simulator against AVPlayerViewController
+//  captioning bipbop, compared by ink width.
 //
 
 import XCTest

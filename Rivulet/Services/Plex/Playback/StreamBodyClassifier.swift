@@ -1,49 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  StreamBodyClassifier.swift
-//  Rivulet
-//
-//  Identifies what a stream URL actually returned, for RIVULET-19 diagnostics.
-//
-//  Why this exists
-//  ---------------
-//  RIVULET-19 is `HLSVideoEngine: open failed (openFailed(code: -1094995529))`,
-//  531 events across 70 users since 2026-01-09, with no release correlation.
-//  That code is FFmpeg's AVERROR_INVALIDDATA, and despite the "HLSVideoEngine"
-//  name it fires on the aether route at startup: the tag `failed_route: aether`
-//  is set on every tagged event. AetherEngine calls `avformat_open_input` with a
-//  custom AVIO provider, a nil URL and a nil input format, so FFmpeg has to
-//  identify the container purely by probing the first bytes. When the bytes are
-//  not media at all the probe fails with exactly this code. The engine already
-//  hardcodes a rescue for one non-media body, an `#EXTM3U` manifest, and the
-//  comment on that rescue names this same error code. Every OTHER non-media
-//  body still dies.
-//
-//  The codec spread rules out a codec, HDR or container cause: it hits h264,
-//  hevc, av1 and mpeg2video, every resolution, SDR and HDR alike. So the bytes
-//  are very likely not the media file. What we do NOT know is WHICH non-media
-//  body dominates. The leading hypothesis is an expired `X-Plex-Token` yielding
-//  a 401 with an HTML or XML body, but nothing in the current telemetry proves
-//  it, because the aether route captures no evidence at all about the response.
-//  One release carrying this classification settles the question.
-//
-//  Why a separate pure type
-//  ------------------------
-//  Byte sniffing is exactly the kind of logic that should be unit-tested without
-//  standing up a view model or a network stack, matching `MarkerSkipOutcome`,
-//  `StallWatchdogPolicy` and `AetherLoadTimeoutPolicy`.
-//
-//  Security posture
-//  ----------------
-//  This type deliberately never returns free text from the body. See
-//  `Classification` and `describe(status:contentType:body:)` for the reasoning.
-//  The short version is that an error body can embed the request URL, which
-//  carries a working `X-Plex-Token`, and IPTV URLs embed credentials directly in
-//  the path where no `key=value` redactor can see them. So the output is drawn
-//  from a fixed vocabulary rather than sanitized from user data.
-//
+//  Identifies what a stream URL returned when the aether route fails to open with
+//  AVERROR_INVALIDDATA (RIVULET-19): the probe sees bytes that are not media. Output is
+//  a fixed vocabulary, never body text, because error bodies can echo tokens and IPTV
+//  URLs carry credentials in the path.
 
 import Foundation
 
@@ -54,8 +15,7 @@ import Foundation
 /// attach to a Sentry event without any redaction pass at all.
 enum StreamBodyClassification: String {
 
-    /// An HTML document. The leading RIVULET-19 hypothesis: a Plex error page,
-    /// a captive portal, or a reverse proxy 401/403 interstitial.
+    /// A Plex error page, captive portal or proxy 401/403 page.
     case html
 
     /// A JSON document. Typically a structured API error from Plex or from an
@@ -66,14 +26,11 @@ enum StreamBodyClassification: String {
     /// XML `MediaContainer` bodies, so this is distinct from `html` on purpose.
     case xml
 
-    /// An HLS manifest. AetherEngine already rescues this specific body at
-    /// `AVIOReader.swift`, so seeing it here would mean that rescue is not
-    /// firing rather than that the body is unexpected.
+    /// An HLS manifest. AetherEngine already rescues this body, so seeing it means
+    /// that rescue did not fire.
     case m3u8
 
-    /// An ISO base media file (MP4, M4V, MOV). This is real media, so seeing it
-    /// would refute the bad-body theory for that event and point the
-    /// investigation back at the engine's demuxer.
+    /// An ISO base media file (MP4, M4V, MOV). Real media, which points at the demuxer.
     case mp4
 
     /// A Matroska or WebM container. Also real media.
@@ -102,13 +59,8 @@ enum StreamBodyClassification: String {
 /// path.
 nonisolated enum StreamBodyClassifier {
 
-    /// How many bytes the caller needs to fetch for `classify` to be reliable.
-    ///
-    /// Every signature this type recognises lives in the first few bytes, so a
-    /// single kilobyte is far more than enough. It is kept small deliberately:
-    /// this request only ever runs after a playback failure, and a small ranged
-    /// GET is cheap enough that it cannot meaningfully compete with the HLS
-    /// fallback for bandwidth.
+    /// Bytes to fetch for `classify`. Every signature sits in the first few bytes, and
+    /// a small ranged GET does not compete with the HLS fallback.
     static let probeByteCount = 1024
 
     /// The `Range` header value for a probe request.
@@ -187,29 +139,9 @@ nonisolated enum StreamBodyClassifier {
 
     // MARK: - Sentry-safe summary
 
-    /// Render a one-line, credential-free summary of a probe result.
-    ///
-    /// SECURITY: this deliberately contains NO data copied out of the response
-    /// body, and no part of the request URL. Only three things go in:
-    ///
-    ///  1. The HTTP status code, an integer.
-    ///  2. The `Content-Type` header, reduced to its media type and matched
-    ///     against a fixed allowlist by `safeContentType`.
-    ///  3. The classification, whose every value is a compile-time constant.
-    ///
-    /// A body prefix is NOT included, even a redacted one. The reason is that
-    /// `SensitiveDataRedactor` only strips `key=value` query pairs, and the two
-    /// most likely credential shapes in an error body defeat exactly that: a
-    /// Plex error page can echo the token as bare text or as an XML attribute
-    /// with no `=` query syntax around it, and an IPTV provider embeds
-    /// `username` and `password` as PATH SEGMENTS (`/live/user/pass/id.ts`)
-    /// which no query-pair regex can see. The `.hls` route's existing preflight
-    /// does record a 120-character prefix, but it does so against a URL the app
-    /// built itself for a Plex transcode session, whereas this probe hits an
-    /// arbitrary direct-play or IPTV origin. Since the classification alone
-    /// answers the question this diagnostic exists to answer, the prefix buys
-    /// nothing and risks a token in Sentry, so it is dropped. When in doubt,
-    /// send less.
+    /// A one-line, credential-free summary: status, allowlisted content type, classification.
+    /// Do not add a body prefix, even redacted: `SensitiveDataRedactor` strips only `key=value`
+    /// pairs, and a token can appear as bare text, an XML attribute or an IPTV path segment.
     static func describe(
         status: Int,
         contentType: String?,

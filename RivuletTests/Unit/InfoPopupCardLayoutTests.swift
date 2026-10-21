@@ -5,12 +5,9 @@
 //  InfoPopupCardLayoutTests.swift
 //  RivuletTests
 //
-//  The info popup sizes its card from the measured content height and only adds
-//  scroll breathing room when the content actually overflows. Pure math, so the
-//  layout behavior that can only be seen on a device rests on a verified core.
-//
-//  Regression: the top inset was applied unconditionally, so a short synopsis
-//  that fit the card exactly still scrolled by 8pt and clipped its last line.
+//  The info popup sizes its card from the measured content height and adds
+//  scroll room only when the content overflows, so a synopsis that fits
+//  doesn't scroll and clip its last line.
 //
 
 import XCTest

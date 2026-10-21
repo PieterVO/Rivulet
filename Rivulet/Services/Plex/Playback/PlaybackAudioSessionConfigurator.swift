@@ -59,14 +59,8 @@ enum PlaybackAudioSessionConfigurator {
         let session = AVAudioSession.sharedInstance()
         let now = CFAbsoluteTimeGetCurrent()
 
-        // Idempotency check: if the session is already in the desired state (correct
-        // category, correct mode, and active with our policy already applied), do not
-        // re-apply setCategory/setActive. Re-applying setCategory on a running session
-        // forces an HDMI route renegotiation that silently breaks in-flight compressed
-        // bitstream passthrough (e.g. EAC3 7.1 mid-stream). This was previously hidden
-        // by the brief minimumReactivationInterval dedup, but the deferred .running
-        // state change means NowPlayingService now re-activates AFTER preroll, well
-        // past that window — so we must guard the underlying API itself, not just dedup.
+        // Skip setCategory/setActive when already configured: re-applying setCategory on a
+        // running session renegotiates HDMI and breaks bitstream passthrough mid-stream.
         let alreadyConfigured = session.category == .playback
             && session.mode == mode
             && session.routeSharingPolicy == .longFormAudio

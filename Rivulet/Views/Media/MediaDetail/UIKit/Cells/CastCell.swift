@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  CastCell.swift
-//  Rivulet
-//
-//  A cast/crew member: circular photo over a name + subtitle (role /
-//  "Director"). Replaced the SwiftUI `PersonCard`, since deleted.
-//
-//  Focus treatment is ENLARGE-ONLY: the avatar scales up on focus, nothing else
-//  (no ring, no glow — a TVCardView's rectangular card can't be round, and the
-//  ring/glow read as clutter). `MediaPerson.imageURL` is already fully-qualified
-//  by the mapper, so no server/token threading.
-//
+//  A cast or crew member: circular photo over name and role. Focus only enlarges the
+//  avatar; a TVCardView cannot be round. `MediaPerson.imageURL` is already absolute.
 
 import UIKit
 

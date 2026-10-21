@@ -38,12 +38,8 @@ struct PreviewStateMachine {
     }
 
     var isExpanded: Bool {
-        // Includes the in-progress `.expandingHero` animation phase
-        // because the user has already committed to expanding by the
-        // time we reach it (`beginExpand()` transitioned out of
-        // carousel-stable); the view is no longer carousel-interactive,
-        // so semantically the preview is "expanded" from the user's
-        // perspective for the duration of the animation.
+        // Counts `.expandingHero`: the user committed in `beginExpand()` and the carousel no
+        // longer takes input.
         phase == .expandingHero || phase == .expandedHero || phase == .detailsStable
     }
 

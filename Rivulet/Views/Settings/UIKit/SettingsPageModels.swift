@@ -634,34 +634,11 @@ enum SettingsContent {
 
     // MARK: Music
 
-    /// Withdrawn: every row here was a no-op, and not merely unread. Each key
-    /// had no reader at all, and the implementation each one was supposed to
-    /// gate has no caller either:
-    ///   - Crossfade wrote `musicCrossfadeDuration` as a `CrossfadeOption`
-    ///     string, while `MusicAudioProcessor.crossfadeDuration` reads
-    ///     `music_crossfade_duration` as a `CrossfadeDuration` Int — different
-    ///     key AND different type — and nothing calls that getter, so music
-    ///     playback has no crossfade to configure.
-    ///   - Loudness Normalization gated `MusicAudioProcessor.adjustedVolume(for:)`,
-    ///     which has no callers.
-    ///   - Audio Quality Badges gated `AudioQualityBadge`, a view that was never
-    ///     instantiated and has since been deleted.
-    /// Restore the rows below once one of those is actually wired up, and fix
-    /// the crossfade key/type mismatch when you do.
+    /// Withdrawn: loudness, crossfade and quality-badge keys had no reader.
+    /// Add a row back only with its reader. `MusicAudioProcessor` reads
+    /// crossfade under a different key and type than the old row wrote.
     private static var music: [SettingsRowItem] {
         []
-//        [
-//            toggle("musicLoudness", "Loudness Normalization", key: "musicLoudnessNormalization", default: false),
-//            SettingsRowItem(id: "musicCrossfade", title: "Crossfade",
-//                            kind: .cycle(value: { CrossfadeOption(rawValue: SettingsStore.string("musicCrossfadeDuration", default: CrossfadeOption.off.rawValue))?.description ?? "" },
-//                                         next: {
-//                                             let all = CrossfadeOption.allCases
-//                                             let cur = CrossfadeOption(rawValue: SettingsStore.string("musicCrossfadeDuration", default: CrossfadeOption.off.rawValue)) ?? all.first!
-//                                             let i = all.firstIndex(of: cur) ?? 0
-//                                             SettingsStore.setString("musicCrossfadeDuration", all[(i + 1) % all.count].rawValue)
-//                                         })),
-//            toggle("musicQualityBadges", "Audio Quality Badges", key: "musicShowQualityBadges", default: true)
-//        ]
     }
 
     // MARK: Servers
@@ -793,18 +770,9 @@ enum SettingsContent {
         }
     }
 
-    /// One toggle per row Plex currently offers Home, in the order Home draws
-    /// them.
-    ///
-    /// Built from `PlexDataStore.homeItems`, the SAME projection Home renders,
-    /// rather than from a list assembled here. That is what keeps the page
-    /// honest: the titles are the server's own (so they are localized, and they
-    /// say "Recently Added in Movies-demo" exactly as the shelf does), and a row
-    /// can never be listed here that Home would not draw.
-    ///
-    /// Hidden rows still appear in this list — they are what you come here to
-    /// switch back on — so the list is the projection plus whatever is currently
-    /// filtered out of it.
+    /// One toggle per row Plex offers Home, in Home's order. Built from
+    /// `PlexDataStore.homeItems`, the projection Home renders, so titles match
+    /// the shelves; hidden rows are added back so they can be switched on.
     private static var homeRows: [SettingsRowItem] {
         let store = PlexDataStore.shared
         let visible = store.homeItems

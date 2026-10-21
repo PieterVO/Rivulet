@@ -56,19 +56,10 @@ struct RivuletApp: App {
         }
 
         #if !DEBUG
-        // Sentry start is DEFERRED off the launch window. Starting it in init()
-        // fired envelope/session uploads to sentry.io before the network nexus
-        // was ready — every cold launch spammed `NECP [22: Invalid argument]`
-        // / `-1000 bad URL` failures (visible in release device logs) AND paid
-        // its swizzling + session-tracking cost on the critical path. A few
-        // seconds later the network is up, the uploads succeed, and the launch
-        // window is clean. Trade-off: a crash in the first ~3s is not captured
-        // (rare; acceptable given the launch-perf + log-noise win).
+        // Sentry starts 3 s after launch: in init() its uploads beat the network
+        // (`NECP [22]`, `-1000 bad URL`) and its swizzling cost the launch. A crash before then is lost.
         Task.detached(priority: .utility) {
-            // No DSN configured (Secrets.swift is local-only) — skip Sentry
-            // entirely rather than initializing a dead SDK. SentryBridge stays
-            // inactive so breadcrumb/capture calls no-op instead of spamming
-            // "SDK is disabled" fatals.
+            // No DSN (Secrets.swift is local): skip Sentry so SentryBridge calls no-op.
             guard !Secrets.sentryDSN.isEmpty else { return }
             try? await Task.sleep(for: .seconds(3))
             await Self.startSentry()
@@ -105,10 +96,8 @@ struct RivuletApp: App {
     #endif
 
     var sharedModelContainer: ModelContainer = {
-        // Runs BEFORE init()'s body (Swift initializes stored properties first),
-        // so this is the earliest app code on the launch path and a prime suspect
-        // for the ~2.2s that used to sit unattributed between init and the
-        // sidebar's first task. Opening a 7-model store is not free.
+        // Runs before init()'s body, so this is the earliest app code at launch.
+        // Opening a 7-model store is not free.
         StartupTimer.mark("sharedModelContainer build start")
         defer { StartupTimer.mark("sharedModelContainer build end") }
         let schema = Schema([

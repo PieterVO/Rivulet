@@ -1,18 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  SeasonPillView.swift
-//  Rivulet
-//
-//  A capsule season selector pill. The below-fold hosts a horizontal row of
-//  these, driven by its data + focus.
-//
-//  Faithful to source: label 24pt (semibold when selected, regular otherwise),
-//  black-on-white when focused, capsule fill white(focused) /
-//  white-0.2(selected) / clear, a white-0.4 border when selected-not-focused,
-//  20/10 padding, 1.05 focus scale.
-//
+//  A capsule season pill for the below-fold's season row.
 
 import UIKit
 
@@ -31,11 +20,7 @@ final class SeasonPillView: UIControl {
     /// leaves that unwired it falls back to re-affirming the season in the rail.
     var onSelected: (() -> Void)?
 
-    /// Host-controlled focusability. Pills are focusable ONLY while the user is
-    /// in the pill row (detailsFocusTarget == .pills). When focus is on the
-    /// episodes the pills are NOT focusable, so the focus engine's spatial Up
-    /// move finds no pill to grab — the host then routes focus straight to the
-    /// SELECTED season's pill with no intermediate wrong-pill landing.
+    /// Set by the host: true only while `detailsFocusTarget == .pills`.
     var focusEnabled = false
     override var canBecomeFocused: Bool { focusEnabled }
 
@@ -45,10 +30,7 @@ final class SeasonPillView: UIControl {
         if focused { onFocused?() }
     }
 
-    // Select does not fire .primaryActionTriggered on a plain UIControl on
-    // tvOS, so the wired target never ran and pill Select has never fired.
-    // Consume the press in BOTH began/ended so the focused pill owns the cycle
-    // (mirrors AboutCardControl, a UIControl in this same directory).
+    // Select never fires primaryActionTriggered on a plain UIControl on tvOS; own both phases.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if presses.contains(where: { $0.type == .select }) { return }
         super.pressesBegan(presses, with: event)
@@ -136,7 +118,7 @@ final class SeasonPillView: UIControl {
         layer.borderWidth = 0
     }
 
-    /// Season label mirroring SwiftUI `SeasonPillBar.seasonLabel(for:)`.
+    /// The pill's season label.
     static func seasonLabel(for season: MediaItem) -> String {
         if let n = season.seasonNumber {
             return n == 0 ? "Specials" : "Season \(n)"

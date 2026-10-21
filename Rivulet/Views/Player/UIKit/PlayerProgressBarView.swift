@@ -5,14 +5,9 @@
 //  PlayerProgressBarView.swift
 //  Rivulet
 //
-//  Transport bar cloned from AVPlayerViewController's tvOS 26 scrubber. Every
-//  metric was read from AVKit's live view tree on a 1080p simulator (DEBUG
-//  `AVKitScrubProbe`, RIVULET_SCRUBPROBE=states). The track's center line is
-//  fixed and the track grows around it (14 rest, 18 scrubbing, 20 ring jog);
-//  labels, needle, ring and thumbnail are laid out from that line.
-//
-//  Frame-driven. A state change (scrub, ring) animates on AVKit's measured
-//  spring; time ticks use a short linear move. One animator per call.
+//  Transport bar cloned from AVKit's tvOS 26 scrubber (measured with DEBUG
+//  `AVKitScrubProbe`). Everything lays out from the track's fixed center line.
+//  Frame-driven: state changes use AVKit's spring, time ticks a short linear move.
 //
 
 import UIKit

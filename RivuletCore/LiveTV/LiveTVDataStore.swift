@@ -219,19 +219,9 @@ class LiveTVDataStore: ObservableObject {
 
     // MARK: - Freshness / refresh
 
-    /// True when the guide on screen can no longer be trusted, for either of
-    /// two independent reasons:
-    ///
-    /// 1. AGE — the grid was fetched more than `maxAge` ago, so "now playing"
-    ///    has almost certainly moved on.
-    /// 2. COVERAGE — the loaded EPG window no longer reaches the current time.
-    ///    This is the case behind "I came back and the guide wasn't loaded":
-    ///    the window is anchored at the load time, so after a long sleep every
-    ///    programme in it is in the past and the grid renders empty even though
-    ///    `epg` is non-empty. Age alone would miss a short window (the tab
-    ///    loads only 6 hours), so both are checked.
-    ///
-    /// A never-loaded (or emptied) store is always stale.
+    /// True when the guide on screen can't be trusted: fetched more than `maxAge`
+    /// ago, or the loaded EPG window no longer reaches now (after a long sleep the
+    /// grid renders empty with `epg` non-empty). An empty store is always stale.
     func isStale(maxAge: TimeInterval = defaultMaxAge, now: Date = Date()) -> Bool {
         if channels.isEmpty || epg.isEmpty { return true }
         guard let lastEPGLoad, let lastChannelsLoad else { return true }
@@ -241,14 +231,9 @@ class LiveTVDataStore: ObservableObject {
         return false
     }
 
-    /// Re-fetch channels + EPG when `isStale`, otherwise do nothing. This is
-    /// the entry point for every "user arrived at a Live TV surface" and
-    /// "app came back to the foreground" moment; it is cheap to call often.
-    ///
-    /// Concurrent callers share one refresh: the tab's `.task` and the
-    /// foreground notification routinely fire together, and two overlapping
-    /// EPG fetches would cancel each other through `epgLoad` and leave
-    /// the grid empty — the very failure this is meant to fix.
+    /// Re-fetches channels and EPG when `isStale`; cheap to call on every arrival
+    /// and foreground. Concurrent callers share one refresh, because two
+    /// overlapping EPG fetches cancel each other through `epgLoad`.
     func refreshIfStale(maxAge: TimeInterval = defaultMaxAge) async {
         guard !providers.isEmpty else { return }
         if let staleRefreshTask {
@@ -785,13 +770,8 @@ class LiveTVDataStore: ObservableObject {
 
     // MARK: - Channel Loading
 
-    /// Fetch every provider in parallel and merge the results into one sorted
-    /// lineup.
-    ///
-    /// `nonisolated` so both callers below can run it off the main actor. On a
-    /// large M3U this is 100k+ channels, and the sort falls through to Unicode
-    /// string collation because most playlists omit `tvg-chno` — enough work to
-    /// stall the focus engine if it lands on the main thread.
+    /// Fetches every provider in parallel and merges one sorted lineup. Off the
+    /// main actor: a 100k-channel M3U without `tvg-chno` sorts by Unicode collation.
     private nonisolated static func fetchAndMergeChannels(
         from providerEntries: [(key: String, value: any LiveTVProvider)],
         refreshing: Bool

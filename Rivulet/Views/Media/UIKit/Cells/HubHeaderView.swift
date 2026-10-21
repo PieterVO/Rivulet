@@ -1,23 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  HubHeaderView.swift
-//  Rivulet
-//
-//  Section headers above each home row. Two distinct styles in SwiftUI
-//  that must both be supported here:
-//
-//   - InfiniteContentRow / ContentRow (Continue Watching, Recently Added,
-//     Personalized Recommendations): 30pt semibold, foreground white-0.6,
-//     with no inline count indicator.
-//
-//   - WatchlistHubRow: ScaledDimensions.sectionTitleSize (30pt) bold,
-//     full white. No count.
-//
-//  Style is set per-configure via `Style.swiftUIInfiniteRow` or
-//  `.swiftUIWatchlist` — the dataSource picks the right one per section.
-//
+// Home row section headers. `.swiftUIInfiniteRow`: 30pt semibold, white 0.6.
+// `.swiftUIWatchlist`: 30pt bold, full white. Neither shows a count.
 
 import UIKit
 

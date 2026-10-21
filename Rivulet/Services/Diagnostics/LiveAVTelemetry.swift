@@ -1,36 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  LiveAVTelemetry.swift
-//  Rivulet
-//
-//  How sound and picture start together on a software-route live join,
-//  reported as a Sentry `live.av` transaction (issue #319).
-//
-//  WHY THIS EXISTS
-//  ---------------
-//  A HomePod user hears Plex Live TV sound about a second before the picture,
-//  and nobody else can reproduce it. Two engine behaviours could explain it:
-//    1. The software route starts its clock on the first decoded AUDIO packet,
-//       with no wait for a picture. A join that lands mid-GOP plays sound until
-//       the first keyframe decodes, then stays in sync.
-//    2. The decoder falls behind, so sound leads the whole time.
-//  The numbers below separate them:
-//    - first_frame_pts_gap: the first picture's timestamp minus the clock's
-//      starting one.
-//    - first_frame_wall_gap: wall time from the clock starting to the first
-//      picture reaching the display layer.
-//      Sound before picture is about the larger of these two (reading 1).
-//    - vlead_min: the lowest video lead over the clock from 5 s after the
-//      start, which is the engine's own [SWDiag] vLead. Below zero, pictures
-//      arrive after the sound they belong to (reading 2).
-//  The engine's own lines for the join ride along as data, so one reporter's
-//  session can be read in full from the trace.
-//
-//  Same rules as LiveJoinTelemetry: no URL leaves the device, and nothing here
-//  reads `engine.diagnostics.liveTelemetry`.
-//
+// How sound and picture start on a software-route live join, as the Sentry `live.av`
+// transaction (#319). `first_frame_pts_gap` and `first_frame_wall_gap` measure a mid-GOP
+// join (audio-led clock); `vlead_min`, the engine's vLead from 5 s in, below zero means the decoder lags.
+// Same rules as LiveJoinTelemetry: no URLs, no `engine.diagnostics.liveTelemetry`.
 
 import AVFoundation
 import Foundation

@@ -3,26 +3,14 @@
 
 import Foundation
 
-/// Keeps a tuned Plex Live TV session alive via `/:/timeline` pings.
-///
-/// PMS runs each live grab as a rolling subscription with a 300-second
-/// stop-grab timer; a timeline report referencing the session resets it
-/// (verified: an unreported session dies within minutes, a reported one
-/// survives and `state=stopped` releases it immediately).
-///
-/// Cadence and parameters follow the working-client consensus:
-///  - 10s heartbeat, with the FIRST ping delayed 3s — an immediate ping can
-///    make the server spawn a duplicate transcode job that 404s.
-///  - `ratingKey` is the NUMERIC live-session metadata id from the tune
-///    response (EPG-style plex:// keys 404 on this endpoint). Carried on the
-///    resolved URL as `rivuletLiveRatingKey` (PMS ignores unknown params).
-///  - `time=0&duration=0&playbackTime=<elapsed ms>` — sidesteps the server's
-///    "time may not exceed duration" rejection entirely.
-///  - `state=stopped` on stop() releases the tuner without waiting for the
-///    timeout, and a start.m3u8 session's transcode job is stopped after it.
-///
-/// Every teardown path (full-screen player, multiview slot, channel zap,
-/// fallback re-tune, abandoned tune) ends here, so the release lives here once.
+/// Keeps a tuned Plex Live TV session alive via `/:/timeline` pings. PMS drops a
+/// grab after 300 s unreported; `state=stopped` releases it at once.
+///  - 10 s heartbeat, first ping after 3 s: an immediate ping can spawn a
+///    duplicate transcode job that 404s.
+///  - `ratingKey` is the numeric session id from the tune (plex:// keys 404),
+///    carried on the URL as `rivuletLiveRatingKey` (PMS ignores unknown params).
+///  - `time=0&duration=0&playbackTime=<ms>` avoids "time may not exceed duration".
+/// Every teardown path ends here.
 @MainActor
 final class PlexLiveTimelineKeepalive {
 

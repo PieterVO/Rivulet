@@ -5,15 +5,9 @@
 //  SeasonPillRowLayoutTests.swift
 //  RivuletTests
 //
-//  The season pill row lives in a scroller so a show with more seasons than fit
-//  the screen can still reach them all (#261). Whether it actually scrolls comes
-//  down to one Auto Layout question that can't be eyeballed: does the row keep
-//  its natural width and overflow (scrollable), or does it get compressed to fit
-//  (nothing to scroll, labels truncated)?
-//
-//  Regression: the scroller's hug constraint sat at .defaultHigh, tying with the
-//  pill labels' compression resistance. The solver squeezed the pills instead of
-//  overflowing, so contentSize == bounds and the row never scrolled.
+//  The season pill row keeps its natural width and overflows its scroller, so
+//  every season is reachable (#261). A hug priority tied with the labels'
+//  compression resistance squeezed the pills instead.
 //
 
 import XCTest

@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  BelowFoldCells.swift
-//  Rivulet
-//
-//  UICollectionViewCell wrappers that host the ported below-fold section views
-//  (EpisodeCell / SeasonPillView / CastCell) so they can live in the
-//  compositional below-fold collection, plus a section-header reusable view.
-//  Each wrapper forwards focus to the inner view's setFocused (the standard
-//  tvOS didUpdateFocus + UIFocusAnimationCoordinator pattern) and resets it in
-//  prepareForReuse (avoids the stuck-scale fast-scroll bug). See
-//  perf-spike/EXPANDED_DETAIL_CONVERSION_SPIKE.md §3.
-//
+//  Collection cells hosting the below-fold views, plus the section header. Each forwards
+//  focus to its view and resets it in prepareForReuse, or fast scrolls leave a stuck scale.
 
 import UIKit
 
@@ -21,10 +11,8 @@ import UIKit
 final class EpisodeCollectionCell: UICollectionViewCell {
     static let reuseID = "EpisodeCollectionCell"
     private let episodeView = EpisodeCell()
-    /// Fires when either sub-target (thumb/description) gains focus. Cell-level
-    /// (not collection-level) so it fires for horizontal moves within the
-    /// orthogonal episode row — the collection's own didUpdateFocus does NOT fire
-    /// for intra-section nav. Drives season-pill tracking.
+    /// Fires when the thumb or description gains focus, including moves within the row,
+    /// which the collection's didUpdateFocus misses. Drives season-pill tracking.
     var onFocused: ((Bool) -> Void)?
     /// Thumb Select → play this episode.
     var onPlay: (() -> Void)?
@@ -298,12 +286,7 @@ final class BelowFoldSectionHeader: UICollectionReusableView {
 
 // MARK: - Season divider
 
-/// Slim, non-focusable boundary marker between seasons in the flat episode
-/// rail: a broken vertical hairline through the thumb band with a compact
-/// season chip ("S3" / "SP") in the gap. Structure only — the season's full
-/// identity lives in the pills. The focus engine skips it
-/// (canBecomeFocused false + the collection's canFocusItemAt exclusion), so
-/// the rail's focus order is unchanged.
+/// An unfocusable season boundary in the episode rail: a broken hairline with a chip ("S3", "SP").
 final class SeasonDividerCell: UICollectionViewCell {
     static let reuseID = "SeasonDividerCell"
     /// Wide enough that the chip is fully off screen when the next season's

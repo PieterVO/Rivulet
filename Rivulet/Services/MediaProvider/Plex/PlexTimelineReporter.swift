@@ -1,19 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PlexTimelineReporter.swift
-//  Rivulet
-//
-//  Plex implementation of the agnostic ProgressReporter protocol. Wraps
-//  PlexNetworkManager's /:/timeline endpoint with the right state strings
-//  and ms time conversion.
-//
-//  Note: distinct from `PlexProgressReporter` (the throttled actor in
-//  Services/Plex/Playback/) which is the existing playback-side reporter
-//  used by player view models. This is the protocol-conforming value type
-//  exposed via MediaProvider.progressReporter(for:sourceID:playSessionID:).
-//
+// Plex `ProgressReporter` over `/:/timeline` (state strings, ms times), returned by
+// `MediaProvider.progressReporter(for:)`. Separate from the player's throttled `PlexProgressReporter`.
 
 import Foundation
 

@@ -1,18 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PersonFilmographyProvider.swift
-//  Rivulet
-//
-//  Turns a MediaPerson into a PersonDetail:
-//    - Filmography: the person's titles on the user's Plex server, via a
-//      server-wide `?actor=` filter.
-//    - Known For: Plex Discover's list for the person, minus titles already on
-//      the server, as metadata-only items.
-//    - Biography: the Discover person's summary, else TMDB.
-//  The data sources are injected so the logic unit-tests with fakes.
-//
+// Builds a PersonDetail: filmography from the server-wide `?actor=` filter, Known For from
+// Plex Discover minus titles on the server, biography from Discover else TMDB.
 
 import Foundation
 

@@ -1,17 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  ShuttleGrammar.swift
-//  Rivulet
-//
-//  Pure FF/RW shuttle grammar: click-and-hold enters shuttle at level 1,
-//  clicks in the same direction bump up to the level 8 cap, clicks in the
-//  opposite direction step down THROUGH zero into the opposite direction.
-//  Levels 1-4 are AVKit's (`AVScrubbingController.defaultScrubbingRates`,
-//  8x/24x/48x/96x); 5-8 keep doubling past AVKit's cap. The bar numbers
-//  levels from 2 as AVKit does.
-//
+// FF/RW shuttle grammar: hold enters level 1, same-direction clicks step up to 8,
+// opposite clicks step down through zero. Levels 1-4 are AVKit's 8x/24x/48x/96x; 5-8 keep doubling.
+// The bar numbers levels from 2, as AVKit does.
 
 import Foundation
 

@@ -1,23 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  AboutInfoCells.swift
-//  Rivulet
-//
-//  The two static info blocks at the bottom of the UIKit expanded detail,
-//  matching the Apple TV+ show-detail reference (Docs/atv_ref/carousel_details_ref_about
-//  + _information):
-//
-//   - AboutCollectionCell  — "About" header + two cards: left = title / genres /
-//     synopsis, right = the content-rating block.
-//   - InfoColumnsCollectionCell — three columns: Information / Languages /
-//     Accessibility, the latter two derived from the item's media streams.
-//
-//  Both are single full-width cells in the below-fold compositional collection.
-//  Neither cell is focusable: each hosts focusable cards, which is what the
-//  focus-driven below-fold (FocusScrollControlledCollectionView) scrolls to.
-//
+//  The detail's About cards and Information / Languages / Accessibility columns
+//  (Docs/atv_ref/carousel_details_ref_about, _information). The cells are not focusable; their cards are.
 
 import UIKit
 
@@ -419,10 +404,8 @@ final class InfoColumnView: UIView {
         stack.axis = .vertical
         stack.alignment = .fill
         addSubview(stack)
-        // Bottom pinned with `=` at high (not required) priority so the column
-        // HUGS its content when nothing else drives its height (the vertically-
-        // stacked Info popup). In the below-fold's horizontal `.fill` row, the
-        // required equal-height stretch outranks this and still wins.
+        // High, not required: the column hugs its content in the Info popup, and the
+        // below-fold row's required equal-height stretch still wins.
         let bottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor)
         bottom.priority = .defaultHigh
         stackLeading = stack.leadingAnchor.constraint(equalTo: leadingAnchor)

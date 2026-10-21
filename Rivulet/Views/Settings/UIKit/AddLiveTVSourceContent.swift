@@ -5,16 +5,9 @@
 //  AddLiveTVSourceContent.swift
 //  Rivulet
 //
-//  Live TV add-source flow, as real pages in the UIKit Settings stack: a
-//  picker (`.addLiveTVSource`) that pushes one form per kind (`.addXtream`,
-//  `.addPlaylistURL`, `.addOwnServer`).
-//
-//  Every form is one list of its fields, optional ones included. Each row
-//  opens its own entry page; nothing opens on arrival.
-//
-//  Draft state lives in `AddSourceDraft`, created when the picker pushes a form
-//  and released when the flow leaves. Nothing touches UserDefaults until a
-//  source is actually added.
+//  Live TV add-source flow: a picker (`.addLiveTVSource`) that pushes one form
+//  per kind, each a list of its fields. Drafts live in `AddSourceDraft`, and
+//  nothing touches UserDefaults until a source is added.
 //
 
 import Foundation

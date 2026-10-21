@@ -5,19 +5,10 @@
 //  LiveMultiviewViewController.swift
 //  Rivulet
 //
-//  Multiview for the Browse layout, after the Apple TV app's: up to four live
-//  channels at once, with sound following focus.
-//
-//  Two modes. Edit shows the tiles smaller with the layout switch and an
-//  "Add More" row under them; watch lets the tiles fill the screen. The mode
-//  changes when focus reaches the hint at the edge ("Swipe up to watch" at
-//  the top of edit, the chevron at the bottom of watch), so a swipe and an
-//  arrow press both work with no transport of their own.
-//
-//  Playback belongs to MultiStreamViewModel, the same model the SwiftUI
-//  multiview uses. A session arrives running (from the full-screen player or
-//  the Browse corner player) and leaves running (a tile taken full screen),
-//  so moving between surfaces never re-tunes.
+//  Multiview, after the Apple TV app's: up to four live channels, sound follows
+//  focus. Edit and watch modes switch when focus reaches the edge hint, so both
+//  remote transports work. Playback belongs to MultiStreamViewModel, and a
+//  session arrives and leaves running, so moving between surfaces never re-tunes.
 //
 
 import UIKit

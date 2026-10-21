@@ -5,18 +5,8 @@
 //  PlexLibraryVisibilityFilterTests.swift
 //  RivuletTests
 //
-//  `/hubs/continueWatching` and the global `/hubs` are account-level endpoints:
-//  one flat list spanning every library, with no way to scope the request.
-//  Rivulet's hidden-library / shown-on-Home sets are client-side UserDefaults
-//  Plex never sees, so items from a hidden library keep arriving — visibly
-//  duplicated for a user with mirrored libraries ("Movies" plus a
-//  "Movies.x264" re-encode of the same films). The predicate under test is the
-//  only thing standing between that payload and the Home rows.
-//
-//  Both fail-open cases are load-bearing, not politeness: an empty key set
-//  means the library list has not loaded yet (cold launch), and an
-//  unattributed item is not evidence of being hidden. Getting either wrong
-//  blanks Continue Watching and the hero.
+//  The predicate that keeps hidden libraries' items out of account-level hubs on
+//  Home, including both fail-open cases (no keys loaded, unattributed item).
 //
 
 import XCTest

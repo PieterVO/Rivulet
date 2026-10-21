@@ -1,38 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  InputProbe.swift
-//  Rivulet
-//
-//  Ingress-level input diagnostics (issues #212, #232).
-//
-//  `PlaybackInputTelemetry` records what an input DID, after a handler claimed
-//  it. The third-party-remote bugs are inputs that do NOTHING, which no
-//  after-the-fact log can show. This probe records at the ingress instead: every
-//  `UIPress` phase the app receives (from the `MenuPressInterceptor` swizzle,
-//  the one layer that sees a press before anybody consumes it), every raw
-//  GameController event, and the action that eventually resulted.
-//
-//  Two things it answers that nothing else can:
-//
-//  1. **Which physical remote class sent this.** `PlaybackInputSource.irPress`
-//     only means "arrived as an arrow `UIPress`", which a Siri Remote clickpad
-//     edge click also produces — so no existing breadcrumb distinguishes a
-//     Harmony from a Siri Remote. A Siri Remote press is always accompanied by a
-//     micro-gamepad event; an IR or HDMI-CEC press never is. That is the `gc=`
-//     field on each verdict.
-//  2. **Whether the press terminated.** Every tap-vs-hold decision in the
-//     player reads the began→ended interval against `InputConfig.holdThreshold`.
-//     If an IR remote releases late, each tap reads as a hold; if the release
-//     never arrives, `UILongPressGestureRecognizer` never reaches a terminal
-//     state and `require(toFail:)` blocks every later tap. Both show up here as
-//     a duration and a never-terminated warning.
-//
-//  Off by default, behind Settings → About → Input Diagnostics. Enabled it
-//  prints, adds Sentry breadcrumbs, and draws an on-screen HUD so a reporter can
-//  send one screenshot.
-//
+// Ingress input diagnostics (#212, #232): logs every UIPress phase and GameController event.
+// A Siri Remote press always comes with a micro-gamepad event and an IR/CEC press never does (`gc=`).
+// Also reports presses that never terminate, which block every later `require(toFail:)` tap.
+// Off by default: Settings > About > Input Diagnostics.
 
 import UIKit
 import GameController
@@ -219,15 +191,8 @@ enum InputProbe {
         log("● gc \(what)")
     }
 
-    /// Siri Remote state read at the instant a press lands. A clickpad edge
-    /// click has `buttonA` down and/or the dpad off-center when its arrow press
-    /// arrives; an IR or HDMI-CEC press has no `GCController` behind it at all,
-    /// so this returns nil and the verdict reads `gc=no`.
-    ///
-    /// Polled rather than subscribed because GameController's handlers are
-    /// single-slot — installing our own would clobber `RemoteInputHandler`'s and
-    /// break seeking. Polling also works on surfaces that have no GameController
-    /// wiring of their own (home, settings, detail), which is most of the app.
+    /// Siri Remote state when a press lands; nil for IR/CEC (`gc=no`). Polled because
+    /// GameController handlers are single-slot: our own would replace `RemoteInputHandler`'s.
     private static func microGamepadState() -> String? {
         guard let micro = GCController.controllers().lazy.compactMap(\.microGamepad).first else {
             return nil
@@ -248,13 +213,8 @@ enum InputProbe {
 
     // MARK: Reporting
 
-    /// Ships one finished input test as its own Sentry event.
-    ///
-    /// Deliberately NOT breadcrumbs. Breadcrumbs only travel attached to an
-    /// event, so with no crash they never leave the device at all, and the
-    /// SDK's ring buffer evicts them long before an unrelated crash arrives.
-    /// One self-contained event carries the whole transcript and is findable by
-    /// its fixed fingerprint, which groups every run into a single Sentry issue.
+    /// Ships one finished input test as its own Sentry event, grouped by a fixed fingerprint.
+    /// Not breadcrumbs: those leave the device only attached to some other event.
     static func captureTestResult(_ transcript: String) {
         let event = Sentry.Event(level: .info)
         event.message = SentryMessage(formatted: "Remote input test")

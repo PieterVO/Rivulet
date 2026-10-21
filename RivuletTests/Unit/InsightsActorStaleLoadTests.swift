@@ -5,15 +5,8 @@
 //  InsightsActorStaleLoadTests.swift
 //  RivuletTests
 //
-//  Integration coverage for the stale-load guard behind the in-panel actor
-//  view (Docs/superpowers/plans/2026-07-07-insights-in-panel-actor.md, Task
-//  B/D). `InsightsActorLoadCoordinatorTests` already covers the token
-//  bookkeeping in isolation; this test drives the REAL
-//  `InsightsPanelContainerView` + `InsightsActorView` wiring end to end
-//  through the injectable `PersonFilmographyProviding` seam, to prove a
-//  slow `load` that resolves AFTER the user has moved on (backed out to the
-//  cast list, or switched to a different actor) never populates the actor
-//  view with the late, now-irrelevant result.
+//  End to end through `PersonFilmographyProviding`: a slow actor load that
+//  resolves after the user backed out or switched actors never fills the view.
 //
 
 import XCTest
@@ -30,14 +23,9 @@ private final class ManuallyResolvableFilmographyProvider: PersonFilmographyProv
         continuations.removeValue(forKey: personID)?.resume(returning: detail)
     }
 
-    /// `InsightsPanelContainerView.crossfadeToActor` spawns a plain `Task {}`
-    /// from its own (MainActor-isolated, `UIView` is `@MainActor` by
-    /// default) body, which inherits MainActor — so this `nonisolated` func
-    /// actually runs its body on the main actor already. Registering the
-    /// continuation SYNCHRONOUSLY (no inner `Task` hop) is what lets the
-    /// test call `resolve(...)` immediately afterwards with no race: by the
-    /// time `crossfadeToActor`'s `await load(...)` line has been reached and
-    /// suspended, this closure has already run and stored the continuation.
+    /// Runs on the main actor (the caller's `Task {}` inherits it), so registering
+    /// the continuation synchronously lets the test call `resolve(...)` right after
+    /// with no race.
     nonisolated func load(person: MediaPerson) async throws -> PersonDetail {
         try await withCheckedThrowingContinuation { continuation in
             MainActor.assumeIsolated {

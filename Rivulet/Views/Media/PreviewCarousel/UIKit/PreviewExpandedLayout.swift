@@ -1,23 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PreviewExpandedLayout.swift
-//  Rivulet
-//
-//  The expanded-detail layout for the preview carousel. The cell at
-//  `expandedIndex` gets the full collection-view bounds (translated by
-//  contentOffset so it sits at viewport origin); every other cell keeps
-//  its normal carousel frame with alpha 0 (still laid out so a collapse
-//  transition back to PreviewCarouselLayout reverses cleanly).
-//
-//  This is the former `isExpanded` short-circuit from
-//  PreviewCarouselLayout, extracted so `setCollectionViewLayout(_:animated:)`
-//  can interpolate between two concrete layouts (carousel <-> expanded)
-//  instead of one layout mutating a bool. See
-//  docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md
-//  and perf-spike/UIKIT_FOUNDATIONS.md §1.
-//
+//  The expanded layout: the cell at `expandedIndex` fills the viewport; the others keep
+//  their carousel frames at alpha 0 so collapse reverses cleanly (UIKIT_FOUNDATIONS §1).
 
 import UIKit
 
@@ -29,11 +14,7 @@ final class PreviewExpandedLayout: UICollectionViewLayout {
     var expandedIndex: Int = 0
 
     override var collectionViewContentSize: CGSize {
-        // Same content size as the carousel layout so contentOffset is
-        // preserved across the layout swap (the expanded cell is placed
-        // relative to the live contentOffset). The swap still zeroes the offset
-        // asynchronously, so the carousel uses PinnableCollectionView to hold it
-        // centered through the morph — see PinnableCollectionView.swift.
+        // The carousel's content size, so the offset survives the swap (see PinnableCollectionView).
         guard let cv = collectionView, itemCount > 0 else { return .zero }
         let centeredWidth = PreviewCarouselGeometry.centeredCardSize(in: cv.bounds).width
         let stride = centeredWidth + PreviewCarouselGeometry.sideCardGap

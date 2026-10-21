@@ -5,22 +5,9 @@
 //  PartKeyQueryStringTests.swift
 //  RivuletTests
 //
-//  Issue #255, second defect. A Plex Part key can carry its OWN query string:
-//
-//      /services/iva/assets/715933/video.mp4?fmt=4&bitrate=5000
-//
-//  buildDirectPlayURL assigned that whole string to URLComponents.path, which
-//  percent-encodes the '?' to %3F. The server then sees a path literally
-//  containing "?fmt=4&bitrate=5000", 404s, the demuxer probes the HTML error
-//  page, and startup dies with AVERROR_INVALIDDATA (-1094995529) before
-//  falling back to HLS. Observed on device as a trailer flashing an error and
-//  then either stalling or being rescued by the fallback.
-//
-//  The load-bearing test is `test_libraryPartKey_isUnchanged`: library parts
-//  have no query string and MUST come through byte-identical, since this code
-//  is shared with all normal direct-play video.
-//
-//  Pure tests: no network.
+//  A Part key with its own query (`/services/iva/.../video.mp4?fmt=4`) must keep
+//  its '?' unencoded in the direct-play URL, and library part keys must come
+//  through byte-identical (#255).
 //
 
 import XCTest

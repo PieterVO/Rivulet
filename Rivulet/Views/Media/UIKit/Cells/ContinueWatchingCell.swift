@@ -71,9 +71,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         placeholderView.backgroundColor = UIColor(white: 1, alpha: 0.1)
         card.contentView.addSubview(placeholderView)
 
-        // SwiftUI failure branch: dark gradient + film/play.rectangle icon.
-        // We reuse the placeholder view for both empty and failure states;
-        // the icon is hidden by default and shown only when the load fails.
+        // Placeholder for empty and failed loads; the icon shows only on failure.
         placeholderIcon.translatesAutoresizingMaskIntoConstraints = false
         placeholderIcon.contentMode = .scaleAspectFit
         placeholderIcon.tintColor = UIColor.white.withAlphaComponent(0.3)
@@ -257,7 +255,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         guard let serverURL = PlexAuthManager.shared.selectedServerURL,
               let token = PlexAuthManager.shared.selectedServerToken
         else { return nil }
-        // SwiftUI: episodes prefer grandparentArt; otherwise art > thumb.
+        // Episodes prefer grandparentArt; otherwise art > thumb.
         let path: String?
         if item.type == "episode" {
             path = item.grandparentArt ?? item.art ?? item.thumb

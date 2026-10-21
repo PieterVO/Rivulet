@@ -30,16 +30,9 @@ enum SidebarTab: Hashable {
 
 // MARK: - Nested Navigation State
 
-/// Observable object to track nested navigation state across views.
-/// `isNested` is set true while a child view has pushed a detail view;
-/// the sidebar reads it to hide the tab bar and block tab switches.
-///
-/// `isSettingsSubPage` is a parallel signal specific to Settings sub-pages.
-/// It cannot share `isNested` because Settings sub-page navigation is
-/// intra-tab view swapping (not a real view push), and coupling it to
-/// `isNested` caused a hide/show race with the sidebar when returning to
-/// the root page. A dedicated flag lets us hide the tab bar and block tab
-/// switches while in a Settings sub-page without that race.
+/// Nested navigation state: while either flag is set the sidebar hides its pill
+/// and blocks tab switches. Settings sub-pages get their own flag because
+/// sharing `isNested` raced the sidebar on the way back to the root page.
 @MainActor
 class NestedNavigationState: ObservableObject {
     @Published var isNested: Bool = false
@@ -66,15 +59,9 @@ extension Notification.Name {
     /// Change-only: posted when the value flips, not on every focus move.
     static let contentFocusBelowTopChanged = Notification.Name("contentFocusBelowTopChanged")
 
-    /// Posted by a content page the moment it goes from having nothing
-    /// focusable (a loading or splash state) to showing its collection view.
-    ///
-    /// The focus engine has no notion of "this surface just became focusable":
-    /// it re-resolves on a press, a presentation, or an explicit request, and a
-    /// page that finishes loading is none of those. So a page that mounts empty
-    /// and fills in later strands focus wherever it was parked, and every arrow
-    /// press is dead until the user leaves the tab. `RootShellViewController`
-    /// listens and re-drives focus into the content.
+    /// Posted by a content page when it goes from nothing focusable (loading)
+    /// to its collection view. The focus engine does not re-resolve on its own
+    /// when a page finishes loading, so `RootShellViewController` re-drives it.
     static let contentBecameFocusable = Notification.Name("contentBecameFocusable")
 
     /// Posted by a tab's content controller (object: itself) after it swapped the

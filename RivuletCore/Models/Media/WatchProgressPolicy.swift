@@ -5,19 +5,8 @@
 //  WatchProgressPolicy.swift
 //  Rivulet
 //
-//  The one definition of "has a resume point" and "how far in".
-//
-//  There used to be three, one per DTO, with three different completion
-//  thresholds and the same name: `MediaUserState.isInProgress` (offset only),
-//  `MediaItem.isInProgress` (< 98%), `PlexMetadata.isInProgress` (2%..90%).
-//  Two of them gated the same resume-or-restart prompt on the same item, so
-//  which thresholds applied depended on which DTO the play path happened to
-//  hold. All three now delegate here.
-//
-//  This answers the DECISION question ("would pressing Play resume, and is
-//  there enough left to bother asking?"). It deliberately does not answer the
-//  DISPLAY question: a partial progress bar is drawn whenever the raw fraction
-//  is between 0 and 1, which is a different rule and lives at the render sites.
+//  The one definition of "has a resume point" and "how far in". Drawing a partial
+//  progress bar (0 < fraction < 1) is a different rule and lives at the render sites.
 //
 
 import Foundation
@@ -40,16 +29,8 @@ enum WatchProgressPolicy {
         return min(1.0, offsetSeconds / runtime)
     }
 
-    /// True when the item has a resume point worth offering.
-    ///
-    /// A runtime the payload should have carried but didn't answers `false`, not
-    /// "any offset counts": the fraction is the whole point of the thresholds,
-    /// and guessing would turn a finished item back into a resumable one.
-    /// Callers with no runtime field at all use the overload below.
-    ///
-    /// Played-ness is deliberately NOT considered here: a watched item being
-    /// rewatched has a real resume point. The one caller that needs "unfinished"
-    /// rather than "resumable" adds `&& !isPlayed`.
+    /// True when the item has a resume point worth offering. A missing runtime
+    /// answers false. Played state is ignored: a rewatch has a real resume point.
     static func hasResumePoint(offsetSeconds: TimeInterval, runtimeSeconds: TimeInterval?) -> Bool {
         guard let fraction = progress(offsetSeconds: offsetSeconds, runtimeSeconds: runtimeSeconds) else {
             return false

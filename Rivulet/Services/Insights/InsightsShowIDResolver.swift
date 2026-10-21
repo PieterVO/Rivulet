@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  InsightsShowIDResolver.swift
-//  Rivulet
-//
-//  Resolves a show's TMDB id for Insights when Plex didn't give us a direct
-//  tmdb:// guid. Modern Plex agents store a plex:// or tvdb:// grandparent
-//  guid on episodes, with the real external ids (tvdb://, imdb://) in the
-//  `Guid` array — so an episode's show TMDB id often can't be read straight
-//  off `grandparentGuid`. This bridges tvdb/imdb -> tmdb via the tmdb-proxy
-//  `/tmdb/find` route, caching per show so it's one lookup, not one per episode.
-//
+// Resolves a show's TMDB id when Plex gives no tmdb:// guid: episodes carry a plex:// or tvdb://
+// grandparent guid, so tvdb/imdb ids go through the tmdb-proxy `/tmdb/find`, cached per show.
 
 import Foundation
 

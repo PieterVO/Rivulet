@@ -17,14 +17,9 @@ import UIKit
 
 enum PlayerInfoSheetStyle {
 
-    /// No info-sheet label may be squeezed vertically. Every sheet hugs its
-    /// content at `.defaultHigh` so the panel sizes to it, and a label's own
-    /// vertical compression resistance defaults to the SAME priority — a tie
-    /// Auto Layout is free to settle by shortening the text instead of growing
-    /// the scroll content. Measured: a 12-paragraph summary in a 448pt sheet
-    /// reported `contentSize.height == 448`, so it was clipped with nothing to
-    /// scroll rather than overflowing. Required resistance breaks the tie the
-    /// only way that can be right.
+    /// Sheets hug content at `.defaultHigh`, the same priority as a label's
+    /// default compression resistance, and that tie clipped long text instead of
+    /// scrolling it. Required resistance breaks the tie.
     @MainActor
     private static func resistVerticalSqueeze(_ label: UILabel) {
         label.setContentCompressionResistancePriority(.required, for: .vertical)

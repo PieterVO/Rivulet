@@ -3,22 +3,11 @@
 
 import Foundation
 
-/// Circular jog on the Siri Remote clickpad ring, ported from UIKit's private
-/// `_UIRotaryGestureRecognizer` (the recognizer AVKit scrubs with). Constants
-/// were read from its tvOS 26.5 runtime: digitizer space is 0...1 with the centre
-/// at 0.5, wheel position runs clockwise from 12 o'clock, and a turn's distance is
-/// weighted by 2.5 × the touch's radius (full weight at radius 0.4).
-///
-/// A touch is classified once, from where it started: it becomes a jog when its
-/// angle turns past `15 / radius` degrees before its radius changes by the
-/// directional threshold, and a swipe otherwise. A touch that starts or strays
-/// too near the centre never jogs. The turn spent classifying is dropped, as
-/// UIKit's recognizer begins with zero delta.
+/// Clickpad ring jog, ported from UIKit's private `_UIRotaryGestureRecognizer` (read on tvOS 26.5):
+/// wheel runs clockwise from 12 o'clock, a turn is weighted by 2.5 × radius (full at 0.4), and a
+/// touch is a jog if it turns `15 / radius` degrees before its radius moves the threshold.
 /// Feed absolute `GCMicroGamepad` dpad values (-1...1, y up); (0, 0) is a lift.
-///
-/// Speed is AVKit's (`rotaryGestureDetected:`): each turn moves the scrub needle
-/// 100 points per weighted revolution, scaled up with the turn's velocity, along
-/// the 1760-point bar that spans the whole title.
+/// Speed is AVKit's: 100 points per weighted revolution, scaled by velocity, on the 1760-point bar.
 struct ClickpadRingJog {
     /// Radius change that makes a touch a swipe.
     static let directionalThreshold = 0.15

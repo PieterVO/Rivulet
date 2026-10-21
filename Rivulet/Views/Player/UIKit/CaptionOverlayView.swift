@@ -1,43 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  CaptionOverlayView.swift
-//  Rivulet
-//
-//  UIKit caption overlay. Renders the cues in `SubtitleModel` (text, styled
-//  text, and PGS/DVB bitmaps) for both the Aether VOD player and Live TV.
-//  Mounted as a plain subview above the video surface and below the chrome by
-//  PlayerContainerViewController and LiveTVAetherPlayerViewController.
-//
-//  Sizing and placement mirror AVPlayer's own caption rendering:
-//  - point size = a fraction of the PRESENTATION height x the system's
-//    relative-character-size multiplier
-//  - the resting bottom margin is a fraction of the PICTURE height, so a
-//    letterboxed film is captioned on the image, not in its black bar
-//  - with the rail up, the same margin is measured off the rail's top edge
-//    instead, so the caption keeps its distance either way
-//
-//  There is a margin FLOOR every cue obeys (`placementFloor`), including one
-//  that positioned itself: a cue placed into the rail is lifted clear of it.
-//  There is a matching no-go zone at each side (`sideSafeFraction`), because
-//  AVPlayer will not draw to the picture edge either.
-//
-//  Within those, a cue that gave an exact position keeps it. Vertically the
-//  position names the box's TOP edge (WebVTT's default `line-align: start`),
-//  so the box hangs down from it, which is where AVPlayer draws it.
-//  Horizontally the cue's own left/centre/right alignment decides which box
-//  edge the position names. A cue that gave only a coarse band (teletext)
-//  takes that band's resting anchor instead.
-//
-//  Only the user's Height stepper is placement-exempt.
-//
-//  This replaced a SwiftUI implementation. Two things it had to fake are real
-//  here: the outline is one stroked draw rather than eight offset copies of
-//  the string, and the box is MEASURED rather than estimated, so the top-edge
-//  anchor and the floor clamp are exact for a multi-line cue instead of
-//  approximate.
-//
+//  UIKit caption overlay for VOD and Live TV: text, styled text and PGS/DVB
+//  bitmaps from `SubtitleModel`, mounted above the video and below the chrome.
+//  Sizing and placement match AVPlayer's caption rendering.
 
 import Combine
 import UIKit
@@ -117,13 +83,9 @@ final class CaptionOverlayView: UIView {
 
     enum Metrics {
 
-        /// Caption size as a fraction of the PRESENTATION height, for each value
-        /// the system can report. MEASURED against AVKit, not derived.
-        ///
-        /// `MACaptionAppearanceGetRelativeCharacterSize` is not a multiplier you
-        /// can multiply by. It reports one of five quantised values, and AVKit's
-        /// own size does NOT scale linearly with them — a plain multiply is
-        /// ~11% short at every setting except the default:
+        /// Caption size as a fraction of the presentation height, per value
+        /// `MACaptionAppearanceGetRelativeCharacterSize` reports. Measured against
+        /// AVKit (tvOS 26.5 sim); AVKit does not scale linearly with the reported value:
         ///
         ///     reported   AVKit @1080   ratio    a linear multiply would give
         ///       0.35        18.5pt     0.40x                0.35x
@@ -132,29 +94,8 @@ final class CaptionOverlayView: UIView {
         ///       1.5         78.0pt     1.69x                1.5x
         ///       2.0        104.1pt     2.25x                2.0x
         ///
-        /// Method (tvOS 26.5 simulator): an AVPlayerViewController playing a
-        /// plain black HLS stream with a fixed WebVTT cue, with reference glyphs
-        /// of the same vertical extremes drawn at known point sizes through the
-        /// same MediaAccessibility font descriptor; ink heights compared in one
-        /// screenshot. Sizes off the ladder were reached by writing
-        /// `MACaptionCharScale` into injected caption profiles.
-        ///
-        /// This was a single `0.0529` multiplier from `9f4acd3` (shipped
-        /// v1.0.4-74), giving 57.1pt at the default: **24% oversized**, issue
-        /// #299. The note behind it claimed a match at "the smallest caption
-        /// size", where the API reports 0.35 — but 0.35 is the smallest BUCKET,
-        /// and the same commit widened `CaptionAppearance.fontScale`'s clamp
-        /// from 0.5 to 0.25, so at that one value the two changes cancelled to
-        /// within a point. It was calibrated at the only place in the range that
-        /// could not reveal the regression. **Measure both ends.**
-        ///
-        /// Deliberately NOT the letterboxed picture height: AVKit sizes captions
-        /// from the presentation and only *positions* them against the picture,
-        /// so a 2.39:1 film gets the same type as a 16:9 one rather than
-        /// shrunken type. Verified by shrinking the player view to 960x540, at
-        /// which AVKit's captions halve — they follow the VIEW, not the video's
-        /// intrinsic size. tvOS always presents 1080 points tall regardless of
-        /// whether the display is 1080p or 4K, so this is stable.
+        /// Presentation height, not picture height: AVKit sizes captions from the
+        /// view and only positions them against the picture (#299).
         static let sizeLadder: [(reported: CGFloat, fraction: CGFloat)] = [
             (0.35, 0.0172),
             (0.60, 0.0287),
@@ -163,13 +104,8 @@ final class CaptionOverlayView: UIView {
             (2.00, 0.0964)
         ]
 
-        /// Caption point size for a presentation height and the system's
-        /// reported relative character size.
-        ///
-        /// Interpolates between the measured rungs rather than matching exactly,
-        /// so a value tvOS does not currently report still lands sensibly
-        /// instead of falling back to a wrong multiply. Pure and static so the
-        /// calibration is testable without building a view.
+        /// Caption point size for a presentation height and reported character
+        /// size, interpolated between the measured rungs.
         static func pointSize(presentationHeight: CGFloat, fontScale: CGFloat) -> CGFloat {
             let height = presentationHeight > 0 ? presentationHeight : assumedVideoHeight
             return height * fraction(forReported: fontScale)
@@ -189,26 +125,14 @@ final class CaptionOverlayView: UIView {
         /// Fallback presentation height, for a degenerate zero-height layout pass.
         static let assumedVideoHeight: CGFloat = 1080
 
-        // Box geometry is expressed as MULTIPLES OF THE POINT SIZE, not fixed
-        // points, because Apple's caption box grows with the type — a fixed
-        // radius reads as a hard rectangle against much bigger glyphs at a
-        // large caption size, and as an over-rounded pill at a small one.
-        //
-        // Radius is tuned by eye against AVPlayer: 0.25 gives 5pt at the
-        // smallest setting (20pt type). The padding ratios are deliberately NOT
-        // tied to it — they set how tightly the box hugs the text, which is
-        // already matched, so change one without the other.
+        // Box geometry scales with the point size, as Apple's caption box does.
+        // Radius tuned by eye against AVPlayer; padding is matched separately.
         static let cornerRadiusRatio: CGFloat = 0.25
         static let paddingHRatio: CGFloat = 0.30
         static let paddingVRatio: CGFloat = 0.075
 
-        /// Uniform-edge outline weight, as a PERCENTAGE of the point size for
-        /// `NSAttributedString.Key.strokeWidth` (negative = stroke AND fill).
-        ///
-        /// Proportional rather than fixed. The SwiftUI implementation faked the
-        /// outline with eight copies of the string at a fixed 2pt offset, which
-        /// was a tenth of the glyph height at the smallest caption size and a
-        /// thin halo at the largest. 4% tracks the type at every size.
+        /// Uniform-edge outline weight, a percentage of the point size for
+        /// `NSAttributedString.Key.strokeWidth` (negative means stroke and fill).
         static let outlineStrokePercent: CGFloat = -4
 
         /// Emboss offset for the raised and depressed edge styles, as a
@@ -230,22 +154,9 @@ final class CaptionOverlayView: UIView {
         /// caption wraps well inside the picture rather than at its edge.
         static let defaultBandSideInset: CGFloat = 120
 
-        /// Where a TOP-band cue lands when its source gave only a coarse band
-        /// and no fine position — teletext through the engine demux, which
-        /// quantises the 24-row grid to three bands and supplies no percentage.
-        ///
-        /// Free to tune, because nothing measurable pins it: the source
-        /// genuinely does not say where in the third the caption belongs.
-        /// Set near where the same page's proxied WebVTT resolves (it carries an
-        /// exact `line:`, typically around 10%), so the two routes look similar
-        /// even though only one of them can be precise.
-        ///
-        /// Used for the TOP and BOTTOM bands alike. Teletext is equally vague in
-        /// both directions, so it should rest the same distance from whichever
-        /// edge it names — and the bottom band in particular must NOT fall back
-        /// to the default 6% floor, because that is exactly where an UNPLACED
-        /// cue sits. A cue that stated a position landing at the no-position
-        /// height makes its placement invisible.
+        /// Edge distance for a top or bottom band cue with no fine position
+        /// (teletext via engine demux). Near where proxied WebVTT lands (~10%).
+        /// Keep it off the 6% default floor, or a placed cue looks unplaced.
         static let bandEdgeFraction: CGFloat = 0.10
 
         /// Anchor for a LEFT or RIGHT column that came with no fine position.
@@ -398,20 +309,9 @@ final class CaptionOverlayView: UIView {
         return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
     }
 
-    /// The lowest any caption may sit, as a distance from the bottom of the
-    /// CONTAINER. EVERY cue obeys this, placed or not.
-    ///
-    /// Two anchors compete and the larger wins: the caption must sit
-    /// `SubtitleAdjustments.bottomMarginFraction` of the PICTURE above its
-    /// bottom edge (so letterboxed content is not captioned into its black
-    /// bar), and it must clear the rail when the rail is up (which is anchored
-    /// to the SCREEN). Taking the max means a 2.39:1 film with the rail hidden
-    /// lifts by its letterbox, while the same film with the rail up still
-    /// clears the chrome.
-    ///
-    /// Placed cues obey it too — Live TV is almost entirely placed cues, and
-    /// exempting them is what made its captions sit lower than VOD's. It is a
-    /// floor only: a cue asking to sit higher keeps its own position.
+    /// The lowest any cue may sit, placed or not, as a distance from the container
+    /// bottom: the larger of the picture margin (clears a letterbox bar) and the
+    /// rail's clearance when the rail is up. A floor only.
     private func placementFloor(in size: CGSize) -> CGFloat {
         let rect = videoRect(in: size)
         let letterbox = max(0, size.height - rect.maxY)
@@ -449,11 +349,8 @@ final class CaptionOverlayView: UIView {
         assView.linePosition = assLinePosition(in: size, rect: rect)
         assView.frame = rect
 
-        // `SubtitleImage.position` is normalized against the SOURCE VIDEO
-        // FRAME, not the player's bounds — upstream is explicit that a host
-        // maps it onto the on-screen video rect. Multiplying by the full bounds
-        // put PGS/DVB cues wrong on anything letterboxed: a 2.39:1 film
-        // stretched them vertically and pushed them toward the black bar.
+        // `SubtitleImage.position` is normalized to the source video frame, so
+        // map it onto the on-screen video rect, not the bounds.
         for entry in bitmapCues {
             entry.view.frame = CGRect(
                 x: rect.minX + entry.position.minX * rect.width,
@@ -474,8 +371,7 @@ final class CaptionOverlayView: UIView {
     }
 
     /// The default bottom band: cues stacked upward from the floor, centred on
-    /// the CONTAINER (not the picture, which is what the SwiftUI original did
-    /// and what AVPlayer does for an unplaced cue).
+    /// the container, as AVPlayer does for an unplaced cue.
     private func layoutDefaultBand(_ boxes: [CaptionBoxView], in size: CGSize, pointSize: CGFloat) {
         guard !boxes.isEmpty else { return }
         let maxWidth = max(0, size.width - Metrics.defaultBandSideInset * 2)
@@ -493,16 +389,9 @@ final class CaptionOverlayView: UIView {
 
     /// Which column a positioned cue anchors to: 0 left, 1 centre, 2 right.
     ///
-    /// An explicit numpad `alignment` wins. When the source gives none, a fine
-    /// `position.x` STILL names an edge — WebVTT's `position:` is the box's
-    /// start edge, not its centre — so a cue placed on the left anchors left.
-    /// Centre-anchoring it lets a longer second line widen the box
-    /// symmetrically and drag the first line sideways, which is the drift
-    /// the line alignment was meant to stop and could not, because the box
-    /// itself was on the wrong anchor.
-    ///
-    /// `layoutPlaced` and `lineAlignment` both read this, so the edge the box
-    /// is pinned on and the edge the lines align to cannot disagree.
+    /// An explicit numpad `alignment` wins; otherwise `position.x` names an edge,
+    /// because WebVTT's `position:` is the box's start edge, not its centre.
+    /// `layoutPlaced` and `lineAlignment` both read this so they cannot disagree.
     static func captionColumn(for placement: AetherSubtitleCue.TextPlacement) -> Int {
         if let alignment = placement.alignment {
             return (min(max(alignment, 1), 9) - 1) % 3
@@ -513,11 +402,7 @@ final class CaptionOverlayView: UIView {
         return 1
     }
 
-    /// Which edge a cue's lines align to, from the column its own alignment
-    /// names. Matches the edge `layoutPlaced` anchors the box on, so the two
-    /// cannot disagree.
-    ///
-    /// An unplaced cue centres, as the default band always has.
+    /// Which edge a cue's lines align to, from its column. An unplaced cue centres.
     static func lineAlignment(for placement: AetherSubtitleCue.TextPlacement?) -> NSTextAlignment {
         guard let placement else { return .center }
         switch captionColumn(for: placement) {
@@ -530,21 +415,9 @@ final class CaptionOverlayView: UIView {
     /// A cue the source positioned itself, placed against the PICTURE (so a
     /// letterboxed film's signs land on the image, not in the black bar).
     ///
-    /// Two kinds of placement arrive here and they resolve differently:
-    ///
-    /// **With a fine position** (proxied WebVTT `line:` / `position:`, ASS
-    /// `\pos`) the line position names the box's TOP edge: WebVTT's default
-    /// `line-align` is `start`, so the box hangs DOWN from the stated line, and
-    /// that is where AVPlayer draws it. Anchoring the centre on it instead sits
-    /// half a box high. Horizontally the cue's alignment picks the anchored
-    /// edge, and the box wraps into the room between that anchor and the far
-    /// side of the picture.
-    ///
-    /// **Without one** (teletext through the engine demux, which quantises the
-    /// grid row to a coarse `\an` and supplies no percentage) the numpad band is
-    /// all there is, so the cue takes that band's natural resting place: the
-    /// shared floor at the bottom, the matching margin at the top, dead centre
-    /// in the middle.
+    /// A fine position (WebVTT `line:`, ASS `\pos`) names the box's top edge, since
+    /// WebVTT's default `line-align` is `start`. Without one (teletext) the cue
+    /// takes its numpad band's resting place.
     private func layoutPlaced(_ box: CaptionBoxView,
                               placement: AetherSubtitleCue.TextPlacement,
                               in size: CGSize,
@@ -563,30 +436,21 @@ final class CaptionOverlayView: UIView {
         let letterbox = max(0, size.height - rect.maxY)
         let floor = placementFloor(in: size)
 
-        // Horizontal first: the width limit decides how the box wraps, and the
-        // wrapped height then decides the vertical anchor.
-        //
-        // A column with no fine position (teletext) borrows the anchor the
-        // proxy writes for that column, so both routes resolve through the
-        // identical maths below and land together.
+        // Horizontal first: the width limit decides the wrap, which decides the
+        // height. A column with no fine position borrows the proxy's anchor.
         let anchorX: CGFloat? = ax
             ?? (col == 0 ? Metrics.bandSideFraction
                 : col == 2 ? 1 - Metrics.bandSideFraction : nil)
 
-        // The anchor names the edge the cue's OWN alignment names: a left
-        // column's left edge, a right column's right edge, a centre column's
-        // midpoint. Centring every box on the anchor regardless of alignment
-        // is what wrapped `align:left position:10%` into a 27%-wide column
-        // four lines tall, pinned at 18.5% instead of starting at 10%.
+        // The anchor is the edge the cue's column names: left edge, right edge,
+        // or midpoint.
         let safeMinX = rect.minX + rect.width * Metrics.sideSafeFraction
         let safeMaxX = rect.maxX - rect.width * Metrics.sideSafeFraction
         let requested = anchorX.map { rect.minX + $0 * rect.width } ?? rect.midX
         let anchor = min(max(requested, safeMinX), max(safeMinX, safeMaxX))
 
         // A side-anchored cue wraps into the room between its anchor and the
-        // FAR safe edge, which is what WebVTT gives it. Wrapping into the
-        // whole safe width instead would overflow and drag the box off its
-        // anchor; wrapping into the near half squeezes it into a column.
+        // far safe edge, as WebVTT does.
         let widthLimit: CGFloat
         switch col {
         case 0: widthLimit = safeMaxX - anchor
@@ -608,11 +472,6 @@ final class CaptionOverlayView: UIView {
         let originX = min(max(requestedX, safeMinX), max(safeMinX, safeMaxX - fitted.width))
 
         // Vertical. A fine position wins; the band is the fallback.
-        //
-        // The box is measured, so the half-box below is the real one. That
-        // matters twice: the top-edge anchor is exact for a two-line cue rather
-        // than a one-line estimate, and the floor clamp protects the TEXT
-        // rather than a guess at its midpoint.
         let centreY: CGFloat
         if let ay {
             let halfBox = fitted.height / 2
@@ -624,10 +483,7 @@ final class CaptionOverlayView: UIView {
         } else if row == 1 {
             centreY = rect.midY
         } else {
-            // The band's resting place, symmetric with the top band and the
-            // 10%/90% side anchors. `floor` still applies underneath it, so a
-            // letterboxed picture or a raised rail can push the cue higher —
-            // it is a floor, never a ceiling.
+            // The band's resting place; `floor` can still push it higher.
             let band = rect.height * Metrics.bandEdgeFraction
             let lowest = max(0, floor - letterbox)
             centreY = rect.maxY - max(band, lowest) - fitted.height / 2
@@ -673,25 +529,15 @@ final class CaptionOverlayView: UIView {
 
 /// One cue in ONE rounded box, sized to its longest line.
 ///
-/// A multi-line cue keeps its author's line breaks and stays inside a single
-/// background — the box hugs the widest line, and the shorter lines align to
-/// the edge `alignment` names, centring only when the cue itself is centred.
-/// (An earlier attempt boxed each line separately; that reads as detached
-/// labels rather than one caption.)
+/// Keeps the author's line breaks; shorter lines align to `alignment`.
 private final class CaptionBoxView: UIView {
 
     private let label = UILabel()
     private let body: AetherSubtitleCue.Body
     private let style: CaptionStyle
 
-    /// Which edge the lines align to INSIDE the box.
-    ///
-    /// The box hugs its widest line, so a shorter line has slack. Centring that
-    /// slack is right for a centred cue and wrong for a side-anchored one: the
-    /// box grows away from its anchor as a later line runs longer, and every
-    /// shorter line then re-centres in the wider box — so a left-positioned
-    /// cue's first word visibly slides right when the line below it extends.
-    /// The anchored edge has to stay put and the growth go to the other side.
+    /// Which edge the lines align to inside the box. A side-anchored cue must not
+    /// centre, or its first line slides when a later line runs longer.
     private let alignment: NSTextAlignment
 
     /// Point size the current attributed string was built at. Everything about
@@ -831,11 +677,7 @@ private final class CaptionBoxView: UIView {
     /// `strokeWidth` strokes AND fills, and `NSShadow` is drawn by the text
     /// system rather than by a layer shadow (no offscreen pass, no shadowPath).
     ///
-    /// All five `MACaptionAppearanceTextEdgeStyle` values are honoured. Raised
-    /// and depressed are the same hard-edged offset in opposite directions:
-    /// light from the top-left lifts the glyph off the picture, light from the
-    /// bottom-right carves it in. Zero blur is what separates them from
-    /// `dropShadow`, which is a soft shadow rather than an emboss.
+    /// Raised and depressed are the same zero-blur offset in opposite directions.
     private func applyEdge(to text: NSMutableAttributedString, pointSize: CGFloat) {
         let full = NSRange(location: 0, length: text.length)
         guard full.length > 0 else { return }
@@ -919,11 +761,8 @@ private final class CaptionBoxView: UIView {
 
     /// A run's `\fs` as a multiplier, or nil when it asks for nothing.
     ///
-    /// `fontSize` is in ASS play-resolution points, so it is meaningful only
-    /// RELATIVE to the script's nominal size — libavcodec's synthesised lines
-    /// use a 384x288 play resolution whose default style is 16pt. Treating it as
-    /// a point size directly would make a `\fs20` line tiny. Clamped so a wild
-    /// value cannot fill the screen.
+    /// `fontSize` is relative to `assNominalFontSize`, not a point size. Clamped
+    /// so a wild value cannot fill the screen.
     private func contentSizeScale(for run: AetherSubtitleCue.StyledRun) -> CGFloat? {
         guard style.allowsContentFontSize, let size = run.fontSize, size > 0 else { return nil }
         let ratio = CGFloat(size) / Self.assNominalFontSize

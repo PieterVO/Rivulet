@@ -2,24 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  ContentFilterManager.swift
-//  Rivulet
-//
-//  Runtime for the local content filter. Owned by UniversalPlayerViewModel
-//  (VOD only). Three sources feed it:
-//
-//    1. The title's own subtitle file — read in full when Plex has it as an
-//       external text stream, and matched against ProfanityDictionary up
-//       front. Mutes language with subtitles off, on either route.
-//    2. The subtitles on screen — the active line is matched live. Covers
-//       titles whose only subtitles are embedded in the file.
-//    3. Imported time-coded lists (MCF/EDL) — precise mute + scene-skip
-//       windows fetched per title from a user-configured source. This is the
-//       only way to skip scenes (violence, nudity) that dialogue can't reveal.
-//
-//  Nothing here modifies the media. Muting sets the player volume to zero for
-//  the window; skipping seeks past it. Both are undone the instant the window
-//  ends — the client-side approach protected by the Family Movie Act of 2005.
+//  Runtime for the local content filter (VOD), owned by UniversalPlayerViewModel.
+//  Sources: CLAUDE.md, "Content Filter (VOD)". Muting zeroes the volume and skipping
+//  seeks; the media is never modified.
 //
 
 import Foundation

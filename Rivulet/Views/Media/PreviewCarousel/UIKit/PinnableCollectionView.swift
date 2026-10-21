@@ -1,25 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PinnableCollectionView.swift
-//  Rivulet
-//
-//  A UICollectionView that can PIN its horizontal contentOffset to a fixed
-//  value. The expand morph swaps layouts via `setCollectionViewLayout`, which
-//  asynchronously zeroes contentOffset (even with isScrollEnabled=false, and
-//  `targetContentOffset(forProposedContentOffset:)` is NOT consulted on that
-//  path). The expanded cell is placed at content x = contentOffset.x, so a
-//  zeroed offset throws the cell — and its metadata chrome — off the right edge
-//  for any non-first item, and destabilises the morph (the "metadata wrong
-//  location / janky on non-first items" bug). The zeroing is deferred and
-//  recurring, so a one-shot restore can't win.
-//
-//  Pinning intercepts EVERY offset write, so the carousel stays centered on the
-//  expanded index through the whole morph + expanded state. The pin is set when
-//  expand begins and cleared when collapse completes, so manual paging in
-//  carousel-stable is unaffected.
-//
+//  A collection view whose horizontal contentOffset can be pinned. `setCollectionViewLayout`
+//  zeroes the offset later and repeatedly, without consulting `targetContentOffset`, which
+//  throws a non-first expanded cell off screen; the pin holds from expand to collapse.
 
 import UIKit
 

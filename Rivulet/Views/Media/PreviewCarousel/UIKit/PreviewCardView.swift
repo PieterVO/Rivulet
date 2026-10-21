@@ -1,37 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PreviewCardView.swift
-//  Rivulet
-//
-//  One hero card in the preview carousel. A UICollectionViewCell so
-//  the collection view handles cell recycling + positioning; we
-//  override `apply(_:)` to read parallax + alpha from custom layout
-//  attributes computed by `PreviewCarouselLayout` based on the
-//  cell's distance from the centered viewport position.
-//
-//  This cell is the carousel-stable host of `MediaDetailChromeView`.
-//  Layout of the chrome content itself (logo / genre / description /
-//  quality / action+cast row) lives in `MediaDetailChromeView` so the
-//  same code drives the expanded-detail surface. The cell adds:
-//   - backdrop (full-stage sized, parallaxed, clipped by the card)
-//   - vignette gradients (Apple's three scrim layers)
-//   - corner-clipped card window
-//   - the chrome cascade (vignette + chrome alpha 0→1 on becoming current)
-//
-//  Chrome fade (selected center cell only), after Apple's TV app:
-//   - Vignette + chrome fade in together once paging settles, 0.5s
-//     ease-in-out, no delay.
-//   - While paging away they fade against the card's travel
-//     (`setPagingFade`), gone after 0.3 of normalized position.
-//
-//  Designed to keep offscreen passes near zero outside the entry
-//  storm: no Material, no shadows. The vignette is three gradient-backed
-//  UIViews (GradientView, layerClass = CAGradientLayer) positioned by
-//  Auto Layout, so they resize with the card and ride the morph
-//  animator curve automatically (no layoutSubviews frame-setting).
-//
+//  One carousel card: Apple's scrim and a `MediaDetailChromeView`, over the artwork
+//  `BackdropPlaneView` draws. The centred card's chrome fades in over 0.5 s once paging
+//  settles and fades against its travel when paging away (`setPagingFade`).
 
 import UIKit
 import os.log
@@ -57,12 +29,7 @@ final class PreviewCardView: UICollectionViewCell {
         }
     }
 
-    /// Whether this cell is the currently-focused / centered card in
-    /// the carousel. Drives the chrome cascade — only the current
-    /// cell shows vignette + chrome. Side peeks render bare backdrop.
-    ///
-    /// Use `setIsCurrent(_:animated:)` rather than assigning directly
-    /// so the cascade fires with the right animation behavior.
+    /// Only the centred card shows vignette and chrome. Set through `setIsCurrent(_:animated:)`.
     private(set) var isCurrent: Bool = false
 
     /// Monotonic load token for the backdrop image fetch. Chrome view
@@ -86,10 +53,7 @@ final class PreviewCardView: UICollectionViewCell {
         return v
     }()
 
-    // The Apple TV app's product-page scrim, each layer filling the card.
-    // GRADIENT-BACKED UIVIEWS (not CAGradientLayer sublayers) so their bounds
-    // animate with the morph's UIViewPropertyAnimator; unit coordinates fill
-    // the view at any size, so nothing sets frames in layoutSubviews.
+    // The Apple TV app's product-page scrim. Views, not sublayers, so they ride the morph animator.
     private let scrimLayers: [GradientView] = GradientView.productPageScrim().map { v in
         v.translatesAutoresizingMaskIntoConstraints = false
         // Follows the card's top corners, or the scrim shows as dark squares
@@ -101,12 +65,7 @@ final class PreviewCardView: UICollectionViewCell {
         return v
     }
 
-    /// Shared chrome view (logo / genre / description / quality /
-    /// action+cast). Anchored bottom-leading inside the card with
-    /// `heroOverlayHorizontalInset` (118pt in carousel-stable mode,
-    /// 140pt in expanded mode) and 220pt up from the bottom (shelf
-    /// peek reserve). Alpha 0 by default; cascade fades `chromeAlpha`
-    /// to 1.
+    /// Bottom-leading in the card, above the shelf peek. Starts at alpha 0; the cascade fades it in.
     private let chromeView: MediaDetailChromeView = {
         let v = MediaDetailChromeView()
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -129,10 +88,7 @@ final class PreviewCardView: UICollectionViewCell {
         return v
     }()
 
-    /// Leading chrome inset constraint. The host carousel VC mutates
-    /// `.constant` during the expand morph to slide chrome inward
-    /// (118 → 140). Same view, same constraint, same chrome subview
-    /// tree throughout — true visual continuity.
+    /// The expand morph animates its constant from the carousel inset to the expanded one.
     private var chromeLeadingConstraint: NSLayoutConstraint!
 
     /// Trailing chrome inset constraint. Mirrors leading (constants
@@ -140,10 +96,7 @@ final class PreviewCardView: UICollectionViewCell {
     /// symmetric during morph.
     private var chromeTrailingConstraint: NSLayoutConstraint!
 
-    /// Chrome bottom inset constraint (the shelf-peek reserve). In
-    /// carousel mode this is -220 (movie) or -160 (TV) from the card
-    /// bottom; same value used in expanded mode (no animation).
-    /// Exposed for future iter where TV shows shrink the peek.
+    /// The shelf-peek reserve (`carouselChromeShelfPeek`), the same in both modes.
     private var chromeBottomConstraint: NSLayoutConstraint!
 
     // MARK: - Init
@@ -162,10 +115,7 @@ final class PreviewCardView: UICollectionViewCell {
         backgroundColor = .clear
         // Stable identifier for focus diagnostics / UI automation.
         accessibilityIdentifier = "carousel.card.9f27c1"
-        // Transparent: the VC-owned BackdropPlaneView renders artwork
-        // behind the collection view, masked to the card windows. The
-        // cell holds only vignette + chrome. No corner clip here — the
-        // rounded window is the plane's mask (see BackdropPlaneView).
+        // Transparent: BackdropPlaneView draws and clips the artwork behind the cell.
         contentView.backgroundColor = .clear
         contentView.clipsToBounds = false
 
@@ -194,10 +144,7 @@ final class PreviewCardView: UICollectionViewCell {
             vignetteContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             vignetteContainer.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
-            // Chrome anchored bottom-leading inside the card. The host
-            // animates the inset constraint constants during expand to
-            // morph 118 → 140 (carousel → expanded). Same view, same
-            // constraint instance — no second view tree.
+            // The host animates these constants during expand.
             chromeLeadingConstraint,
             chromeTrailingConstraint,
             chromeBottomConstraint,
@@ -218,11 +165,6 @@ final class PreviewCardView: UICollectionViewCell {
     }
 
     // MARK: - Layout
-
-    // No layoutSubviews override needed: the vignette gradients are now
-    // gradient-backed UIViews positioned by Auto Layout (constraints in
-    // commonInit), so they resize with the card automatically and ride the
-    // morph animator curve. The backdrop lives in the VC-owned plane.
 
     // MARK: - Custom layout attribute application
 
@@ -251,11 +193,7 @@ final class PreviewCardView: UICollectionViewCell {
 
     // MARK: - Chrome cascade
 
-    /// Update whether this cell is the currently-focused center card,
-    /// optionally with the timed fade-in cascade.
-    ///
-    /// Passing `animated: true` fades vignette and chrome in over 0.5s.
-    /// Passing `animated: false` snaps to the final alpha values.
+    /// Marks the centred card; `animated` fades vignette and chrome in over 0.5 s.
     func setIsCurrent(_ current: Bool, animated: Bool) {
         guard isCurrent != current || !animated else { return }
         isCurrent = current
@@ -394,12 +332,7 @@ final class PreviewCardView: UICollectionViewCell {
     }
 }
 
-/// A UIView whose backing layer is a CAGradientLayer. Because the gradient is
-/// the view's OWN layer (not a sublayer), its bounds animate as a first-class
-/// UIView property — so the gradient rides a UIViewPropertyAnimator curve and
-/// resizes with the view automatically, no layoutSubviews frame-setting. The
-/// gradient is configured in unit coordinates (startPoint/endPoint in [0,1],
-/// fractional locations), so it fills the view identically at any size.
+/// A view backed by a CAGradientLayer, so the gradient resizes and animates with the view.
 final class GradientView: UIView {
     override class var layerClass: AnyClass { CAGradientLayer.self }
     var gradientLayer: CAGradientLayer { layer as! CAGradientLayer }

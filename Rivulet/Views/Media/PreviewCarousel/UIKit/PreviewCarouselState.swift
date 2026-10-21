@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  PreviewCarouselState.swift
-//  Rivulet
-//
-//  Geometry constants and lightweight types for the UIKit preview
-//  carousel. The card shell follows Apple's TV app (read from its
+//  Preview carousel geometry. The card shell follows Apple's TV app (read from its
 //  binary, tvOS 26.5); see Docs/PREVIEW_CAROUSEL_REFERENCE_LAYOUT.md.
-//
 
 import UIKit
 
@@ -56,18 +50,11 @@ enum PreviewCarouselGeometry {
     static let carouselChromeInset: CGFloat = 40
     /// That edge in screen space (160): the collapsed card's content margin.
     static var collapsedChromeInset: CGFloat { centeredHorizontalInset + carouselChromeInset }
-    /// Expanded-state content margin: the single app-wide content-left edge
-    /// (80, Apple's). Everything in the fullscreen detail aligns here: the
-    /// chrome (logo / metadata / action row), the seasons header, every
-    /// below-fold row, the standalone detail page, and the info popup padding.
-    /// Sourced from `MediaRowMetrics.rowLeading` so the expanded detail, the
-    /// home shelves, and the hero all share ONE margin; the expand morph's pull
-    /// is derived from it (ExpandedDetailContainerView.belowFoldExpandPull).
+    /// The expanded detail's content margin, the app-wide `rowLeading`. The expand
+    /// morph's pull derives from it (`ExpandedDetailContainerView.belowFoldExpandPull`).
     static var expandedChromeInset: CGFloat { MediaRowMetrics.rowLeading }
 
-    /// Vertical reserve below the chrome — sets BOTH the chrome's bottom inset
-    /// (in the carousel cell) and the height of the below-fold peek region (in
-    /// the detail container), so the metadata and the episode peek move
+    /// Both the chrome's bottom inset and the below-fold peek height, so the two move
     /// together. Apple's: 75 below the buttons plus a 40 peek (banner 1040 of 1080).
     static let carouselChromeShelfPeek: CGFloat = 115
 
@@ -75,12 +62,8 @@ enum PreviewCarouselGeometry {
     /// chrome insets, corner radius and hairline all run on this curve.
     static let expandAnimationDuration: TimeInterval = 0.25
 
-    /// The collapsed card is inset left/right/top and bleeds off the SCREEN
-    /// BOTTOM (Apple TV+ look — the episode strip overlaps the artwork rather
-    /// than sitting below it; see `Docs/atv_ref/carousel_ref.md`). Deliberately
-    /// not an aspect-ratio height: the artwork is `.scaleAspectFill` inside a
-    /// clipping window, so an off-16:9 card crops instead of letterboxing, and
-    /// expand only has to travel left, right, and top to reach fullscreen.
+    /// Inset left, right and top, bleeding off the screen bottom as Apple's does
+    /// (`Docs/atv_ref/carousel_ref.md`). Not an aspect height: the artwork aspect-fills and crops.
     static func centeredCardSize(in bounds: CGRect) -> CGSize {
         let width = max(0, bounds.width - 2 * centeredHorizontalInset)
         let height = max(0, bounds.height - topInset)
@@ -98,16 +81,7 @@ enum PreviewCarouselGeometry {
     }
 }
 
-/// Slot positions for the 5-slot host. Cards live at these positions
-/// in screen space. Paging shifts the *content mapping* (which item
-/// each card displays), not the card identities or positions.
-///
-/// The two `offscreen*` slots are off-screen and serve two purposes:
-///   1. They give us pre-rendered cards waiting in the wings, so the
-///      first frame of a paging animation already has the right
-///      artwork showing instead of asynchronously loading.
-///   2. They give the cards a clean target to slide into / out of
-///      without ever swapping content mid-animation.
+/// Card slots one stride apart around the centre.
 enum PreviewCarouselSlot: Int, CaseIterable {
     case offscreenLeft = -2
     case leftPeek = -1
@@ -116,9 +90,7 @@ enum PreviewCarouselSlot: Int, CaseIterable {
     case offscreenRight = 2
 }
 
-/// Computes the carousel frame for a card at the given slot.
-///
-/// The three visible slots plus the two off-screen ones, one stride apart.
+/// The carousel frame for a card at `slot`.
 func previewCarouselFrame(
     slot: PreviewCarouselSlot,
     in bounds: CGRect

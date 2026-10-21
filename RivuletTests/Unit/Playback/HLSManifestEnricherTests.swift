@@ -5,15 +5,9 @@
 //  HLSManifestEnricherTests.swift
 //  RivuletTests
 //
-//  The enricher hands AVFoundation a custom-scheme asset, so every sub-URL
-//  AVPlayer fetches has to come out of `patchMasterPlaylist` as an absolute
-//  HTTP URL. Nothing else can load `rivulet-hls://`, so a rewrite that silently
-//  stops producing absolute URLs costs the whole playback session rather than
-//  degrading (RIVULET-55 / RIVULET-62).
-//
-//  The fixture is a real master playlist from PMS 1.43.4, captured verbatim:
-//  one relative variant line and one relative URI= attribute. Both forms were
-//  confirmed against the live server to serve 200 once rewritten this way.
+//  Every sub-URL out of `patchMasterPlaylist` must be absolute HTTP, since nothing
+//  else loads `rivulet-hls://` (RIVULET-55, RIVULET-62). The fixture is a verbatim
+//  PMS 1.43.4 master playlist.
 //
 
 import XCTest

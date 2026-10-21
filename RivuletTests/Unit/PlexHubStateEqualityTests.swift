@@ -5,11 +5,8 @@
 //  PlexHubStateEqualityTests.swift
 //  RivuletTests
 //
-//  Regression coverage for the Continue Watching "stale progress bar" bug:
-//  the hub-equality check that gates whether `PlexDataStore` re-publishes a
-//  refreshed hub must treat a changed `viewOffset` / `viewCount` as a change,
-//  not just a changed set of ratingKeys. Comparing ratingKeys alone froze the
-//  Continue Watching row's progress bars after playback.
+//  Hub equality must count a changed `viewOffset` or `viewCount` as a change,
+//  or Continue Watching progress bars freeze after playback.
 //
 
 import XCTest

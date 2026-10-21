@@ -1,53 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  MediaDetailChromeView.swift
-//  Rivulet
-//
-//  The shared chrome surface — logo / genre row / description / quality
-//  row / action+cast row — used by the carousel cell (`PreviewCardView`,
-//  which also backs the standalone detail) and the home hero button row
-//  (`HeroButtonRowView`).
-//
-//  Layout structure:
-//
-//      ┌─────────────────────────────────────────┐  ← self
-//      │ ┌──────────────────┐                    │
-//      │ │ metadataBlock    │  (860pt max)       │
-//      │ │   logoSlot       │                    │
-//      │ │   genreRow       │                    │
-//      │ │   descLabel      │                    │
-//      │ │   qualityRow     │                    │
-//      │ └──────────────────┘                    │
-//      │  ↕ 32pt                                 │
-//      │ ┌───────────────────────────────────────┤
-//      │ │ actionAndCastRow (full width)         │
-//      │ │   [Play][Watched][+][i]    Starring … │
-//      │ └───────────────────────────────────────┤
-//      └─────────────────────────────────────────┘
-//
-//  The carousel cell anchors this view bottom-leading inside the card,
-//  with the card's horizontal insets (118pt) applied to self's leading
-//  and trailing anchors. The expanded detail VC anchors it bottom-leading
-//  to the screen with the expanded insets (140pt). The chrome view itself
-//  is layout-agnostic — it just lays out its own internal stack from the
-//  width its host gives it.
-//
-//  Animation:
-//   - The host owns the cascade timer. This view exposes `chromeAlpha`
-//     which forwards directly to `self.alpha`.
-//   - The vignette is OUTSIDE this view (owned by the host: carousel
-//     cell or expanded-detail VC) because the vignette is part of the
-//     surrounding hero, not the chrome content.
-//
-//  Mode:
-//   - `.carouselStable` — action row is interaction-disabled (carousel
-//     paging owns input). This is the only mode wired up in Iter A.
-//   - `.expandedDetail` — action row becomes focus-enabled and tap-wired
-//     (Iter B+). Mode is a property so the host can flip it; this view
-//     reads it during `applyItem`.
-//
+//  The detail chrome: logo, genre row, description, quality row, and the action
+//  and cast row. Shared by `PreviewCardView` and the home hero's `HeroButtonRowView`.
+//  It lays out to whatever width its host gives it; the host owns the vignette and the cascade.
 
 import UIKit
 import os.log
@@ -59,10 +15,7 @@ private let chromeLog = Logger(
 
 final class MediaDetailChromeView: UIView {
 
-    /// Action-button sizing shared with the home hero's
-    /// `HeroPillButton`/`HeroCircleButton` (see `HeroButtonRowView`) so the
-    /// carousel/expanded-detail row matches the hero exactly. The pill width
-    /// is a floor: a long title ("Play First Episode") grows past it.
+    /// Sizes shared with the home hero's buttons. The pill width is a floor; long titles grow past it.
     private static let actionButtonHeight: CGFloat = HeroPillButton.buttonHeight
     private static let actionPillWidth: CGFloat = HeroPillButton.pillWidth
     private static let playProgressTrackWidth: CGFloat = 50
@@ -76,9 +29,7 @@ final class MediaDetailChromeView: UIView {
 
     // MARK: - Public surface
 
-    /// Layout mode — narrows insets, swaps action-row interactivity.
-    /// In Iter A only `.carouselStable` is exercised; the structure is in
-    /// place for Iter B to flip to `.expandedDetail`.
+    /// `.expandedDetail` makes the action row interactive.
     enum Mode {
         case carouselStable
         case expandedDetail
@@ -108,9 +59,7 @@ final class MediaDetailChromeView: UIView {
         set { alpha = newValue }
     }
 
-    /// Action callbacks. In `.carouselStable` mode these are not invoked
-    /// (action row is interaction-disabled). Wired in `.expandedDetail`
-    /// during Iter B/D.
+    /// Action callbacks; never invoked in `.carouselStable`, where the action row is inert.
     var onPlay: (() -> Void)?
     var onPlayVersion: ((String) -> Void)?
     var onToggleWatchlist: (() -> Void)?
@@ -122,10 +71,8 @@ final class MediaDetailChromeView: UIView {
     /// Preferred focus target for the action row (Play), or nil before detail loads.
     var playFocusable: UIView? { playButton }
 
-    /// Fill width of the Play pill's watch-progress bar, held so the fraction can
-    /// be set after the pill is built — on a show/season the bar belongs to the
-    /// episode Play resolves to, which only arrives asynchronously. Rebuilt with
-    /// the pill.
+    /// Play pill progress fill, held because on a show or season the episode it tracks
+    /// arrives asynchronously. Rebuilt with the pill.
     private var playProgressFillWidth: NSLayoutConstraint?
     /// The Play pill's title and progress track. Held so `setPlayTarget` can
     /// rewrite them: the pill is built once and only its watch-derived bits change.
@@ -144,15 +91,8 @@ final class MediaDetailChromeView: UIView {
     /// repopulate genre + quality rows + cast label with richer fields.
     private var detail: MediaItemDetail?
 
-    /// Per-item aspect-ratio constraint on the logo image view. Plex
-    /// logo assets are typically wide PNGs with the visible glyphs at
-    /// natural aspect (no transparent padding) — but `.scaleAspectFit`
-    /// in a UIImageView CENTERS the content inside the view bounds,
-    /// which would offset the visible glyphs right of the metadata's
-    /// leading edge. Installing a width = height * imageAspect
-    /// constraint when the image lands sizes the view exactly to the
-    /// visible pixels, so leading-aligned constraint to the metadata
-    /// edge lines up the glyphs flush left.
+    /// Sizes the logo view to the image's aspect, since `.scaleAspectFit` centres the glyphs
+    /// and would push them right of the metadata's leading edge.
     private var logoAspectConstraint: NSLayoutConstraint?
 
     // MARK: - Subviews
@@ -163,23 +103,15 @@ final class MediaDetailChromeView: UIView {
         let s = UIStackView()
         s.translatesAutoresizingMaskIntoConstraints = false
         s.axis = .vertical
-        // LEADING, not .fill: the metadata block has a ≤860 width cap, and
-        // .fill pins both its edges to the stack — an undefined conflict that
-        // could snap the block to the trailing edge (far right) when the chrome
-        // is wider than 860. Leading-align it deterministically; the action row
-        // gets an explicit full-width constraint instead.
+        // Not .fill: with the block's 860 cap that conflicts and can snap it to the
+        // trailing edge. The action row gets its own full-width constraint.
         s.alignment = .leading
         s.spacing = 18
         return s
     }()
 
-    /// Inner metadata block — vertical stack, max 860pt wide.
-    /// Natural-content height: takes as much vertical space as the logo
-    /// slot (126pt) + genre row + description + quality row + spacing.
-    /// The outer `chromeStack` settles this block above the action row;
-    /// the chrome view itself is anchored from below by the card.
-    /// Matches the carousel-stable layout at commit `bc127a9` (the
-    /// agreed visual baseline at the start of Iter A).
+    /// Logo slot (126 pt), genre row, description and quality row, at most 860 pt wide
+    /// and content height.
     private let metadataBlock: UIStackView = {
         let s = UIStackView()
         s.translatesAutoresizingMaskIntoConstraints = false
@@ -247,13 +179,8 @@ final class MediaDetailChromeView: UIView {
         return s
     }()
 
-    /// Bottom action+cast row. NOT a stack view — using a UIStackView
-    /// here was causing the action buttons to flash stretched-wide on
-    /// the first layout pass before constraints settled. A plain
-    /// UIView with explicit leading/trailing constraints on the two
-    /// children gives byte-stable widths from frame zero: action
-    /// buttons hug their content on the left, cast label hugs its
-    /// content on the right, the gap between is the leftover.
+    /// Action buttons left, cast label right. A plain view, since a stack view flashes
+    /// the buttons stretched wide on the first layout pass.
     private let actionAndCastRow: UIView = {
         let v = UIView()
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -315,11 +242,7 @@ final class MediaDetailChromeView: UIView {
         chromeStack.setCustomSpacing(32, after: metadataBlock)
         chromeStack.addArrangedSubview(actionAndCastRow)
 
-        // actionAndCastRow is a plain UIView (not a stack). Children
-        // are pinned explicitly: actionButtonsStack to leading +
-        // centerY, castLabel to trailing + bottom, with a min-gap
-        // between. The two compete only over the gap, so neither
-        // can stretch beyond its content width.
+        // The two children compete only over the gap, so neither stretches past its content.
         actionAndCastRow.addSubview(actionButtonsStack)
         actionAndCastRow.addSubview(castLabel)
 
@@ -354,10 +277,7 @@ final class MediaDetailChromeView: UIView {
             titleLogoImageView.trailingAnchor.constraint(lessThanOrEqualTo: logoSlotView.trailingAnchor),
             titleLogoImageView.bottomAnchor.constraint(equalTo: logoSlotView.bottomAnchor),
             titleLogoImageView.topAnchor.constraint(greaterThanOrEqualTo: logoSlotView.topAnchor),
-            // Cap height at slot height; prefer to fill it. The
-            // priority-999 equality lets the inequality + aspect
-            // constraints drive height down when an extra-wide asset
-            // would push width past the 420pt cap.
+            // Fill the slot at 999, so an extra-wide logo shrinks to the 420 pt width cap.
             titleLogoImageView.heightAnchor.constraint(lessThanOrEqualToConstant: 126),
             {
                 let c = titleLogoImageView.heightAnchor.constraint(equalToConstant: 126)
@@ -372,10 +292,7 @@ final class MediaDetailChromeView: UIView {
 
             descMaxWidth,
 
-            // Metadata block capped at 860pt wide. Block height is
-            // natural (content-driven); chromeStack pins it above the
-            // action row from below. With .leading alignment it sits at the
-            // leading edge at its natural width — no trailing-pin conflict.
+            // 860 pt cap; height follows content.
             metadataBlock.widthAnchor.constraint(lessThanOrEqualToConstant: Self.episodeDescriptionMaxWidth),
 
             // The action+cast row spans the full chrome width (the stack is
@@ -420,10 +337,8 @@ final class MediaDetailChromeView: UIView {
         }
     }
 
-    /// Make the action buttons (un)focusable WITHOUT changing mode. Used when the
-    /// user enters the below-fold (details): the chrome is faded out, and its
-    /// buttons must be non-focusable so focus can't escape UP from the below-fold
-    /// primary row into a chrome button (which is the hero → "jumps to carousel").
+    /// Toggles button focusability without changing mode, so Up from the below-fold
+    /// cannot escape into the faded chrome.
     func setActionRowFocusable(_ on: Bool) {
         actionAndCastRow.isUserInteractionEnabled = on
     }
@@ -453,11 +368,7 @@ final class MediaDetailChromeView: UIView {
         castLabel.text = nil
     }
 
-    /// Install a width = height × imageAspect constraint on
-    /// `titleLogoImageView` so the view bounds tightly wrap the
-    /// visible image pixels. Without this, `.scaleAspectFit` would
-    /// center the scaled image inside an artificially-wide view and
-    /// the glyphs would float right of the metadata's leading edge.
+    /// See `logoAspectConstraint`.
     private func installLogoAspectConstraint(for image: UIImage) {
         guard image.size.height > 0 else { return }
         let aspect = image.size.width / image.size.height
@@ -472,15 +383,8 @@ final class MediaDetailChromeView: UIView {
 
     // MARK: - Apply / load
 
-    /// Repaint only the watch-derived hero bits from a re-fetched copy of the
-    /// SAME item (issue #228: the hero kept showing the pre-playback state
-    /// after the player dismissed).
-    ///
-    /// Deliberately NOT `self.item = refreshed`: that `didSet` runs the full
-    /// `applyItem()`, which tears down and rebuilds the action row — and the
-    /// Play pill is very often the focused view when the player dismisses back
-    /// onto the hero. Only the watched glyph and the Play pill's title and
-    /// bar depend on watch state, so both are updated in place.
+    /// Repaints the watched glyph and Play pill from a re-fetched copy of the item (#228).
+    /// Not `item = refreshed`: that rebuilds the action row, which often holds focus.
     func refreshWatchState(from refreshed: MediaItem) {
         guard let current = item, current.ref == refreshed.ref else { return }
         // Keep the stored item current so a later toggle/Play reads fresh state.
@@ -527,12 +431,7 @@ final class MediaDetailChromeView: UIView {
             logoAspectConstraint = nil
         }
 
-        // Logo: probe the memory cache synchronously first. If the
-        // logo is already cached (which it nearly always is when the
-        // chrome is being shown in the expanded detail — the carousel
-        // cell underneath has already loaded it), render the image on
-        // frame 0 with no fallback-text flash. Otherwise show the
-        // fallback label and start the async load.
+        // A cached logo renders on frame 0 with no fallback-text flash.
         let cachedLogo = item.artwork.logo.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
         if let cachedLogo {
             titleLogoImageView.image = cachedLogo
@@ -606,10 +505,8 @@ final class MediaDetailChromeView: UIView {
 
     private var resolvedGenres: [String] = []
 
-    /// Resolve the episode Play will start on a show/season card and point the
-    /// pill at it ("Play S1, E3"). Uses the same `EpisodePicker.resolvePlayTarget`
-    /// the Play button does, so the title can never promise a different episode
-    /// than the one that plays.
+    /// Titles the pill ("Play S1, E3") through the same `EpisodePicker.resolvePlayTarget`
+    /// Play uses, so it names the episode that plays.
     private func resolvePlayTarget(for item: MediaItem, token: UInt64) {
         guard item.kind == .show || item.kind == .season else { return }
         Task { @MainActor [weak self] in
@@ -688,19 +585,12 @@ final class MediaDetailChromeView: UIView {
     private func rebuildActionButtons(item: MediaItem) {
         actionButtonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        // Metadata-only items (TMDB/Discover, unmatched watchlist entries)
-        // have no playback route — no provider is registered for their ref,
-        // so Play / Watched / provider-watchlist would all silently no-op.
-        // Their primary action is the Watchlist toggle instead.
+        // Metadata-only items have no provider, so Play and Watched would no-op.
         if item.isMetadataOnly {
             rebuildMetadataOnlyActions(item: item)
             return
         }
 
-        // Carousel-stable button set (agreed in perf-spike commits up to
-        // bc127a9): Play pill + Watched + Watchlist + Info. The SwiftUI
-        // source has a wider set (Trailer, Audio, Subs) that's gated by
-        // detail content — we don't surface those in the carousel.
         let play = makePlayPill(item: item)
         play.onPrimaryAction = { [weak self] in self?.onPlay?() }
         // Movie/episode: the item's own state. Show/season: reads "Play" until
@@ -757,10 +647,7 @@ final class MediaDetailChromeView: UIView {
         sequence(first: self as UIResponder, next: \.next).first { $0 is UIViewController } as? UIViewController
     }
 
-    /// Metadata-only (TMDB) action row: Watchlist pill + Info. The pill
-    /// toggles the Plex Discover watchlist via the tmdb guid (the provider
-    /// registry has no entry for TMDB refs). No Watched circle — external
-    /// items carry no watch state.
+    /// Watchlist pill (Plex Discover, by tmdb guid) and Info. No Watched: external items have no watch state.
     private func rebuildMetadataOnlyActions(item: MediaItem) {
         let pill = makeWatchlistPill(item: item)
 
@@ -883,10 +770,7 @@ final class MediaDetailChromeView: UIView {
         Task {
             guard let p = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
             if target { try? await p.markPlayed(item.ref) } else { try? await p.markUnplayed(item.ref) }
-            // Issue #270: the glyph was the only thing that moved. This is the
-            // same repaint the player posts on dismissal, so the hero's Next Up
-            // line, the episode rail, and Home's Continue Watching row all
-            // re-read the state this toggle just changed.
+            // Repaint every surface showing watch state, as the player does (#270).
             NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
         }
     }

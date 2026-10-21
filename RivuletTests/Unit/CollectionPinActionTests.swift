@@ -6,11 +6,8 @@
 //  RivuletTests
 //
 //  A collection tile's menu in a library offers Pin to Home, Unpin from Home,
-//  or nothing. A wrong answer either hides the only tile-side Unpin or offers
-//  a Pin whose row can never render, so the choice is a pure static and this
-//  covers it. Keys follow the measured P1 hub: a promoted collection hub's key
-//  is /library/collections/{rk}/children (James Bond is rk 9144 on the test
-//  server).
+//  or nothing. A promoted collection hub's key is
+//  /library/collections/{rk}/children (James Bond is rk 9144 on the test server).
 //
 
 import XCTest

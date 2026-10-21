@@ -1,27 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  SeekHoldLogic.swift
-//  Rivulet
-//
-//  Pure logic for holding the transport rail at a seek's target until the
-//  picture actually gets there.
-//
-//  `AetherPlayer.seek(to:)` returns when the engine accepts the seek, not
-//  when it lands. Since AetherEngine 5.4.1 a native seek is hard-bounded at
-//  its recovery budget: on a stalling source it returns with the clock
-//  reconciled to the *rendered* frame and completes asynchronously later. So
-//  the clock ticks that arrive between accept and landing report the old
-//  position, and the rail snaps back to where the user started before
-//  jumping to the target. On the software path (all non-HLS live, plus
-//  AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2 VOD) a spent budget is terminal:
-//  nothing re-issues the seek, so nothing hides the snap-back either.
-//
-//  AetherEngine 6.1.0's `seekEvents` is what makes this decidable — the
-//  `isSeeking` level signal's falling edge cannot tell a landing from a
-//  give-up from a supersede.
-//
+// Holds the transport rail at a seek's target until the picture lands there.
+// `AetherPlayer.seek(to:)` returns on accept, and a seek past its recovery budget reports the
+// rendered frame first, so clock ticks before landing would snap the rail back. `seekEvents`
+// tells a landing from a give-up or a supersede; `isSeeking`'s falling edge cannot.
 
 import Foundation
 

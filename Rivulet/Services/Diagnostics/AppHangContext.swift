@@ -1,32 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-//
-//  AppHangContext.swift
-//  Rivulet
-//
-//  Continuously-updated Sentry context for diagnosing main-thread App Hangs
-//  (Sentry mechanism "AppHang" — see issue RIVULET-41).
-//
-//  Why this exists
-//  ---------------
-//  RIVULET-41 is a recurring "Fatal App Hang Fully Blocked": the main thread
-//  blocked for >= 2s and the OS watchdog killed the app. The captured stack is
-//  a Swift-concurrency executor job ending in `pthread_cond_wait`, but the
-//  in-app frames don't symbolicate in the release build, so the event tells us
-//  nothing about WHAT the user was doing.
-//
-//  App-hang events arrive with whatever breadcrumbs and scope tags were set at
-//  the moment the watchdog fired. This type keeps a small, always-current
-//  picture of app state on the Sentry scope so the NEXT hang event is
-//  self-describing (which screen, which playback route, which playback state,
-//  and the most recent main-thread checkpoint it passed through) even when the
-//  frames themselves are unsymbolicated.
-//
-//  Note: the Sentry SDK is only started in release builds (see RivuletApp).
-//  Every call here is a cheap no-op when the SDK isn't running, so callers
-//  never need to guard on build configuration.
-//
+// Keeps current app state (screen, playback route and state, last main-thread checkpoint)
+// on the Sentry scope, so an App Hang event says what the user was doing when its frames
+// do not symbolicate (RIVULET-41). Every call is a no-op when Sentry is not running.
 
 import Foundation
 import Sentry
@@ -125,16 +102,8 @@ enum AppHangContext {
 
     // MARK: - Main-thread blocking sections
 
-    /// Bracket a main-thread section that is KNOWN to be able to block on a
-    /// lock / condition variable / synchronous I/O. If the watchdog fires while
-    /// inside the section, the `main_thread_section` tag names it and the
-    /// breadcrumb trail shows we entered but never exited.
-    ///
-    /// Usage:
-    /// ```
-    /// AppHangContext.enterMainThreadSection("avio_wait")
-    /// defer { AppHangContext.exitMainThreadSection("avio_wait") }
-    /// ```
+    /// Brackets a main-thread section that can block (pair with `exitMainThreadSection` in a
+    /// `defer`). A hang inside it is named by the `main_thread_section` tag.
     static func enterMainThreadSection(_ name: String) {
         setTag(TagKey.mainThreadSection, name)
         breadcrumb(category: "main_thread_section", message: "enter:\(name)")

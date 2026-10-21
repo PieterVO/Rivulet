@@ -5,15 +5,8 @@
 //  CancellationClassificationTests.swift
 //  RivuletTests
 //
-//  RIVULET-19: an ordinary task cancellation (user backs out of the preview
-//  carousel, or switches items, while a load is in flight) was being wrapped
-//  into PlayerError.loadFailed, classified as runtimeFatal, reported to Sentry,
-//  and used to trigger the one-shot HLS fallback. `isCancellationError` is the
-//  gate that stops that at every site; these tests pin its behaviour.
-//
-//  Pure tests: no engine, no view model. UniversalPlayerViewModel's init builds
-//  a real player and Combine graph, so the load path itself is not reachable
-//  from a unit test — the predicate is the testable seam.
+//  `isCancellationError`: an ordinary task cancellation must not become a load
+//  failure, a Sentry report or an HLS fallback (RIVULET-19).
 //
 
 import XCTest
@@ -69,10 +62,8 @@ final class CancellationClassificationTests: XCTestCase {
         XCTAssertFalse(isCancellationError(error))
     }
 
-    /// The bug's signature. `PlayerError.loadFailed(String(describing:))` is
-    /// exactly how AetherPlayer used to launder a CancellationError into a
-    /// fatal-looking error; once wrapped it is unrecoverable, which is why the
-    /// fix has to catch it before the wrap.
+    /// Once wrapped in `PlayerError.loadFailed`, a cancellation is unrecognisable,
+    /// so the guard must run before the wrap.
     func testWrappedCancellationIsUnrecognisable() {
         let wrapped = PlayerError.loadFailed(String(describing: CancellationError()))
         XCTAssertEqual(wrapped, .loadFailed("CancellationError()"))
@@ -82,9 +73,8 @@ final class CancellationClassificationTests: XCTestCase {
         )
     }
 
-    /// The wrapped form also defeats the Sentry beforeSend drop list as it was
-    /// originally written (`Code=-999` / lowercase `cancelled`), which is why
-    /// the hook now matches "CancellationError" too.
+    /// The wrapped text has no `Code=-999` or `cancelled`, so the Sentry
+    /// beforeSend drop list also matches "CancellationError".
     func testWrappedCancellationTextMissesOriginalSentryPredicate() {
         let text = String(describing: CancellationError())
         XCTAssertFalse(text.contains("Code=-999"))

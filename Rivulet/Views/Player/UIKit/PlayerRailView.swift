@@ -5,13 +5,8 @@
 //  PlayerRailView.swift
 //  Rivulet
 //
-//  The player's control overlay, laid out like AVPlayerViewController on tvOS
-//  26 (measured with DEBUG `AVKitScrubProbe`, RIVULET_SCRUBPROBE=chrome): no
-//  plate, the title block bottom-left, round glass tool buttons right-aligned
-//  beside it, and the info pills (Info, Insights, Up Next) in a row below the
-//  scrub bar. Spans the screen's bottom `railHeight` points edge to edge. The
-//  scrub bar (`PlayerProgressBarView`) is a host-owned sibling placed with
-//  `barTop`.
+//  The player's control overlay, laid out like AVKit on tvOS 26 (measured with
+//  DEBUG `AVKitScrubProbe`). The scrub bar is a host-owned sibling placed with `barTop`.
 //
 
 import UIKit

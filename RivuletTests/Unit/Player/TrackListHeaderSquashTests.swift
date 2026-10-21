@@ -5,11 +5,9 @@
 //  TrackListHeaderSquashTests.swift
 //  RivuletTests
 //
-//  The Subtitles panel (Off + three tracks + Delay and Height steppers)
-//  overflows the rail panel's cap. With the list's self-sizing scroll height at
-//  `.defaultHigh` it tied the header label's compression resistance, and the
-//  solver squashed the header instead of scrolling the list: the title rendered
-//  cut off at the top. Same tie as `InfoSheetOverflowTests`.
+//  An overflowing Subtitles panel scrolls its list instead of squashing the
+//  header: the list's self-sizing height must not tie the header label's
+//  compression resistance. Same tie as `InfoSheetOverflowTests`.
 //
 
 import XCTest

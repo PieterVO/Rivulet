@@ -5,19 +5,10 @@
 //  SettingsContainerViewController.swift
 //  Rivulet
 //
-//  UIKit Settings container — the single focus authority and the owner of the
-//  whole Settings surface (replaces the SwiftUI NavigationStack so the
-//  transition can be fully controlled). Mirrors the SwiftUI layout: a
-//  persistent title + left description panel, and a right content pane whose
-//  page row-lists are swapped with a custom DIRECTIONAL cross-dissolve
-//  (push = new from right / old to left; pop = new from left / old to right) —
-//  matching Apple TV Settings + the old SwiftUI `animatePageSwap`.
-//
-//  Focus never collapses to nil (preferredFocusEnvironments → top page).
-//  Left is trapped in sub-pages via a focus guide (so it can't open the
-//  sidebar); Menu-pop is driven by the SwiftUI wrapper's `.onExitCommand`
-//  calling `pop()`. The wedge is structurally impossible: focus is always
-//  owned, and there is no SwiftUI in-place rebuild.
+//  Settings container and its focus owner: the title, the left description
+//  panel, and a right pane whose pages swap with a directional cross-dissolve,
+//  as tvOS Settings does. A focus guide traps Left in sub-pages; the SwiftUI
+//  wrapper's `.onExitCommand` calls `pop()`.
 //
 
 import UIKit
@@ -171,18 +162,9 @@ final class SettingsContainerViewController: UIViewController {
         let newVC = topPage
         if let newVC {
             installPageView(newVC, into: rightPane)
-            // Refresh values (e.g. a picker selection just changed) — the kept
-            // VC's cells were built with the old value. Reload FIRST, then lay
-            // out, so the reloaded cells exist (and are focusable) BEFORE the
-            // focus request in `animateTransition`. Reloading AFTER layout
-            // strands focus: the request finds no laid-out cell → focusedItem
-            // becomes nil → the shell's focus watchdog yanks focus into the
-            // content and the sidebar flickers open/closed at the root.
-            //
-            // REBUILD, don't just reloadData: a kept page's row ARRAY is also
-            // stale when the pushed page changed the underlying model (Live TV
-            // Sources gains a row when the add-source flow pops back). Reloading
-            // cells alone would redraw the old row list.
+            // Rebuild the kept page's rows (the pushed page may have changed
+            // them), then lay out, so its cells exist before the focus request
+            // in `animateTransition`. In the other order focus goes to nil.
             newVC.reloadRows()
             newVC.collectionView?.layoutIfNeeded()
             rightPane.layoutIfNeeded()

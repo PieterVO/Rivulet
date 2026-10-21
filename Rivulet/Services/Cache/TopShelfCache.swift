@@ -92,11 +92,8 @@ final class TopShelfCache: Sendable {
 
     // MARK: - Composite image files (AppGroup/Library/Caches/TopShelf/*.jpg)
 
-    // The container ROOT is not writable on tvOS — only `Library/Caches` under it
-    // is. Creating the composites dir at the root silently failed (the mkdir error
-    // was swallowed by `try?`), so every `writeComposite` then failed ENOENT and
-    // Top Shelf never had a single composite to show. Keep this path in sync with
-    // the extension's copy of this file, which builds the same URL independently.
+    // On tvOS only `Library/Caches` in the App Group container is writable, not its root.
+    // Keep this path in sync with the extension's copy of this file.
     private var compositeDirName: String { "TopShelf" }
 
     /// The TopShelf composites directory, created if needed. nil if no container.

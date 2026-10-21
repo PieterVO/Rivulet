@@ -5,19 +5,9 @@
 //  PlexRelay.swift
 //  Rivulet
 //
-//  Plex relay-connection detection.
-//
-//  A server reached through Plex's relay (its only route when the owner
-//  has no working remote access) sits behind a bandwidth-capped
-//  single-tunnel proxy (roughly 1-2 Mbps). It refuses raw part fetches
-//  above the server's remote-bitrate policy: the same /library/parts
-//  request that a directly reachable server answers with 206 Partial
-//  Content comes back as HTTP 500 through the relay, so direct play
-//  fails at open, and original-bitrate streams that do serve cannot be
-//  sustained through the tunnel. ContentRouter routes relay servers
-//  straight to the HLS path, and buildHLSDirectPlayURL caps that
-//  session at 1.5 Mbps 480p, which is the same shape stock Plex uses
-//  (it shows "Convert to 480p" on every relay item).
+//  Plex relay-connection detection. The relay is a ~1-2 Mbps tunnel that answers
+//  raw /library/parts fetches with 500, so ContentRouter sends relay servers to
+//  HLS and buildHLSDirectPlayURL caps them at 1.5 Mbps 480p, as stock Plex does.
 //
 
 import Foundation

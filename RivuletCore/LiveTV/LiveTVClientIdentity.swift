@@ -10,19 +10,10 @@
 
 import Foundation
 
-/// How Rivulet identifies itself to an IPTV server on a Live TV stream request.
-///
-/// Dispatcharr's `stream_ts` view is `@permission_classes([AllowAny])` and only
-/// resolves a named user from a Django session cookie. A DRF
-/// `Authorization: Token` header authenticates API calls but does NOT name the
-/// client on a stream, so Dispatcharr falls back to hashing the client IP and
-/// User-Agent and the connection shows up as anonymous. Sending a stable,
-/// distinctive User-Agent does not produce a username, but it makes Rivulet
-/// recognisable in the stats and connections views and keeps that hash stable
-/// across reconnects. Only Xtream-style credentials in the URL would supply a
-/// real username, and that is deliberately not implemented here.
-///
-/// See GitHub issue #246.
+/// How Rivulet identifies itself to an IPTV server on a stream request.
+/// Dispatcharr's `stream_ts` names users only from a session cookie, so the token
+/// header leaves streams anonymous, keyed on IP plus User-Agent. A stable
+/// User-Agent makes Rivulet recognisable there and keeps that key stable (#246).
 enum LiveTVClientIdentity {
 
     /// The User-Agent header value, for example `Rivulet/1.0.3`.

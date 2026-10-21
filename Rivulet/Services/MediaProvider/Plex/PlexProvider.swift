@@ -437,11 +437,8 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
         )) ?? meta
     }
 
-    /// Every external guid Plex holds for the item, tmdb first (it's what the
-    /// watchlist cache is keyed on elsewhere). NOT tmdb-only: a show scraped by
-    /// the TheTVDB agent frequently carries no tmdb guid at all, and demanding
-    /// one meant adding it silently did nothing (issue #269). Plex Discover
-    /// matches imdb and tvdb guids just as well.
+    /// Every external guid Plex holds for the item, tmdb first. Not tmdb-only: a TheTVDB-agent
+    /// show often has none, and Discover matches imdb and tvdb guids too (#269).
     func watchlistGUIDs(_ ref: MediaItemRef) async -> [String] {
         if ref.providerID == TMDBMediaMapper.providerID,
            let (tmdbId, _) = TMDBMediaMapper.decodeItemID(ref.itemID) {
