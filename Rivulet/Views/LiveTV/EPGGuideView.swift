@@ -1917,26 +1917,34 @@ struct GuideInfoBar: View {
     /// guides carry no portrait art, so there the info text starts at the edge.
     /// Nothing is drawn until the image is loaded AND measured portrait:
     /// drawing during the load showed an empty frame, or the wide art, that
-    /// then vanished.
+    /// then vanished. The previous poster holds the slot while the next one
+    /// loads, so the text does not jump left and back (#360).
     @ViewBuilder private var poster: some View {
-        if let loaded = loadedPoster, loaded.url == programImageURL {
+        if let loaded = loadedPoster {
             ZStack {
                 EPGTheme.surface
                 Image(uiImage: loaded.image).resizable().aspectRatio(contentMode: .fit)
+                    .id(loaded.url)
+                    .transition(.opacity)
             }
             .frame(width: posterWidth, height: posterHeight)
             .clipShape(RoundedRectangle(cornerRadius: EPGTheme.columnCorner))
             .shadow(color: .black.opacity(0.4), radius: 8, y: 3)
+            .transition(.opacity)
         }
     }
 
-    /// Loads and measures the poster; keeps it only when it is portrait.
+    /// Loads and measures the poster; keeps it only when it is portrait,
+    /// otherwise collapses the slot.
     private func loadPoster(_ url: URL?) async {
-        guard let url, !EPGImageClassifier.shared.isLandscape(url),
-              let image = await ImageCacheManager.shared.image(for: url) else { return }
-        let kind = await EPGImageClassifier.shared.classify(url) { image.size }
-        guard !Task.isCancelled, kind == .portrait else { return }
-        loadedPoster = (url, image)
+        var next: (url: URL, image: UIImage)?
+        if let url, !EPGImageClassifier.shared.isLandscape(url),
+           let image = await ImageCacheManager.shared.image(for: url),
+           await EPGImageClassifier.shared.classify(url, loadSize: { image.size }) == .portrait {
+            next = (url, image)
+        }
+        guard !Task.isCancelled, next?.url != loadedPoster?.url else { return }
+        withAnimation(.easeInOut(duration: 0.35)) { loadedPoster = next }
     }
 
     private func channelLine(_ channel: UnifiedChannel) -> String {
