@@ -5532,8 +5532,16 @@ final class PlexHomeViewController: UIViewController {
                 // lives in the row's own collection view. Bring both layers on
                 // screen before the modal disappears so focus does not flash
                 // on the old source tile or visibly jump to the new one.
+                // Rest the row where focus will hold it, or the focus move
+                // that follows scrolls it again (row 1 rests under the hero).
                 let rowPath = IndexPath(item: 0, section: indexPath.section)
-                collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
+                if let restY = restingOffsetY(forSection: indexPath.section) {
+                    offsetLink?.invalidate()
+                    offsetLink = nil
+                    collectionView.contentOffset.y = restY
+                } else {
+                    collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
+                }
                 collectionView.layoutIfNeeded()
                 if let row = collectionView.cellForItem(at: rowPath) as? ShelfRowCell {
                     if routeFocus {
@@ -5657,39 +5665,36 @@ final class PlexHomeViewController: UIViewController {
         animateContentOffset(toY: targetY)
     }
 
-    /// Centre a row vertically so the focused tile sits roughly mid-screen.
-    /// Matches the SwiftUI version's `scrollTo(rowID, anchor: .center)`.
-    private func scrollSectionIntoView(sectionIndex: Int) {
-        guard sectionsSnapshot.indices.contains(sectionIndex) else { return }
-        // Find any layout attribute belonging to this section to derive its
-        // vertical centre. Falls back to the section's first item.
-        let firstItemPath = IndexPath(item: 0, section: sectionIndex)
-        guard let attrs = collectionView.layoutAttributesForItem(at: firstItemPath) else { return }
-        scrollToCenter(frame: attrs.frame)
+    /// Scroll a row to where it rests while it holds focus.
+    private func scrollSectionToRest(sectionIndex: Int) {
+        guard let target = restingOffsetY(forSection: sectionIndex),
+              abs(collectionView.contentOffset.y - target) > 1 else { return }
+        animateContentOffset(toY: target)
     }
 
-    /// Collapse the hero to a fixed band when focus drops to the first row.
+    /// The offset a focused row rests at. Focus moves and the preview-dismiss
+    /// restore both use it, so a restored row never shifts once focus lands.
     ///
-    /// The hero is self-contained: its resting position when you leave it is a
-    /// function of the HERO geometry only, never the first row's height. We
-    /// scroll so a fixed-height slice of the hero's bottom (logo / metadata /
-    /// action row / paging dots) stays on screen; the first row then falls
-    /// just beneath it. Because the hero section height is constant, this lands
-    /// at the SAME offset whether row 1 is Continue Watching or a poster row —
-    /// which is what `scrollToCenter(midY)` could not do (taller row → more
-    /// scroll → hero shifted up ~84pt on Discover vs home).
-    private func scrollFirstRowToHeroCollapsed(heroSectionIndex: Int) {
-        let heroPath = IndexPath(item: 0, section: heroSectionIndex)
-        guard let heroAttrs = collectionView.layoutAttributesForItem(at: heroPath) else { return }
-        // Bottom slice of the hero kept on screen. The chrome (metadata + action
-        // row + dots) lives in the hero's lower ~290pt; keeping that band visible
-        // reproduces the established home/Continue-Watching resting height.
-        let visibleHeroBand: CGFloat = 290
-        let target = heroAttrs.frame.maxY - visibleHeroBand
+    /// The first row under the hero collapses the hero to a fixed band: a
+    /// slice of the hero's bottom (metadata, action row, dots) stays on screen,
+    /// so the hero rests at the SAME offset whether row 1 is Continue Watching
+    /// or a poster row (centring it instead moved the hero ~84pt between them).
+    /// Deeper rows centre, like the SwiftUI version's `scrollTo(anchor: .center)`.
+    private func restingOffsetY(forSection sectionIndex: Int) -> CGFloat? {
+        guard sectionsSnapshot.indices.contains(sectionIndex) else { return nil }
+        let target: CGFloat
+        if let heroIndex = heroSectionIndex, sectionIndex == heroIndex + 1 {
+            guard let heroAttrs = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: heroIndex))
+            else { return nil }
+            let visibleHeroBand: CGFloat = 290
+            target = heroAttrs.frame.maxY - visibleHeroBand
+        } else {
+            guard let attrs = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: sectionIndex))
+            else { return nil }
+            target = attrs.frame.midY - collectionView.bounds.height / 2
+        }
         let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height)
-        let clamped = max(-collectionView.adjustedContentInset.top, min(target, maxOffset))
-        guard abs(collectionView.contentOffset.y - clamped) > 1 else { return }
-        animateContentOffset(toY: clamped)
+        return max(-collectionView.adjustedContentInset.top, min(target, maxOffset))
     }
 
     /// Keep a grid cell's row on screen (library mode), scrolling only as far
@@ -5776,14 +5781,6 @@ final class PlexHomeViewController: UIViewController {
         let maxOffset = max(top, collectionView.contentSize.height - collectionView.bounds.height)
         let clamped = max(top, min(target, maxOffset))
         guard abs(offset - clamped) > 1 else { return }
-        animateContentOffset(toY: clamped)
-    }
-
-    private func scrollToCenter(frame: CGRect) {
-        let target = frame.midY - collectionView.bounds.height / 2
-        let maxOffset = max(0, collectionView.contentSize.height - collectionView.bounds.height)
-        let clamped = max(-collectionView.adjustedContentInset.top, min(target, maxOffset))
-        guard abs(collectionView.contentOffset.y - clamped) > 1 else { return }
         animateContentOffset(toY: clamped)
     }
 
@@ -6631,11 +6628,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // regardless of whether row 1 is Continue Watching (277pt) or a
             // poster row (444pt). Centring couples the hero's height to the
             // row's height (~84pt drift). Deeper rows centre as usual.
-            if let heroIndex = heroSectionIndex, nextSectionIndex == heroIndex + 1 {
-                scrollFirstRowToHeroCollapsed(heroSectionIndex: heroIndex)
-            } else {
-                scrollSectionIntoView(sectionIndex: nextSectionIndex)
-            }
+            scrollSectionToRest(sectionIndex: nextSectionIndex)
         }
         updateLeftEdgeGuide(for: context.nextFocusedIndexPath)
     }
