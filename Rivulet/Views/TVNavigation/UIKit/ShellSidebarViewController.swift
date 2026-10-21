@@ -375,6 +375,8 @@ final class ShellSidebarViewController: UIViewController {
     var onTabSelected: ((SidebarTab) -> Void)?
     var onCollapseRequested: (() -> Void)?
     private var pillHidden = false
+    /// The remote gesture that last moved focus between rows (see `stopsUpwardRun`).
+    private var lastFocusMoveGesture = -1
     /// While the profile panel is up the pill names the user, not the tab.
     private var pillShowsProfile = false
 
@@ -774,6 +776,13 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
 
     func collectionView(_ collectionView: UICollectionView,
                         shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
+        if ShellSidebarModel.stopsUpwardRun(
+            from: context.previouslyFocusedIndexPath.flatMap(tab(at:)),
+            to: context.nextFocusedIndexPath.flatMap(tab(at:)),
+            headingUp: context.focusHeading.contains(.up),
+            gestureAlreadyMoved: lastFocusMoveGesture == MenuPressInterceptor.remoteGestures.count) {
+            return false
+        }
         // Containment: while expanded, focus stays inside the sidebar; the
         // shell moves it out explicitly on collapse (state flips first, so
         // that move is never blocked).
@@ -782,6 +791,19 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
             return false
         }
         return true
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
+                        with coordinator: UIFocusAnimationCoordinator) {
+        if context.nextFocusedIndexPath != nil {
+            lastFocusMoveGesture = MenuPressInterceptor.remoteGestures.count
+        }
+    }
+
+    private func tab(at indexPath: IndexPath) -> SidebarTab? {
+        sections.indices.contains(indexPath.section)
+            ? sections[indexPath.section].items[safe: indexPath.item]?.tab : nil
     }
 
     private func select(tab: SidebarTab) {

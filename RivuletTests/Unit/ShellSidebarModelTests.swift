@@ -94,4 +94,29 @@ final class ShellSidebarModelTests: XCTestCase {
         XCTAssertEqual(sections(jellyfinName: "jellyfin-test", jellyfin: libs).map(\.title),
                        [nil, nil, "jellyfin-test", nil])
     }
+
+    func test_upwardRun_stopsAtHomeAndSearch_onlyWhenTheGestureAlreadyMoved() {
+        func stops(_ from: SidebarTab, _ to: SidebarTab, moved: Bool, up: Bool = true) -> Bool {
+            ShellSidebarModel.stopsUpwardRun(from: from, to: to, headingUp: up, gestureAlreadyMoved: moved)
+        }
+        XCTAssertTrue(stops(.home, .search, moved: true))
+        XCTAssertTrue(stops(.search, .account, moved: true))
+        XCTAssertFalse(stops(.home, .search, moved: false), "a fresh press always moves")
+        XCTAssertFalse(stops(.discover, .home, moved: true), "the run reaches Home")
+        XCTAssertFalse(stops(.home, .discover, moved: true, up: false), "Down never stops")
+    }
+
+    func test_gestureCounter_heldArrowIsOneGesture() {
+        let press = NSObject(), next = NSObject()
+        var counter = RemoteGestureCounter()
+        counter.observe(arrowBegan: press, arrowFinished: false, touchBegan: false)
+        counter.observe(arrowBegan: press, arrowFinished: false, touchBegan: false)
+        XCTAssertEqual(counter.count, 1, "a repeated .began of the held press is the same gesture")
+        counter.observe(arrowBegan: nil, arrowFinished: true, touchBegan: false)
+        counter.observe(arrowBegan: press, arrowFinished: false, touchBegan: false)
+        XCTAssertEqual(counter.count, 2, "a reused press object after release is a new gesture")
+        counter.observe(arrowBegan: next, arrowFinished: false, touchBegan: false)
+        counter.observe(arrowBegan: nil, arrowFinished: false, touchBegan: true)
+        XCTAssertEqual(counter.count, 4)
+    }
 }

@@ -58,6 +58,24 @@ struct MenuPressSwallowState {
     }
 }
 
+// MARK: - Remote gestures
+
+/// Counts remote gestures: a new arrow press or a new touch on the remote's
+/// surface. A held arrow repeats `.began` for the same press; that is not a new one.
+struct RemoteGestureCounter {
+    private(set) var count = 0
+    private var heldArrow: AnyObject?
+
+    mutating func observe(arrowBegan press: AnyObject?, arrowFinished: Bool, touchBegan: Bool) {
+        if let press, press !== heldArrow {
+            count += 1
+            heldArrow = press
+        }
+        if arrowFinished { heldArrow = nil }
+        if touchBegan { count += 1 }
+    }
+}
+
 // MARK: - Policy
 
 /// Staged Menu ("back") navigation, stage 1 (issue #19): a Menu press from
@@ -82,6 +100,8 @@ enum MenuPressInterceptor {
     private static var swizzledClasses = Set<ObjectIdentifier>()
     private static var handlers: [WeakHandler] = []
     private static var swallowState = MenuPressSwallowState()
+    /// Counted here because this hook sees each gesture before the focus engine acts on it.
+    private(set) static var remoteGestures = RemoteGestureCounter()
 
     private struct WeakHandler {
         weak var value: (any MenuBackHandling)?
@@ -129,10 +149,23 @@ enum MenuPressInterceptor {
 
         let block: @convention(block) (AnyObject, UIEvent) -> Void = { obj, event in
             guard let pressesEvent = event as? UIPressesEvent else {
+                if event.type == .touches, event.allTouches?.contains(where: { $0.phase == .began }) == true {
+                    MainActor.assumeIsolated {
+                        remoteGestures.observe(arrowBegan: nil, arrowFinished: false, touchBegan: true)
+                    }
+                }
                 originalFunc(obj, selector, event)
                 return
             }
             let withhold = MainActor.assumeIsolated { () -> Bool in
+                let arrows = pressesEvent.allPresses.filter {
+                    [.upArrow, .downArrow, .leftArrow, .rightArrow].contains($0.type)
+                }
+                remoteGestures.observe(
+                    arrowBegan: arrows.first { $0.phase == .began },
+                    arrowFinished: arrows.contains { $0.phase == .ended || $0.phase == .cancelled },
+                    touchBegan: false)
+
                 // This is the only layer that sees a press before a responder or
                 // gesture recognizer can consume it, which is exactly what the
                 // input probe needs. No-ops unless Input Diagnostics is on.

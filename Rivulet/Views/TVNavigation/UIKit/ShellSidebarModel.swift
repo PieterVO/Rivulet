@@ -120,6 +120,13 @@ enum ShellSidebarModel {
         !hasMediaServer && !liveTVSources.isEmpty
     }
 
+    /// A held or long Up stops at Home and at Search: leaving either upward takes
+    /// a fresh press or swipe, so the rarely used profile row is never overshot into.
+    static func stopsUpwardRun(from: SidebarTab?, to: SidebarTab?, headingUp: Bool,
+                               gestureAlreadyMoved: Bool) -> Bool {
+        headingUp && gestureAlreadyMoved && from != to && (from == .home || from == .search)
+    }
+
     /// The first word of a display name; a one-word name or handle is whole.
     static func firstName(of displayName: String) -> String {
         displayName.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? displayName
