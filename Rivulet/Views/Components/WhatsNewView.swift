@@ -149,6 +149,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (101)", [
+            "Fixed the empty Enhance Dialogue levels menu on titles with many audio tracks.",
+        ]),
         ("1.1.0 (100)", [
             "Added folder view.",
             "Added delete to the long press menu.",
