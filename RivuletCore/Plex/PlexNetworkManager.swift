@@ -3095,7 +3095,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// POST https://plex.tv/api/v2/home/users/{uuid}/switch
     /// - Returns: The user's auth token if switch succeeded, nil if PIN invalid
     func switchToHomeUser(userUUID: String, pin: String?, authToken: String) async throws -> String? {
-        guard let url = URL(string: "\(PlexAPI.baseUrl)/api/v2/home/users/\(userUUID)/switch") else {
+        // plex.tv reads the PIN from the query only; an X-Plex-Pin header is ignored.
+        guard var components = URLComponents(string: "\(PlexAPI.baseUrl)/api/v2/home/users/\(userUUID)/switch") else {
+            throw PlexAPIError.invalidURL
+        }
+        if let pin, !pin.isEmpty {
+            components.queryItems = [URLQueryItem(name: "pin", value: pin)]
+        }
+        guard let url = components.url else {
             throw PlexAPIError.invalidURL
         }
 
@@ -3106,11 +3113,6 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         // Add standard Plex headers
         for (key, value) in plexHeaders(authToken: authToken) {
             request.addValue(value, forHTTPHeaderField: key)
-        }
-
-        // Add PIN if provided
-        if let pin = pin, !pin.isEmpty {
-            request.addValue(pin, forHTTPHeaderField: "X-Plex-Pin")
         }
 
         let (data, response) = try await session.data(for: request)

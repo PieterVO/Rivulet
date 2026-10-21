@@ -35,11 +35,11 @@ struct ProfilePickerOverlay: View {
                 VStack(spacing: 12) {
                     Text("Who's Watching?")
                         .font(.system(size: 64, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.primary)
 
                     Text("Select a profile to continue")
                         .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(Color.primary.opacity(0.6))
                 }
                 .padding(.top, 80)
 
@@ -193,7 +193,7 @@ private struct ProfileAvatarButton: View {
                         .overlay(
                             Circle()
                                 .strokeBorder(
-                                    isFocused ? .white.opacity(0.8) : .white.opacity(0.15),
+                                    isFocused ? Color.primary.opacity(0.8) : Color.primary.opacity(0.15),
                                     lineWidth: isFocused ? 3 : 1
                                 )
                         )
@@ -221,7 +221,7 @@ private struct ProfileAvatarButton: View {
                 // Name
                 Text(user.displayName)
                     .font(.system(size: 26, weight: isFocused ? .semibold : .regular))
-                    .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.7))
+                    .foregroundStyle(Color.primary.opacity(isFocused ? 1.0 : 0.7))
                     .lineLimit(1)
             }
         }

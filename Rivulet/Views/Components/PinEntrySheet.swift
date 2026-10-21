@@ -43,7 +43,7 @@ private struct ProfileAvatar: View {
         .clipShape(Circle())
         .overlay(
             Circle()
-                .strokeBorder(.white.opacity(0.2), lineWidth: 2)
+                .strokeBorder(Color.primary.opacity(0.2), lineWidth: 2)
         )
     }
 
@@ -91,11 +91,11 @@ struct PinEntrySheet: View {
 
                 Text(user.displayName)
                     .font(.system(size: 40, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.primary)
 
                 Text("Enter PIN to switch profile")
                     .font(.system(size: 26))
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(Color.primary.opacity(0.6))
             }
 
             // PIN display
@@ -148,7 +148,7 @@ struct PinEntrySheet: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 24, weight: .medium))
-            .foregroundStyle(.white.opacity(0.6))
+            .foregroundStyle(Color.primary.opacity(0.6))
             .focused($focusedButton, equals: "cancel")
         }
         .padding(60)
@@ -181,23 +181,23 @@ private struct RememberPinToggle: View {
             HStack(spacing: 16) {
                 Text("Remember PIN")
                     .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.primary)
 
                 Spacer()
 
                 Text(isOn ? "On" : "Off")
                     .font(.system(size: 26, weight: .medium))
-                    .foregroundStyle(isOn ? .green : .white.opacity(0.5))
+                    .foregroundStyle(isOn ? .green : Color.primary.opacity(0.5))
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 18)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isFocused ? .white.opacity(0.18) : .white.opacity(0.08))
+                    .fill(isFocused ? Color.primary.opacity(0.18) : Color.primary.opacity(0.08))
                     .overlay(
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .strokeBorder(
-                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                isFocused ? Color.primary.opacity(0.25) : Color.primary.opacity(0.08),
                                 lineWidth: 1
                             )
                     )
@@ -228,7 +228,7 @@ private struct PinPadButton: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(
-                                isFocused ? .white.opacity(0.25) : .white.opacity(0.08),
+                                isFocused ? Color.primary.opacity(0.25) : Color.primary.opacity(0.08),
                                 lineWidth: 1
                             )
                     )
@@ -236,15 +236,15 @@ private struct PinPadButton: View {
                 if key == "delete" {
                     Image(systemName: "delete.left.fill")
                         .font(.system(size: 24))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.primary)
                 } else if key == "submit" {
                     Image(systemName: "checkmark")
                         .font(.system(size: 24, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.primary)
                 } else {
                     Text(key)
                         .font(.system(size: 32, weight: .medium))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.primary)
                 }
             }
         }
@@ -257,7 +257,7 @@ private struct PinPadButton: View {
         if key == "submit" && pin.count == 4 {
             return .blue.opacity(0.6)
         }
-        return isFocused ? .white.opacity(0.18) : .white.opacity(0.08)
+        return isFocused ? Color.primary.opacity(0.18) : Color.primary.opacity(0.08)
     }
 
     private func handleTap() {
@@ -283,16 +283,16 @@ private struct PinDigitView: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.white.opacity(isFilled ? 0.2 : 0.1))
+                .fill(Color.primary.opacity(isFilled ? 0.2 : 0.1))
                 .frame(width: 60, height: 80)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(.white.opacity(0.3), lineWidth: 2)
+                        .strokeBorder(Color.primary.opacity(0.3), lineWidth: 2)
                 )
 
             Text(digit)
                 .font(.system(size: 40, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.primary)
         }
     }
 }

@@ -101,7 +101,7 @@ struct ProfileSwitcherPopup: View {
                         .overlay(
                             Circle()
                                 .strokeBorder(
-                                    isFocused ? .white.opacity(0.8) : .white.opacity(0.15),
+                                    isFocused ? Color.primary.opacity(0.8) : Color.primary.opacity(0.15),
                                     lineWidth: isFocused ? 3 : 1
                                 )
                         )
@@ -138,7 +138,7 @@ struct ProfileSwitcherPopup: View {
                 Text(firstName)
                     .font(Font(UIFont.preferredFont(forTextStyle: .caption2)).weight(isFocused ? .semibold : .regular))
                     .padding(.horizontal, 5)
-                    .foregroundStyle(.white.opacity(isFocused ? 1.0 : 0.7))
+                    .foregroundStyle(Color.primary.opacity(isFocused ? 1.0 : 0.7))
                     .lineLimit(1)
             }
         }
