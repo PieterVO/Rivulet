@@ -150,10 +150,6 @@ struct GuideLayoutView: View {
     @State private var outgoingBackdropImage: UIImage?
     @State private var incomingBackdropImage: UIImage?
     @State private var backdropProgress: Double = 1
-    /// The measured backdrop for unlabelled programme art: its URL when it is
-    /// landscape, nil when not. Keyed to the programme it was measured for so a
-    /// late result never paints behind another programme.
-    @State private var resolvedLandscape: (programID: String, url: URL?)?
 
     /// How long focus has to rest on a programme before its backdrop loads.
     /// Holding a direction to cross the guide should not fire an image load or
@@ -222,9 +218,6 @@ struct GuideLayoutView: View {
             miniSession?.stop()
             miniSession = nil
         }
-        .task(id: focusedProgram?.id) {
-            await resolveLandscape(for: focusedProgram)
-        }
     }
 
     // MARK: - Guide (grid + info bar)
@@ -276,36 +269,11 @@ struct GuideLayoutView: View {
         }
     }
 
-    /// What the backdrop should show for the focused programme: its declared
-    /// 16:9 image, else its unlabelled art once measured as landscape, else
-    /// nothing (the stock settings background). `settled` means the settle
-    /// delay already passed while the art was measured.
-    enum BackdropTarget: Equatable {
-        /// Unlabelled art still being measured. The current backdrop stays;
-        /// treating this as "no art" faded to the bare background and back.
-        case pending
-        case image(URL?, settled: Bool)
-    }
-
-    private var backdropTarget: BackdropTarget {
-        let candidate = focusedProgram.flatMap { $0.iconURL ?? $0.posterURL }
-        return Self.backdropTarget(for: focusedProgram, resolved: resolvedLandscape,
-                                   kind: EPGImageClassifier.shared.kind(for: candidate))
-    }
-
-    /// `kind` is the classifier's cached verdict on the programme's icon or
-    /// poster, nil when it has not been measured.
-    static func backdropTarget(for program: UnifiedProgram?, resolved: (programID: String, url: URL?)?,
-                               kind: EPGImageKind?) -> BackdropTarget {
-        guard let program else { return .image(nil, settled: false) }
-        if let landscape = program.landscapeURL { return .image(landscape, settled: false) }
-        guard let candidate = program.iconURL ?? program.posterURL else { return .image(nil, settled: false) }
-        if let resolved, resolved.programID == program.id { return .image(resolved.url, settled: true) }
-        switch kind {
-        case .landscape?: return .image(candidate, settled: false)
-        case .portrait?: return .image(nil, settled: false)
-        case nil: return .pending
-        }
+    /// What the backdrop shows for the focused programme: its declared 16:9
+    /// image, else whatever art it has (a portrait poster fills the same way),
+    /// else nothing (the stock settings background).
+    static func backdropURL(for program: UnifiedProgram?) -> URL? {
+        program.flatMap { $0.landscapeURL ?? $0.iconURL ?? $0.posterURL }
     }
 
     /// The outgoing layer stays opaque under an incoming image, so the page
@@ -315,30 +283,11 @@ struct GuideLayoutView: View {
         hasIncoming ? 1 : 1 - progress
     }
 
-    /// Measures unlabelled programme art after the same settle delay as the
-    /// backdrop, so crossing the guide does not download an icon per channel.
-    private func resolveLandscape(for program: UnifiedProgram?) async {
-        guard let program, program.landscapeURL == nil,
-              let candidate = program.iconURL ?? program.posterURL,
-              EPGImageClassifier.shared.kind(for: candidate) == nil else { return }
-        do {
-            try await Task.sleep(for: backdropSettleDelay)
-        } catch {
-            return
-        }
-        let kind = await EPGImageClassifier.shared.classify(candidate) {
-            await ImageCacheManager.shared.image(for: candidate)?.size
-        }
-        guard !Task.isCancelled else { return }
-        // Recorded either way: a non-landscape verdict must end `.pending` too.
-        resolvedLandscape = (program.id, kind == .landscape ? candidate : nil)
-    }
-
     /// A constant full-screen layer. The backdrop image is drawn INSIDE it as an
     /// overlay, so toggling the image (as focus moves between programmes with and
     /// without a backdrop) never changes this layer's geometry — which is what
-    /// was nudging the grid. Only landscape programme art is used; otherwise the
-    /// stock settings background shows through the clear.
+    /// was nudging the grid. With no programme art the stock settings
+    /// background shows through the clear.
     private var ambiance: some View {
         GeometryReader { geo in
             ZStack(alignment: .topTrailing) {
@@ -356,9 +305,8 @@ struct GuideLayoutView: View {
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topTrailing)
         }
         .ignoresSafeArea()
-        .task(id: backdropTarget) {
-            guard case .image(let url, let settled) = backdropTarget else { return }
-            await transitionBackdrop(to: url, settle: !settled)
+        .task(id: Self.backdropURL(for: focusedProgram)) {
+            await transitionBackdrop(to: Self.backdropURL(for: focusedProgram))
         }
     }
 
@@ -408,17 +356,15 @@ struct GuideLayoutView: View {
             )
     }
 
-    private func transitionBackdrop(to newURL: URL?, settle: Bool) async {
+    private func transitionBackdrop(to newURL: URL?) async {
         // Settle first, and mutate nothing before it. `.task(id:)` cancels this
         // on every focus change, so anything written ahead of the first suspend
         // survives a cancel while the rest of the transition never runs.
         // Returning here instead leaves the current backdrop exactly as it is.
-        if settle {
-            do {
-                try await Task.sleep(for: backdropSettleDelay)
-            } catch {
-                return
-            }
+        do {
+            try await Task.sleep(for: backdropSettleDelay)
+        } catch {
+            return
         }
 
         let newImage = await loadBackdrop(newURL)

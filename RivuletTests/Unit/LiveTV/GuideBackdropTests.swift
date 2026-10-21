@@ -14,46 +14,23 @@ import XCTest
 
 @MainActor
 final class GuideBackdropTests: XCTestCase {
-    private typealias Target = GuideLayoutView.BackdropTarget
-
     private let art = URL(string: "https://example.com/art.jpg")!
     private let wide = URL(string: "https://example.com/wide.jpg")!
+    private let poster = URL(string: "https://example.com/poster.jpg")!
 
-    private func program(id: String = "p", icon: URL? = nil, landscape: URL? = nil) -> UnifiedProgram {
-        UnifiedProgram(id: id, channelId: "c", title: "t", startTime: .now, endTime: .now + 1800,
-                       iconURL: icon, landscapeURL: landscape)
+    private func program(icon: URL? = nil, landscape: URL? = nil, poster: URL? = nil) -> UnifiedProgram {
+        UnifiedProgram(id: "p", channelId: "c", title: "t", startTime: .now, endTime: .now + 1800,
+                       iconURL: icon, posterURL: poster, landscapeURL: landscape)
     }
 
-    private func target(_ program: UnifiedProgram?, resolved: (programID: String, url: URL?)? = nil,
-                        kind: EPGImageKind? = nil) -> Target {
-        GuideLayoutView.backdropTarget(for: program, resolved: resolved, kind: kind)
-    }
-
-    func test_declaredLandscape_isShownAfterTheSettleDelay() {
-        XCTAssertEqual(target(program(icon: art, landscape: wide)), .image(wide, settled: false))
-    }
-
-    /// The black flash: unlabelled art not yet measured used to read as "no
-    /// backdrop", fading to the bare background, then back once measured.
-    func test_unmeasuredArt_isPendingNotEmpty() {
-        XCTAssertEqual(target(program(icon: art)), .pending)
-    }
-
-    /// Measuring already waited out the settle delay; waiting again is the lag.
-    func test_measuredForThisProgramme_isReadyWithoutASecondWait() {
-        XCTAssertEqual(target(program(icon: art), resolved: ("p", art)), .image(art, settled: true))
-        XCTAssertEqual(target(program(icon: art), resolved: ("p", nil)), .image(nil, settled: true))
-    }
-
-    func test_measuredForAnotherProgramme_isIgnored() {
-        XCTAssertEqual(target(program(icon: art), resolved: ("other", art)), .pending)
-    }
-
-    func test_knownKinds_andNoArt() {
-        XCTAssertEqual(target(program(icon: art), kind: .landscape), .image(art, settled: false))
-        XCTAssertEqual(target(program(icon: art), kind: .portrait), .image(nil, settled: false))
-        XCTAssertEqual(target(program()), .image(nil, settled: false))
-        XCTAssertEqual(target(nil), .image(nil, settled: false))
+    /// Declared wide art first, then any art at all: a portrait poster fills
+    /// the backdrop rather than leaving it bare (#360).
+    func test_backdropURL() {
+        XCTAssertEqual(GuideLayoutView.backdropURL(for: program(icon: art, landscape: wide)), wide)
+        XCTAssertEqual(GuideLayoutView.backdropURL(for: program(icon: art, poster: poster)), art)
+        XCTAssertEqual(GuideLayoutView.backdropURL(for: program(poster: poster)), poster)
+        XCTAssertNil(GuideLayoutView.backdropURL(for: program()))
+        XCTAssertNil(GuideLayoutView.backdropURL(for: nil))
     }
 
     /// Art to art: the outgoing image stays opaque under the incoming one, so
