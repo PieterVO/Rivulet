@@ -10,6 +10,8 @@
 import AVFoundation
 import Combine
 import Foundation
+import os
+import Sentry
 import SwiftUI
 import UIKit
 import AetherEngine
@@ -1016,7 +1018,18 @@ final class AetherPlayer: PlayerProtocol {
         // Profile 7 FEL composes both layers (#345). The engine doesn't check the panel,
         // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
         // Heights only render on the native route, so they win over FEL (which then plays as 8.1).
-        options.preferDualLayerDolbyVision = AetherEngine.displayCapabilities.supportsDolbyVision && heightLayout == nil
+        let panelDV = AetherEngine.displayCapabilities.supportsDolbyVision
+        options.preferDualLayerDolbyVision = panelDV && heightLayout == nil
+        // #362: catch the engine's one Profile 7 route line for Sentry. Live TV's capture owns the
+        // handler while it runs, and VOD never loads then.
+        let p7RouteLine = OSAllocatedUnfairLock<String?>(initialState: nil)
+        let ownsLogHandler = EngineLog.handler == nil
+        if ownsLogHandler {
+            EngineLog.handler = { @Sendable line in
+                if line.contains("DV P7 dual-layer route:") { p7RouteLine.withLock { $0 = line } }
+            }
+        }
+        defer { if ownsLogHandler { EngineLog.handler = nil } }
         // New content, so the previous item's aspect ratio describes nothing.
         // Reset HERE rather than when `currentItem` goes nil: the engine also
         // swaps its player for SAME-content reasons (audio track switch,
@@ -1044,6 +1057,13 @@ final class AetherPlayer: PlayerProtocol {
             let pe = loadFailure(from: error)
             errorSubject.send(pe)
             throw pe
+        }
+        if let routeLine = p7RouteLine.withLock({ $0 }) {
+            SentryBridge.log(.info, "DV P7 route", attributes: [
+                "engine_route": routeLine,
+                "panel_dv": panelDV,
+                "height_speakers": heightLayout?.rawValue ?? "off"
+            ])
         }
         assFonts = engine.fontAttachments.map { LibassRenderer.Font(name: $0.filename, data: $0.data) }
         // The track may have been published during the load with no fonts;
