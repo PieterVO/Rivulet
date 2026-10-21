@@ -149,6 +149,14 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (102)", [
+            "Added Jellyfin music libraries.",
+            "Added Jellyfin Live TV. Plex and Jellyfin Live TV now show up automatically.",
+            "Live TV guide now loads days ahead and stays up to date.",
+            "Fixed Atmos and DTS:X height channels not working.",
+            "Fixed full Dolby Vision for Profile 7 FEL titles not turning on.",
+            "Height Speakers now opens a list to pick your speaker layout.",
+        ]),
         ("1.1.0 (101)", [
             "Fixed the empty Enhance Dialogue levels menu on titles with many audio tracks.",
         ]),
