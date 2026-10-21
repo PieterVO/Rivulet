@@ -64,6 +64,9 @@ workflows:
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
 
+      - name: Restore package traits dropped by use-profiles
+        script: python3 Scripts/restore-package-traits.py
+
       - name: Generate Secrets.swift from env
         script: |
           cat > RivuletCore/Config/Secrets.swift <<EOF
@@ -233,6 +236,9 @@ workflows:
 
       - name: Apply fetched signing profiles to Xcode project
         script: xcode-project use-profiles
+
+      - name: Restore package traits dropped by use-profiles
+        script: python3 Scripts/restore-package-traits.py
 
       - name: Generate Secrets.swift from env
         script: |
