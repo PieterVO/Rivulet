@@ -42,10 +42,6 @@ class PlexDataStore: ObservableObject {
     @Published var libraryHubs: [String: [PlexHub]] = [:]
     @Published var isLoadingLibraryHubs = false
 
-    /// Library keys whose last hub fetch threw, which a nil `libraryHubs[key]`
-    /// cannot tell apart from never loaded. Cleared on success, sign-out and profile switch.
-    private var libraryHubFetchFailures: Set<String> = []
-
     /// First page of each pinned collection (see `HomeCollectionPins`), keyed
     /// by `Pin.id`. nil means not fetched this session; [] means fetched and
     /// empty. `pinRowDecision` needs the difference.
@@ -588,7 +584,6 @@ class PlexDataStore: ObservableObject {
         libraryHubs.removeAll()
         pinnedCollectionItems.removeAll()
         lastRecentlyAddedStamp = nil
-        libraryHubFetchFailures.removeAll()
         homeItems = []
         libraryItemsByKey.removeAll()
         hubsVersion = UUID()
@@ -1075,7 +1070,6 @@ class PlexDataStore: ObservableObject {
     /// Refresh hubs for all libraries on Home screen
     func refreshLibraryHubs() async {
         libraryHubs.removeAll()
-        libraryHubFetchFailures.removeAll()
         await cacheManager.clearLibraryHubsCache()
         await loadLibraryHubsIfNeeded()
     }
@@ -1144,16 +1138,11 @@ class PlexDataStore: ObservableObject {
         Set((libraryHubs[key] ?? []).filter { $0.promoted == true }.compactMap(\.key))
     }
 
-    /// Applies one library's hub-fetch outcome. Success stores the hubs and clears
-    /// the failure mark; failure (nil) keeps the last-known hubs and marks the key.
+    /// Applies one library's hub-fetch outcome. Failure (nil) keeps the last-known hubs.
     /// The disk write lives here because every successful fetch passes through (#315).
     private func noteLibraryHubFetchResult(key: String, hubs: [PlexHub]?) async {
-        guard let hubs else {
-            libraryHubFetchFailures.insert(key)
-            return
-        }
+        guard let hubs else { return }
         libraryHubs[key] = hubs
-        libraryHubFetchFailures.remove(key)
         recordFetch(for: "libraryHubs:\(key)")
         await cacheManager.cacheLibraryHubs(hubs, forLibrary: key)
     }
@@ -1399,28 +1388,6 @@ class PlexDataStore: ObservableObject {
         }
     }
 
-    /// Keep the disk-backed launch hero projection in lockstep with
-    /// `PlexHomeViewController.computeHubBackedHero(from:)` so warm launches
-    /// can start the hero image load without decoding the full `[PlexHub]`
-    /// cache first.
-    /// Same test as `PlexHomeViewController.isRecentlyAdded(_:)`.
-    private func isRecentlyAddedHub(_ hub: PlexHub) -> Bool {
-        let id = hub.hubIdentifier?.lowercased() ?? ""
-        let title = hub.title?.lowercased() ?? ""
-        return id.contains("recentlyadded") || title.contains("recently added")
-    }
-
-    /// Stable row id for a library's Recently Added shelf.
-    nonisolated static func recentlyAddedRowID(forLibraryKey key: String) -> String {
-        "hub:\(key):recent"
-    }
-
-    /// Whether a library with no usable Recently Added hub keeps its last row (#236).
-    /// Only a library that answered drops it; `hubs` can hold a stale payload after a failed fetch.
-    nonisolated static func shouldCarryOverRecentlyAddedRow(hubs: [PlexHub]?, fetchFailed: Bool) -> Bool {
-        hubs == nil || fetchFailed
-    }
-
     /// What `projectHomeItems` does with one pinned collection (see
     /// `HomeCollectionPins`). Plain values so it can be tested.
     nonisolated enum PinRowDecision { case render, carryOver, omit }
@@ -1593,83 +1560,6 @@ class PlexDataStore: ObservableObject {
 
         isLoadingLibraries = true
         await fetchLibrariesFromServer(serverURL: serverURL, token: token, updateLoading: true)
-    }
-
-    // MARK: - Optimistic Updates
-
-    /// Update an item's watch status locally (optimistic update)
-    /// This immediately reflects the change in UI before the server refresh completes.
-    ///
-    /// The same `ratingKey` can appear in multiple hub collections at once:
-    /// - `hubs` — the global `/hubs` response, home of Continue Watching.
-    /// - `libraryHubs[libraryKey]` — per-library hubs, home of "Recently Added <Library>".
-    ///
-    /// Both must be walked so a Mark as Watched from Continue Watching also
-    /// flips the checkmark on the same title in a Recently Added row below.
-    func updateItemWatchStatus(ratingKey: String, watched: Bool) {
-        func applyWatchState(to item: inout PlexMetadata) {
-            if watched {
-                item.viewCount = (item.viewCount ?? 0) + 1
-                item.viewOffset = nil
-            } else {
-                item.viewCount = 0
-                item.viewOffset = nil
-            }
-        }
-
-        var didUpdateHubs = false
-        // Update in global hubs (Continue Watching lives here)
-        for hubIndex in hubs.indices {
-            guard var metadata = hubs[hubIndex].Metadata else { continue }
-            var hubChanged = false
-            for itemIndex in metadata.indices where metadata[itemIndex].ratingKey == ratingKey {
-                applyWatchState(to: &metadata[itemIndex])
-                hubChanged = true
-            }
-            if hubChanged {
-                hubs[hubIndex].Metadata = metadata
-                didUpdateHubs = true
-            }
-        }
-
-        var didUpdateLibraryHubs = false
-        // Update in per-library hubs (Recently Added <Library> rows live here)
-        for (libraryKey, hubList) in libraryHubs {
-            var updatedHubList = hubList
-            var libraryChanged = false
-            for hubIndex in updatedHubList.indices {
-                guard var metadata = updatedHubList[hubIndex].Metadata else { continue }
-                var hubChanged = false
-                for itemIndex in metadata.indices where metadata[itemIndex].ratingKey == ratingKey {
-                    applyWatchState(to: &metadata[itemIndex])
-                    hubChanged = true
-                }
-                if hubChanged {
-                    updatedHubList[hubIndex].Metadata = metadata
-                    libraryChanged = true
-                }
-            }
-            if libraryChanged {
-                libraryHubs[libraryKey] = updatedHubList
-                didUpdateLibraryHubs = true
-            }
-        }
-
-        // Bump versions so views recompute their derived state
-        if didUpdateHubs {
-            hubsVersion = UUID()
-        }
-        if didUpdateLibraryHubs {
-            libraryHubsVersion = UUID()
-        }
-
-        // Re-project only the surfaces the watch-state edit touched.
-        if didUpdateHubs {
-            projectHomeItems()
-        }
-        if didUpdateLibraryHubs {
-            projectAllLoadedItems()
-        }
     }
 
     // MARK: - Background Prefetch
@@ -1959,7 +1849,6 @@ class PlexDataStore: ObservableObject {
         libraryHubs.removeAll()
         pinnedCollectionItems.removeAll()
         lastRecentlyAddedStamp = nil
-        libraryHubFetchFailures.removeAll()
         homeItems = []
         libraryItemsByKey.removeAll()
         hubsVersion = UUID()

@@ -80,25 +80,3 @@ enum PreviewCarouselGeometry {
         )
     }
 }
-
-/// Card slots one stride apart around the centre.
-enum PreviewCarouselSlot: Int, CaseIterable {
-    case offscreenLeft = -2
-    case leftPeek = -1
-    case center = 0
-    case rightPeek = 1
-    case offscreenRight = 2
-}
-
-/// The carousel frame for a card at `slot`.
-func previewCarouselFrame(
-    slot: PreviewCarouselSlot,
-    in bounds: CGRect
-) -> CGRect {
-    let geom = PreviewCarouselGeometry.self
-    let centered = geom.centeredCardFrame(in: bounds)
-
-    // Each step is one full card width plus the inter-card gap.
-    let stride = centered.width + geom.sideCardGap
-    return centered.offsetBy(dx: stride * CGFloat(slot.rawValue), dy: 0)
-}

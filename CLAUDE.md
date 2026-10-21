@@ -683,10 +683,10 @@ Two rules that look wrong until you know them:
 
 **Changing watch state must repaint.** `.plexDataNeedsRefresh` is the live
 channel; all three UIKit surfaces observe it. Post it after the server call.
-`PlexDataStore.updateItemWatchStatus` and `.episodeWatchedStatusChanged` are
-both **dead** (no callers / no posters), orphaned when the SwiftUI detail view
-was deleted — don't revive either, and don't reintroduce optimistic Continue
-Watching mutation from a shelf (reverted in `90bfd2b` for focus reasons).
+The old optimistic path (`PlexDataStore.updateItemWatchStatus`,
+`.episodeWatchedStatusChanged`) is deleted; don't revive it, and don't
+reintroduce optimistic Continue Watching mutation from a shelf (reverted in
+`90bfd2b` for focus reasons).
 
 ### Content margin and tile grid
 
