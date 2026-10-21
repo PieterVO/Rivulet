@@ -43,7 +43,8 @@ final class PhotoBrowsePredicateTests: XCTestCase {
 
     func test_jellyfin_photoLibrariesAreBrowsable() {
         XCTAssertTrue(JellyfinDataStore.browsableKinds.contains(.photos))
-        XCTAssertFalse(JellyfinDataStore.browsableKinds.contains(.music))
+        XCTAssertTrue(JellyfinDataStore.browsableKinds.contains(.music))
+        XCTAssertFalse(JellyfinDataStore.homeRowKinds.contains(.photos))
     }
 
     func test_plexProvider_isFoundAsAPhotoProviderByCast() {

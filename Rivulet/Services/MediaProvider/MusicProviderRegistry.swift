@@ -42,6 +42,11 @@ final class MusicProviderRegistry {
         currentPlexID.flatMap { providers[$0] }
     }
 
+    /// Each signed-in server once, Plex first. Stale Plex ids kept for old refs are left out.
+    var signedInProviders: [any MusicProvider] {
+        [primaryProvider].compactMap { $0 } + providers.values.filter { $0.kind != .plex }
+    }
+
     func register(_ provider: any MusicProvider) {
         providers[provider.id] = provider
         if provider.kind == .plex { currentPlexID = provider.id }
@@ -52,18 +57,19 @@ final class MusicProviderRegistry {
         if providerID == currentPlexID { currentPlexID = nil }
     }
 
-    /// Reads the active Plex auth state from `PlexAuthManager.shared` and
-    /// creates/updates the corresponding `PlexMusicProvider` entry. Called at
-    /// app launch and after auth-state changes (sign-in, sign-out, server
-    /// switch). Wave 1 single-server: at most one provider entry.
+    /// Brings the registry in line with what is signed in: the Plex server from
+    /// `PlexAuthManager.shared`, the Jellyfin server from `JellyfinSession`. Called at
+    /// app launch, after Plex auth changes (sign-in, sign-out, server switch), and
+    /// after Jellyfin sign-in or sign-out.
     func populateFromCurrentAuth() {
+        populateJellyfin()
         let auth = PlexAuthManager.shared
         guard
             let serverURL = auth.selectedServerURL,
             let token = auth.selectedServerToken
         else {
-            if !providers.isEmpty { generation += 1 }
-            providers.removeAll()
+            if providers.values.contains(where: { $0.kind == .plex }) { generation += 1 }
+            providers = providers.filter { $0.value.kind != .plex }
             currentPlexID = nil
             return
         }
@@ -84,6 +90,15 @@ final class MusicProviderRegistry {
         // hashed id changes with the address, so there a new address does count as a rebuild.
         if (providers[provider.id] as? PlexMusicProvider)?.authToken != token { generation += 1 }
         register(provider)
+    }
+
+    /// Rebuilt from the stored account each time, as `MediaProviderRegistry` does.
+    private func populateJellyfin() {
+        let jellyfin = JellyfinSession.storedProvider().map(JellyfinMusicProvider.init)
+        let previous = providers.values.first { $0.kind == .jellyfin } as? JellyfinMusicProvider
+        if previous?.id != jellyfin?.id || previous?.client.token != jellyfin?.client.token { generation += 1 }
+        providers = providers.filter { $0.value.kind != .jellyfin }
+        if let jellyfin { register(jellyfin) }
     }
 
     /// Process-stable hash. Avoid `String.hashValue` (per-process randomized).

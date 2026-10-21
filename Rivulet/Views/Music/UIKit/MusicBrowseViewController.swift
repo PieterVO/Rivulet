@@ -39,6 +39,7 @@ final class MusicBrowseViewController: UIViewController, UICollectionViewDelegat
 
     private let libraryKey: String
     private let libraryTitle: String
+    private let providerID: String?
     private var destination: MusicLibraryDestination = .recentlyAdded
     private var entries: [Entry] = []
     private var seen = Set<MediaItemRef>()
@@ -66,14 +67,18 @@ final class MusicBrowseViewController: UIViewController, UICollectionViewDelegat
     private lazy var failureView = MusicChrome.failureView { [weak self] in self?.reload() }
 
     /// The provider and this library as it knows it; nil until the registry has one.
+    /// No `providerID` is the signed-in Plex server, whose id can change mid-session.
     var source: (provider: any MusicProvider, library: MediaLibrary)? {
-        guard let provider = MusicProviderRegistry.shared.primaryProvider else { return nil }
+        let registry = MusicProviderRegistry.shared
+        let provider = if let providerID { registry.provider(for: providerID) } else { registry.primaryProvider }
+        guard let provider else { return nil }
         return (provider, MediaLibrary(id: libraryKey, providerID: provider.id, title: libraryTitle, kind: .music))
     }
 
-    init(libraryKey: String, libraryTitle: String) {
+    init(libraryKey: String, libraryTitle: String, providerID: String?) {
         self.libraryKey = libraryKey
         self.libraryTitle = libraryTitle
+        self.providerID = providerID
         super.init(nibName: nil, bundle: nil)
     }
 

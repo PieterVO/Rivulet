@@ -53,8 +53,9 @@ final class MusicLibraryViewController: UIViewController {
     private var queueObserver: AnyCancellable?
     private var genreTask: Task<Void, Never>?
 
-    init(libraryKey: String, title: String) {
-        browse = MusicBrowseViewController(libraryKey: libraryKey, libraryTitle: title)
+    /// `providerID` nil is the signed-in Plex server.
+    init(libraryKey: String, title: String, providerID: String? = nil) {
+        browse = MusicBrowseViewController(libraryKey: libraryKey, libraryTitle: title, providerID: providerID)
         super.init(nibName: nil, bundle: nil)
     }
 

@@ -111,6 +111,7 @@ enum JellyfinSession {
         try await CredentialRegistry.shared.setToken(token, for: .server(providerID: account.providerID))
         UserDefaults.standard.set(try JSONEncoder().encode(account), forKey: accountKey)
         MediaProviderRegistry.shared.populateFromCurrentAuth()
+        MusicProviderRegistry.shared.populateFromCurrentAuth()
         onChanged?()
         return account
     }
@@ -128,6 +129,7 @@ enum JellyfinSession {
         await CredentialRegistry.shared.clearToken(for: scope)
         UserDefaults.standard.removeObject(forKey: accountKey)
         MediaProviderRegistry.shared.populateFromCurrentAuth()
+        MusicProviderRegistry.shared.populateFromCurrentAuth()
         onChanged?()
 
         guard let token else { return }

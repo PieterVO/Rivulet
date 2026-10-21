@@ -59,6 +59,7 @@ final class StubMusicProvider: MusicProvider, @unchecked Sendable {
                                        subtitleTracks: [], streamKind: .directPlay, streamURL: nil),
                    playSessionID: nil, trackInfoAvailable: false)
     }
+    func progressReporter(for trackRef: MediaItemRef, stream: StreamInfo) -> (any Rivulet.ProgressReporter)? { nil }
     func setRating(_ rating: Double?, for ref: MediaItemRef) async throws {}
     func setFavorite(_ favorite: Bool, for ref: MediaItemRef) async throws {
         try? await Task.sleep(for: favoriteDelay)

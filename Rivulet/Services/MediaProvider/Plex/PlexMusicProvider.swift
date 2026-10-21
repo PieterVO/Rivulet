@@ -283,6 +283,8 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
         }
     }
 
+    func progressReporter(for trackRef: MediaItemRef, stream: StreamInfo) -> (any ProgressReporter)? { nil }
+
     // MARK: - State
 
     func setRating(_ rating: Double?, for ref: MediaItemRef) async throws {

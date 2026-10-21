@@ -30,9 +30,11 @@ final class JellyfinDataStore: ObservableObject {
     @Published private(set) var homeRows: CachedHomeRail = []
     @Published private(set) var isLoading = false
 
-    /// Video and photo libraries. Music libraries render through Plex-only
-    /// views; they join when those views take a provider.
-    static let browsableKinds: Set<MediaLibrary.LibraryKind> = [.movies, .shows, .mixed, .photos]
+    /// Video, photo and music libraries.
+    static let browsableKinds: Set<MediaLibrary.LibraryKind> = [.movies, .shows, .mixed, .photos, .music]
+
+    /// Libraries with a Recently Added row. Photo and music tiles would open the video detail.
+    static let homeRowKinds: Set<MediaLibrary.LibraryKind> = [.movies, .shows, .mixed]
 
     private var loadTask: Task<Void, Never>?
     private var refreshObserver: NSObjectProtocol?
@@ -122,7 +124,7 @@ final class JellyfinDataStore: ObservableObject {
         }
         let browsable = fetched.filter { Self.browsableKinds.contains($0.kind) }
         var recent: [CachedHomeHub] = []
-        for library in browsable where library.kind != .photos {
+        for library in browsable where Self.homeRowKinds.contains(library.kind) {
             let suffix = "|\(library.id).recentlyAdded"
             do {
                 if let hub = try await provider.recentlyAddedHub(in: library) { recent.append(Self.row(hub)) }

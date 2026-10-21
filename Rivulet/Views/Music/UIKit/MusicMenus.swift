@@ -66,7 +66,7 @@ enum MusicMenus {
         if showsArtist, let artistRef = album.artistRef {
             items.append(MusicMenuItem(title: "Go to Artist", symbol: "music.microphone") { navigate(.artist(artistRef)) })
         }
-        items += addToPlaylist(tracks)
+        items += addToPlaylist(tracks, on: album.ref.providerID)
         items.append(MusicMenuItem(title: "Shuffle", symbol: "shuffle") { play(tracks, shuffled: true) })
         return items + queueing(tracks)
     }
@@ -101,10 +101,10 @@ enum MusicMenus {
             goTo.append(MusicMenuItem(title: "Go to Artist", symbol: "music.microphone") { navigate(.artist(artistRef)) })
         }
         // Now Playing's More menu: Apple's order, and the queue rows mean nothing there.
-        if screen == .nowPlaying { return addToPlaylist(tracks) + goTo }
+        if screen == .nowPlaying { return addToPlaylist(tracks, on: track.ref.providerID) + goTo }
         let favorite = MusicQueue.shared.isFavorite(track)
         // Apple sorts a track menu by action rank: go-to rows, playlist, queue, favorite.
-        return goTo.reversed() + addToPlaylist(tracks) + queueing(tracks) + [
+        return goTo.reversed() + addToPlaylist(tracks, on: track.ref.providerID) + queueing(tracks) + [
             MusicMenuItem(title: favorite ? "Undo Favorite" : "Favorite", symbol: favorite ? "star.slash" : "star") {
                 MusicQueue.shared.toggleFavorite(track)
             },
@@ -130,7 +130,9 @@ enum MusicMenus {
         ]
     }
 
-    private static func addToPlaylist(_ tracks: @escaping TrackSource) -> [MusicMenuItem] {
+    /// Only the tracks' own server's playlists: a playlist holds one server's items.
+    private static func addToPlaylist(_ tracks: @escaping TrackSource, on providerID: String) -> [MusicMenuItem] {
+        let playlists = playlists.filter { $0.ref.providerID == providerID }
         guard !playlists.isEmpty else { return [] }
         let children = playlists.map { playlist in
             MusicMenuItem(title: playlist.title, symbol: "music.note.list") {
@@ -185,7 +187,7 @@ enum MusicMenus {
 
     // MARK: - Data
 
-    private static var loaded: (generation: Int, playlists: [MusicPlaylist])?
+    private static var loaded: (generation: Int, playlists: [MusicPlaylist], complete: Bool)?
 
     /// Regular playlists for the "Add to a Playlist…" submenu. Smart ones reject tracks.
     /// Empty again after a sign-out or a server or profile switch: they belong to the account.
@@ -196,24 +198,26 @@ enum MusicMenus {
     /// Fills `playlists` once per account; callers rebuild their menu when it returns.
     static func loadPlaylists() async {
         let generation = MusicProviderRegistry.shared.generation
-        guard loaded?.generation != generation else { return }
+        guard loaded?.generation != generation || loaded?.complete == false else { return }
         var found: [MusicPlaylist] = []
-        do {
-            // The current server only: an entry kept for an old address would fail the lot or list twice.
-            guard let provider = MusicProviderRegistry.shared.primaryProvider else { return }
-            for library in try await provider.musicLibraries() {
-                // The same playlist can come back for more than one library.
-                for playlist in try await provider.playlists(in: library, sort: .title)
-                where !playlist.isSmart && !found.contains(playlist) {
-                    found.append(playlist)
+        var complete = true
+        // Signed-in servers only: an entry kept for an old address would fail the lot or list twice.
+        for provider in MusicProviderRegistry.shared.signedInProviders {
+            do {
+                for library in try await provider.musicLibraries() {
+                    // The same playlist can come back for more than one library.
+                    for playlist in try await provider.playlists(in: library, sort: .title)
+                    where !playlist.isSmart && !found.contains(playlist) {
+                        found.append(playlist)
+                    }
                 }
+            } catch {
+                // A failed server is not "no playlists": the next page asks again.
+                complete = false
             }
-        } catch {
-            // A failed fetch is not "no playlists": nothing is stored, so the next page asks again.
-            return
         }
         guard !Task.isCancelled else { return }
-        loaded = (generation, found)
+        loaded = (generation, found, complete)
     }
 
     // ponytail: a queue takes at most 2000 playlist tracks (four requests), so a longer

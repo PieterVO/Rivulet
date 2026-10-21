@@ -82,6 +82,16 @@ nonisolated struct JFItem: Decodable, Sendable {
     let recursiveItemCount: Int?
     let childCount: Int?
 
+    // Music (Audio, MusicAlbum)
+    let album: String?
+    let albumId: String?
+    let albumArtist: String?
+    let albumArtists: [JFNameId]?
+    let artistItems: [JFNameId]?
+    let albumPrimaryImageTag: String?
+    let container: String?
+    let mediaStreams: [JFMediaStream]?  // needs Fields=MediaStreams on list calls
+
     let userData: JFUserData?
 
     let imageTags: [String: String]?
@@ -111,6 +121,17 @@ nonisolated struct JFUserData: Decodable, Sendable {
     let isFavorite: Bool?
     let lastPlayedDate: String?
     let unplayedItemCount: Int?
+    let playCount: Int?
+    let rating: Double?             // 0-10, set through UserData; absent when unrated
+}
+
+/// `/Audio/{id}/Lyrics`. `start` (ticks) is absent on untimed lyrics.
+nonisolated struct JFLyrics: Decodable, Sendable {
+    let lyrics: [Line]?
+    nonisolated struct Line: Decodable, Sendable {
+        let text: String?
+        let start: Int64?
+    }
 }
 
 nonisolated struct JFNameId: Decodable, Sendable {
@@ -223,6 +244,7 @@ nonisolated struct JFPlaybackInfoRequest: Encodable, Sendable {
     }
     nonisolated struct DirectPlay: Encodable, Sendable {
         let type: String
+        var container: String?
     }
     nonisolated struct Subtitle: Encodable, Sendable {
         let format: String
@@ -278,6 +300,28 @@ nonisolated struct JFPlaybackInfoRequest: Encodable, Sendable {
     }
 }
 
+extension JFPlaybackInfoRequest {
+    /// Music through AVPlayer: these containers play direct, anything else
+    /// (ogg, opus, wma) comes back as an AAC HLS transcode.
+    static func audio(userId: String) -> Self {
+        let bitrate = 400_000_000
+        return Self(
+            userId: userId, mediaSourceId: nil, maxStreamingBitrate: bitrate, startTimeTicks: nil,
+            audioStreamIndex: nil, subtitleStreamIndex: nil,
+            enableDirectPlay: true, enableDirectStream: true, enableTranscoding: true,
+            deviceProfile: Profile(
+                maxStreamingBitrate: bitrate,
+                directPlayProfiles: [DirectPlay(type: "Audio", container: "mp3,aac,m4a,m4b,mp4,flac,alac,wav,aiff")],
+                transcodingProfiles: [Transcoding(
+                    container: "ts", type: "Audio", videoCodec: "", audioCodec: "aac", protocol: "hls",
+                    context: "Streaming", maxAudioChannels: "2", breakOnNonKeyFrames: false
+                )],
+                subtitleProfiles: []
+            )
+        )
+    }
+}
+
 /// Body for /Sessions/Playing, /Sessions/Playing/Progress and /Sessions/Playing/Stopped.
 /// The server ignores fields a given endpoint doesn't define.
 nonisolated struct JFPlaybackReport: Encodable, Sendable {
@@ -292,4 +336,9 @@ nonisolated struct JFPlaybackReport: Encodable, Sendable {
 
 nonisolated struct JFUserDataUpdate: Encodable, Sendable {
     let playbackPositionTicks: Int64
+}
+
+/// POST /UserItems/{id}/UserData with a 0-10 star rating.
+nonisolated struct JFRatingUpdate: Encodable, Sendable {
+    let rating: Double
 }

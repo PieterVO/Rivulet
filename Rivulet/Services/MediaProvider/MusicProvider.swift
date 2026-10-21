@@ -60,6 +60,8 @@ protocol MusicProvider: Sendable, Identifiable {
 
     // MARK: - Playback
     func resolveStream(for trackRef: MediaItemRef) async throws -> StreamInfo
+    /// Play reports for a resolved track; nil keeps `MusicQueue`'s Plex timeline reports.
+    func progressReporter(for trackRef: MediaItemRef, stream: StreamInfo) -> (any ProgressReporter)?
 
     // MARK: - State
     func setRating(_ rating: Double?, for ref: MediaItemRef) async throws
