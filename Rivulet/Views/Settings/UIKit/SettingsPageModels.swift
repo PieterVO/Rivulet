@@ -204,6 +204,9 @@ enum SettingsContent {
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
         case .skipBackIntervalPicker: return skipBackIntervalPicker
+        case .heightSpeakersPicker:   return heightSpeakersPicker
+        case .subtitleModePicker:     return subtitleModePicker
+        case .autoplayLimitPicker:    return autoplayLimitPicker
         case .homeQualityPicker:      return qualityPicker(home: true)
         case .awayQualityPicker:      return qualityPicker(home: false)
         case .audioLanguagePicker:    return audioLanguagePicker
@@ -244,6 +247,34 @@ enum SettingsContent {
             SettingsRowItem(id: "sbi_\(opt.rawValue)", title: opt.description, kind: .option(
                 isSelected: { Int(InputConfig.tapSeekBackSeconds) == opt.rawValue },
                 select: { SettingsStore.setInt(SkipInterval.backStorageKey, opt.rawValue) }))
+        }
+    }
+
+    /// Forced Only is set only by a player pick, so it is listed only while it is current.
+    private static var subtitleModePicker: [SettingsRowItem] {
+        let current = SubtitleMode(TrackIntentStore.effectiveSubtitleIntent)
+        let modes: [SubtitleMode] = [.off, .foreignAudio, .always] + (current == .forcedOnly ? [.forcedOnly] : [])
+        return modes.map { mode in
+            SettingsRowItem(id: "sm_\(mode)", title: mode.rawValue, kind: .option(
+                isSelected: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent) == mode },
+                select: { setSubtitles(mode: mode) }))
+        }
+    }
+
+    private static var autoplayLimitPicker: [SettingsRowItem] {
+        AutoplayLimit.allCases.map { opt in
+            SettingsRowItem(id: "alim_\(opt.rawValue)", title: opt.description, kind: .option(
+                isSelected: { AutoplayLimit.current == opt },
+                select: { SettingsStore.setInt(AutoplayLimit.storageKey, opt.rawValue) }))
+        }
+    }
+
+    /// "" is Off; the rest are the layouts the engine renders heights into.
+    private static var heightSpeakersPicker: [SettingsRowItem] {
+        ["", "5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"].map { layout in
+            SettingsRowItem(id: "hs_\(layout.isEmpty ? "off" : layout)", title: layout.isEmpty ? "Off" : layout, kind: .option(
+                isSelected: { heightSpeakers == layout },
+                select: { SettingsStore.setString(AetherPlayer.heightSpeakersKey, layout) }))
         }
     }
 
@@ -290,15 +321,6 @@ enum SettingsContent {
             case .off: self = .off
             case .foreignAudio: self = .foreignAudio
             case .track(_, let forced, _, _): self = forced ? .forcedOnly : .always
-            }
-        }
-
-        /// Forced Only comes from a player pick; cycling leaves it for Always.
-        var next: SubtitleMode {
-            switch self {
-            case .foreignAudio, .forcedOnly: return .always
-            case .always: return .off
-            case .off: return .foreignAudio
             }
         }
     }
@@ -425,8 +447,7 @@ enum SettingsContent {
                                 audioLanguageName(TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language))
                             })),
             SettingsRowItem(id: "subtitleMode", title: "Subtitles",
-                            kind: .cycle(value: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).rawValue },
-                                         next: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).next) })),
+                            kind: .navigationValue(.subtitleModePicker, value: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).rawValue })),
             SettingsRowItem(id: "subtitleLanguage", title: "Subtitle Language",
                             kind: .navigationValue(.subtitleLanguagePicker, value: {
                                 TrackLanguage.displayName(TrackLanguage.normalize(subtitleLanguage))
@@ -436,12 +457,7 @@ enum SettingsContent {
                                           set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
                             isEnabled: subtitlesOn),
             SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
-                            kind: .cycle(value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers },
-                                         next: {
-                                             let all = ["", "5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"]
-                                             let next = all[((all.firstIndex(of: heightSpeakers) ?? 0) + 1) % all.count]
-                                             SettingsStore.setString(AetherPlayer.heightSpeakersKey, next)
-                                         })),
+                            kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
             .header("Auto-Skip"),
             toggle("autoSkipIntro", "Intro", key: "autoSkipIntro", default: false),
             toggle("autoSkipCredits", "Credits", key: "autoSkipCredits", default: false),
@@ -478,12 +494,7 @@ enum SettingsContent {
                                 AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
                             })),
             SettingsRowItem(id: "autoplayLimit", title: "Limit",
-                            kind: .cycle(value: { AutoplayLimit.current.description },
-                                         next: {
-                                             let all = AutoplayLimit.allCases
-                                             let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
-                                             SettingsStore.setInt(AutoplayLimit.storageKey, next.rawValue)
-                                         })),
+                            kind: .navigationValue(.autoplayLimitPicker, value: { AutoplayLimit.current.description })),
             toggle("showPostVideoUpNext", "Up Next Panel", key: "showPostVideoUpNext", default: true),
         ]
     }

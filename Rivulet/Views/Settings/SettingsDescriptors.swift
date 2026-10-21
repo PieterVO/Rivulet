@@ -31,6 +31,9 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("sq_") { return descriptors["streamingQualityOption"] }
         if id.hasPrefix("al_") { return descriptors["audioLanguage"] }
         if id.hasPrefix("sl_") { return descriptors["subtitleLanguage"] }
+        if id.hasPrefix("hs_") { return descriptors["heightSpeakers"] }
+        if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
+        if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
         return nil
     }
@@ -179,7 +182,7 @@ enum SettingsDescriptorStore {
         ),
         "heightSpeakers": SettingDescriptor(
             icon: "hifispeaker.2",
-            description: "Plays the height channels of Dolby Atmos (TrueHD) and DTS:X soundtracks as Atmos on your receiver. Pick your speaker layout. DTS:X works with 7.1.4 and 9.1.6 only. While on, Profile 7 FEL titles play as single-layer Dolby Vision so the heights come through. Off keeps lossless 7.1 without the heights."
+            description: "Keeps the height channels of Dolby TrueHD Atmos and DTS:X soundtracks, in a lossy format. Off plays lossless 7.1 without them. DTS:X needs 7.1.4 or 9.1.6."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",
@@ -491,6 +494,9 @@ enum SettingsDescriptorStore {
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)
         case .skipBackIntervalPicker: return ("backward.fill", .systemBlue)
+        case .heightSpeakersPicker: return ("hifispeaker.2", .systemCyan)
+        case .subtitleModePicker: return ("captions.bubble", .systemYellow)
+        case .autoplayLimitPicker: return ("moon.zzz", .systemPurple)
         case .homeQualityPicker: return ("house.fill", .systemBlue)
         case .awayQualityPicker: return ("antenna.radiowaves.left.and.right", .systemBlue)
         case .audioLanguagePicker: return ("waveform", .systemCyan)

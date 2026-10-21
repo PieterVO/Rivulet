@@ -52,6 +52,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case liveTVSourceDetail, liveTVFavorites
     case addLiveTVSource, addXtream, addOwnServer, addPlaylistURL
     case displaySizePicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
+    case heightSpeakersPicker, subtitleModePicker, autoplayLimitPicker
     case homeQualityPicker, awayQualityPicker
     case audioLanguagePicker, subtitleLanguagePicker
     case contentFilter, contentFilterStrength
@@ -82,6 +83,9 @@ enum SettingsPage: Hashable, CaseIterable {
         case .autoplayCountdownPicker: return "Autoplay Countdown"
         case .skipIntervalPicker: return "Skip Forward Length"
         case .skipBackIntervalPicker: return "Skip Back Length"
+        case .heightSpeakersPicker: return "Height Speakers"
+        case .subtitleModePicker: return "Subtitles"
+        case .autoplayLimitPicker: return "Autoplay Limit"
         case .homeQualityPicker: return "Home Streaming"
         case .awayQualityPicker: return "Away Streaming"
         case .audioLanguagePicker: return "Audio Language"
