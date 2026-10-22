@@ -203,7 +203,7 @@ final class SettingsCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         onFocusGained = nil
-        bg.layer.removeAnimation(forKey: "reorderWiggle")
+        bg.setReorderWiggle(false)
         setDimmed(false)
         applyAppearance(focused: false)
     }
@@ -212,16 +212,7 @@ final class SettingsCell: UICollectionViewCell {
     /// capsule (the cell keeps its focused scale). Toggled by the reorder
     /// (move) mode in `SettingsPageViewController`.
     func setReordering(_ on: Bool) {
-        if on {
-            let wiggle = CAKeyframeAnimation(keyPath: "transform.rotation.z")
-            wiggle.values = [-0.022, 0.022, -0.022]
-            wiggle.duration = 0.34
-            wiggle.repeatCount = .infinity
-            wiggle.isRemovedOnCompletion = false
-            bg.layer.add(wiggle, forKey: "reorderWiggle")
-        } else {
-            bg.layer.removeAnimation(forKey: "reorderWiggle")
-        }
+        bg.setReorderWiggle(on)
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {

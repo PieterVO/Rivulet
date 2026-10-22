@@ -158,6 +158,7 @@ struct WhatsNewView: View {
             "With Height Speakers on, FEL videos now keep FEL and play without heights.",
             "New Dolby Vision FEL setting in Playback. Turn it off to keep heights instead.",
             "Fixed the player's Details panel showing SDR for Dolby Vision FEL videos.",
+            "Added Plex and Jellyfin video playlists to the sidebar, with shuffle and editing.",
         ]),
         ("1.1.0 (102)", [
             "Added Jellyfin music libraries.",

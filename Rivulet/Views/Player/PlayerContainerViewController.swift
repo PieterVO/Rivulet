@@ -1118,6 +1118,8 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self, weak vm] _ in
                 self?.progressBar?.resetFilmstrip()
                 if let vm { self?.applyRailMetadata(vm: vm) }
+                // An open Playlist pane marks the old position; it rebuilds on the next open.
+                if vm?.playQueue != nil, self?.openPaneTab == .upNext { self?.activeRailPanel?.dismissPanel() }
             }
             .store(in: &cancellables)
 
@@ -1275,7 +1277,13 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self, weak vm] episodes in
                 guard let self, let vm else { return }
                 self.upNextEpisodesCache = episodes
-                self.rail?.setUpNextAvailable(!episodes.isEmpty && vm.metadata.type == "episode")
+                if let queue = vm.playQueue {
+                    // A playlist of any type gets the pane, titled for what it lists.
+                    self.rail?.upNextButton.setTitle("Playlist")
+                    self.rail?.setUpNextAvailable(queue.entries.count > 1)
+                } else {
+                    self.rail?.setUpNextAvailable(!episodes.isEmpty && vm.metadata.type == "episode")
+                }
                 // The open Up Next panel is reading a snapshot of the old
                 // list — a fresh instance is built per presentation, so
                 // there's no way to refresh it in place. Dismiss rather
@@ -1674,6 +1682,7 @@ class PlayerContainerViewController: UIViewController {
             return (row, nil)
 
         case .upNext:
+            if let queue = vm.playQueue { return (playlistRow(queue, vm: vm), nil) }
             guard !upNextEpisodesCache.isEmpty else { return nil }
             let currentKey = vm.metadata.ratingKey
             let episodes = upNextEpisodesCache
@@ -1721,6 +1730,36 @@ class PlayerContainerViewController: UIViewController {
                 statsProvider: statsProvider)
             return (details, nil)
         }
+    }
+
+    /// The Playlist pane: a window of queue entries around the current one, indexed by queue position.
+    private func playlistRow(_ queue: PlayQueue, vm: UniversalPlayerViewModel) -> PlayerCardRowView {
+        let window = UpNextRowState.queueWindow(count: queue.entries.count, currentIndex: queue.index)
+        let cards = window.map { index -> PlayerCardRowView.Card in
+            let item = queue.entries[index].item
+            let isCurrent = UpNextRowState.queueState(at: index, currentIndex: queue.index) == .nowPlaying
+            let eyebrow: String? = if isCurrent {
+                "Watching"
+            } else if item.kind == .movie {
+                "Movie"
+            } else if item.kind == .episode, let season = item.seasonNumber, let episode = item.episodeNumber {
+                "S\(season) E\(episode)"
+            } else {
+                nil
+            }
+            return PlayerCardRowView.Card(
+                imageURL: UniversalPlayerViewModel.queueThumbnailURL(for: item),
+                eyebrow: eyebrow,
+                title: item.title,
+                isCurrent: isCurrent,
+                onSelect: { [weak self, weak vm] in
+                    self?.activeRailPanel?.dismissPanel()
+                    guard !isCurrent else { return }
+                    vm?.exitControlsFocus()
+                    Task { await vm?.playQueueEntry(at: index) }
+                })
+        }
+        return PlayerCardRowView(cards: cards)
     }
 
     /// Shared by popups and panes: Menu echo guard, dismissal bookkeeping,

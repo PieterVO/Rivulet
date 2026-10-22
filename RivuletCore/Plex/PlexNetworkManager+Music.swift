@@ -5,7 +5,7 @@
 //  PlexNetworkManager+Music.swift
 //  Rivulet
 //
-//  Music-only endpoints: the genre directory, audio playlists and lyrics.
+//  Music-only endpoints: the genre directory, audio playlist listing and lyrics.
 //
 
 import Foundation
@@ -21,24 +21,6 @@ nonisolated struct PlexGenreDirectory: Decodable, Sendable {
 nonisolated struct PlexGenreContainer: Decodable, Sendable {
     nonisolated struct Container: Decodable, Sendable {
         let Directory: [PlexGenreDirectory]?
-    }
-    let MediaContainer: Container
-}
-
-/// A playlist row. Not `PlexMetadata`: playlists send `smart` as a JSON bool
-/// and collections send it as "1", so one shared field cannot decode both.
-nonisolated struct PlexPlaylist: Decodable, Sendable {
-    let ratingKey: String
-    let title: String?
-    let composite: String?
-    let leafCount: Int?
-    let duration: Int?
-    let smart: Bool?
-}
-
-nonisolated struct PlexPlaylistContainer: Decodable, Sendable {
-    nonisolated struct Container: Decodable, Sendable {
-        let Metadata: [PlexPlaylist]?
     }
     let MediaContainer: Container
 }
@@ -59,13 +41,6 @@ nonisolated struct PlexLyrics: Decodable, Sendable {
 nonisolated struct PlexLyricsContainer: Decodable, Sendable {
     nonisolated struct Container: Decodable, Sendable {
         let Lyrics: [PlexLyrics]?
-    }
-    let MediaContainer: Container
-}
-
-nonisolated struct PlexIdentityContainer: Decodable, Sendable {
-    nonisolated struct Container: Decodable, Sendable {
-        let machineIdentifier: String
     }
     let MediaContainer: Container
 }
@@ -96,56 +71,7 @@ extension PlexNetworkManager {
         sectionId: String,
         sort: String
     ) async throws -> [PlexPlaylist] {
-        guard let url = URL(string: "\(serverURL)/playlists?playlistType=audio&sectionID=\(sectionId)&sort=\(sort)") else {
-            throw PlexAPIError.invalidURL
-        }
-        let container: PlexPlaylistContainer = try await request(url, headers: plexHeaders(authToken: authToken))
-        return container.MediaContainer.Metadata ?? []
-    }
-
-    /// One page of a playlist's tracks. A smart playlist can hold the whole library.
-    func getPlaylistItemsWithTotal(
-        serverURL: String,
-        authToken: String,
-        ratingKey: String,
-        start: Int,
-        size: Int
-    ) async throws -> (items: [PlexMetadata], totalSize: Int?) {
-        guard let url = URL(string: "\(serverURL)/playlists/\(ratingKey)/items?X-Plex-Container-Start=\(start)&X-Plex-Container-Size=\(size)") else {
-            throw PlexAPIError.invalidURL
-        }
-        let container: PlexMediaContainerWrapper = try await request(url, headers: plexHeaders(authToken: authToken))
-        return (container.MediaContainer.Metadata ?? [], container.MediaContainer.totalSize)
-    }
-
-    /// Append library items to a regular playlist. Unverified against a live server.
-    func addToPlaylist(
-        serverURL: String,
-        authToken: String,
-        playlistRatingKey: String,
-        machineIdentifier: String,
-        ratingKeys: [String]
-    ) async throws {
-        guard var components = URLComponents(string: "\(serverURL)/playlists/\(playlistRatingKey)/items") else {
-            throw PlexAPIError.invalidURL
-        }
-        components.queryItems = [
-            URLQueryItem(name: "uri", value: Self.libraryURI(machineIdentifier: machineIdentifier, ratingKeys: ratingKeys))
-        ]
-        guard let url = components.url else { throw PlexAPIError.invalidURL }
-        _ = try await requestData(url, method: "PUT", headers: plexHeaders(authToken: authToken))
-    }
-
-    /// The `uri` a playlist write takes. The host is the SERVER's machine identifier.
-    nonisolated static func libraryURI(machineIdentifier: String, ratingKeys: [String]) -> String {
-        "server://\(machineIdentifier)/com.plexapp.plugins.library/library/metadata/\(ratingKeys.joined(separator: ","))"
-    }
-
-    /// The server's own machine identifier, from `/identity`.
-    func getMachineIdentifier(serverURL: String, authToken: String) async throws -> String {
-        guard let url = URL(string: "\(serverURL)/identity") else { throw PlexAPIError.invalidURL }
-        let container: PlexIdentityContainer = try await request(url, headers: plexHeaders(authToken: authToken))
-        return container.MediaContainer.machineIdentifier
+        try await getPlaylists(serverURL: serverURL, authToken: authToken, type: "audio", sectionID: sectionId, sort: sort)
     }
 
     /// A lyric stream as parsed lines, or nil when the server has no content for it.

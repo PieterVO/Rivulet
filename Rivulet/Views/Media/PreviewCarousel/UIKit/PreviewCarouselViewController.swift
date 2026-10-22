@@ -864,11 +864,11 @@ final class PreviewCarouselViewController: UIViewController {
     private func presentStandaloneDetail(_ item: MediaItem) {
         // Collection tile: arm the row's restore while the tile exists, since the engine
         // may resolve before onDismiss runs. No focus request: it would spend the one-shot index now.
-        if item.kind == .collection {
+        if item.kind == .collection || item.kind == .playlist {
             expandedDetail.restoreShelfRowFocusIfNeeded(requestingFocus: false)
-            PlexHomeViewController.openCollectionIfNeeded(item, from: self) { [weak self] in
-                self?.restoreBelowFoldFocusAfterReturn()
-            }
+            let restore: () -> Void = { [weak self] in self?.restoreBelowFoldFocusAfterReturn() }
+            _ = PlexHomeViewController.openCollectionIfNeeded(item, from: self, onDismiss: restore)
+                || PlexHomeViewController.openPlaylistIfNeeded(item, from: self, onDismiss: restore)
             return
         }
         // Over full screen, so viewDidAppear never fires on return; restore from onDismiss.

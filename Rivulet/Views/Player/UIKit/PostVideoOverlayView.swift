@@ -275,7 +275,11 @@ final class NextEpisodeCardView: UIView {
         configuredRatingKey = episode.ratingKey
         showLabel.text = episode.grandparentTitle
         showLabel.isHidden = (episode.grandparentTitle ?? "").isEmpty
-        numberLabel.text = String(format: "S%02dE%02d", episode.parentIndex ?? 0, episode.index ?? 0)
+        // A playlist's next item can be a movie: year in place of SxEy.
+        numberLabel.text = episode.type == "episode"
+            ? String(format: "S%02dE%02d", episode.parentIndex ?? 0, episode.index ?? 0)
+            : episode.year.map(String.init)
+        numberLabel.isHidden = numberLabel.text == nil
         titleLabel.text = episode.title ?? "Episode"
         summaryLabel.text = episode.summary
         summaryLabel.isHidden = (episode.summary ?? "").isEmpty

@@ -29,4 +29,15 @@ enum UpNextRowState: Equatable {
         if (episode.viewCount ?? 0) > 0 { return .watched }
         return .future
     }
+
+    /// A playlist row, by queue position: a title listed twice must mark only the playing copy.
+    static func queueState(at index: Int, currentIndex: Int) -> UpNextRowState {
+        if index == currentIndex { return .nowPlaying }
+        return index == currentIndex + 1 ? .upNext : .future
+    }
+
+    /// The playlist rows the pane builds: 5 before the current one, 30 after. A smart playlist can hold a library.
+    static func queueWindow(count: Int, currentIndex: Int) -> Range<Int> {
+        max(0, currentIndex - 5)..<min(count, currentIndex + 31)
+    }
 }

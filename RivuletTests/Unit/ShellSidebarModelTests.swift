@@ -7,7 +7,7 @@ import XCTest
 @MainActor
 final class ShellSidebarModelTests: XCTestCase {
 
-    private func sections(_ servers: [(name: String, libraries: [MediaLibrary])]) -> [ShellSidebarSection] {
+    private func sections(_ servers: [(providerID: String, name: String, libraries: [MediaLibrary])]) -> [ShellSidebarSection] {
         ShellSidebarModel.sections(
             libraries: servers.flatMap { server in server.libraries.map { SidebarLibrary($0, serverName: server.name) } },
             liveTVSources: [], combineLiveTV: true,
@@ -15,14 +15,36 @@ final class ShellSidebarModelTests: XCTestCase {
             liveTVAbove: false, profileName: "Bain")
     }
 
-    private func tabs(hasServer: Bool, liveTV: Bool) -> [SidebarTab] {
+    private func tabs(hasServer: Bool, liveTV: Bool, libraries: [PlexLibrary] = [],
+                      playlistServers: [PlaylistServer] = []) -> [SidebarTab] {
         let source = LiveTVDataStore.LiveTVSourceInfo(
             id: "m3u", sourceType: .genericM3U, displayName: "IPTV", channelCount: 10, isConnected: true, lastSync: nil)
         return ShellSidebarModel.sections(
-            libraries: [], liveTVSources: liveTV ? [source] : [], combineLiveTV: true,
+            libraries: libraries.map { SidebarLibrary(plex: $0, serverName: "Angel") },
+            liveTVSources: liveTV ? [source] : [], combineLiveTV: true,
             showDiscover: true, discoverAbove: true, showWatchlist: true,
-            liveTVAbove: false, profileName: "Account", hasMediaServer: hasServer)
+            liveTVAbove: false, profileName: "Account", hasMediaServer: hasServer,
+            playlistServers: playlistServers)
             .flatMap(\.items).map(\.tab)
+    }
+
+    private let movies = PlexLibrary(
+        key: "1", type: "movie", title: "Movies", agent: nil, scanner: nil, language: nil, uuid: "u",
+        updatedAt: nil, createdAt: nil, scannedAt: nil, Location: nil)
+
+    private let primary = PlaylistServer(providerID: "plex:primary", name: "Angel", serverID: "")
+
+    private func server(_ providerID: String, _ name: String) -> PlaylistServer {
+        PlaylistServer(providerID: providerID, name: name, serverID: providerID)
+    }
+
+    /// The selected Plex server's Movies, then each other server's libraries, grouped.
+    private func playlistSections(_ playlistServers: [PlaylistServer],
+                                  _ servers: [(providerID: String, name: String, libraries: [MediaLibrary])]) -> [ShellSidebarSection] {
+        ShellSidebarModel.librarySections(
+            [SidebarLibrary(plex: movies, serverName: "Angel")]
+                + servers.flatMap { server in server.libraries.map { SidebarLibrary($0, serverName: server.name) } },
+            playlistServers: playlistServers)
     }
 
     func test_liveTVOnly_hidesServerTabs_andHome() {
@@ -34,8 +56,59 @@ final class ShellSidebarModelTests: XCTestCase {
     }
 
     func test_withServer_keepsEveryTab() {
-        XCTAssertEqual(tabs(hasServer: true, liveTV: true),
-                       [.account, .search, .home, .discover, .watchlist, .liveTV(sourceId: nil), .settings])
+        XCTAssertEqual(tabs(hasServer: true, liveTV: true, libraries: [movies], playlistServers: [primary]),
+                       [.account, .search, .home, .discover, .watchlist, .library(key: "1"),
+                        .playlists(providerID: "plex:primary"), .liveTV(sourceId: nil), .settings])
+    }
+
+    func test_playlistsRow_onlyForServersWithPlaylists() {
+        let office = [MediaLibrary(id: "1", providerID: "plex:office", title: "Movies", kind: .movies)]
+        let jf = [MediaLibrary(id: "lib-m", providerID: "jellyfin:srv", title: "Movies", kind: .movies)]
+
+        let all = playlistSections([server("jellyfin:srv", "jellyfin-test")],
+                                   [("plex:office", "Office", office), ("jellyfin:srv", "jellyfin-test", jf)])
+
+        XCTAssertEqual(all.flatMap(\.items).filter { $0.title == "Playlists" }.map(\.tab),
+                       [.playlists(providerID: "jellyfin:srv")])
+        XCTAssertTrue(playlistSections([], [("plex:office", "Office", office)]).flatMap(\.items).allSatisfy { $0.title != "Playlists" })
+    }
+
+    func test_playlistsRow_isLastInItsServerSection() {
+        let jf = [MediaLibrary(id: "lib-m", providerID: "jellyfin:srv", title: "Movies", kind: .movies),
+                  MediaLibrary(id: "lib-t", providerID: "jellyfin:srv", title: "TV Shows", kind: .shows)]
+
+        let section = playlistSections([server("jellyfin:srv", "jellyfin-test")], [("jellyfin:srv", "jellyfin-test", jf)])
+            .first { $0.title == "jellyfin-test" }
+
+        XCTAssertEqual(section?.items.map(\.title), ["Movies", "TV Shows", "Playlists"])
+        XCTAssertEqual(section?.items.last?.icon, "list.bullet.rectangle")
+    }
+
+    func test_playlistsRow_survivesEveryLibraryHidden() {
+        let all = playlistSections([server("jellyfin:srv", "jellyfin-test")], [("jellyfin:srv", "jellyfin-test", [])])
+
+        XCTAssertEqual(all.first { $0.title == "jellyfin-test" }?.items.map(\.tab),
+                       [.playlists(providerID: "jellyfin:srv")])
+        let primaryOnly = ShellSidebarModel.librarySections([], playlistServers: [primary])
+        XCTAssertEqual(primaryOnly.first { $0.title == "Angel" }?.items.map(\.tab),
+                       [.playlists(providerID: "plex:primary")])
+    }
+
+    func test_playlistsRow_primaryPlexServer() {
+        let section = playlistSections([primary], []).first { $0.title == "Angel" }
+
+        XCTAssertEqual(section?.items.map(\.tab), [.library(key: "1"), .playlists(providerID: "plex:primary")])
+    }
+
+    func test_playlistsRow_mixedServers_joinsLibrariesWithABadge() {
+        let mixed = ShellSidebarModel.librarySections(
+            [SidebarLibrary(plex: movies, serverName: "Angel"), SidebarLibrary(testMovies, serverName: "Test"),
+             SidebarLibrary(plex: angelTV, serverName: "Angel")],
+            playlistServers: [primary])
+
+        XCTAssertEqual(mixed.map(\.title), ["Libraries"])
+        XCTAssertEqual(mixed.first?.items.last?.tab, .playlists(providerID: "plex:primary"))
+        XCTAssertEqual(mixed.first?.items.last?.badge, "Angel")
     }
 
     func test_jellyfinLibraries_getAServerNamedSection_withProviderTabs() {
@@ -43,7 +116,7 @@ final class ShellSidebarModelTests: XCTestCase {
                     MediaLibrary(id: "lib-t", providerID: "jellyfin:srv", title: "TV Shows", kind: .shows),
                     MediaLibrary(id: "lib-x", providerID: "jellyfin:srv", title: "Home Videos", kind: .mixed)]
 
-        let jf = sections([("jellyfin-test", libs)]).first { $0.title == "jellyfin-test" }
+        let jf = sections([("jellyfin:srv", "jellyfin-test", libs)]).first { $0.title == "jellyfin-test" }
 
         XCTAssertEqual(jf?.items.map(\.title), ["Movies", "TV Shows", "Home Videos"])
         XCTAssertEqual(jf?.items.map(\.icon), ["film.fill", "tv.fill", "folder.fill"])
@@ -54,7 +127,7 @@ final class ShellSidebarModelTests: XCTestCase {
         let office = [MediaLibrary(id: "1", providerID: "plex:office", title: "Movies", kind: .movies)]
         let jf = [MediaLibrary(id: "lib-m", providerID: "jellyfin:srv", title: "Movies", kind: .movies)]
 
-        let titles = sections([("Office", office), ("Empty", []), ("jellyfin-test", jf)]).compactMap(\.title)
+        let titles = sections([("plex:office", "Office", office), ("plex:empty", "Empty", []), ("jellyfin:srv", "jellyfin-test", jf)]).compactMap(\.title)
 
         XCTAssertEqual(titles, ["Office", "jellyfin-test"])
     }
@@ -134,7 +207,7 @@ final class ShellSidebarModelTests: XCTestCase {
 
     func test_jellyfinSectionSitsBeforeSettings() {
         let libs = [MediaLibrary(id: "lib-m", providerID: "jellyfin:srv", title: "Movies", kind: .movies)]
-        XCTAssertEqual(sections([("jellyfin-test", libs)]).map(\.title),
+        XCTAssertEqual(sections([("jellyfin:srv", "jellyfin-test", libs)]).map(\.title),
                        [nil, nil, "jellyfin-test", nil])
     }
 

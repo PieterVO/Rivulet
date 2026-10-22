@@ -64,6 +64,15 @@ final class StubMediaProvider: MediaProvider, @unchecked Sendable {
 
     var libraryList: [MediaLibrary] = []
     var librariesError: Error?
+
+    var supportsPlaylists = false
+    var playlistList: [MediaPlaylist] = []
+    /// Awaited before `videoPlaylists()` answers, so a test can hold a refresh open.
+    var playlistsGate: (@Sendable () async -> Void)?
+    func videoPlaylists() async throws -> [MediaPlaylist] {
+        await playlistsGate?()
+        return playlistList
+    }
     func libraries() async throws -> [MediaLibrary] {
         if let librariesError { throw librariesError }
         return libraryList

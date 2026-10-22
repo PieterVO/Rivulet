@@ -118,7 +118,7 @@ final class MusicBrowseViewController: UIViewController, UICollectionViewDelegat
             .sink { [weak self] in self?.queueChanged() }
             .store(in: &observers)
 
-        // For the long-press menus' "Add to a Playlist…" row.
+        // For the long-press menus' "Add to Playlist" row.
         Task { await MusicMenus.loadPlaylists() }
     }
 

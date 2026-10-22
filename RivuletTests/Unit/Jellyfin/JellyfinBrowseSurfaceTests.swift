@@ -172,9 +172,9 @@ final class JellyfinBrowseSurfaceTests: XCTestCase {
             return menu(item).flatMap { $0 }.map(\.title)
         }
         XCTAssertTrue(titles(#"{"Id":"m1","Name":"Heat","Type":"Movie","MediaSourceCount":2}"#)
-            .contains("Play Version…"))
+            .contains("Play Version"))
         XCTAssertFalse(titles(#"{"Id":"m1","Name":"Heat","Type":"Movie","MediaSourceCount":1}"#)
-            .contains("Play Version…"))
+            .contains("Play Version"))
     }
 
     func test_sourceBadge_onlyWhileBothServersAreSignedIn() {

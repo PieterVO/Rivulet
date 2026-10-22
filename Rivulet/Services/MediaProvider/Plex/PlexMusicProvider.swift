@@ -192,6 +192,17 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
         }
     }
 
+    func createPlaylist(title: String, seededWith tracks: [MediaItemRef]) async throws -> MusicPlaylist {
+        try await plexCall {
+            let machineID = try await networkManager.getMachineIdentifier(serverURL: serverURL, authToken: authToken)
+            let created = try await networkManager.createPlaylist(
+                serverURL: serverURL, authToken: authToken, type: "audio", title: title,
+                uri: PlexNetworkManager.libraryURI(machineIdentifier: machineID, ratingKeys: tracks.map(\.itemID))
+            )
+            return PlexMusicMapper.playlist(created, providerID: id, serverURL: serverURL, authToken: authToken)
+        }
+    }
+
     // MARK: - Detail
 
     func artistDetail(for ref: MediaItemRef) async throws -> MusicArtistDetail {

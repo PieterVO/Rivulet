@@ -305,6 +305,8 @@ nonisolated struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     var key: String?
     var guid: String?
     var type: String?             // "movie", "show", "season", "episode"
+    /// A playlist row's own id, unique per row even when a title repeats.
+    var playlistItemID: Int? = nil
 
     // MARK: - Display Info
     var title: String?

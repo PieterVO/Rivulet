@@ -36,6 +36,7 @@ struct TVSidebarView: View {
     @AppStorage("showDiscoverTab") private var showDiscoverTab = true
     @AppStorage("discoverAboveLibraries") private var discoverAboveLibraries = true
     @AppStorage("showWatchlistTab") private var showWatchlistTab = true
+    @AppStorage("showPlaylistsTab") private var showPlaylistsTab = true
     @AppStorage("displaySize") private var displaySizeRaw = DisplaySize.normal.rawValue
     @State private var selectedTab: SidebarTab = .home
     @State private var showProfilePicker = false
@@ -109,7 +110,13 @@ struct TVSidebarView: View {
             profileName: profileName,
             profileAvatar: profileManager.selectedUser?.thumb.flatMap { URL(string: $0) },
             canSwitchProfile: profileManager.hasMultipleProfiles,
-            hasMediaServer: isSignedInToAnyServer)
+            hasMediaServer: isSignedInToAnyServer,
+            playlistServers: PlaylistServer.current(visiblePlaylistProviders))
+    }
+
+    /// Servers that get a Playlists row: none while Settings hides the rows.
+    private var visiblePlaylistProviders: Set<String> {
+        showPlaylistsTab ? PlaylistAvailability.shared.providerIDs : []
     }
 
     private var opensToLiveTV: Bool {
@@ -204,6 +211,12 @@ struct TVSidebarView: View {
         }
         .onChange(of: showWatchlistTab) { _, shown in
             if !shown && selectedTab == .watchlist {
+                selectedTab = .home
+            }
+        }
+        // The toggle went off, or the server's last playlist went.
+        .onChange(of: visiblePlaylistProviders) { _, providers in
+            if case .playlists(let providerID) = selectedTab, !providers.contains(providerID) {
                 selectedTab = .home
             }
         }
@@ -495,6 +508,8 @@ struct TVSidebarView: View {
             return PlexHomeViewController(mode: .discover)
         case .watchlist:
             return PlexHomeViewController(mode: .watchlist)
+        case .playlists(let providerID):
+            return PlexHomeViewController(mode: .playlists(providerID: providerID))
         case .search:
             let search = SearchContainerViewController()
             search.onNestedChange = { [nestedNavState] isNested in
@@ -581,7 +596,7 @@ struct TVSidebarView: View {
                 // Unreachable: mounted directly as a UIKit VC above. Kept so
                 // this switch stays exhaustive over SidebarTab.
                 Color.clear
-            case .watchlist:
+            case .watchlist, .playlists:
                 // Unreachable: mounted directly as a UIKit VC above. Kept so
                 // this switch stays exhaustive over SidebarTab.
                 Color.clear

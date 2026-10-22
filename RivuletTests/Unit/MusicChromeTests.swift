@@ -62,7 +62,7 @@ final class MusicChromeTests: XCTestCase {
     func test_trackMenu_order() {
         // The playlist row appears only once a signed-in host has loaded playlists.
         let titles = { MusicMenus.track(self.makeTrack("1"), screen: $0) { _ in }.map(\.title)
-            .filter { !$0.hasPrefix("Add to a Playlist") } }
+            .filter { !$0.hasPrefix("Add to Playlist") } }
         XCTAssertEqual(titles(.songs), ["Go to Artist", "Go to Album", "Play Next", "Play After", "Favorite"])
         XCTAssertEqual(titles(.album), ["Go to Artist", "Play Next", "Play After", "Favorite"])
     }

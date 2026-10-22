@@ -561,3 +561,82 @@ struct JellyfinProgressReporter: ProgressReporter {
         ])
     }
 }
+
+// MARK: - Playlists (video)
+
+extension JellyfinProvider {
+    var supportsPlaylists: Bool { true }
+
+    private static func asPlaylist(_ dto: JFItem, providerID: String, baseURL: URL) -> MediaPlaylist {
+        MediaPlaylist(item: JellyfinMediaMapper.item(dto, providerID: providerID, baseURL: baseURL), isSmart: false)
+    }
+
+    func videoPlaylists() async throws -> [MediaPlaylist] {
+        let result: JFQueryResult = try await client.get("Items", [
+            URLQueryItem(name: "userId", value: userID),
+            URLQueryItem(name: "includeItemTypes", value: "Playlist"),
+            URLQueryItem(name: "recursive", value: "true")
+        ])
+        return (result.items ?? []).filter { $0.mediaType == "Video" }
+            .map { Self.asPlaylist($0, providerID: id, baseURL: client.baseURL) }
+            .sorted { $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending }
+    }
+
+    func playlistEntries(_ playlist: MediaItemRef) async throws -> [PlaylistEntry] {
+        let size = 200
+        var entries: [PlaylistEntry] = []
+        while true {
+            let page: JFQueryResult = try await client.get("Playlists/\(playlist.itemID)/Items", [
+                URLQueryItem(name: "userId", value: userID),
+                URLQueryItem(name: "startIndex", value: String(entries.count)),
+                URLQueryItem(name: "limit", value: String(size)),
+                Self.listFields
+            ])
+            let rows = page.items ?? []
+            entries += rows.compactMap { dto in
+                (dto.playlistItemId ?? dto.id).map {
+                    PlaylistEntry(entryID: $0, item: JellyfinMediaMapper.item(dto, providerID: id, baseURL: client.baseURL))
+                }
+            }
+            if rows.isEmpty || entries.count >= (page.totalRecordCount ?? entries.count) { return entries }
+        }
+    }
+
+    /// Seeds with `items` (an empty list is allowed), then reads the playlist back for its mapped row.
+    func createPlaylist(title: String, seededWith items: [MediaItemRef]) async throws -> MediaPlaylist {
+        let created: JFCreated = try await client.post("Playlists", body: JFCreatePlaylist(
+            name: title, ids: items.map(\.itemID), userId: userID, mediaType: "Video"
+        ))
+        let dto: JFItem = try await client.get("Items/\(created.id)", [URLQueryItem(name: "userId", value: userID)])
+        return Self.asPlaylist(dto, providerID: id, baseURL: client.baseURL)
+    }
+
+    func addToPlaylist(_ playlist: MediaItemRef, items: [MediaItemRef]) async throws {
+        guard !items.isEmpty else { return }
+        try await client.post("Playlists/\(playlist.itemID)/Items", query: [
+            URLQueryItem(name: "ids", value: items.map(\.itemID).joined(separator: ",")),
+            URLQueryItem(name: "userId", value: userID)
+        ])
+    }
+
+    func removeFromPlaylist(_ playlist: MediaItemRef, entryID: String) async throws {
+        try await client.delete("Playlists/\(playlist.itemID)/Items", query: [URLQueryItem(name: "entryIds", value: entryID)])
+    }
+
+    /// Jellyfin's newIndex is the final 0-based position, so `toIndex` goes through unchanged.
+    func movePlaylistEntry(_ playlist: MediaItemRef, entryID: String, toIndex: Int, in entries: [PlaylistEntry]) async throws {
+        try await client.post(Self.movePath(playlist: playlist.itemID, entryID: entryID, toIndex: toIndex))
+    }
+
+    nonisolated static func movePath(playlist: String, entryID: String, toIndex: Int) -> String {
+        "Playlists/\(playlist)/Items/\(entryID)/Move/\(toIndex)"
+    }
+
+    func renamePlaylist(_ playlist: MediaItemRef, title: String) async throws {
+        try await client.post("Playlists/\(playlist.itemID)", body: JFUpdatePlaylist(name: title))
+    }
+
+    func deletePlaylist(_ playlist: MediaItemRef) async throws {
+        try await client.delete("Items/\(playlist.itemID)")
+    }
+}

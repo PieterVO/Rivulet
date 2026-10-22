@@ -48,6 +48,8 @@ protocol MusicProvider: Sendable, Identifiable {
                 page: Page) async throws -> PagedResult<MusicTrack>
     /// Appends tracks to a regular playlist. Smart playlists reject them.
     func addToPlaylist(_ playlistRef: MediaItemRef, tracks: [MediaItemRef]) async throws
+    /// A new regular audio playlist holding `tracks`.
+    func createPlaylist(title: String, seededWith tracks: [MediaItemRef]) async throws -> MusicPlaylist
 
     // MARK: - Detail
     func artistDetail(for ref: MediaItemRef) async throws -> MusicArtistDetail

@@ -552,11 +552,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// fallback failure never reports itself as the root cause. See RIVULET-19.
     private let diagnostics = PlaybackDiagnostics()
 
-    // MARK: - Shuffled Queue
+    // MARK: - Play Queue
 
-    private var shuffledQueue: [PlexMetadata] = []
-    private var shuffledQueueIndex: Int = 0
-    var isShufflePlay: Bool { !shuffledQueue.isEmpty }
+    /// The playlist being played, by position; nil plays one title with series Up Next.
+    private(set) var playQueue: PlayQueue?
+    /// Full Plex metadata for the next item, by ratingKey. Tests stub the server here.
+    var plexMetadataFetch: (_ serverURL: String, _ authToken: String, _ ratingKey: String) async throws -> PlexMetadata = {
+        try await PlexNetworkManager.shared.getFullMetadata(serverURL: $0, authToken: $1, ratingKey: $2)
+    }
 
     // MARK: - Preloaded Next Episode Data
 
@@ -595,7 +598,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         serverURL: String,
         authToken: String,
         startOffset: TimeInterval? = nil,
-        shuffledQueue: [PlexMetadata] = [],
+        playQueue: PlayQueue? = nil,
         loadingArtImage: UIImage? = nil,
         loadingThumbImage: UIImage? = nil,
         initialAudioTrackId: Int? = nil,
@@ -615,7 +618,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.serverURL = serverURL
         self.authToken = authToken
         self.startOffset = startOffset
-        self.shuffledQueue = shuffledQueue
+        self.playQueue = playQueue
         self.loadingArtImage = loadingArtImage
         self.loadingThumbImage = loadingThumbImage
         self.initialAudioTrackId = initialAudioTrackId
@@ -647,6 +650,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     convenience init(
         providerPlayback: ProviderPlayback,
         startOffset: TimeInterval?,
+        playQueue: PlayQueue? = nil,
         loadingArtImage: UIImage? = nil,
         loadingThumbImage: UIImage? = nil,
         preferredMediaID: String? = nil
@@ -660,11 +664,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             serverURL: "",
             authToken: "",
             startOffset: startOffset,
+            playQueue: playQueue,
             loadingArtImage: loadingArtImage,
             loadingThumbImage: loadingThumbImage,
             preferredMediaID: preferredMediaID
         )
         setProviderStream(providerPlayback)
+        // Lets `preparedNextProviderPlayback` start any entry.
+        for entry in playQueue?.entries ?? [] {
+            providerEpisodeItems[entry.item.ref.itemID] = entry.item
+        }
     }
 
     /// Store the provider's current stream and a reporter for its play
@@ -2573,33 +2582,38 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Episodes: season poster → show poster → episode thumb → backdrop
     /// Movies: poster (thumb) → backdrop
     private func nowPlayingArtwork() -> UIImage? {
-        if metadata.type == "episode" {
+        if metadata.type == "episode" || isLaterQueueItem {
             // Prefer season/show poster over episode screenshot for Now Playing
             if let poster = seasonPosterImage { return poster }
         }
-        return loadingThumbImage ?? loadingArtImage
+        // The loading images are the first playlist entry's.
+        return isLaterQueueItem ? nil : loadingThumbImage ?? loadingArtImage
     }
+
+    /// A playlist item after the first: the swap replaced it, the loading images stayed.
+    private var isLaterQueueItem: Bool { playQueue != nil && itemGeneration > 0 }
 
     /// Fetch the season or show poster for episode Now Playing artwork.
     /// Called before building external metadata so the image is ready.
     private func fetchSeasonPosterIfNeeded() async {
-        guard metadata.type == "episode" else { return }
+        let isEpisode = metadata.type == "episode"
+        guard isEpisode || isLaterQueueItem else { return }
+        // Never show the outgoing playlist item's poster.
+        if isLaterQueueItem { seasonPosterImage = nil }
 
-        // Try season poster first, then show poster
+        // Try season poster first, then show poster; a later playlist movie uses its own
         let posterURL = artworkURL(
-            plex: { plexImageURL(metadata.parentThumb ?? metadata.grandparentThumb) },
-            provider: { $0.item.parentArtwork?.poster ?? $0.item.grandparentArtwork?.poster }
+            plex: { plexImageURL(isEpisode ? metadata.parentThumb ?? metadata.grandparentThumb : metadata.thumb) },
+            provider: { isEpisode ? $0.item.parentArtwork?.poster ?? $0.item.grandparentArtwork?.poster
+                : $0.item.artwork.poster }
         )
         guard let url = posterURL else { return }
 
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            if let image = UIImage(data: data) {
-                seasonPosterImage = image
-            }
-        } catch {
-            // Fall through to episode thumb/backdrop
-        }
+        // The app's image session trusts raw-IP Plex servers; URLSession.shared does not.
+        let generation = itemGeneration
+        guard let image = await ImageCacheManager.shared.image(for: url),
+              generation == itemGeneration else { return }
+        seasonPosterImage = image
     }
 
     /// Resolve the title logo for the transport bar's ambient-pause swap:
@@ -5259,7 +5273,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// EpisodeSummaryOverlay, rather than fetching only at end-of-episode. Runs
     /// once per episode; later currentAVPlayer re-emissions are no-ops.
     private func resolveNextEpisodeEarlyIfNeeded() async {
-        guard metadata.type == "episode" else { return }
+        guard playQueue == nil, metadata.type == "episode" else { return }
         guard !nextEpisodeResolvedEarly else { return }
         nextEpisodeResolvedEarly = true
 
@@ -5278,7 +5292,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func triggerPostVideoTransition() {
         let isEpisode = metadata.type == "episode"
 
-        if showPostVideoUpNext || !isEpisode {
+        if playQueue != nil || showPostVideoUpNext || !isEpisode {
             Task { await handlePlaybackEnded() }
         } else {
             Task { await markCurrentAsWatched() }
@@ -5289,7 +5303,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// consumed everything left. Runs the end-of-playback funnel, then exits the
     /// player when nothing followed it (#264). Do not fold this into
     /// `handlePlaybackEnded()`: its other caller runs mid-credits and must not exit.
-    private func finishPlayback() async {
+    func finishPlayback() async {
         await handlePlaybackEnded()
         if postVideoState == .hidden {
             shouldDismiss = true
@@ -5318,8 +5332,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Per-user opt-out of the post-video "Up Next" chooser for TV
         // episodes. When disabled, episodes follow the same path movies
         // already take: credits play uninterrupted at full size.
-        // Movies: No PostVideo - just let the video play through to the end
-        guard isEpisode && showPostVideoUpNext else {
+        // Movies: No PostVideo - just let the video play through to the end.
+        // A playlist's next entry follows any type, ahead of both gates.
+        guard playQueue != nil || (isEpisode && showPostVideoUpNext) else {
             postVideoState = .hidden
             return
         }
@@ -5327,7 +5342,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // TV Show: Only show PostVideo if there's a next episode
 
         // If parent metadata is missing (e.g., from Continue Watching), fetch full metadata first
-        if metadata.parentRatingKey == nil || metadata.index == nil {
+        if playQueue == nil, metadata.parentRatingKey == nil || metadata.index == nil {
             await fetchFullMetadataIfNeeded()
         }
 
@@ -5424,6 +5439,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// or on any fetch failure.
     func loadUpNextEpisodes() async {
         let generation = itemGeneration
+        guard playQueue == nil else { return }
         guard metadata.type == "episode" else {
             upNextEpisodes = []
             return
@@ -5452,10 +5468,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 .filter { $0.index != nil }
                 .sorted { ($0.index ?? 0) < ($1.index ?? 0) }
             // Season finale: surface the next season's opener as the up-next row.
-            // Skipped during shuffle play — fetchNextEpisode() advances the shuffle
-            // queue index as a side effect, and the panel shows season order anyway.
-            if !isShufflePlay,
-               episodes.last?.ratingKey == metadata.ratingKey,
+            if episodes.last?.ratingKey == metadata.ratingKey,
                let next = await fetchNextEpisode(),
                next.parentRatingKey != metadata.parentRatingKey {
                 episodes.append(next)
@@ -5772,9 +5785,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         return (season, nextEpisode(after: current, in: season, nextSeasonEpisodes: nextSeasonEpisodes))
     }
 
+    /// A playlist row's still: an episode's frame, otherwise the backdrop.
+    static func queueThumbnailURL(for item: MediaItem) -> URL? {
+        item.kind == .episode ? item.artwork.thumbnail ?? item.artwork.backdrop
+            : item.artwork.backdrop ?? item.artwork.thumbnail
+    }
+
     /// Up Next thumbnail for a provider episode's shim, from its own artwork.
     /// nil on the Plex path, where the views build the Plex URL.
     func providerThumbnailURL(for episode: PlexMetadata) -> URL? {
+        // A playlist entry is a listing shell on both sources: its art is the item's.
+        if let key = episode.ratingKey,
+           let item = playQueue?.entries.first(where: { $0.item.ref.itemID == key })?.item {
+            return Self.queueThumbnailURL(for: item)
+        }
         guard case .provider = source, let key = episode.ratingKey,
               let item = providerEpisodeItems[key] else { return nil }
         return item.artwork.thumbnail ?? item.artwork.backdrop
@@ -5782,15 +5806,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Fetch the next episode for TV shows
     func fetchNextEpisode() async -> PlexMetadata? {
+        // A playlist plays its next entry, any type. No side effects: the swap advances.
+        if let playQueue {
+            return playQueue.next.map { ProviderPlaybackMetadata.listing(item: $0.item) }
+        }
         if case .provider(let playback) = source {
             return await providerUpNext(playback).next.map(ProviderPlaybackMetadata.listing(item:))
-        }
-
-        // Shuffled queue: return next shuffled episode instead of sequential
-        if !shuffledQueue.isEmpty {
-            shuffledQueueIndex += 1
-            guard shuffledQueueIndex < shuffledQueue.count else { return nil }
-            return shuffledQueue[shuffledQueueIndex]
         }
 
         // Check if next episode was prefetched
@@ -5929,11 +5950,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Fetch full metadata with markers
         do {
-            let fullMetadata = try await networkManager.getFullMetadata(
-                serverURL: serverURL,
-                authToken: authToken,
-                ratingKey: ratingKey
-            )
+            let fullMetadata = try await plexMetadataFetch(serverURL, authToken, ratingKey)
             preloadedNextMetadata = fullMetadata
         } catch {
             print("🎬 [Preload] Failed to fetch metadata: \(error)")
@@ -6021,7 +6038,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Stops the countdown and says why. The post-video page shows it; with
     /// no page up (a pick from the Up Next panel) it shows as a notice.
     private func showNextEpisodeError() {
-        let message = "Couldn't load the next episode."
+        let message = playQueue == nil ? "Couldn't load the next episode." : "Couldn't load the next item."
         nextEpisodeError = message
         cancelCountdown()
         if postVideoState == .hidden { showCompatibilityNotice(message) }
@@ -6040,7 +6057,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// still marks the CURRENT episode watched — same semantics as advancing
     /// normally, even when jumping ahead or back within the season.
     func playEpisode(_ episode: PlexMetadata) async {
-        guard episode.ratingKey != metadata.ratingKey else { return }
+        // A playlist pick goes by position, through `playQueueEntry(at:)`.
+        guard playQueue == nil, episode.ratingKey != metadata.ratingKey else { return }
         // Any in-flight preload was for the previously-resolved `nextEpisode`,
         // not this target — discard it so playNextEpisode() doesn't splice in
         // the wrong episode's metadata/stream URL.
@@ -6051,13 +6069,25 @@ final class UniversalPlayerViewModel: ObservableObject {
         await playNextEpisode()
     }
 
+    /// Plays the playlist entry at `index`, by position, so a repeated title still plays.
+    func playQueueEntry(at index: Int) async {
+        guard let playQueue, playQueue.entries.indices.contains(index), index != playQueue.index else { return }
+        preloadedNextMetadata = nil
+        preloadedNextStreamURL = nil
+        preloadedNextStreamHeaders = [:]
+        nextEpisode = ProviderPlaybackMetadata.listing(item: playQueue.entries[index].item)
+        await playNextEpisode(queueIndex: index)
+    }
+
     /// Play the next episode. `autoplayed` is the countdown running out; any
     /// other start comes from the remote and begins a new run.
-    func playNextEpisode(autoplayed: Bool = false) async {
+    /// `queueIndex` is a playlist jump; nil moves a playlist on by one.
+    func playNextEpisode(autoplayed: Bool = false, queueIndex: Int? = nil) async {
         guard let next = nextEpisode else { return }
         // A provider swap awaits its provider first, so a second call (the
         // countdown and a Play Now press) must not start another one.
         if case .provider = source, isSwappingItem { return }
+        if playQueue != nil, isSwappingItem { return }
 
         // Everything below runs while the OUTGOING episode is still playing.
         // See `isSwappingItem`.
@@ -6067,6 +6097,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // A provider episode's stream comes before anything is torn down: if
         // the provider can't serve it, the current episode plays on.
         var nextProviderPlayback: ProviderPlayback?
+        // Plex playlist target's metadata, held locally: a preload for another entry can land at any await.
+        var queuePlexMetadata: PlexMetadata?
         if case .provider = source {
             nextEpisodeError = nil
             let stops = stopCount
@@ -6074,6 +6106,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             // The player was closed while the provider answered.
             guard stops == stopCount else { return }
             nextProviderPlayback = prepared
+        } else if playQueue != nil, let key = next.ratingKey {
+            if let preloaded = preloadedNextMetadata, preloaded.ratingKey == key, preloaded.Media?.isEmpty == false {
+                queuePlexMetadata = preloaded
+            } else {
+                let stops = stopCount
+                let fetched = try? await plexMetadataFetch(serverURL, authToken, key)
+                guard stops == stopCount else { return }
+                guard let fetched, fetched.Media?.isEmpty == false else { return showNextEpisodeError() }
+                queuePlexMetadata = fetched
+            }
         }
 
         // A step-down or track reload for the outgoing episode must not land on the next one.
@@ -6081,8 +6123,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         longStallTask?.cancel()
         longStallTask = nil
 
-        // Mark current episode as watched BEFORE switching to next
-        await markCurrentAsWatched()
+        // A playlist pick before the credits leaves the item resumable: stopped at the playhead, not watched.
+        let reachedEnd = queueIndex == nil || hasTriggeredPostVideo || postVideoState != .hidden
+        if reachedEnd {
+            await markCurrentAsWatched()
+        } else if case .plex = source, let ratingKey = metadata.ratingKey, !ratingKey.isEmpty {
+            await PlexProgressReporter.shared.reportProgress(
+                ratingKey: ratingKey, time: currentTime, duration: duration,
+                state: "stopped", forceReport: true, server: plexServer)
+        }
         // The outgoing item's play session ends here.
         if case .provider = source {
             await stopProviderReporter(at: currentTime)
@@ -6109,7 +6158,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         } else {
             // Preloaded metadata has markers. Choose before the swap: the choice may read the outgoing file.
             let version = upNextVersionChoice()
-            metadata = preloadedNextMetadata ?? next
+            metadata = queuePlexMetadata ?? preloadedNextMetadata ?? next
             playingMediaID = nil
             playingMediaServerIndex = 0
             baseVersionChoice = version
@@ -6120,6 +6169,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // signal), so bump this explicitly for anything that caches
         // per-item state and needs to reset across the swap.
         itemGeneration += 1
+        if let queueIndex { playQueue?.jump(to: queueIndex) } else { playQueue?.advance() }
         providerTargetSourceID = nil
         // Work queued for the outgoing item never runs, so nothing else clears this.
         trackReloadQueued = false
@@ -6146,8 +6196,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Re-resolve the title logo for the new episode.
         fetchTitleLogoIfNeeded()
 
-        // Reset start offset so next episode starts from beginning (not resume position)
-        startOffset = nil
+        // A series episode starts at 0; a playlist entry at its own resume point.
+        startOffset = playQueue == nil ? nil : ProviderPlayer.plexStartOffset(metadata, fromBeginning: false)
 
         // Reset skip tracking for new episode — but keep hasTriggeredPostVideo = true
         // until after startPlayback() completes. The old time observer can emit stale
@@ -6187,7 +6237,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         plexSessionId = nil
 
         // Use preloaded stream URL if available, otherwise prepare fresh
-        if let preloadedURL = preloadedNextStreamURL, nextEpisodePlaysOriginal {
+        // The warmed URL is written with its metadata, so a matching key means it is this item's file.
+        if let preloadedURL = preloadedNextStreamURL, nextEpisodePlaysOriginal,
+           preloadedNextMetadata?.ratingKey == metadata.ratingKey {
             streamURL = preloadedURL
             streamHeaders = preloadedNextStreamHeaders
             qualityChoice = .original

@@ -224,6 +224,7 @@ final class SearchRecentsCell: UICollectionViewCell {
         case .season: parts.append("Season")
         case .episode: parts.append("Episode")
         case .collection: parts.append("Collection")
+        case .playlist: parts.append("Playlist")
         case .person, .unknown: break
         }
         if let year = item.year { parts.append(String(year)) }

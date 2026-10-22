@@ -119,6 +119,10 @@ enum SettingsDescriptorStore {
             icon: "bookmark",
             description: "Shows a Watchlist tab in the sidebar with everything on your Plex Watchlist."
         ),
+        "showPlaylistsTab": SettingDescriptor(
+            icon: "list.bullet.rectangle",
+            description: "Shows a Playlists row under each server that has video playlists."
+        ),
         "discoverAboveLibraries": SettingDescriptor(
             icon: "arrow.up.arrow.down",
             description: "Moves the Discover tab above your Media libraries in the sidebar for quicker access."

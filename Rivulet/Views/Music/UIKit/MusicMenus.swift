@@ -130,11 +130,26 @@ enum MusicMenus {
         ]
     }
 
-    /// Only the tracks' own server's playlists: a playlist holds one server's items.
+    /// New Playlist first, then only the tracks' own server's playlists: a playlist holds one server's items.
     private static func addToPlaylist(_ tracks: @escaping TrackSource, on providerID: String) -> [MusicMenuItem] {
         let playlists = playlists.filter { $0.ref.providerID == providerID }
-        guard !playlists.isEmpty else { return [] }
-        let children = playlists.map { playlist in
+        let newPlaylist = MusicMenuItem(title: "New Playlist", symbol: "plus") {
+            // Resolved after the system menu has closed: nil = the window's top.
+            PlaylistMenus.presentNameEntry(title: "New Playlist", initialText: "", from: nil) { name in
+                run(tracks) { tracks in
+                    Task {
+                        do {
+                            guard let created = try await registry.provider(for: providerID)?
+                                .createPlaylist(title: name, seededWith: tracks.map(\.ref)) else { return }
+                            if loaded?.generation == registry.generation { loaded?.playlists.append(created) }
+                        } catch {
+                            MusicPresenter.reportFailure(error)
+                        }
+                    }
+                }
+            }
+        }
+        let children = [newPlaylist] + playlists.map { playlist in
             MusicMenuItem(title: playlist.title, symbol: "music.note.list") {
                 run(tracks) { tracks in
                     Task {
@@ -148,7 +163,7 @@ enum MusicMenus {
                 }
             }
         }
-        return [MusicMenuItem(title: "Add to a Playlist…", symbol: "text.badge.plus", children: children)]
+        return [MusicMenuItem(title: "Add to Playlist", symbol: "text.badge.plus", children: children)]
     }
 
     /// The Play or Shuffle still fetching its tracks. A newer one replaces it and a
@@ -189,7 +204,7 @@ enum MusicMenus {
 
     private static var loaded: (generation: Int, playlists: [MusicPlaylist], complete: Bool)?
 
-    /// Regular playlists for the "Add to a Playlist…" submenu. Smart ones reject tracks.
+    /// Regular playlists for the "Add to Playlist" submenu. Smart ones reject tracks.
     /// Empty again after a sign-out or a server or profile switch: they belong to the account.
     static var playlists: [MusicPlaylist] {
         loaded?.generation == MusicProviderRegistry.shared.generation ? loaded?.playlists ?? [] : []

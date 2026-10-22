@@ -107,4 +107,44 @@ final class CollectionPageRoutingTests: XCTestCase {
         XCTAssertTrue(opened)
         XCTAssertEqual(memberDetail.presented.count, 1)
     }
+
+    func test_playlistTile_opensPlaylistPage() throws {
+        let presenter = RecordingPresenter()
+
+        XCTAssertFalse(PlexHomeViewController.openPlaylistIfNeeded(item("1", kind: .movie), from: presenter))
+        XCTAssertFalse(PlexHomeViewController.openCollectionIfNeeded(item("77", kind: .playlist), from: presenter))
+        let opened = PlexHomeViewController.openPlaylistIfNeeded(item("77", kind: .playlist), from: presenter)
+
+        XCTAssertTrue(opened)
+        let page = try XCTUnwrap(presenter.presented.first as? PlexHomeViewController)
+        guard case .playlist(let shown) = page.mode else {
+            return XCTFail("presented page is not in playlist mode")
+        }
+        XCTAssertEqual(shown.item.ref.itemID, "77")
+        XCTAssertEqual(page.modalPresentationStyle, .overFullScreen)
+        XCTAssertTrue(page.transitioningDelegate is BlurFadeTransitioningDelegate)
+    }
+
+    func test_openPlaylist_dedupesStack() {
+        let playlist = MediaPlaylist(item: item("77", kind: .playlist), isSmart: false)
+        let page = PlexHomeViewController(mode: .playlist(playlist))
+        let entryDetail = RecordingPresenter()
+        entryDetail.below = page
+
+        XCTAssertTrue(PlexHomeViewController.openPlaylistIfNeeded(item("77", kind: .playlist), from: entryDetail))
+        XCTAssertTrue(entryDetail.presented.isEmpty, "a second page for the same playlist was stacked")
+
+        XCTAssertTrue(PlexHomeViewController.openPlaylistIfNeeded(item("78", kind: .playlist), from: entryDetail))
+        XCTAssertEqual(entryDetail.presented.count, 1)
+    }
+
+    /// A title in a playlist twice: the preview's source ids are slots, so
+    /// focus returns to the copy that opened it.
+    func test_playlistPage_sourceIDsArePositional() {
+        let same = item("5", kind: .movie)
+        XCTAssertEqual(PlexHomeViewController.sourceItemIDs([same, same], rowID: "grid", positional: true),
+                       ["grid-0", "grid-1"])
+        XCTAssertEqual(PlexHomeViewController.sourceItemIDs([same, item("", kind: .movie)], rowID: "grid", positional: false),
+                       ["5", "grid-1"])
+    }
 }

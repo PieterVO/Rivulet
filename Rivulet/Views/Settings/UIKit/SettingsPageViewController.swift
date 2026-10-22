@@ -33,13 +33,8 @@ final class SettingsPageViewController: UIViewController {
 
     /// Tracks the focused row so a grab (hold Select) knows which row to act on.
     private var focusedIndexPath: IndexPath?
-    /// The row currently grabbed in reorder/move mode (nil = not moving).
-    private var movingIndexPath: IndexPath?
-    /// Swallows the Select that ends a grab/drop so it doesn't also toggle.
-    private var suppressNextSelect = false
-    /// Gestures active ONLY during move mode (Up/Down slide, Select drop). The
-    /// grab long-press is always active.
-    private var moveGestures: [UIGestureRecognizer] = []
+    /// Move mode for a grabbed row: Up/Down slide it, Select drops it.
+    private var reorder: GrabReorderController!
 
     init(page: SettingsPage) {
         self.page = page
@@ -95,77 +90,40 @@ final class SettingsPageViewController: UIViewController {
         grab.allowedPressTypes = [NSNumber(value: UIPress.PressType.select.rawValue)]
         collectionView.addGestureRecognizer(grab)
 
-        moveGestures = [
-            moveGesture(.upArrow, #selector(moveUp)),
-            moveGesture(.downArrow, #selector(moveDown)),
-            moveGesture(.select, #selector(dropGrab)),
-            moveSwipe(.up, #selector(moveUp)),
-            moveSwipe(.down, #selector(moveDown))
-        ]
-        moveGestures.forEach { $0.isEnabled = false; collectionView.addGestureRecognizer($0) }
+        reorder = GrabReorderController(
+            view: collectionView, axis: .vertical, count: { [weak self] in self?.rows.count ?? 0 },
+            canMove: { [weak self] from, to in
+                // Only slide within the reorderable run (don't pass Add All / Remove All).
+                guard let rows = self?.rows else { return false }
+                return rows[to].isReorderable && rows[to].reorderGroup == rows[from].reorderGroup
+            },
+            onStep: { [weak self] from, to in self?.moveRow(from: from, to: to) },
+            onDrop: { [weak self] _, final in
+                (self?.collectionView.cellForItem(at: IndexPath(item: final, section: 0)) as? SettingsCell)?
+                    .setReordering(false)
+            })
 
         // Kick off any background load this page needs (e.g. fetch Plex Home
         // users) and refresh the list when it arrives.
         SettingsContent.prepareAsync(for: page) { [weak self] in self?.reloadRows() }
     }
 
-    private func moveGesture(_ type: UIPress.PressType, _ action: Selector) -> UITapGestureRecognizer {
-        let gr = UITapGestureRecognizer(target: self, action: action)
-        gr.allowedPressTypes = [NSNumber(value: type.rawValue)]
-        return gr
-    }
-
-    /// The swipe twin of `moveGesture(_:_:)` (#239): a touch-surface swipe never
-    /// arrives as an arrow press. Enabled only while a row is grabbed, so normal
-    /// swipe-to-scroll is untouched.
-    private func moveSwipe(_ direction: UISwipeGestureRecognizer.Direction, _ action: Selector) -> UISwipeGestureRecognizer {
-        let gr = UISwipeGestureRecognizer(target: self, action: action)
-        gr.direction = direction
-        gr.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
-        // On tvOS a swipe recognizer otherwise also waits for a .select press,
-        // which would race the grab/drop handling above.
-        gr.allowedPressTypes = []
-        return gr
-    }
-
     @objc private func handleGrab(_ gr: UILongPressGestureRecognizer) {
-        guard gr.state == .began, movingIndexPath == nil,
+        guard gr.state == .began, !reorder.isMoving,
               let ip = focusedIndexPath, ip.item < rows.count,
               rows[ip.item].isReorderable else { return }
-        movingIndexPath = ip
-        suppressNextSelect = true            // the grab hold's release must not toggle
-        setMoveGesturesEnabled(true)
+        reorder.begin(at: ip.item)
+        reorder.swallowsNextSelect = true     // the grab hold's release must not toggle
         (collectionView.cellForItem(at: ip) as? SettingsCell)?.setReordering(true)
     }
 
-    @objc private func moveUp() { moveHeld(up: true) }
-    @objc private func moveDown() { moveHeld(up: false) }
-
-    private func moveHeld(up: Bool) {
-        guard let from = movingIndexPath else { return }
-        let toItem = from.item + (up ? -1 : 1)
-        // Only slide within the reorderable run (don't pass Add All / Remove All).
-        guard toItem >= 0, toItem < rows.count, rows[toItem].isReorderable,
-              rows[toItem].reorderGroup == rows[from.item].reorderGroup else { return }
-        let to = IndexPath(item: toItem, section: 0)
-        rows[from.item].onReorder?(up)        // persist the single-step move
-        let moved = rows.remove(at: from.item)
-        rows.insert(moved, at: toItem)
-        collectionView.performBatchUpdates { collectionView.moveItem(at: from, to: to) }
-        movingIndexPath = to
-        focusedIndexPath = to
-    }
-
-    @objc private func dropGrab() {
-        guard let ip = movingIndexPath else { return }
-        (collectionView.cellForItem(at: ip) as? SettingsCell)?.setReordering(false)
-        movingIndexPath = nil
-        suppressNextSelect = true             // swallow the drop click so it doesn't toggle
-        setMoveGesturesEnabled(false)
-    }
-
-    private func setMoveGesturesEnabled(_ on: Bool) {
-        moveGestures.forEach { $0.isEnabled = on }
+    private func moveRow(from: Int, to: Int) {
+        rows[from].onReorder?(to < from)       // persist the single-step move
+        let moved = rows.remove(at: from)
+        rows.insert(moved, at: to)
+        let toPath = IndexPath(item: to, section: 0)
+        collectionView.performBatchUpdates { collectionView.moveItem(at: IndexPath(item: from, section: 0), to: toPath) }
+        focusedIndexPath = toPath
     }
 
     private var hasAppeared = false
@@ -248,7 +206,7 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         // A long-press just fired its menu; swallow the trailing Select so it
         // doesn't also toggle the row.
-        if suppressNextSelect { suppressNextSelect = false; return }
+        if reorder.swallowsNextSelect { reorder.swallowsNextSelect = false; return }
         let item = rows[indexPath.item]
         switch item.kind {
         case .navigation(let target), .navigationValue(let target, _):
@@ -301,6 +259,6 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
     /// of moving focus to a neighbour.
     func collectionView(_ collectionView: UICollectionView,
                         shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
-        movingIndexPath == nil
+        !reorder.isMoving
     }
 }

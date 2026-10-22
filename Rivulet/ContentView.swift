@@ -270,7 +270,6 @@ private struct AutoPlayLauncherModifier: ViewModifier {
                         serverURL: serverURL,
                         authToken: authToken,
                         startOffset: startOffset,
-                        shuffledQueue: [],
                         loadingArtImage: nil,
                         loadingThumbImage: nil
                     )

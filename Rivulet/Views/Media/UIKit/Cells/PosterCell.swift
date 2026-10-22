@@ -270,6 +270,7 @@ final class PosterCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         resetContent()
+        contentView.setReorderWiggle(false)
     }
 
     /// Blank glass card for a library-grid slot whose page has not loaded.
@@ -520,9 +521,9 @@ final class PosterCell: UICollectionViewCell {
     // MARK: - MediaItem progress bar
 
     private func configureProgressBar(item: MediaItem) {
-        // MediaItem has no audio kind equivalent; only person/collection are
+        // MediaItem has no audio kind equivalent; only person/collection/playlist are
         // "no progress" -- treat anything without a runtime as suppressed.
-        guard item.kind != .person, item.kind != .collection else {
+        guard item.kind != .person, item.kind != .collection, item.kind != .playlist else {
             progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
             progressInfoBar.reset()
             return

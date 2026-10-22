@@ -1023,6 +1023,7 @@ final class MediaDetailChromeView: UIView {
         case .movie: return "Movie"
         case .show, .season, .episode: return "TV Show"
         case .collection: return "Collection"
+        case .playlist: return "Playlist"
         case .person: return "Person"
         case .unknown: return ""
         }

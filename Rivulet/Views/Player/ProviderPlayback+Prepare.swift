@@ -121,9 +121,11 @@ enum ProviderPlayer {
     }
 
     /// Play `item` from its own provider. A show or a season resolves to the
-    /// episode Play means first, the same way the Plex path does.
+    /// episode Play means first, the same way the Plex path does. `playQueue`
+    /// is the playlist `item` starts.
     @MainActor
     static func play(_ item: MediaItem, fromBeginning: Bool, sourceID: String? = nil,
+                     playQueue: PlayQueue? = nil,
                      from presenter: UIViewController, onDismiss: (() -> Void)?) {
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
             presentError(MediaProviderError.notFound, from: presenter)
@@ -149,6 +151,7 @@ enum ProviderPlayer {
                     let viewModel = UniversalPlayerViewModel(
                         metadata: metadata, serverURL: plex.serverURL, authToken: plex.authToken,
                         startOffset: plexStartOffset(metadata, fromBeginning: fromBeginning),
+                        playQueue: playQueue,
                         loadingArtImage: art, loadingThumbImage: thumb, preferredMediaID: sourceID)
                     PlayerPresenter.present(viewModel: viewModel, from: presenter, onDismiss: onDismiss)
                 } catch {
@@ -164,6 +167,7 @@ enum ProviderPlayer {
                     providerPlayback: playback,
                     startOffset: startOffset(detailOffset: playback.detail.item.userState.viewOffset,
                                              fromBeginning: fromBeginning),
+                    playQueue: playQueue,
                     loadingArtImage: art,
                     loadingThumbImage: thumb,
                     preferredMediaID: sourceID)

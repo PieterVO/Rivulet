@@ -23,6 +23,30 @@ struct ShellSidebarItem: Hashable {
     var badge: String?
 }
 
+/// A server whose sidebar gets a Playlists row.
+struct PlaylistServer: Hashable {
+    let providerID: String
+    let name: String
+    /// `LibrarySettingsManager.serverID(ofKey:)` of this server's libraries: "" for the selected Plex server.
+    let serverID: String
+
+    /// The servers among `providerIDs`, the selected Plex server first.
+    @MainActor static func current(_ providerIDs: Set<String>) -> [PlaylistServer] {
+        let plexID = MediaProviderRegistry.shared.plexProvider?.id
+        var servers: [PlaylistServer] = []
+        if let plexID, providerIDs.contains(plexID) {
+            servers.append(PlaylistServer(providerID: plexID,
+                                          name: PlexAuthManager.shared.savedServerName ?? "Library", serverID: ""))
+        }
+        for source in ServerDataStore.shared.sources
+        where source.providerID != plexID && providerIDs.contains(source.providerID)
+            && !servers.contains(where: { $0.providerID == source.providerID }) {
+            servers.append(PlaylistServer(providerID: source.providerID, name: source.name, serverID: source.providerID))
+        }
+        return servers
+    }
+}
+
 /// One library in the sidebar, any server's, in the user's order.
 struct SidebarLibrary: Hashable {
     /// `LibrarySettingsManager`'s key, which names the server.
@@ -79,7 +103,8 @@ enum ShellSidebarModel {
         profileName: String,
         profileAvatar: URL? = nil,
         canSwitchProfile: Bool = false,
-        hasMediaServer: Bool = true
+        hasMediaServer: Bool = true,
+        playlistServers: [PlaylistServer] = []
     ) -> [ShellSidebarSection] {
         var sections: [ShellSidebarSection] = []
 
@@ -116,7 +141,7 @@ enum ShellSidebarModel {
         let liveTVSection = ShellSidebarSection(
             title: "Live TV",
             items: liveTVItems(sources: liveTVSources, combined: combineLiveTV))
-        let librarySections = self.librarySections(libraries)
+        let librarySections = self.librarySections(libraries, playlistServers: playlistServers)
         let middle = liveTVAbove ? [liveTVSection] + librarySections : librarySections + [liveTVSection]
         sections.append(contentsOf: middle.filter { !$0.items.isEmpty })
 
@@ -132,27 +157,54 @@ enum ShellSidebarModel {
     /// The libraries, already in the user's order. While each server's sit
     /// together they get a section under the server's name, the selected Plex
     /// server's first by default. Once the user mixes them, one Libraries
-    /// section, each row badged with its server.
-    static func librarySections(_ libraries: [SidebarLibrary]) -> [ShellSidebarSection] {
+    /// section, each row badged with its server. A server with video playlists
+    /// gets a Playlists row after its libraries, and a section of its own when
+    /// all its libraries are hidden.
+    static func librarySections(_ libraries: [SidebarLibrary],
+                                playlistServers: [PlaylistServer] = []) -> [ShellSidebarSection] {
         guard LibrarySettingsManager.isGroupedByServer(libraries.map(\.key)) else {
-            return [ShellSidebarSection(title: "Libraries", items: libraries.map { library in
+            let items = libraries.map { library in
                 var item = library.item
                 item.badge = library.serverName
                 return item
-            })]
+            } + playlistServers.map { server in
+                var item = playlistsItem(server)
+                item.badge = server.name
+                return item
+            }
+            return [ShellSidebarSection(title: "Libraries", items: items)]
         }
         var sections: [ShellSidebarSection] = []
+        var placed: Set<String> = []
+        func close(_ run: [SidebarLibrary]) {
+            guard let first = run.first else { return }
+            var items = run.map(\.item)
+            let serverID = LibrarySettingsManager.serverID(ofKey: first.key)
+            if let server = playlistServers.first(where: { $0.serverID == serverID }) {
+                items.append(playlistsItem(server))
+                placed.insert(server.providerID)
+            }
+            sections.append(ShellSidebarSection(title: first.serverName, items: items))
+        }
         var run: [SidebarLibrary] = []
         for library in libraries {
             if let first = run.first,
                LibrarySettingsManager.serverID(ofKey: first.key) != LibrarySettingsManager.serverID(ofKey: library.key) {
-                sections.append(ShellSidebarSection(title: first.serverName, items: run.map(\.item)))
+                close(run)
                 run = []
             }
             run.append(library)
         }
-        if let first = run.first { sections.append(ShellSidebarSection(title: first.serverName, items: run.map(\.item))) }
+        close(run)
+        for server in playlistServers where !placed.contains(server.providerID) {
+            sections.append(ShellSidebarSection(title: server.name, items: [playlistsItem(server)]))
+        }
         return sections
+    }
+
+    private static func playlistsItem(_ server: PlaylistServer) -> ShellSidebarItem {
+        ShellSidebarItem(tab: .playlists(providerID: server.providerID), title: "Playlists",
+                         icon: "list.bullet.rectangle")
     }
 
     /// Live TV with no media server: the app opens on Live TV and Home is hidden.

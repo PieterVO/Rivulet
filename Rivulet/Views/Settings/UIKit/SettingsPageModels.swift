@@ -417,6 +417,7 @@ enum SettingsContent {
             toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true,
                    enabledWhen: { SettingsStore.bool("showDiscoverTab", default: true) }),
             toggle("showWatchlistTab", "Show Watchlist Tab", key: "showWatchlistTab", default: true),
+            toggle("showPlaylistsTab", "Show Playlists", key: "showPlaylistsTab", default: true),
             // Profiles themselves are switched from the sidebar now, so this is
             // all that is left of the retired User Profiles page.
             SettingsRowItem(id: "profilePickerOnLaunch", title: "Profile Picker on Launch",

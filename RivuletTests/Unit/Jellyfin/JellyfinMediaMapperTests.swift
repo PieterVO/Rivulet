@@ -54,6 +54,12 @@ final class JellyfinMediaMapperTests: XCTestCase {
         XCTAssertEqual(ep.grandparentArtwork?.poster?.absoluteString, "http://jf.local:8096/Items/show1/Images/Primary?tag=showPrim")
     }
 
+    func test_playlist_cardArt_isPrimaryFilledTo16x9() {
+        let list = item(#"{"Id":"pl1","Name":"Road Trip","Type":"Playlist","ImageTags":{"Primary":"pp"}}"#)
+        XCTAssertEqual(list.artwork.backdrop?.absoluteString,
+                       "http://jf.local:8096/Items/pl1/Images/Primary?tag=pp&fillWidth=1280&fillHeight=720")
+    }
+
     func test_artwork_carriesNoToken() {
         XCTAssertFalse(item(JellyfinFixtures.episode).artwork.poster!.absoluteString.contains("ApiKey"))
     }

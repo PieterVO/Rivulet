@@ -119,6 +119,20 @@ protocol MediaProvider: Sendable, Identifiable {
     func addToWatchlist(_ ref: MediaItemRef) async throws
     func removeFromWatchlist(_ ref: MediaItemRef) async throws
 
+    // MARK: - Playlists (video)
+    var supportsPlaylists: Bool { get }
+    /// Regular and smart video playlists, sorted by title.
+    func videoPlaylists() async throws -> [MediaPlaylist]
+    /// Every row, all pages, in the server's order.
+    func playlistEntries(_ playlist: MediaItemRef) async throws -> [PlaylistEntry]
+    func createPlaylist(title: String, seededWith items: [MediaItemRef]) async throws -> MediaPlaylist
+    func addToPlaylist(_ playlist: MediaItemRef, items: [MediaItemRef]) async throws
+    func removeFromPlaylist(_ playlist: MediaItemRef, entryID: String) async throws
+    /// `entries` is the order before the move; each backend derives what its server takes.
+    func movePlaylistEntry(_ playlist: MediaItemRef, entryID: String, toIndex: Int, in entries: [PlaylistEntry]) async throws
+    func renamePlaylist(_ playlist: MediaItemRef, title: String) async throws
+    func deletePlaylist(_ playlist: MediaItemRef) async throws
+
     // MARK: - Content advisory
 
     /// Provider-agnostic content advisory (Common Sense Media on Plex). Returns
@@ -168,6 +182,28 @@ extension MediaProvider {
     func canDeleteMedia() async -> Bool { false }
     func deleteMedia(_ itemRef: MediaItemRef) async throws {
         throw MediaProviderError.backendSpecific(underlying: "delete not supported")
+    }
+
+    var supportsPlaylists: Bool { false }
+    func videoPlaylists() async throws -> [MediaPlaylist] { [] }
+    func playlistEntries(_ playlist: MediaItemRef) async throws -> [PlaylistEntry] { [] }
+    func createPlaylist(title: String, seededWith items: [MediaItemRef]) async throws -> MediaPlaylist {
+        throw MediaProviderError.backendSpecific(underlying: "playlists not supported")
+    }
+    func addToPlaylist(_ playlist: MediaItemRef, items: [MediaItemRef]) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "playlists not supported")
+    }
+    func removeFromPlaylist(_ playlist: MediaItemRef, entryID: String) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "playlists not supported")
+    }
+    func movePlaylistEntry(_ playlist: MediaItemRef, entryID: String, toIndex: Int, in entries: [PlaylistEntry]) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "playlists not supported")
+    }
+    func renamePlaylist(_ playlist: MediaItemRef, title: String) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "playlists not supported")
+    }
+    func deletePlaylist(_ playlist: MediaItemRef) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "playlists not supported")
     }
 }
 

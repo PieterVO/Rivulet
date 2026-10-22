@@ -534,6 +534,113 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
         }
     }
 
+    // MARK: - Playlists
+
+    var supportsPlaylists: Bool { true }
+
+    /// Asked of the server once: the provider id can be a URL hash when the server list had not loaded.
+    private let machineID = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    private func serverMachineID() async throws -> String {
+        if let known = machineID.withLock({ $0 }) { return known }
+        let fetched = try await networkManager.getMachineIdentifier(serverURL: serverURL, authToken: authToken)
+        machineID.withLock { $0 = fetched }
+        return fetched
+    }
+
+    func videoPlaylists() async throws -> [MediaPlaylist] {
+        try await plexCall {
+            try await networkManager.getPlaylists(serverURL: serverURL, authToken: authToken, type: "video")
+                .map { PlexMediaMapper.playlist($0, providerID: id, serverURL: serverURL, authToken: authToken) }
+                .sorted { $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending }
+        }
+    }
+
+    func playlistEntries(_ playlist: MediaItemRef) async throws -> [PlaylistEntry] {
+        try await plexCall {
+            let size = 200
+            var entries: [PlaylistEntry] = []
+            var start = 0
+            while true {
+                let page = try await networkManager.getPlaylistItemsWithTotal(
+                    serverURL: serverURL, authToken: authToken,
+                    ratingKey: playlist.itemID, start: start, size: size
+                )
+                entries += page.items.compactMap { meta in
+                    meta.playlistItemID.map {
+                        PlaylistEntry(entryID: String($0),
+                                      item: PlexMediaMapper.item(meta, providerID: id, serverURL: serverURL, authToken: authToken))
+                    }
+                }
+                start += page.items.count
+                if page.items.isEmpty || start >= (page.totalSize ?? start) { return entries }
+            }
+        }
+    }
+
+    func createPlaylist(title: String, seededWith items: [MediaItemRef]) async throws -> MediaPlaylist {
+        try await plexCall {
+            let uri = PlexNetworkManager.libraryURI(machineIdentifier: try await serverMachineID(),
+                                                    ratingKeys: items.map(\.itemID))
+            let created = try await networkManager.createPlaylist(
+                serverURL: serverURL, authToken: authToken, type: "video", title: title, uri: uri
+            )
+            return PlexMediaMapper.playlist(created, providerID: id, serverURL: serverURL, authToken: authToken)
+        }
+    }
+
+    func addToPlaylist(_ playlist: MediaItemRef, items: [MediaItemRef]) async throws {
+        guard !items.isEmpty else { return }
+        try await plexCall {
+            try await networkManager.addToPlaylist(
+                serverURL: serverURL, authToken: authToken, playlistRatingKey: playlist.itemID,
+                machineIdentifier: try await serverMachineID(), ratingKeys: items.map(\.itemID)
+            )
+        }
+    }
+
+    func removeFromPlaylist(_ playlist: MediaItemRef, entryID: String) async throws {
+        try await plexCall {
+            try await networkManager.removePlaylistItem(
+                serverURL: serverURL, authToken: authToken,
+                playlistRatingKey: playlist.itemID, playlistItemID: entryID
+            )
+        }
+    }
+
+    func movePlaylistEntry(_ playlist: MediaItemRef, entryID: String, toIndex: Int, in entries: [PlaylistEntry]) async throws {
+        let after = Self.moveAfter(entryID: entryID, toIndex: toIndex, in: entries.map(\.entryID))
+        try await plexCall {
+            try await networkManager.movePlaylistItem(
+                serverURL: serverURL, authToken: authToken, playlistRatingKey: playlist.itemID,
+                playlistItemID: entryID, after: after
+            )
+        }
+    }
+
+    /// The row the moved one lands after, nil for the top: what Plex's `after` takes.
+    nonisolated static func moveAfter(entryID: String, toIndex: Int, in entryIDs: [String]) -> String? {
+        let others = entryIDs.filter { $0 != entryID }
+        let landed = min(max(toIndex, 0), others.count)
+        return landed > 0 ? others[landed - 1] : nil
+    }
+
+    func renamePlaylist(_ playlist: MediaItemRef, title: String) async throws {
+        try await plexCall {
+            try await networkManager.renamePlaylist(
+                serverURL: serverURL, authToken: authToken, playlistRatingKey: playlist.itemID, title: title
+            )
+        }
+    }
+
+    func deletePlaylist(_ playlist: MediaItemRef) async throws {
+        try await plexCall {
+            try await networkManager.deletePlaylist(
+                serverURL: serverURL, authToken: authToken, playlistRatingKey: playlist.itemID
+            )
+        }
+    }
+
     // MARK: - Helpers
 
     private func plexSortString(for sort: SortOption) -> String? {

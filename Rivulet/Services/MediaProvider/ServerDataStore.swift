@@ -77,12 +77,6 @@ final class ServerDataStore: ObservableObject {
         LibrarySettingsManager.shared.filterAndSort(libraries)
     }
 
-    /// Each server's visible libraries under its name, for the sidebar.
-    var visibleLibrariesBySource: [(name: String, libraries: [MediaLibrary])] {
-        let visible = visibleLibraries
-        return sources.map { source in (source.name, visible.filter { $0.providerID == source.providerID }) }
-    }
-
     /// Per server: Continue Watching, then each visible library's row in
     /// sidebar order. Settings > Home Rows lists these, hidden rows included.
     var homeRowsInSidebarOrder: CachedHomeRail {
@@ -119,6 +113,8 @@ final class ServerDataStore: ObservableObject {
     // poll if that proves too slow.
     func reload() {
         loadTask?.cancel()
+        // The sidebar's Playlists rows follow every server reload, the selected Plex server's included.
+        if self === Self.shared { Task { await PlaylistAvailability.shared.refresh() } }
         // A restricted profile does not see the Jellyfin server; a signed-out one is gone.
         let jellyfinID = PlexUserProfileManager.shared.isRestrictedProfile ? nil : JellyfinSession.account?.providerID
         let providers = MediaProviderRegistry.shared.secondaryProviders.filter { $0.kind != .jellyfin || $0.id == jellyfinID }

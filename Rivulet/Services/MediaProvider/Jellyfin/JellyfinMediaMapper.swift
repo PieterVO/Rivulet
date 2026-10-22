@@ -50,6 +50,7 @@ enum JellyfinMediaMapper {
         case "Season": return .season
         case "Episode": return .episode
         case "BoxSet": return .collection
+        case "Playlist": return .playlist
         case "Person": return .person
         default: return .unknown
         }
@@ -89,9 +90,13 @@ enum JellyfinMediaMapper {
 
     static func artwork(_ dto: JFItem, baseURL: URL) -> MediaArtwork {
         let primary = imageURL(baseURL, itemID: dto.id, type: "Primary", tag: dto.imageTags?["Primary"])
-        let backdrop = imageURL(baseURL, itemID: dto.id, type: "Backdrop", tag: dto.backdropImageTags?.first)
-            ?? imageURL(baseURL, itemID: dto.parentBackdropItemId, type: "Backdrop",
-                        tag: dto.parentBackdropImageTags?.first)
+        // A playlist's card is its Primary collage, filled to 16:9.
+        let backdrop = dto.type == "Playlist"
+            ? primary?.appending(queryItems: [URLQueryItem(name: "fillWidth", value: "\(MediaPlaylist.cardSize.width)"),
+                                              URLQueryItem(name: "fillHeight", value: "\(MediaPlaylist.cardSize.height)")])
+            : imageURL(baseURL, itemID: dto.id, type: "Backdrop", tag: dto.backdropImageTags?.first)
+                ?? imageURL(baseURL, itemID: dto.parentBackdropItemId, type: "Backdrop",
+                            tag: dto.parentBackdropImageTags?.first)
         let logo = imageURL(baseURL, itemID: dto.id, type: "Logo", tag: dto.imageTags?["Logo"])
             ?? imageURL(baseURL, itemID: dto.parentLogoItemId, type: "Logo", tag: dto.parentLogoImageTag)
         return MediaArtwork(poster: primary, backdrop: backdrop, thumbnail: primary, logo: logo)

@@ -38,6 +38,7 @@ enum PlexMediaMapper {
         case "season": return .season
         case "episode": return .episode
         case "collection": return .collection
+        case "playlist": return .playlist
         default: return .unknown
         }
     }
@@ -239,7 +240,8 @@ enum PlexMediaMapper {
         // Child progress — for shows / seasons, leafCount = total episodes,
         // viewedLeafCount = watched count.
         let childProgress: ChildProgress? = {
-            if let total = meta.leafCount {
+            // A playlist's leafCount is not a count to show (see `playlist`).
+            if meta.type != "playlist", let total = meta.leafCount {
                 return ChildProgress(played: meta.viewedLeafCount ?? 0, total: total)
             }
             return nil
@@ -288,6 +290,43 @@ enum PlexMediaMapper {
             versionCount: meta.Media.map { Set($0.map(\.id)).count },
             editionTitle: meta.editionTitle
         )
+    }
+
+    // MARK: - Playlist
+
+    /// No count: Plex `leafCount` disagrees with the rows a playlist serves.
+    static func playlist(
+        _ playlist: PlexPlaylist,
+        providerID: String,
+        serverURL: String,
+        authToken: String
+    ) -> MediaPlaylist {
+        let art = artworkURL(playlist.composite, serverURL: serverURL, authToken: authToken)
+        // ponytail: always the composite, even over a custom thumb; decode `thumb` and prefer it if users ask.
+        // The composite endpoint lays out the collage at any aspect when asked (the transcoder returns it square).
+        let card = playlist.composite.flatMap {
+            artworkURL("\($0)?width=\(MediaPlaylist.cardSize.width)&height=\(MediaPlaylist.cardSize.height)",
+                       serverURL: serverURL, authToken: authToken)
+        }
+        let item = MediaItem(
+            ref: MediaItemRef(providerID: providerID, itemID: playlist.ratingKey),
+            kind: .playlist,
+            title: playlist.title ?? "",
+            sortTitle: nil,
+            overview: nil,
+            year: nil,
+            runtime: playlist.duration.map { TimeInterval($0) / 1000 },
+            parentRef: nil,
+            grandparentRef: nil,
+            episodeNumber: nil,
+            seasonNumber: nil,
+            childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: art, backdrop: card, thumbnail: art, logo: nil),
+            parentArtwork: nil,
+            grandparentArtwork: nil
+        )
+        return MediaPlaylist(item: item, isSmart: playlist.smart ?? false)
     }
 
     // MARK: - Media source

@@ -67,4 +67,20 @@ final class UpNextRowStateTests: XCTestCase {
         let eps = [episode(key: "5", index: 5), episode(key: "6", index: 6, viewCount: 1)]
         XCTAssertEqual(UpNextRowState.state(for: eps[1], in: eps, currentRatingKey: "5"), .upNext)
     }
+
+    func test_upNextRows_markCurrentByIndex_forDuplicates() {
+        // A playlist with the same title at 0 and 2: only the playing copy is current.
+        let keys = ["a", "b", "a"]
+        let playingSecondCopy = keys.indices.map { UpNextRowState.queueState(at: $0, currentIndex: 2) }
+        XCTAssertEqual(playingSecondCopy, [.future, .future, .nowPlaying])
+        let playingFirstCopy = keys.indices.map { UpNextRowState.queueState(at: $0, currentIndex: 0) }
+        XCTAssertEqual(playingFirstCopy, [.nowPlaying, .upNext, .future])
+    }
+
+    func test_queueWindow_clampsAroundCurrent() {
+        XCTAssertEqual(UpNextRowState.queueWindow(count: 1000, currentIndex: 100), 95..<131)
+        XCTAssertEqual(UpNextRowState.queueWindow(count: 1000, currentIndex: 2), 0..<33)
+        XCTAssertEqual(UpNextRowState.queueWindow(count: 10, currentIndex: 8), 3..<10)
+        XCTAssertEqual(UpNextRowState.queueWindow(count: 1, currentIndex: 0), 0..<1)
+    }
 }

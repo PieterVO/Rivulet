@@ -85,6 +85,13 @@ enum MediaRowMetrics {
     static let cwWidth = continueWatching.frame.width
     static let cwHeight = continueWatching.frame.height
 
+    /// Playlists grid card: 16:9 art, three across.
+    static let playlistFullCount = 3
+    static let playlist: Tile = {
+        let width = gridWidth(columns: playlistFullCount)
+        return Tile(art: CGSize(width: width, height: (width * 9 / 16).rounded()), lockup: .card)
+    }()
+
     /// Live TV Browse card (16:9), on the Apple TV app's live-row geometry:
     /// four across, its ~88pt margin and 40pt gap, so both peeks stay wide.
     /// 2·88 + 4·406 + 3·40 = 1920 → 48pt sliver. The Browse page only, with

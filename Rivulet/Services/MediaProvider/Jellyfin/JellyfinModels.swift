@@ -93,6 +93,8 @@ nonisolated struct JFItem: Decodable, Sendable {
     let mediaStreams: [JFMediaStream]?  // needs Fields=MediaStreams on list calls
 
     let userData: JFUserData?
+    let playlistItemId: String? // Playlists/{id}/Items rows
+    let mediaType: String? // Video or Audio, on a Playlist
 
     let imageTags: [String: String]?
     let backdropImageTags: [String]?
@@ -341,4 +343,19 @@ nonisolated struct JFUserDataUpdate: Encodable, Sendable {
 /// POST /UserItems/{id}/UserData with a 0-10 star rating.
 nonisolated struct JFRatingUpdate: Encodable, Sendable {
     let rating: Double
+}
+
+nonisolated struct JFCreatePlaylist: Encodable, Sendable {
+    let name: String
+    let ids: [String]
+    let userId: String
+    let mediaType: String
+}
+
+nonisolated struct JFUpdatePlaylist: Encodable, Sendable {
+    let name: String
+}
+
+nonisolated struct JFCreated: Decodable, Sendable {
+    let id: String
 }

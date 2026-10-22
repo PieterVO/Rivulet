@@ -106,6 +106,7 @@ enum ProviderPlaybackMetadata {
             type: item.kind == .episode ? "episode" : nil,
             title: item.title,
             summary: item.overview,
+            year: item.year,
             duration: item.runtime.map { ms($0) },
             parentIndex: item.seasonNumber,
             grandparentTitle: item.seriesTitle,

@@ -266,6 +266,14 @@ final class JellyfinMusicProvider: MusicProvider, @unchecked Sendable {
         ])
     }
 
+    func createPlaylist(title: String, seededWith tracks: [MediaItemRef]) async throws -> MusicPlaylist {
+        let created: JFCreated = try await client.post("Playlists", body: JFCreatePlaylist(
+            name: title, ids: tracks.map(\.itemID), userId: userID, mediaType: "Audio"
+        ))
+        let dto: JFItem = try await client.get("Items/\(created.id)", [URLQueryItem(name: "userId", value: userID)])
+        return JellyfinMusicMapper.playlist(dto, providerID: id, baseURL: baseURL)
+    }
+
     // MARK: - Detail
 
     func artistDetail(for ref: MediaItemRef) async throws -> MusicArtistDetail {

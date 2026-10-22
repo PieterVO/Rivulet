@@ -40,6 +40,10 @@ final class StubMusicProvider: MusicProvider, @unchecked Sendable {
         PagedResult(items: [], total: 0, nextPage: nil)
     }
     func addToPlaylist(_ playlistRef: MediaItemRef, tracks: [MediaItemRef]) async throws {}
+    func createPlaylist(title: String, seededWith tracks: [MediaItemRef]) async throws -> MusicPlaylist {
+        MusicPlaylist(ref: MediaItemRef(providerID: id, itemID: title), title: title, artworkURL: nil,
+                      trackCount: tracks.count, duration: 0, isSmart: false)
+    }
     func artistDetail(for ref: MediaItemRef) async throws -> MusicArtistDetail {
         MusicArtistDetail(artist: MusicArtist(ref: ref, name: "", sortName: nil, artwork: Self.noArtwork,
                                               genres: [], yearRange: nil, userState: .empty),

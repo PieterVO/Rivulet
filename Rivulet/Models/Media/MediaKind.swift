@@ -16,6 +16,7 @@ enum MediaKind: String, Sendable, Hashable, Codable {
     case season
     case episode
     case collection
+    case playlist
     case person
     case unknown
 }

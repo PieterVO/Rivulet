@@ -369,11 +369,17 @@ final class FolderListViewController: UIViewController, UICollectionViewDelegate
                 Self.changeOnServer { try await provider.markUnplayed(ref) }
             })
         }
-        let sections = [[TileMenuAction(title: "Play from Beginning", systemImage: "arrow.counterclockwise") {
+        let tileFrame = cell.convert(cell.bounds, to: nil)
+        var first = [TileMenuAction(title: "Play from Beginning", systemImage: "arrow.counterclockwise") {
             [weak self] in self?.play(item, fromBeginning: true)
-        }], marks]
-        present(TileMenuPopupViewController(sections: sections, sourceFrame: cell.convert(cell.bounds, to: nil)),
-                animated: false)
+        }]
+        if PlaylistMenus.canAdd(item, provider: provider, isVideoFile: true) {
+            first.append(TileMenuAction(title: "Add to Playlist", systemImage: "text.badge.plus") { [weak self] in
+                guard let self else { return }
+                PlaylistMenus.presentAddToPlaylist(for: item, from: self, sourceFrame: tileFrame)
+            })
+        }
+        present(TileMenuPopupViewController(sections: [first, marks], sourceFrame: tileFrame), animated: false)
     }
 
     /// Posts `.plexDataNeedsRefresh` after the server call, failed or not, so the page repaints from the server.
