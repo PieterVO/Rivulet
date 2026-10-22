@@ -48,7 +48,29 @@ final class PlexExtraServers {
         let auth = PlexAuthManager.shared
         guard let stored, !auth.isContentWithheld, stored.ownerID == auth.contentOwnerID else { return [] }
         // The URL check covers a list saved before the selected server's id was known.
-        return stored.servers.filter { $0.machineID != auth.selectedServerMachineID && $0.url != auth.selectedServerURL }
+        return stored.servers.filter {
+            $0.machineID != auth.selectedServerMachineID && $0.url != auth.selectedServerURL && isEnabled(machineID: $0.machineID)
+        }
+    }
+
+    /// Servers turned off in Settings, by machine id. Survives refreshes and sign-out.
+    private let disabledKey = "plexDisabledServers"
+
+    func isEnabled(machineID: String) -> Bool {
+        !(UserDefaults.standard.stringArray(forKey: disabledKey) ?? []).contains(machineID)
+    }
+
+    func setEnabled(_ enabled: Bool, machineID: String) {
+        var disabled = Set(UserDefaults.standard.stringArray(forKey: disabledKey) ?? [])
+        if enabled { disabled.remove(machineID) } else { disabled.insert(machineID) }
+        UserDefaults.standard.set(disabled.sorted(), forKey: disabledKey)
+        Self.onChanged?()
+        LiveTVDataStore.shared.plexContentTokenChanged()
+        // A server that was the selected one is not in the stored list yet.
+        if enabled {
+            lastRefresh = nil
+            refreshForAccount()
+        }
     }
 
     func token(for server: Server) -> String? {

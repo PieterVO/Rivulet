@@ -11,6 +11,7 @@
 //  the UIKit equivalent of SettingsView's per-page ViewBuilders.
 //
 
+import Combine
 import Foundation
 import UIKit
 import SwiftUI
@@ -91,6 +92,8 @@ struct SettingsRowItem {
     /// unfocusable while that state is off. Evaluated live (not cached at build
     /// time) so flipping the row it depends on takes effect without a rebuild.
     var isEnabled: () -> Bool = { true }
+    /// Shows a spinner in place of the value while the row's change runs.
+    var isBusy: () -> Bool = { false }
     /// True = this "row" is really a group caption (see `header(_:)`).
     var isHeader = false
 
@@ -737,7 +740,7 @@ enum SettingsContent {
         return servers.map { server in
             SettingsRowItem(id: "plexServer_\(server.clientIdentifier)", title: server.name,
                             kind: .navigationAction(.plexServerDetail,
-                                                    value: { server.owned == false ? server.sourceTitle ?? "" : "" },
+                                                    value: { isPlexServerEnabled(server) ? (server.owned == false ? server.sourceTitle ?? "" : "") : "Off" },
                                                     prepare: { pendingPlexServer = server }))
         }
     }
@@ -750,6 +753,11 @@ enum SettingsContent {
         let connection = url.flatMap { url in server.connections?.first { url.contains($0.address) || url == $0.uri } }
         let liveTV = url.flatMap { url in LiveTVDataStore.shared.sources.first { $0.id == "plex:\(url)" } }
         var rows: [SettingsRowItem] = [
+            SettingsRowItem(id: "plexServerEnabled", title: "Use This Server", kind: .selectable(
+                isSelected: { false },
+                value: { isPlexServerEnabled(server) ? "On" : "Off" },
+                handler: { vc in togglePlexServer(server, on: vc) }),
+                isBusy: { busyPlexServerID == server.clientIdentifier }),
             info("plexServerStatus", "Status", server.presence == false ? "Offline" : "Online"),
             info("plexServerOwner", "Owner", server.owned == false ? (server.sourceTitle ?? "Shared") : "You"),
             info("plexServerVersion", "Version", server.productVersion)
@@ -775,6 +783,57 @@ enum SettingsContent {
             }
         })))
         return rows
+    }
+
+    /// The server whose Use This Server change is still loading.
+    private static var busyPlexServerID: String?
+
+    private static func isPlexServerEnabled(_ server: PlexDevice) -> Bool {
+        server.machineIdentifier.map { PlexExtraServers.shared.isEnabled(machineID: $0) } ?? true
+    }
+
+    /// Turning off the selected server first moves the selected role to another
+    /// server that is on; the last server in use can only be signed out. The row
+    /// spins until the servers' content has reloaded.
+    private static func togglePlexServer(_ server: PlexDevice, on vc: UIViewController) {
+        guard busyPlexServerID == nil, let id = server.machineIdentifier else { return }
+        let turningOff = isPlexServerEnabled(server)
+        let others = (plexServers ?? []).filter { $0.clientIdentifier != server.clientIdentifier && isPlexServerEnabled($0) }
+        let isSelected = PlexAuthManager.shared.isCurrentServer(server)
+        if turningOff, isSelected, others.isEmpty {
+            vc.present(ConfirmationPopupViewController(
+                title: "Only Server in Use",
+                message: "Turn on another server first, or sign out of Plex.",
+                confirmTitle: "OK", cancelTitle: nil, onConfirm: {}), animated: true)
+            return
+        }
+        busyPlexServerID = server.clientIdentifier
+        (vc as? SettingsPageViewController)?.reloadRows()
+        Task { @MainActor [weak vc] in
+            // Let the spinner draw before the reload's main-thread work.
+            try? await Task.sleep(for: .milliseconds(50))
+            var changed = true
+            if turningOff, isSelected {
+                changed = false
+                for other in others where await PlexDataStore.shared.switchServer(to: other) {
+                    changed = true
+                    break
+                }
+            }
+            if changed {
+                PlexExtraServers.shared.setEnabled(!turningOff, machineID: id)
+                for await loading in ServerDataStore.shared.$isLoading.values where !loading { break }
+            }
+            busyPlexServerID = nil
+            guard let page = vc as? SettingsPageViewController else { return }
+            page.reloadRows()
+            if !changed {
+                page.present(ConfirmationPopupViewController(
+                    title: "Couldn’t Turn Off",
+                    message: "No other server is reachable right now, so \(server.name) stays on.",
+                    confirmTitle: "OK", cancelTitle: nil, onConfirm: {}), animated: true)
+            }
+        }
     }
 
     private static func info(_ id: String, _ title: String, _ value: String) -> SettingsRowItem {

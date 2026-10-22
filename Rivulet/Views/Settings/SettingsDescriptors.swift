@@ -274,6 +274,10 @@ enum SettingsDescriptorStore {
             icon: "server.rack",
             description: "See this server's details. A server shared with you shows who owns it."
         ),
+        "plexServerEnabled": SettingDescriptor(
+            icon: "power",
+            description: "Turn off to remove this server from Rivulet: its libraries, Home rows, Continue Watching and Live TV. Your account stays signed in."
+        ),
         "plexServerRefresh": SettingDescriptor(
             icon: "arrow.clockwise",
             description: "Ask Plex for this server's latest status."

@@ -76,6 +76,8 @@ final class SettingsCell: UICollectionViewCell {
     private let valueLabel = UILabel()
     private let chevron = UIImageView()
     private let checkmark = UIImageView()
+    /// Stands in for the value while the row's change is in flight.
+    private let spinner = UIActivityIndicatorView(style: .medium)
 
     private var bgTop: NSLayoutConstraint!
     private var bgBottom: NSLayoutConstraint!
@@ -146,6 +148,10 @@ final class SettingsCell: UICollectionViewCell {
         checkmark.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(checkmark)
 
+        spinner.hidesWhenStopped = true
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(spinner)
+
         // Held as properties: focus grows the capsule by moving these four, so
         // the labels ride with it and nothing is scaled (text stays crisp).
         bgTop = bg.topAnchor.constraint(equalTo: contentView.topAnchor, constant: Self.restingInsetY)
@@ -169,6 +175,9 @@ final class SettingsCell: UICollectionViewCell {
             checkmark.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -28),
             checkmark.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
 
+            spinner.trailingAnchor.constraint(equalTo: valueLabel.trailingAnchor),
+            spinner.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
+
             valueToChevron,
             valueLabel.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
             valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 16)
@@ -176,11 +185,12 @@ final class SettingsCell: UICollectionViewCell {
     }
 
     func configure(title: String, value: String?, showsChevron: Bool, destructive: Bool,
-                   showsCheckmark: Bool = false, dimmed: Bool = false) {
+                   showsCheckmark: Bool = false, dimmed: Bool = false, busy: Bool = false) {
         titleLabel.text = title
         checkmark.isHidden = !showsCheckmark
         valueLabel.text = value
-        valueLabel.isHidden = (value == nil || value?.isEmpty == true)
+        valueLabel.isHidden = busy || (value == nil || value?.isEmpty == true)
+        if busy { spinner.startAnimating() } else { spinner.stopAnimating() }
         chevron.isHidden = !showsChevron
         NSLayoutConstraint.deactivate([valueToChevron, valueToEdge])
         (showsChevron ? valueToChevron : valueToEdge).isActive = true
@@ -242,6 +252,7 @@ final class SettingsCell: UICollectionViewCell {
             valueLabel.textColor = Self.focusedValue
             chevron.tintColor = Self.focusedValue
             checkmark.tintColor = .black
+            spinner.color = Self.focusedValue
         } else {
             // Unfocused rows are translucent glass capsules (visible buttons).
             bg.backgroundColor = Self.restingFill
@@ -249,6 +260,7 @@ final class SettingsCell: UICollectionViewCell {
             valueLabel.textColor = Self.restingValue
             chevron.tintColor = Self.restingValue
             checkmark.tintColor = .systemBlue
+            spinner.color = .white
         }
         // Grow the capsule outward by the same amount on all four sides. The
         // grown capsule reaches past the cell's own bounds, so lift it above its
