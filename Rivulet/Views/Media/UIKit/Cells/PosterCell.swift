@@ -67,8 +67,9 @@ final class PosterCell: UICollectionViewCell {
 
     /// The system image corner on tvOS 26.
     private let cornerRadius: CGFloat = 20
-    private let posterWidth: CGFloat = MediaRowMetrics.posterWidth
-    private let posterHeight: CGFloat = MediaRowMetrics.posterHeight
+    /// Whether the cell shows the 1:1 music lockup; its size is re-read from `MediaRowMetrics` on every
+    /// configure, so a reused cell follows a Display Size change.
+    private var isSquare = false
 
     /// Swappable so music tiles render the 1:1 square lockup instead of the
     /// 2:3 poster one. Set per item in `configure(...)`.
@@ -145,8 +146,8 @@ final class PosterCell: UICollectionViewCell {
         watchedGlyph.isHidden = true
         overlayContainer.addSubview(watchedGlyph)
 
-        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: posterWidth)
-        posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: posterHeight)
+        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: MediaRowMetrics.posterWidth)
+        posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: MediaRowMetrics.posterHeight)
         NSLayoutConstraint.activate([
             posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
@@ -258,11 +259,13 @@ final class PosterCell: UICollectionViewCell {
     /// The badge's text while it shows (tests).
     var sourceBadgeText: String? { sourceBadge.isHidden ? nil : sourceBadge.text }
 
-    /// Music tiles are 1:1 square; everything else keeps the 2:3 poster ratio.
+    /// Music tiles are 1:1 square; everything else keeps the 2:3 poster ratio. Both follow Display Size.
     private func setSquare(_ square: Bool) {
-        let height = square ? MediaRowMetrics.musicHeight : posterHeight
-        if posterHeightConstraint.constant != height {
-            posterWidthConstraint.constant = square ? MediaRowMetrics.musicWidth : posterWidth
+        isSquare = square
+        let width = square ? MediaRowMetrics.musicWidth : MediaRowMetrics.posterWidth
+        let height = square ? MediaRowMetrics.musicHeight : MediaRowMetrics.posterHeight
+        if posterWidthConstraint.constant != width || posterHeightConstraint.constant != height {
+            posterWidthConstraint.constant = width
             posterHeightConstraint.constant = height
         }
     }
@@ -279,6 +282,7 @@ final class PosterCell: UICollectionViewCell {
     /// occupant here rather than assume `prepareForReuse` ran.
     func configurePlaceholder() {
         resetContent()
+        setSquare(isSquare)
         placeholderPanel.isHidden = false
     }
 
