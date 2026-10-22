@@ -2808,6 +2808,9 @@ final class PlexHomeViewController: UIViewController {
     /// The hero section: the screen less 200 pt, then a 40 pt gap to the first shelf.
     private static var heroHeight: CGFloat { max(400, UIScreen.main.bounds.height - 200) }
     private static let heroShelfGap: CGFloat = 40
+    /// The line the backdrop's bottom catches up with: 40 pt above the hero's
+    /// bottom, leaving Apple's ~100 pt between the art and the first row title.
+    private static var heroBackdropFloor: CGFloat { heroHeight - 40 }
 
     /// Nothing covers Home, so a hero page change would be seen. Checks the
     /// window's root: the carousel and player present from the shell, not here.
@@ -2834,10 +2837,13 @@ final class PlexHomeViewController: UIViewController {
         // ShelfRowCell carries the margin and the peeking sliver
         // internally.
         layoutSection.contentInsetsReference = .none
-        // top: header-to-first-card gap (row title sits close to its cards).
+        // top: header-to-first-card gap. The row's flow layout centres the
+        // tiles in their focus padding, so a titled row rises by the top half
+        // of it: title baseline to artwork ~36 pt, Apple's ~39.
         // bottom: gap to the next section.
+        let headerPull = section.title != nil ? MediaRowMetrics.focusGrowthPadding / 2 : 0
         layoutSection.contentInsets = NSDirectionalEdgeInsets(
-            top: MediaRowMetrics.rowTopInset,
+            top: MediaRowMetrics.rowTopInset - headerPull,
             leading: 0,
             bottom: MediaRowMetrics.rowBottomInset,
             trailing: 0
@@ -5686,8 +5692,8 @@ final class PlexHomeViewController: UIViewController {
         if let heroIndex = heroSectionIndex, sectionIndex == heroIndex + 1 {
             guard let heroAttrs = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: heroIndex))
             else { return nil }
-            let visibleHeroBand: CGFloat = 290
-            target = heroAttrs.frame.maxY - visibleHeroBand
+            // Ends the showcase transition here: backdrop floor at meetY, row title at ~390, as Apple's.
+            target = heroAttrs.frame.minY + Self.heroBackdropFloor - HeroBackdropView.meetY
         } else {
             guard let attrs = collectionView.layoutAttributesForItem(at: IndexPath(item: 0, section: sectionIndex))
             else { return nil }
@@ -6509,7 +6515,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         let offset = scrollView.contentOffset.y
-        let shelfTop = Self.heroHeight + Self.heroShelfGap
+        let shelfTop = Self.heroBackdropFloor
         backdropView.applyScrollOffset(offset, shelfTop: shelfTop)
         let showcase = HeroBackdropView.showcasePercentage(offset, shelfTop: shelfTop)
         for case let heroCell as HeroOverlayCell in collectionView.visibleCells {

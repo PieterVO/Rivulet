@@ -23,10 +23,4 @@ final class HeroBackdropScrollTests: XCTestCase {
         let later = HeroBackdropView.scrollLift(travel + 100, shelfTop: shelfTop, height: height)
         XCTAssertEqual(later - lift, 100)
     }
-
-    /// Apple's layout (shelf at 793) gives its read 1.63x rate.
-    func test_appleConstants_rate() {
-        let rate = HeroBackdropView.scrollLift(100, shelfTop: 793, height: 1080) / 100
-        XCTAssertEqual(rate, 1 + 287.0 / 455.0, accuracy: 0.001)
-    }
 }

@@ -138,18 +138,21 @@ final class HeroOverlayView: UIView {
     // MARK: - Scroll
 
     /// Apple's showcase transition: as the page scrolls from the hero (`p` 1)
-    /// to the shelves (`p` 0), the text rises 120 pt faster than the content.
+    /// to the shelves (`p` 0), the text and dots rise faster than the content.
     func applyShowcase(_ p: CGFloat) {
         let lift = CGAffineTransform(translationX: 0, y: -(1 - p) * Self.showcaseTextLift)
         slideView.transform = lift
         buttonRow.transform = lift
+        pagingDotsBackground.transform = lift
         mediaItemOverlay?.applyShowcase(p)
         let wasAtTop = showcasePercentage == 1
         showcasePercentage = p
         if wasAtTop != (p == 1) { updateAutoAdvanceTimer() }
     }
 
-    static let showcaseTextLift: CGFloat = 120
+    /// Apple lifts 120 from a stack resting ~30 pt lower than ours; 80 puts the
+    /// buttons where Apple's sit on the first shelf (y ~120).
+    static let showcaseTextLift: CGFloat = 80
 
     // MARK: - Auto-advance
 
@@ -636,6 +639,7 @@ final class MediaItemHeroOverlayView: UIView {
         let lift = CGAffineTransform(translationX: 0, y: -(1 - p) * HeroOverlayView.showcaseTextLift)
         slideView.transform = lift
         buttonRow.transform = lift
+        pagingDotsBackground.transform = lift
     }
 
     /// Per-item primary action (Discover): library-matched items get the
