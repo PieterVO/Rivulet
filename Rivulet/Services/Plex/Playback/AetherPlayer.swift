@@ -717,6 +717,7 @@ final class AetherPlayer: PlayerProtocol {
     var dolbyVisionPlayback: DolbyVisionPlayback? {
         DolbyVisionPlayback(sourceProfile: engine.sourceDVProfile,
                             convertedTo81: engine.dolbyVisionConversion == .profile7ToProfile81,
+                            onSoftwareRoute: isOnSoftwareRoute,
                             presentsDolbyVision: engine.videoFormat == .dolbyVision,
                             presentsHDR: engine.videoFormat != .sdr)
     }
@@ -938,6 +939,9 @@ final class AetherPlayer: PlayerProtocol {
     /// Speaker layout ("7.1.4"…) object audio renders into; absent = off.
     static let heightSpeakersKey = "heightSpeakers"
 
+    /// Profile 7 FEL composition; absent = on.
+    static let dolbyVisionFELKey = "dolbyVisionFEL"
+
     /// DVB teletext caption page, applied to BOTH live and VOD loads. A
     /// `liveTeletextPage` UserDefaults key overrides everything (0 = force
     /// libzvbi auto-detect); otherwise Australian regions default to 801
@@ -1017,9 +1021,10 @@ final class AetherPlayer: PlayerProtocol {
         if let heightLayout { options.objectAudioRendering = .apac(heightLayout) }
         // Profile 7 FEL composes both layers (#345). The engine doesn't check the panel,
         // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
-        // Heights only render on the native route, so they win over FEL (which then plays as 8.1).
+        // FEL wins over heights: on a FEL title the soundtrack plays as 7.1 without them (#362).
         let panelDV = AetherEngine.displayCapabilities.supportsDolbyVision
-        options.preferDualLayerDolbyVision = panelDV && heightLayout == nil
+        let felOn = UserDefaults.standard.object(forKey: Self.dolbyVisionFELKey) as? Bool ?? true
+        options.preferDualLayerDolbyVision = panelDV && felOn
         // #362: catch the engine's one Profile 7 route line for Sentry. Live TV's capture owns the
         // handler while it runs, and VOD never loads then.
         let p7RouteLine = OSAllocatedUnfairLock<String?>(initialState: nil)
@@ -1062,7 +1067,8 @@ final class AetherPlayer: PlayerProtocol {
             SentryBridge.log(.info, "DV P7 route", attributes: [
                 "engine_route": routeLine,
                 "panel_dv": panelDV,
-                "height_speakers": heightLayout?.rawValue ?? "off"
+                "height_speakers": heightLayout?.rawValue ?? "off",
+                "fel_setting": felOn
             ])
         }
         assFonts = engine.fontAttachments.map { LibassRenderer.Font(name: $0.filename, data: $0.data) }

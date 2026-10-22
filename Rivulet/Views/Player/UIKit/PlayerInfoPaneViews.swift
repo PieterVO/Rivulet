@@ -626,10 +626,14 @@ enum DolbyVisionPlayback: String, Equatable {
 
     /// A Profile 7 source shown as Dolby Vision without the 8.1 rewrite is on
     /// the engine's dual-layer route, which only FEL takes.
-    init?(sourceProfile: Int?, convertedTo81: Bool, presentsDolbyVision: Bool, presentsHDR: Bool) {
+    /// videoFormat read SDR on the dual-layer route in #362; an unconverted P7 on the software route is it.
+    init?(sourceProfile: Int?, convertedTo81: Bool, onSoftwareRoute: Bool = false,
+          presentsDolbyVision: Bool, presentsHDR: Bool) {
         guard let sourceProfile else { return nil }
         if convertedTo81 {
             self = .convertedTo81
+        } else if sourceProfile == 7, onSoftwareRoute {
+            self = .dualLayer
         } else if presentsDolbyVision {
             self = sourceProfile == 7 ? .dualLayer : .dolbyVision
         } else {

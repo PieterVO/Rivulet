@@ -149,6 +149,11 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (104)", [
+            "With Height Speakers on, FEL videos now keep FEL and play without heights.",
+            "New Dolby Vision FEL setting in Playback. Turn it off to keep heights instead.",
+            "Fixed the player's Details panel showing SDR for Dolby Vision FEL videos.",
+        ]),
         ("1.1.0 (102)", [
             "Added Jellyfin music libraries.",
             "Added Jellyfin Live TV. Plex and Jellyfin Live TV now show up automatically.",

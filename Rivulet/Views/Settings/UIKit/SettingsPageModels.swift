@@ -272,10 +272,31 @@ enum SettingsContent {
     /// "" is Off; the rest are the layouts the engine renders heights into.
     private static var heightSpeakersPicker: [SettingsRowItem] {
         ["", "5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"].map { layout in
-            SettingsRowItem(id: "hs_\(layout.isEmpty ? "off" : layout)", title: layout.isEmpty ? "Off" : layout, kind: .option(
-                isSelected: { heightSpeakers == layout },
-                select: { SettingsStore.setString(AetherPlayer.heightSpeakersKey, layout) }))
+            SettingsRowItem(id: "hs_\(layout.isEmpty ? "off" : layout)", title: layout.isEmpty ? "Off" : layout,
+                            kind: .selectable(isSelected: { heightSpeakers == layout }, value: { nil }, handler: { vc in
+                let page = vc as? SettingsPageViewController
+                let firstHeights = heightSpeakers.isEmpty && !layout.isEmpty
+                SettingsStore.setString(AetherPlayer.heightSpeakersKey, layout)
+                guard firstHeights, dolbyVisionFEL,
+                      !SettingsStore.bool(heightsFELNoticeShownKey, default: false) else {
+                    page?.onPop?()
+                    return
+                }
+                SettingsStore.setBool(heightsFELNoticeShownKey, true)
+                vc.present(ConfirmationPopupViewController(
+                    title: "Height Speakers and FEL",
+                    message: "When a video has both Dolby Vision FEL and Atmos or DTS:X, Rivulet plays FEL, and the soundtrack plays without height channels. Turn off Dolby Vision FEL to keep heights instead.",
+                    confirmTitle: "Got It", cancelTitle: nil,
+                    onConfirm: { page?.onPop?() }, onCancel: { page?.onPop?() }), animated: true)
+            }))
         }
+    }
+
+    /// The one-time Height Speakers / FEL popup (#362).
+    private static let heightsFELNoticeShownKey = "heightsFELNoticeShown"
+
+    private static var dolbyVisionFEL: Bool {
+        SettingsStore.bool(AetherPlayer.dolbyVisionFELKey, default: true)
     }
 
     /// Read at play time by the player (`StreamingQuality.setting`).
@@ -456,6 +477,8 @@ enum SettingsContent {
                             kind: .toggle(get: { subtitleSDH },
                                           set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
                             isEnabled: subtitlesOn),
+            .header("Home Theater"),
+            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: true),
             SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
                             kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
             .header("Auto-Skip"),

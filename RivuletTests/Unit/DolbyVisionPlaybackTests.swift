@@ -20,6 +20,14 @@ final class DolbyVisionPlaybackTests: XCTestCase {
         XCTAssertEqual(playback(7, hdr: true), .hdr10BaseLayer)
     }
 
+    func test_profile7_softwareRoute_isDualLayer() {
+        let p = DolbyVisionPlayback(sourceProfile: 7, convertedTo81: false, onSoftwareRoute: true,
+                                    presentsDolbyVision: false, presentsHDR: false)
+        XCTAssertEqual(p, .dualLayer)
+        XCTAssertEqual(DolbyVisionPlayback(sourceProfile: 8, convertedTo81: false, onSoftwareRoute: true,
+                                           presentsDolbyVision: false, presentsHDR: false), .sdr)
+    }
+
     func test_singleLayerProfiles() {
         XCTAssertEqual(playback(8, dv: true, hdr: true), .dolbyVision)
         XCTAssertEqual(playback(5, dv: true, hdr: true), .dolbyVision)

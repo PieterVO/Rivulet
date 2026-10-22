@@ -182,7 +182,11 @@ enum SettingsDescriptorStore {
         ),
         "heightSpeakers": SettingDescriptor(
             icon: "hifispeaker.2",
-            description: "Keeps the height channels of Dolby TrueHD Atmos and DTS:X soundtracks, in a lossy format. Off plays lossless 7.1 without them. DTS:X needs 7.1.4 or 9.1.6."
+            description: "Keeps the height channels of Dolby TrueHD Atmos and DTS:X soundtracks, in a lossy format. Off plays lossless 7.1 without them. DTS:X needs 7.1.4 or 9.1.6. With Dolby Vision FEL on, a FEL video plays its soundtrack without heights."
+        ),
+        "dolbyVisionFEL": SettingDescriptor(
+            icon: "4k.tv",
+            description: "Plays the full enhancement layer of Dolby Vision Profile 7 videos on a Dolby Vision TV. FEL videos play without Atmos and DTS:X height channels, AirPlay or Picture in Picture. Off plays them as Profile 8.1."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",
