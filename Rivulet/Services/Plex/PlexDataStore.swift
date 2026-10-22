@@ -800,7 +800,7 @@ class PlexDataStore: ObservableObject {
             }
 
             // Always update Top Shelf cache after fetching (composites logo art)
-            await updateTopShelfCache()
+            await TopShelfFeed.refresh()
             self.hubsError = nil
             if updateLoading {
                 self.isLoadingHubs = false
@@ -863,7 +863,7 @@ class PlexDataStore: ObservableObject {
         guard !continueWatchingHubsAreEqual(self.continueWatchingHub, fetched) else { return }
         self.continueWatchingHub = fetched
         self.hubsVersion = UUID()
-        await updateTopShelfCache()
+        await TopShelfFeed.refresh()
         projectHomeItems()
     }
 
@@ -1797,36 +1797,6 @@ class PlexDataStore: ObservableObject {
     /// Clear next episode cache
     func clearNextEpisodeCache() {
         nextEpisodeCache.removeAll()
-    }
-
-    // MARK: - Top Shelf Cache
-
-    /// Update the Top Shelf cache with Continue Watching items
-    /// Called after hubs are fetched to keep Top Shelf in sync
-    private func updateTopShelfCache() async {
-        // The Home screen row sits outside the PIN gate (a remembered PIN reopens it unasked).
-        let profiles = PlexUserProfileManager.shared
-        guard !authManager.relocksOnLaunch || profiles.selectedUser.map(profiles.hasRememberedPin(for:)) ?? false else {
-            TopShelfCache.shared.clear()
-            return
-        }
-        guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else {
-            print("TopShelf: No server URL or token available")
-            return
-        }
-
-        // /hubs/continueWatching, as the in-app row uses. Global /hubs drops movies (#194).
-        let metadata = continueWatchingHub?.Metadata ?? []
-        let baseItems = TopShelfMapper.items(from: metadata, serverURL: serverURL, token: token, limit: 5)
-
-        // Composite backdrop + clearLogo in-app (Apple TV+ look); the extension
-        // only reads the finished files. Never throws; falls back to the plain
-        // backdrop per item when no logo or on any failure.
-        let items = await TopShelfComposer.composite(items: baseItems, serverURL: serverURL, token: token)
-        // The profile may have changed, locked or signed out during the composite.
-        guard authManager.selectedServerToken == token else { return }
-        TopShelfCache.shared.writeItems(items)
     }
 
     // MARK: - Reset (on sign out)

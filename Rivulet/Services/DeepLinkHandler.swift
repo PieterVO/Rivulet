@@ -17,6 +17,13 @@ final class DeepLinkHandler: ObservableObject {
 
     @Published var pendingPlayback: PlexMetadata?
     @Published var pendingDetail: PlexMetadata?
+    /// A link to another server's item (Jellyfin), resolved through its provider.
+    @Published var pendingProviderLink: ProviderLink?
+
+    struct ProviderLink: Equatable {
+        let action: RivuletLink.Action
+        let item: MediaItem
+    }
 
     /// The link waiting for the app to be ready. A newer link replaces it.
     private(set) var heldLink: RivuletLink?
@@ -38,6 +45,7 @@ final class DeepLinkHandler: ObservableObject {
     }
     var reconnect: () async -> Void = { await PlexAuthManager.shared.verifyAndFixConnection() }
     var isSignedIn: () -> Bool = { PlexAuthManager.shared.hasCredentials }
+    var provider: (_ id: String) -> (any MediaProvider)? = { MediaProviderRegistry.shared.provider(for: $0) }
 
     init() {}
 
@@ -59,7 +67,7 @@ final class DeepLinkHandler: ObservableObject {
     @discardableResult
     func handle(_ link: RivuletLink) -> Task<Void, Never>? {
         // Signed out there is nothing to wait for: holding it would fire at the next sign-in.
-        guard isSignedIn() else { return nil }
+        guard isSignedIn() || providerID(of: link) != nil else { return nil }
         // Any app can open a link, and the key is interpolated into a server path.
         guard link.ratingKey.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
         heldLink = link
@@ -75,12 +83,13 @@ final class DeepLinkHandler: ObservableObject {
     /// exists. Until then it stays held; the shell calls this again.
     @discardableResult
     func deliverHeldLink() -> Task<Void, Never>? {
-        guard isShellReady, let link = heldLink, credentials() != nil else { return nil }
+        guard isShellReady, let link = heldLink, credentials() != nil || providerID(of: link) != nil else { return nil }
         heldLink = nil
         return Task { await resolve(link) }
     }
 
     private func resolve(_ link: RivuletLink) async {
+        if let id = providerID(of: link) { return await resolve(link, providerID: id) }
         let token = credentials()?.token
         var metadata = await metadata(for: link)
         if metadata == nil {
@@ -102,6 +111,26 @@ final class DeepLinkHandler: ObservableObject {
         case .play: pendingPlayback = metadata
         case .detail: pendingDetail = metadata
         }
+    }
+
+    private func resolve(_ link: RivuletLink, providerID id: String) async {
+        let ref = MediaItemRef(providerID: id, itemID: link.ratingKey)
+        guard let provider = provider(id), let item = try? await provider.fullDetail(for: ref).item else {
+            print("DeepLinkHandler: could not resolve \(id) item \(link.ratingKey)")
+            return
+        }
+        // A profile prompt came up while fetching: hold it for the shell.
+        guard isShellReady else {
+            if heldLink == nil { heldLink = link }
+            return
+        }
+        pendingProviderLink = ProviderLink(action: link.action, item: item)
+    }
+
+    /// The non-Plex server a link names. A Plex link's server is informational.
+    private func providerID(of link: RivuletLink) -> String? {
+        guard let server = link.server, MediaItemRef(providerID: server, itemID: link.ratingKey).isJellyfin else { return nil }
+        return server
     }
 
     private func metadata(for link: RivuletLink) async -> PlexMetadata? {

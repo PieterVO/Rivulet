@@ -229,6 +229,8 @@ struct ProfileSwitcherPopup: View {
         if success {
             if rememberPin {
                 profileManager.rememberPin(pin, for: user)
+                // The switch's Home fetch ran before the PIN was saved, and cleared Top Shelf.
+                Task { await TopShelfFeed.refresh() }
             }
             showPinEntry = false
             selectedUserForPin = nil

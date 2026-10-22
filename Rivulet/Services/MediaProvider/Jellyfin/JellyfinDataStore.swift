@@ -101,7 +101,10 @@ final class JellyfinDataStore: ObservableObject {
         guard let account,
               let provider = MediaProviderRegistry.shared.provider(for: account.providerID) else {
             update(\.libraries, [])
-            if !homeRows.isEmpty { homeRows = [] }
+            if !homeRows.isEmpty {
+                homeRows = []
+                refreshTopShelf()
+            }
             update(\.isLoading, false)
             return
         }
@@ -150,6 +153,12 @@ final class JellyfinDataStore: ObservableObject {
         update(\.libraries, browsable)
         homeRows = continuingRow + recent
         update(\.isLoading, false)
+        refreshTopShelf()
+    }
+
+    private func refreshTopShelf() {
+        guard self === Self.shared else { return }
+        Task { await TopShelfFeed.refresh() }
     }
 
     /// Provider-prefixed ids keep a Jellyfin row distinct from every Plex row

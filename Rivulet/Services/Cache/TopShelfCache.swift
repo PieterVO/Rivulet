@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import TVServices
 
 /// Manages read/write access to Top Shelf data in the shared App Group container
 /// Used by both the main app (write) and TV Services Extension (read)
@@ -51,9 +52,13 @@ final class TopShelfCache: Sendable {
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = .sortedKeys
             let data = try encoder.encode(items)
+            guard defaults.data(forKey: userDefaultsKey) != data else { return }
             defaults.set(data, forKey: userDefaultsKey)
             defaults.synchronize()
+            // Without this tvOS keeps whatever the extension last returned, nil before first sign-in (#364).
+            TVTopShelfContentProvider.topShelfContentDidChange()
 
             // Debug: print first item
         } catch {
@@ -87,7 +92,9 @@ final class TopShelfCache: Sendable {
 
     /// Remove all cached Top Shelf items
     func clear() {
+        guard sharedDefaults?.data(forKey: userDefaultsKey) != nil else { return }
         sharedDefaults?.removeObject(forKey: userDefaultsKey)
+        TVTopShelfContentProvider.topShelfContentDidChange()
     }
 
     // MARK: - Composite image files (AppGroup/Library/Caches/TopShelf/*.jpg)

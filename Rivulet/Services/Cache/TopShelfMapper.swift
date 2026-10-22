@@ -56,7 +56,7 @@ enum TopShelfMapper {
                 : (m.art ?? m.thumb)
 
             let lastWatched = m.lastViewedAt
-                .map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? Date()
+                .map { Date(timeIntervalSince1970: TimeInterval($0)) } ?? .distantPast
 
             return TopShelfItem(
                 ratingKey: ratingKey,
@@ -72,6 +72,38 @@ enum TopShelfMapper {
                 serverIdentifier: serverURL
             )
         }
+    }
+
+    /// Map a non-Plex Continue Watching row (Jellyfin) into Top Shelf items.
+    /// The logo is known up front, so the composer skips its Plex lookup.
+    static func items(from mediaItems: [MediaItem], limit: Int = 5) -> [TopShelfItem] {
+        mediaItems.prefix(limit).map { m in
+            let isEpisode = m.kind == .episode
+            let show = isEpisode ? m.grandparentArtwork : nil
+            let poster = show?.poster ?? m.artwork.poster
+            let wide = m.artwork.backdrop ?? show?.backdrop ?? m.artwork.thumbnail
+            return TopShelfItem(
+                ratingKey: m.ref.itemID,
+                title: m.title,
+                subtitle: isEpisode ? m.seriesTitle : nil,
+                imageURL: poster?.absoluteString ?? "",
+                wideImageURL: wide?.absoluteString ?? "",
+                logoImageURL: m.artwork.logo?.absoluteString ?? "",
+                compositeFileName: nil,
+                progress: m.watchProgress ?? 0,
+                type: isEpisode ? "episode" : "movie",
+                lastWatched: m.userState.lastViewedAt ?? .distantPast,
+                serverIdentifier: m.ref.providerID
+            )
+        }
+    }
+
+    /// Every server's items in one list, most recently watched first. Ties
+    /// (items never watched, like Up Next) keep their server's order.
+    static func merge(_ lists: [TopShelfItem]..., limit: Int = 5) -> [TopShelfItem] {
+        let all = lists.flatMap { $0 }.enumerated()
+            .sorted { ($0.element.lastWatched, $1.offset) > ($1.element.lastWatched, $0.offset) }
+        return all.prefix(limit).map(\.element)
     }
 
     /// Resolve a Plex image path to an absolute, token-bearing URL string.

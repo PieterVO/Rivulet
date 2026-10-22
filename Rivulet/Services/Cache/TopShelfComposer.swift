@@ -18,7 +18,7 @@ enum TopShelfComposer {
     /// Returns items with `logoImageURL` / `compositeFileName` populated where a
     /// composite was produced. Prunes composite files to the current set.
     @MainActor
-    static func composite(items: [TopShelfItem], serverURL: String, token: String) async -> [TopShelfItem] {
+    static func composite(items: [TopShelfItem], serverURL: String?, token: String?) async -> [TopShelfItem] {
         // One run at a time, in call order: a prune never sees another run's files.
         let previous = inFlight
         let task = Task { @MainActor in
@@ -32,17 +32,19 @@ enum TopShelfComposer {
     @MainActor private static var inFlight: Task<[TopShelfItem], Never>?
 
     @MainActor
-    private static func run(items: [TopShelfItem], serverURL: String, token: String) async -> [TopShelfItem] {
+    private static func run(items: [TopShelfItem], serverURL: String?, token: String?) async -> [TopShelfItem] {
         var result: [TopShelfItem] = []
         var keptFiles: Set<String> = []
 
         for item in items {
-            var logoURLString = ""
+            var logoURLString = item.logoImageURL
             var compositeFileName: String? = nil
 
             // 1. Resolve clearLogo URL (via full/grandparent metadata, cached).
             //    fullMetadata() handles episode → grandparent (show) resolution.
-            if let full = await fullMetadata(for: item.ratingKey, serverURL: serverURL, token: token) {
+            //    Plex items carry the server URL; other servers' items arrive with their logo.
+            if let serverURL, let token, item.serverIdentifier == serverURL,
+               let full = await fullMetadata(for: item.ratingKey, serverURL: serverURL, token: token) {
                 logoURLString = TopShelfLogoResolver.logoURLString(from: full, serverURL: serverURL, token: token)
             }
 

@@ -106,4 +106,45 @@ final class TopShelfMapperTests: XCTestCase {
         let item = TopShelfMapper.items(from: [movie], serverURL: server, token: token).first!
         XCTAssertTrue(item.wideImageURL.contains("/thumb/only"))
     }
+
+    // MARK: - Jellyfin and merge
+
+    private func jellyfinEpisode(_ id: String, lastViewed: Date?) -> MediaItem {
+        let url = { (s: String) in URL(string: "http://jf.local/Items/\(s)") }
+        return MediaItem(
+            ref: MediaItemRef(providerID: "jellyfin:abc", itemID: id),
+            kind: .episode, title: "Ep \(id)", sortTitle: nil, overview: nil,
+            year: nil, runtime: nil, parentRef: nil, grandparentRef: nil,
+            seriesTitle: "Show", episodeNumber: 1, seasonNumber: 1, childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: lastViewed),
+            artwork: MediaArtwork(poster: url("ep"), backdrop: url("backdrop"), thumbnail: nil, logo: url("logo")),
+            parentArtwork: nil,
+            grandparentArtwork: MediaArtwork(poster: url("showposter"), backdrop: nil, thumbnail: nil, logo: nil)
+        )
+    }
+
+    func testJellyfinItemCarriesProviderLogoAndShowPoster() {
+        let item = TopShelfMapper.items(from: [jellyfinEpisode("j1", lastViewed: nil)]).first!
+        XCTAssertEqual(item.serverIdentifier, "jellyfin:abc")
+        XCTAssertEqual(item.subtitle, "Show")
+        XCTAssertEqual(item.logoImageURL, "http://jf.local/Items/logo")
+        XCTAssertEqual(item.imageURL, "http://jf.local/Items/showposter")
+        XCTAssertEqual(item.wideImageURL, "http://jf.local/Items/backdrop")
+        XCTAssertEqual(item.lastWatched, .distantPast)
+    }
+
+    func testMergeOrdersAcrossServersByLastWatched() {
+        let plex = TopShelfMapper.items(from: [
+            meta(ratingKey: "p300", type: "movie", title: "A", lastViewedAt: 300),
+            meta(ratingKey: "p100", type: "movie", title: "B", lastViewedAt: 100),
+        ], serverURL: server, token: token)
+        let jellyfin = TopShelfMapper.items(from: [
+            jellyfinEpisode("j200", lastViewed: Date(timeIntervalSince1970: 200)),
+            jellyfinEpisode("jUpNext1", lastViewed: nil),
+            jellyfinEpisode("jUpNext2", lastViewed: nil),
+        ])
+        let merged = TopShelfMapper.merge(plex, jellyfin, limit: 4)
+        // Never-watched items keep their server's order, after everything watched.
+        XCTAssertEqual(merged.map(\.ratingKey), ["p300", "j200", "p100", "jUpNext1"])
+    }
 }

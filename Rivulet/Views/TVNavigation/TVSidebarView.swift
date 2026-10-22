@@ -285,6 +285,16 @@ struct TVSidebarView: View {
             deepLinkHandler.pendingDetail = nil
             presentDetailForDeepLink(metadata)
         }
+        .onChange(of: deepLinkHandler.pendingProviderLink) { _, link in
+            guard let link else { return }
+            deepLinkHandler.pendingProviderLink = nil
+            presentReplacingStack { top in
+                switch link.action {
+                case .play: ProviderPlayer.play(link.item, fromBeginning: false, from: top, onDismiss: nil)
+                case .detail: presentDetail(link.item, from: top)
+                }
+            }
+        }
         // What's New: present the SAME UIKit glass changelog popup as
         // Settings → Changelog (not a separate SwiftUI dialog) for consistency.
         .onChange(of: showWhatsNew) { _, show in
