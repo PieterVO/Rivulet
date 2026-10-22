@@ -37,6 +37,10 @@ final class AboutCollectionCell: UICollectionViewCell {
     private let paragraphLabel = UILabel()
     private let fallbackCaption = UILabel()
 
+    // Review scores beside the advisory: two columns of three; select → ratings popup.
+    private let ratingsCard = AboutCardControl()
+    private let ratingsGrid = RatingsGridView()
+
     override init(frame: CGRect) {
         super.init(frame: frame)
 
@@ -81,6 +85,12 @@ final class AboutCollectionCell: UICollectionViewCell {
         advisoryStack.spacing = 12
         rightCard.addSubview(advisoryStack)
 
+        ratingsCard.onSelect = { [weak self] in self?.presentRatings() }
+        ratingsCard.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(ratingsCard)
+        ratingsGrid.translatesAutoresizingMaskIntoConstraints = false
+        ratingsCard.addSubview(ratingsGrid)
+
         ageLabel.font = .systemFont(ofSize: 58, weight: .bold)
         ageLabel.textColor = .white
 
@@ -124,14 +134,21 @@ final class AboutCollectionCell: UICollectionViewCell {
             leftCard.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
             leftCard.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             leftCard.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            // On the six-column grid: the synopsis spans two columns, the
-            // advisory one.
-            leftCard.widthAnchor.constraint(equalToConstant: MediaRowMetrics.gridWidth(columns: 6, span: 2)),
+            leftCard.widthAnchor.constraint(equalToConstant: Self.wideCard),
 
             rightCard.topAnchor.constraint(equalTo: leftCard.topAnchor),
             rightCard.leadingAnchor.constraint(equalTo: leftCard.trailingAnchor, constant: MediaRowMetrics.tileGap),
             rightCard.bottomAnchor.constraint(equalTo: leftCard.bottomAnchor),
-            rightCard.widthAnchor.constraint(equalToConstant: MediaRowMetrics.gridWidth(columns: 6)),
+            rightCard.widthAnchor.constraint(equalToConstant: Self.narrowCard),
+
+            ratingsCard.topAnchor.constraint(equalTo: leftCard.topAnchor),
+            ratingsCard.leadingAnchor.constraint(equalTo: rightCard.trailingAnchor, constant: MediaRowMetrics.tileGap),
+            ratingsCard.bottomAnchor.constraint(equalTo: leftCard.bottomAnchor),
+            ratingsCard.widthAnchor.constraint(equalToConstant: Self.wideCard),
+            ratingsGrid.topAnchor.constraint(equalTo: ratingsCard.topAnchor, constant: 22),
+            ratingsGrid.leadingAnchor.constraint(equalTo: ratingsCard.leadingAnchor, constant: 24),
+            ratingsGrid.trailingAnchor.constraint(equalTo: ratingsCard.trailingAnchor, constant: -24),
+            ratingsGrid.bottomAnchor.constraint(equalTo: ratingsCard.bottomAnchor, constant: -22),
 
             titleLabel.topAnchor.constraint(equalTo: leftCard.topAnchor, constant: 22),
             titleLabel.leadingAnchor.constraint(equalTo: leftCard.leadingAnchor, constant: 24),
@@ -162,6 +179,12 @@ final class AboutCollectionCell: UICollectionViewCell {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    // Synopsis, advisory and ratings split the full row 2:1:2, so Common Sense
+    // sits centred (Apple's cards are 2 and 1 grid columns, left-aligned).
+    private static let cardsWidth = 1920 - 2 * MediaRowMetrics.rowLeading - 2 * MediaRowMetrics.tileGap
+    private static let wideCard = (cardsWidth * 2 / 5).rounded(.down)
+    private static let narrowCard = (cardsWidth / 5).rounded(.down)
+
     func configure(detail: MediaItemDetail) {
         currentDetail = detail
         titleLabel.text = detail.item.title
@@ -179,15 +202,11 @@ final class AboutCollectionCell: UICollectionViewCell {
             oneLinerLabel.isHidden = (a.oneLiner ?? "").isEmpty
             fallbackCaption.isHidden = true
         } else {
-            // Fallback: content rating + numeric score (no CSM available).
+            // Fallback: content rating only (no CSM available).
             ageLabel.text = detail.contentRating ?? "NR"
             sealRow.isHidden = true
             oneLinerLabel.isHidden = true
-            if let rating = detail.rating {
-                fallbackCaption.text = "Rated · " + rating.summary
-            } else {
-                fallbackCaption.text = "Rated"
-            }
+            fallbackCaption.text = "Rated"
             fallbackCaption.isHidden = false
         }
         // Topics + paragraph are popup-only; never shown inline.
@@ -198,9 +217,41 @@ final class AboutCollectionCell: UICollectionViewCell {
         // when there's rich CSM (topics/paragraph worth a popup).
         leftCard.selectable = !(detail.item.overview ?? "").isEmpty
         rightCard.selectable = advisory?.hasRichDetail ?? false
+
+        ratingsGrid.configure(detail.ratings)
+        ratingsCard.isHidden = detail.ratings.isEmpty
+        ratingsCard.selectable = !detail.ratings.isEmpty
     }
-    // Focus lives on the two cards (AboutCardControl), not the cell itself.
+
+    private func presentRatings() {
+        guard let ratings = currentDetail?.ratings, !ratings.isEmpty,
+              var top = window?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        top.present(InfoPopupViewController(content: InfoPopupContent.ratings(ratings), width: 720), animated: true)
+    }
+    // Focus lives on the cards (AboutCardControl), not the cell itself.
     override var canBecomeFocused: Bool { false }
+
+    /// The card focus left from, so returning from its popup lands back on it
+    /// instead of the first card.
+    private weak var lastFocusedCard: AboutCardControl?
+
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let card = lastFocusedCard, card.canBecomeFocused, !card.isHidden { return [card] }
+        return super.preferredFocusEnvironments
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        if let card = context.nextFocusedView as? AboutCardControl, card.isDescendant(of: contentView) {
+            lastFocusedCard = card
+        }
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        lastFocusedCard = nil
+    }
 }
 
 // MARK: - Information / Languages / Accessibility columns
@@ -510,6 +561,72 @@ private func sectionHeaderLabel(_ text: String) -> UILabel {
     l.textColor = .white
     l.text = text
     return l
+}
+
+// MARK: - Ratings grid
+
+/// Up to six scores, two per row in display order, each in its source's own
+/// format ("83%", "8.7/10", "4.2/5").
+final class RatingsGridView: UIView {
+    private let rows = UIStackView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        rows.axis = .vertical
+        rows.distribution = .fillEqually
+        rows.spacing = 12
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rows)
+        NSLayoutConstraint.activate([
+            rows.topAnchor.constraint(equalTo: topAnchor),
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rows.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rows.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+        ])
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ ratings: [MediaRating]) {
+        rows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let shown = Array(ratings.prefix(6))
+        for start in stride(from: 0, to: shown.count, by: 2) {
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.distribution = .fillEqually
+            row.spacing = MediaRowMetrics.tileGap
+            for rating in shown[start..<min(start + 2, shown.count)] {
+                row.addArrangedSubview(Self.entry(rating))
+            }
+            if row.arrangedSubviews.count == 1 { row.addArrangedSubview(UIView()) }
+            rows.addArrangedSubview(row)
+        }
+    }
+
+    private static func entry(_ rating: MediaRating) -> UIView {
+        let score = UILabel()
+        let text = NSMutableAttributedString(
+            string: rating.badgeText,
+            attributes: [.font: UIFont.systemFont(ofSize: 38, weight: .bold), .foregroundColor: UIColor.white])
+        if let scale = rating.scale {
+            text.append(NSAttributedString(
+                string: scale,
+                attributes: [.font: UIFont.systemFont(ofSize: 23, weight: .semibold),
+                             .foregroundColor: UIColor.white.withAlphaComponent(0.6)]))
+        }
+        score.attributedText = text
+
+        let name = UILabel()
+        name.text = rating.name
+        name.font = .systemFont(ofSize: 19, weight: .semibold)
+        name.textColor = UIColor.white.withAlphaComponent(0.6)
+
+        let stack = UIStackView(arrangedSubviews: [score, name])
+        stack.axis = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        return stack
+    }
 }
 
 // MARK: - Focusable About card

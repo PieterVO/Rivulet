@@ -448,7 +448,7 @@ enum PlexMediaMapper {
             trailerURL: trailerURL,
             contentRating: meta.contentRating,
             regionOfOrigin: meta.Country?.first?.tag,
-            rating: Self.rating(meta),
+            ratings: Self.ratings(meta),
             nextEpisode: nextEpisode,
             collections: collections,
             extras: extras,
@@ -457,23 +457,26 @@ enum PlexMediaMapper {
         )
     }
 
-    /// `rating` is the critic score and `audienceRating` the audience score,
-    /// each tagged by an image URI naming its source
-    /// ("rottentomatoes://image.rating.ripe", "imdb://image.rating",
-    /// "themoviedb://image.rating"). Legacy agents send `rating` with no image.
-    static func rating(_ meta: PlexMetadata) -> MediaRating? {
-        func source(_ image: String?) -> MediaRating.Source {
+    /// Full metadata carries a `Rating` entry per source, each tagged by an
+    /// image URI ("rottentomatoes://image.rating.ripe", "imdb://image.rating",
+    /// "themoviedb://image.rating"). Hub items carry only the flat
+    /// `rating` / `audienceRating` pair; legacy agents send `rating` with no image.
+    static func ratings(_ meta: PlexMetadata) -> [MediaRating] {
+        func source(_ image: String?, audience: Bool) -> MediaRating.Source {
             switch image?.split(separator: ":").first {
-            case "rottentomatoes": .rottenTomatoes
+            case "rottentomatoes": audience ? .rottenTomatoesAudience : .rottenTomatoes
             case "imdb": .imdb
             case "themoviedb": .tmdb
             default: .unknown
             }
         }
-        return MediaRating.preferred(
-            critic: MediaRating(meta.rating, source: source(meta.ratingImage)),
-            audience: MediaRating(meta.audienceRating, source: source(meta.audienceRatingImage))
-        )
+        let entries = (meta.Rating ?? []).map {
+            MediaRating($0.value, source: source($0.image, audience: $0.type == "audience"))
+        }
+        return MediaRating.ordered(entries + [
+            MediaRating(meta.rating, source: source(meta.ratingImage, audience: false)),
+            MediaRating(meta.audienceRating, source: source(meta.audienceRatingImage, audience: true)),
+        ])
     }
 
     /// `Guid` ids ("tmdb://603", "imdb://tt0133093", "tvdb://169") keyed

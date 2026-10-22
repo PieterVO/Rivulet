@@ -85,7 +85,6 @@ final class ProviderPlaybackMetadataTests: XCTestCase {
             mediaSources: [],
             trailerURL: nil,
             contentRating: "TV-PG",
-            rating: nil,
             nextEpisode: nil,
             collections: [],
             externalIDs: ["tmdb": "12345"]

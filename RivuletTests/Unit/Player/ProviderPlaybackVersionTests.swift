@@ -24,7 +24,7 @@ final class ProviderPlaybackVersionTests: XCTestCase {
             item: JellyfinFixtures.mediaItem("m1"), tagline: nil, genres: [], studios: [], cast: [],
             directors: [], writers: [], chapters: [],
             mediaSources: sources ?? [source("uhd", height: 2160), source("hd", height: 1080)],
-            trailerURL: nil, contentRating: nil, rating: nil, nextEpisode: nil, collections: [])
+            trailerURL: nil, contentRating: nil, nextEpisode: nil, collections: [])
         provider.streamResult = StreamInfo(source: source("hd", height: 1080), playSessionID: nil,
                                            trackInfoAvailable: true)
         return provider

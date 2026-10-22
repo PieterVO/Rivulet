@@ -64,7 +64,7 @@ final class PlayerVersionSelectionTests: XCTestCase {
         let item = JellyfinFixtures.mediaItem("m1")
         let detail = MediaItemDetail(
             item: item, tagline: nil, genres: [], studios: [], cast: [], directors: [], writers: [],
-            chapters: [], mediaSources: [source], trailerURL: nil, contentRating: nil, rating: nil,
+            chapters: [], mediaSources: [source], trailerURL: nil, contentRating: nil,
             nextEpisode: nil, collections: [])
         let playback = ProviderPlayback(
             provider: StubMediaProvider(id: "jellyfin:srv", kind: .jellyfin), item: item, detail: detail,

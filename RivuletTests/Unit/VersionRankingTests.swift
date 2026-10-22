@@ -96,7 +96,7 @@ final class VersionRankingTests: XCTestCase {
         let detail = MediaItemDetail(
             item: item, tagline: nil, genres: [], studios: [], cast: [], directors: [], writers: [],
             chapters: [], mediaSources: [source("hd", height: 1080), source("uhd", height: 2160)],
-            trailerURL: nil, contentRating: nil, rating: nil, nextEpisode: nil, collections: [])
+            trailerURL: nil, contentRating: nil, nextEpisode: nil, collections: [])
         XCTAssertEqual(detail.primarySource?.id, "uhd")
     }
 }

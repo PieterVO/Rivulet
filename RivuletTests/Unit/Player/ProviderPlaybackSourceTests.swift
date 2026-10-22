@@ -57,7 +57,7 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         let detail = MediaItemDetail(
             item: item, tagline: nil, genres: [], studios: [], cast: [], directors: [], writers: [],
             chapters: [], mediaSources: [stream.source], trailerURL: nil, contentRating: nil,
-            rating: nil, nextEpisode: nil, collections: []
+            nextEpisode: nil, collections: []
         )
         return ProviderPlayback(provider: provider, item: item, detail: detail, stream: stream, extras: PlaybackExtras())
     }
@@ -223,7 +223,7 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         MediaItemDetail(
             item: item, tagline: nil, genres: [], studios: [], cast: [], directors: [], writers: [],
             chapters: [], mediaSources: [source], trailerURL: nil, contentRating: nil,
-            rating: nil, nextEpisode: nil, collections: []
+            nextEpisode: nil, collections: []
         )
     }
 

@@ -5,19 +5,22 @@
 //  MediaRating.swift
 //  Rivulet
 //
-//  The one score a detail page shows, and where it came from. Each provider
-//  maps its own fields in through `preferred(critic:audience:)`; every render
-//  site reads `badgeText` / `summary`, so the format rules live here only.
+//  A review score and where it came from. Providers and the ratings worker map
+//  their fields in; the About card reads `name` / `badgeText` / `scale`, so the
+//  format rules live here only.
 //
 
 import Foundation
 
 nonisolated struct MediaRating: Sendable, Hashable {
-    enum Source: Sendable, Hashable {
-        case rottenTomatoes, imdb, tmdb, unknown
+    /// Declared in About-card display order.
+    enum Source: Int, Sendable, Hashable, Comparable {
+        case rottenTomatoes, rottenTomatoesAudience, imdb, metacritic, letterboxd, tmdb, unknown
+
+        static func < (a: Source, b: Source) -> Bool { a.rawValue < b.rawValue }
     }
 
-    /// Normalized 0–10. A Rotten Tomatoes 89% is 8.9.
+    /// Normalized 0–10. A Rotten Tomatoes 89% is 8.9, a Letterboxd 4.2 is 8.4.
     let value: Double
     let source: Source
 
@@ -30,27 +33,58 @@ nonisolated struct MediaRating: Sendable, Hashable {
         self.source = source
     }
 
-    /// The critic score when there is one, else the audience score. A server
-    /// only has a critic score when its admin picked a ratings source that
-    /// has critics, so this follows that choice.
-    static func preferred(critic: MediaRating?, audience: MediaRating?) -> MediaRating? {
-        critic ?? audience
+    /// One score per source in display order; the first of a source wins. An
+    /// unnamed score (Jellyfin's community rating) is dropped once IMDb or
+    /// TMDB is present, since it is one of those.
+    static func ordered(_ ratings: [MediaRating?]) -> [MediaRating] {
+        var seen = Set<Source>()
+        let unique = ratings.compactMap { $0 }.filter { seen.insert($0.source).inserted }
+        let named = seen.contains(.imdb) || seen.contains(.tmdb)
+        return unique.filter { !(named && $0.source == .unknown) }.sorted { $0.source < $1.source }
     }
 
-    /// "89%" for Rotten Tomatoes, "7.6" for everything else.
-    var badgeText: String {
-        source == .rottenTomatoes
-            ? "\(Int((value * 10).rounded()))%"
-            : String(format: "%.1f", value)
-    }
-
-    /// Prose form for text that describes the score.
-    var summary: String {
+    var name: String {
         switch source {
-        case .rottenTomatoes: "\(badgeText) on Rotten Tomatoes"
-        case .imdb: "\(badgeText) on IMDb"
-        case .tmdb: "\(badgeText) on TMDB"
-        case .unknown: "\(badgeText) / 10 average rating"
+        case .rottenTomatoes: "Rotten Tomatoes"
+        case .rottenTomatoesAudience: "RT Audience"
+        case .imdb: "IMDb"
+        case .metacritic: "Metacritic"
+        case .letterboxd: "Letterboxd"
+        case .tmdb: "TMDB"
+        case .unknown: "Rating"
+        }
+    }
+
+    /// Each source in its own format: "89%", "73", "4.2", "7.6".
+    var badgeText: String {
+        switch source {
+        case .rottenTomatoes, .rottenTomatoesAudience: "\(Int((value * 10).rounded()))%"
+        case .metacritic: "\(Int((value * 10).rounded()))"
+        case .letterboxd: String(format: "%.1f", value / 2)
+        case .imdb, .tmdb, .unknown: String(format: "%.1f", value)
+        }
+    }
+
+    /// Who the score is from, for the ratings popup.
+    var detailText: String {
+        switch source {
+        case .rottenTomatoes: "Tomatometer, critics"
+        case .rottenTomatoesAudience: "Popcornmeter, audience"
+        case .imdb: "IMDb users"
+        case .metacritic: "Metascore, critics"
+        case .letterboxd: "Letterboxd members"
+        case .tmdb: "TMDB users"
+        case .unknown: "Average rating"
+        }
+    }
+
+    /// The scale suffix drawn after the score, nil when the score carries its own.
+    var scale: String? {
+        switch source {
+        case .rottenTomatoes, .rottenTomatoesAudience: nil
+        case .metacritic: "/100"
+        case .letterboxd: "/5"
+        case .imdb, .tmdb, .unknown: "/10"
         }
     }
 }

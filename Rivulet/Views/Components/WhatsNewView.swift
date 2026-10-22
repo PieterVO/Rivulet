@@ -150,6 +150,7 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (104)", [
+            "New ratings card with Rotten Tomatoes, IMDb, Metacritic and Letterboxd.",
             "With Height Speakers on, FEL videos now keep FEL and play without heights.",
             "New Dolby Vision FEL setting in Playback. Turn it off to keep heights instead.",
             "Fixed the player's Details panel showing SDR for Dolby Vision FEL videos.",

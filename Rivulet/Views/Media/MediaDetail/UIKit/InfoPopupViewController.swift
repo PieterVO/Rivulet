@@ -258,6 +258,26 @@ enum InfoPopupContent {
         return stack
     }
 
+    /// Every review score, one row each: score, then source and who it's from.
+    static func ratings(_ ratings: [MediaRating]) -> UIView {
+        let stack = verticalStack(spacing: 22)
+        stack.addArrangedSubview(label("Ratings", size: 30, weight: .semibold, color: .white, lines: 1))
+        for rating in ratings {
+            let score = label(rating.badgeText + (rating.scale ?? ""), size: 30, weight: .bold, color: .white, lines: 1)
+            score.widthAnchor.constraint(equalToConstant: 170).isActive = true
+            let text = verticalStack(spacing: 2)
+            text.addArrangedSubview(label(rating.name, size: 24, weight: .semibold, color: .white, lines: 1))
+            text.addArrangedSubview(label(rating.detailText, size: 20, weight: .medium,
+                                          color: .white.withAlphaComponent(0.6), lines: 1))
+            let row = UIStackView(arrangedSubviews: [score, text])
+            row.axis = .horizontal
+            row.alignment = .center
+            row.spacing = 20
+            stack.addArrangedSubview(row)
+        }
+        return stack
+    }
+
     /// Common Sense advisory: green-check + age, one-liner, per-topic dot meters.
     static func advisory(_ advisory: ContentAdvisory) -> UIView {
         let stack = verticalStack(spacing: 18)

@@ -26,7 +26,9 @@ struct MediaItemDetail: Sendable {
     let trailerURL: URL?
     let contentRating: String?
     var regionOfOrigin: String? = nil   // e.g. "United Kingdom" (Plex Country), if present
-    let rating: MediaRating?
+    /// Review scores in display order (`MediaRating.ordered`). The ratings
+    /// worker's Metacritic / Letterboxd scores are merged in after load.
+    var ratings: [MediaRating] = []
 
     // Wave 1 additions for the detail view
     let nextEpisode: MediaItem?      // shows only — Plex `OnDeck`, Jellyfin `/Shows/NextUp`

@@ -24,7 +24,7 @@ final class VersionPickerTests: XCTestCase {
     private func detail(_ sources: [MediaSource]) -> MediaItemDetail {
         MediaItemDetail(item: JellyfinFixtures.mediaItem("m1"), tagline: nil, genres: [], studios: [], cast: [],
                         directors: [], writers: [], chapters: [], mediaSources: sources, trailerURL: nil,
-                        contentRating: nil, rating: nil, nextEpisode: nil, collections: [])
+                        contentRating: nil, nextEpisode: nil, collections: [])
     }
 
     func test_label_isResolutionRangeCodecAudioSize() {

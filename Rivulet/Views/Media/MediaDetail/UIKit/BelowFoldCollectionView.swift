@@ -524,6 +524,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.ingest(content)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
+            self.loadRatings(token: token)
             // Chained after ingest, which would otherwise overwrite it with the partial detail.
             let advisory = await self.loader.loadAdvisory(for: item)
             guard self.loadToken == token, let advisory else { return }
@@ -543,6 +544,25 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         guard snapshot.sectionIdentifiers.contains(.about) else { return }
         snapshot.reconfigureItems([.about])
         dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    /// Merges the ratings Worker's scores into the About card's detail. The
+    /// provider's own scores win per source.
+    private func loadRatings(token: UInt64) {
+        guard let target = showDetail ?? detail else { return }
+        Task { [weak self] in
+            let extra = await RatingsClient.shared.ratings(for: target)
+            guard let self, self.loadToken == token, !extra.isEmpty else { return }
+            if let current = self.showDetail?.ratings {
+                self.showDetail?.ratings = MediaRating.ordered(current + extra)
+            } else if let current = self.detail?.ratings {
+                self.detail?.ratings = MediaRating.ordered(current + extra)
+            }
+            var snapshot = self.dataSource.snapshot()
+            guard snapshot.sectionIdentifiers.contains(.about) else { return }
+            snapshot.reconfigureItems([.about])
+            await self.dataSource.apply(snapshot, animatingDifferences: false)
+        }
     }
 
     /// Episodes-only load for the carousel-stable peek (per page) — skips the
