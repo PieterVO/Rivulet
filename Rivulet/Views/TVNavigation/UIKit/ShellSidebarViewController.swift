@@ -153,6 +153,10 @@ final class ShellSidebarRowCell: UICollectionViewCell {
     private let backgroundPill = UIView()
     private let iconView = UIImageView()
     private let titleLabel = UILabel()
+    /// The library's server, a small line above the title while libraries
+    /// from several servers are mixed. Hidden otherwise, so the title centres.
+    private let serverLabel = UILabel()
+    private let textStack = UIStackView()
     private var isSelectedTab = false
 
     override init(frame: CGRect) {
@@ -164,7 +168,13 @@ final class ShellSidebarRowCell: UICollectionViewCell {
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 24, weight: .medium)
         iconView.setContentHuggingPriority(.required, for: .horizontal)
         titleLabel.font = .preferredFont(forTextStyle: .caption1)
-        for view in [iconView, titleLabel] {
+        serverLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        serverLabel.isHidden = true
+        textStack.axis = .vertical
+        textStack.alignment = .leading
+        textStack.addArrangedSubview(serverLabel)
+        textStack.addArrangedSubview(titleLabel)
+        for view in [iconView, textStack] {
             view.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(view)
         }
@@ -179,11 +189,11 @@ final class ShellSidebarRowCell: UICollectionViewCell {
             iconView.centerXAnchor.constraint(equalTo: contentView.leadingAnchor,
                                               constant: Metrics.iconCenterX),
             iconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
-                                                constant: Metrics.titleLeading),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
-                                                 constant: -Metrics.titleTrailing),
-            titleLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            textStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                               constant: Metrics.titleLeading),
+            textStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
+                                                constant: -Metrics.titleTrailing),
+            textStack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
         ])
         applyAppearance(focused: false)
     }
@@ -194,6 +204,8 @@ final class ShellSidebarRowCell: UICollectionViewCell {
         self.isSelectedTab = isSelectedTab
         iconView.image = UIImage(systemName: item.icon)
         titleLabel.text = item.title
+        serverLabel.text = item.badge
+        serverLabel.isHidden = item.badge == nil
         applyAppearance(focused: isFocused)
     }
 
@@ -215,6 +227,7 @@ final class ShellSidebarRowCell: UICollectionViewCell {
         backgroundPill.backgroundColor = colors.background
         iconView.tintColor = colors.content
         titleLabel.textColor = colors.content
+        serverLabel.textColor = colors.content.withAlphaComponent(0.6)
     }
 }
 
@@ -711,14 +724,13 @@ final class ShellSidebarViewController: UIViewController {
             ?? PlexAuthManager.shared.username
             ?? "Account"
         return ShellSidebarModel.sections(
-            libraries: PlexDataStore.shared.visibleSidebarLibraries,
+            libraries: SidebarLibrary.current(),
             liveTVSources: LiveTVDataStore.shared.sources,
             combineLiveTV: flag("combineLiveTVSources", default: true),
             showDiscover: flag("showDiscoverTab", default: true),
             discoverAbove: flag("discoverAboveLibraries", default: true),
             showWatchlist: flag("showWatchlistTab", default: true),
             liveTVAbove: flag("liveTVAboveLibraries", default: false),
-            serverName: PlexAuthManager.shared.savedServerName,
             profileName: profileName)
     }
 

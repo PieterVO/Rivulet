@@ -959,12 +959,17 @@ final class PreviewCarouselViewController: UIViewController {
         presentPlayer(ratingKey: item.ref.itemID, resumeOffset: offsetSec > 0 ? offsetSec : nil, mediaID: sourceID)
     }
 
+    /// The Plex server the item on screen lives on, which may not be the selected one (#87).
+    private var shownItemServer: PlexServerAddress? {
+        MediaProviderRegistry.shared.plexServer(for: expandedDetail.item?.ref.providerID)
+    }
+
     /// Fetches a Plex ratingKey's metadata and presents the player. A nil `resumeOffset`
     /// means ask the server: the only place an extra's resume point appears (#303).
     private func presentPlayer(ratingKey: String, resumeOffset: Double?, mediaID: String? = nil) {
+        let server = shownItemServer
         Task { [weak self] in
-            guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-                  let token = PlexAuthManager.shared.selectedServerToken else {
+            guard let serverURL = server?.address, let token = server?.token else {
                 previewCarouselLog.error("[PCV] play handoff: no server/token")
                 return
             }
@@ -1019,8 +1024,7 @@ final class PreviewCarouselViewController: UIViewController {
         case .directPartPath(let path):
             // IVA extras aren't library items, so /:/timeline never recorded a
             // position for them — there is nothing to resume from.
-            guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-                  let token = PlexAuthManager.shared.selectedServerToken else {
+            guard let serverURL = shownItemServer?.address, let token = shownItemServer?.token else {
                 previewCarouselLog.error("[PCV] extra play: no server/token")
                 return
             }

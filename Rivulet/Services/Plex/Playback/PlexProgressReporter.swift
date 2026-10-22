@@ -56,19 +56,21 @@ actor PlexProgressReporter {
         time: TimeInterval,
         duration: TimeInterval,
         state: String,
-        forceReport: Bool = false
+        forceReport: Bool = false,
+        server explicit: PlexServerAddress? = nil
     ) async {
         guard !ratingKey.isEmpty else { return }
+        guard let server = await server(explicit) else { return }
+        // Keyed by server too: two servers can share a ratingKey.
+        let key = server.address + "|" + ratingKey
 
         guard Self.shouldReport(state: state,
                                 time: time,
-                                lastState: lastReportedStates[ratingKey],
-                                lastTime: lastReportedTimes[ratingKey],
+                                lastState: lastReportedStates[key],
+                                lastTime: lastReportedTimes[key],
                                 force: forceReport) else { return }
-        lastReportedTimes[ratingKey] = time
-        lastReportedStates[ratingKey] = state
-
-        guard let server = await getServer() else { return }
+        lastReportedTimes[key] = time
+        lastReportedStates[key] = state
 
         let timeMs = Int(time * 1000)
         let durationMs = Int(duration * 1000)
@@ -112,9 +114,9 @@ actor PlexProgressReporter {
 
     /// Marks an item as fully watched (scrobble)
     /// - Parameter ratingKey: The Plex rating key for the media item
-    func markAsWatched(ratingKey: String) async {
+    func markAsWatched(ratingKey: String, server explicit: PlexServerAddress? = nil) async {
         guard !ratingKey.isEmpty else { return }
-        guard let server = await getServer() else { return }
+        guard let server = await server(explicit) else { return }
 
         let urlString = "\(server.address)/:/scrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)"
 
@@ -133,9 +135,9 @@ actor PlexProgressReporter {
 
     /// Marks an item as unwatched
     /// - Parameter ratingKey: The Plex rating key for the media item
-    func markAsUnwatched(ratingKey: String) async {
+    func markAsUnwatched(ratingKey: String, server explicit: PlexServerAddress? = nil) async {
         guard !ratingKey.isEmpty else { return }
-        guard let server = await getServer() else { return }
+        guard let server = await server(explicit) else { return }
 
         let urlString = "\(server.address)/:/unscrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)"
 
@@ -154,14 +156,22 @@ actor PlexProgressReporter {
 
     // MARK: - Helpers
 
-    private func getServer() async -> (address: String, token: String)? {
-        await MainActor.run {
+    /// The item's own server when the caller knows it (the player does), else the selected one.
+    private func server(_ explicit: PlexServerAddress?) async -> PlexServerAddress? {
+        if let explicit { return explicit }
+        return await MainActor.run {
             let authManager = PlexAuthManager.shared
             guard let address = authManager.selectedServerURL,
                   let token = authManager.selectedServerToken else {
                 return nil
             }
-            return (address, token)
+            return PlexServerAddress(address: address, token: token)
         }
     }
+}
+
+/// A Plex server's base URL and the token for it.
+struct PlexServerAddress: Sendable {
+    let address: String
+    let token: String
 }

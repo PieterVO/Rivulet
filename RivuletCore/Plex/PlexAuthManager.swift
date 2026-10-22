@@ -177,7 +177,7 @@ class PlexAuthManager: ObservableObject {
     private func upgradeConnectionIfBetterExists(from url: String) async {
         guard let token = authToken,
               let servers = try? await networkManager.getServers(authToken: token) else { return }
-        let server = servers.first(where: { urlBelongs(url, to: $0) })
+        let server = servers.first(where: { Self.urlBelongs(url, to: $0) })
             ?? savedServerName.flatMap { name in servers.first(where: { $0.name == name }) }
         guard let server,
               let best = await findBestConnection(for: server, reuseLastGood: false),
@@ -246,7 +246,7 @@ class PlexAuthManager: ObservableObject {
         let task = Task { @MainActor () -> Bool in
             if let workingURL = await findBestConnection(for: server) {
                 // A profile's stored token was issued for the server it was entered on.
-                let serverChanged = selectedServerURL.map { !urlBelongs($0, to: server) } ?? false
+                let serverChanged = selectedServerURL.map { !Self.urlBelongs($0, to: server) } ?? false
 
                 // Flip identity, URL and token together only after the connection
                 // verifies, or the UI names one server while data comes from another.
@@ -294,7 +294,7 @@ class PlexAuthManager: ObservableObject {
     /// - local: HTTP > plex.direct
     /// - remote: plex.direct URLs from the API
     /// - relay: last resort
-    private func findBestConnection(for server: PlexDevice, reuseLastGood: Bool = true) async -> String? {
+    func findBestConnection(for server: PlexDevice, reuseLastGood: Bool = true) async -> String? {
         // Probes carry no token; a candidate counts only when it answers as this server.
         let expectedID = server.machineIdentifier
 
@@ -302,7 +302,7 @@ class PlexAuthManager: ObservableObject {
         // to THIS server (matching a connection's host:port or embedding the
         // machineIdentifier, as plex.direct URLs do). Guards the switch-server
         // flow against reusing another server's URL.
-        if reuseLastGood, let lastGood = selectedServerURL, urlBelongs(lastGood, to: server) {
+        if reuseLastGood, let lastGood = selectedServerURL, Self.urlBelongs(lastGood, to: server) {
             print("🔐 PlexAuthManager: Trying last-known-good URL first: \(lastGood)")
             if await testConnection(lastGood, expecting: expectedID) != nil {
                 print("🔐 PlexAuthManager: ✅ Last-known-good works — skipping the probe ladder")
@@ -454,7 +454,7 @@ class PlexAuthManager: ObservableObject {
     /// Whether a persisted URL plausibly belongs to `server`: its host:port
     /// matches one of the server's advertised connections (http or https), or
     /// the URL embeds the server's machineIdentifier (plex.direct form).
-    private func urlBelongs(_ urlString: String, to server: PlexDevice) -> Bool {
+    nonisolated static func urlBelongs(_ urlString: String, to server: PlexDevice) -> Bool {
         if let machineId = server.machineIdentifier, urlString.contains(machineId) {
             return true
         }
@@ -771,6 +771,25 @@ class PlexAuthManager: ObservableObject {
         isAuthenticated && selectedServerToken == nil
     }
 
+    /// Whose content loads: 0 for the account, else the Home profile's user id.
+    var contentOwnerID: Int { userDefaults.integer(forKey: PlexProfileSession.contentUserIDKey) }
+
+    /// The selected server's machineIdentifier, remembered across launches.
+    var selectedServerMachineID: String? {
+        selectedServer?.machineIdentifier ?? userDefaults.string(forKey: serverMachineIDKey)
+    }
+
+    /// The selected server among `servers`: by machineIdentifier, else the one the
+    /// saved URL belongs to. Installs from before its id or name was saved learn them here.
+    func selectedServer(in servers: [PlexDevice]) -> PlexDevice? {
+        let server = selectedServerMachineID.map { id in servers.first { $0.machineIdentifier == id } }
+            ?? selectedServerURL.flatMap { url in servers.first { Self.urlBelongs(url, to: $0) } }
+        guard let server else { return nil }
+        if selectedServerMachineID == nil { userDefaults.set(server.machineIdentifier, forKey: serverMachineIDKey) }
+        if savedServerName == nil { userDefaults.set(server.name, forKey: serverNameKey) }
+        return server
+    }
+
     /// The profile in use was entered with a PIN, so the next launch starts locked.
     var relocksOnLaunch: Bool { storedContent == .withheld }
 
@@ -884,14 +903,14 @@ class PlexAuthManager: ObservableObject {
     /// After a relaunch, `selectedServer` is nil, so this also compares the saved URL and name.
     func isCurrentServer(_ server: PlexDevice) -> Bool {
         if let current = selectedServer { return current.clientIdentifier == server.clientIdentifier }
-        if let url = selectedServerURL, urlBelongs(url, to: server) { return true }
+        if let url = selectedServerURL, Self.urlBelongs(url, to: server) { return true }
         return server.name == savedServerName
     }
 
     /// Whether `url` points at the server in use, so its token may go there.
     func isCurrentServerURL(_ url: String) -> Bool {
         if url == selectedServerURL { return true }
-        if let server = selectedServer { return urlBelongs(url, to: server) }
+        if let server = selectedServer { return Self.urlBelongs(url, to: server) }
         guard let current = selectedServerURL.flatMap(URL.init(string:)), let other = URL(string: url) else { return false }
         return current.host == other.host && current.port == other.port
     }

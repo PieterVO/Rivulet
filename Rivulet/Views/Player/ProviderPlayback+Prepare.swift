@@ -113,6 +113,13 @@ enum ProviderPlayer {
         fromBeginning || detailOffset <= 0 ? nil : detailOffset
     }
 
+    /// A Plex item's resume point in seconds, gated on the shared resume policy
+    /// as the selected server's play path does.
+    static func plexStartOffset(_ metadata: PlexMetadata, fromBeginning: Bool) -> TimeInterval? {
+        guard !fromBeginning, metadata.isInProgress else { return nil }
+        return metadata.viewOffset.map { TimeInterval($0) / 1000 }
+    }
+
     /// Play `item` from its own provider. A show or a season resolves to the
     /// episode Play means first, the same way the Plex path does.
     @MainActor
@@ -132,6 +139,23 @@ enum ProviderPlayer {
             // The loading screen's art, fetched while the stream is resolved.
             async let loadingImages = HeroBackdropResolver.shared.playerLoadingImages(
                 for: target.heroBackdropRequest())
+            // Another Plex server's item takes the full Plex player with its own
+            // server: markers, transcode fallback, content filter, BIF (#87).
+            if let plex = provider as? PlexProvider {
+                do {
+                    let metadata = try await PlexNetworkManager.shared.getFullMetadata(
+                        serverURL: plex.serverURL, authToken: plex.authToken, ratingKey: target.ref.itemID)
+                    let (art, thumb) = await loadingImages
+                    let viewModel = UniversalPlayerViewModel(
+                        metadata: metadata, serverURL: plex.serverURL, authToken: plex.authToken,
+                        startOffset: plexStartOffset(metadata, fromBeginning: fromBeginning),
+                        loadingArtImage: art, loadingThumbImage: thumb, preferredMediaID: sourceID)
+                    PlayerPresenter.present(viewModel: viewModel, from: presenter, onDismiss: onDismiss)
+                } catch {
+                    presentError(MediaProviderError.mapping(error), from: presenter)
+                }
+                return
+            }
             do {
                 let playback = try await ProviderPlayback.prepare(
                     item: target, provider: provider, version: sourceID.map(VersionChoice.source) ?? .best)

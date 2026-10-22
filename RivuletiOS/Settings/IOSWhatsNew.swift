@@ -9,6 +9,8 @@ import SwiftUI
 enum IOSChangelog {
     static let entries: [(version: String, lines: [String])] = [
         ("1.0.7 (79)", [
+            "Every Plex server on your account now shows in Home, Library and Search",
+            "Continue Watching is now one row across all your servers, without duplicates",
             "Fixed the Plex Live TV guide failing to load on slower servers",
             "Fixed a managed profile briefly showing the owner's library at launch",
             "Fixed libraries not loading when one is missing details",

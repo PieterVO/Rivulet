@@ -17,7 +17,7 @@ final class DeepLinkHandler: ObservableObject {
 
     @Published var pendingPlayback: PlexMetadata?
     @Published var pendingDetail: PlexMetadata?
-    /// A link to another server's item (Jellyfin), resolved through its provider.
+    /// A link to another server's item (Jellyfin, another Plex server), resolved through its provider.
     @Published var pendingProviderLink: ProviderLink?
 
     struct ProviderLink: Equatable {
@@ -127,9 +127,11 @@ final class DeepLinkHandler: ObservableObject {
         pendingProviderLink = ProviderLink(action: link.action, item: item)
     }
 
-    /// The non-Plex server a link names. A Plex link's server is informational.
+    /// The server a link names when it is not the selected Plex server (Jellyfin,
+    /// another Plex server). The selected server's links carry its URL, informational.
     private func providerID(of link: RivuletLink) -> String? {
-        guard let server = link.server, MediaItemRef(providerID: server, itemID: link.ratingKey).isJellyfin else { return nil }
+        guard let server = link.server, server.hasPrefix("plex:") || server.hasPrefix("jellyfin:"),
+              !MediaItemRef(providerID: server, itemID: link.ratingKey).isPlex else { return nil }
         return server
     }
 

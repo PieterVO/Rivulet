@@ -46,6 +46,9 @@ class LibrarySettingsManager: ObservableObject {
     private let hiddenLibrariesBaseKey = "hiddenLibraryKeys"
     private let libraryOrderBaseKey = "libraryOrder"
     private let sortOptionsBaseKey = "librarySortOptions"
+    /// The order across every server, per Plex profile. Each server's own list
+    /// keeps its libraries' relative order; this one says how they interleave.
+    private let combinedOrderBaseKey = "libraryOrderAllServers"
 
     /// Retired in the #295 cleanup. Kept only so `loadSettingsForCurrentUser`
     /// can delete what old builds wrote; see the Home Screen Visibility note.
@@ -139,7 +142,8 @@ class LibrarySettingsManager: ObservableObject {
     /// Load settings for the current user from UserDefaults
     private func loadSettingsForCurrentUser() {
         self.hiddenLibraryKeys = Set(storedKeys(hiddenLibrariesBaseKey))
-        self.libraryOrder = storedKeys(libraryOrderBaseKey)
+        let combined = userDefaults.array(forKey: currentKey(combinedOrderBaseKey)) as? [String] ?? []
+        self.libraryOrder = Self.arrange(storedKeys(libraryOrderBaseKey), key: { $0 }, savedOrder: combined)
 
         pruneRetiredHomeVisibilityKeys()
 
@@ -269,11 +273,11 @@ class LibrarySettingsManager: ObservableObject {
         let currentKeys = Set(libraries.map { $0.key })
         let orderedKeys = Set(libraryOrder)
 
-        // Add any new libraries to the end of the order
-        for library in libraries {
-            if !orderedKeys.contains(library.key) {
-                libraryOrder.append(library.key)
-            }
+        // A new library goes after this server's last one, never past another
+        // server's, so it does not split the user's order into mixed servers.
+        for library in libraries where !orderedKeys.contains(library.key) {
+            let last = libraryOrder.lastIndex { !Self.isProviderKey($0) }
+            libraryOrder.insert(library.key, at: last.map { $0 + 1 } ?? libraryOrder.count)
         }
 
         // Remove any libraries from order that no longer exist
@@ -287,7 +291,7 @@ class LibrarySettingsManager: ObservableObject {
 
     /// A non-Plex library's key (`MediaLibrary.settingsKey`). Plex section
     /// keys are bare numbers and never contain ":".
-    static func isProviderKey(_ key: String) -> Bool { key.contains(":") }
+    nonisolated static func isProviderKey(_ key: String) -> Bool { key.contains(":") }
 
     /// `filterAndSortLibraries` for a non-Plex server's libraries: hidden ones
     /// dropped, ordered ones first in their saved order, the rest in server order.
@@ -303,10 +307,52 @@ class LibrarySettingsManager: ObservableObject {
             .map(\.element)
     }
 
-    /// One step up or down within `keys` (one server's libraries in displayed
-    /// order). Rewrites `libraryOrder` as that run followed by every other
-    /// key, so nothing is dropped. A step off either end of the run does
-    /// nothing: the sidebar shows each server in its own section.
+    /// Every server's libraries in the one sidebar and Home order (#87). `items`
+    /// come grouped by server, the selected Plex server first.
+    func arrange<T>(_ items: [T], key: (T) -> String) -> [T] {
+        Self.arrange(items, key: key, savedOrder: libraryOrder)
+    }
+
+    /// Saved keys first, in saved order. An unsaved key (a new library) goes right
+    /// after the last of its own server's, so it never splits a server's run; one
+    /// whose server has none saved goes last.
+    nonisolated static func arrange<T>(_ items: [T], key: (T) -> String, savedOrder: [String]) -> [T] {
+        let rank = Dictionary(savedOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        var result = items.filter { rank[key($0)] != nil }.sorted { rank[key($0)]! < rank[key($1)]! }
+        for item in items where rank[key(item)] == nil {
+            let server = serverID(ofKey: key(item))
+            if let last = result.lastIndex(where: { serverID(ofKey: key($0)) == server }) {
+                result.insert(item, at: last + 1)
+            } else {
+                result.append(item)
+            }
+        }
+        return result
+    }
+
+    /// The server a key belongs to: "" for the selected Plex server's bare section
+    /// keys, else the provider id of a "<providerID>/<library id>" key.
+    nonisolated static func serverID(ofKey key: String) -> String {
+        isProviderKey(key) ? String(key.prefix { $0 != "/" }) : ""
+    }
+
+    /// Whether each server's libraries sit together in `keys`, so the sidebar can
+    /// head them with the server's name instead of badging each one.
+    nonisolated static func isGroupedByServer(_ keys: [String]) -> Bool {
+        var seen: Set<String> = []
+        var current: String?
+        for key in keys {
+            let server = serverID(ofKey: key)
+            guard server != current else { continue }
+            guard seen.insert(server).inserted else { return false }
+            current = server
+        }
+        return true
+    }
+
+    /// One step up or down within `keys` (the libraries in displayed order).
+    /// Rewrites `libraryOrder` as that run followed by every other key, so
+    /// nothing is dropped. A step off either end of the run does nothing.
     func moveLibrary(key: String, up: Bool, among keys: [String]) {
         var run = keys
         guard let i = run.firstIndex(of: key) else { return }
@@ -417,6 +463,7 @@ class LibrarySettingsManager: ObservableObject {
 
     private func saveLibraryOrder() {
         save(libraryOrder, baseKey: libraryOrderBaseKey)
+        userDefaults.set(libraryOrder, forKey: currentKey(combinedOrderBaseKey))
     }
 
     /// Drop what pre-#295 builds wrote for the retired shown-on-Home set, so a

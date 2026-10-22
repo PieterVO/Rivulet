@@ -193,7 +193,10 @@ struct IOSPlexSearchRow: View {
         case "episode": [item.grandparentTitle, episodeCode]
         default: [item.type?.capitalized]
         }
-        return parts.compactMap { $0 }.joined(separator: " · ")
+        // With several servers, results from each can share a title.
+        let server = PlexExtraServers.shared.current.isEmpty ? nil
+            : item.serverID.flatMap { plex.otherServerNames[$0] } ?? plex.auth.savedServerName
+        return (parts + [server]).compactMap { $0 }.joined(separator: " · ")
     }
 
     private var episodeCode: String? {

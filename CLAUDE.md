@@ -179,8 +179,16 @@ exactly four files touch genuinely tvOS-only API: the three in `Services/Input/`
 plus `DisplayCriteriaManager`. Judge by tvOS-only frameworks (`TVServices`,
 `TVUIKit`, `AVDisplayManager`) and focus/press API, nothing else.
 
-Move files into `RivuletCore/` when a slice actually needs them, not
+Move existing files into `RivuletCore/` when a slice actually needs them, not
 speculatively. The list above is the destination, not a migration order.
+
+**New business logic starts in `RivuletCore/`, even when only tvOS ships it.**
+Rules, server and API behavior, and non-UI state go there from the first
+commit, written generic over the item type (closures for keys and dates) so
+they do not depend on tvOS models like `MediaItem`; only views, input and
+tvOS-shaped stores stay in `Rivulet/`. #87 is the worked example of getting
+this wrong: multi-server discovery and the Continue Watching merge landed in
+the tvOS folder and had to be lifted before iOS could use them.
 
 The Plex stack is already across: `PlexNetworkManager`, `PlexAuthManager`,
 `PlexUserProfileManager`, `Models/Plex/`, the TMDB client, `IntroDBClient`,
@@ -728,9 +736,24 @@ which never names a backend.
 
 - **One GUI for both servers.** No Jellyfin-only surface. A Plex-only feature
   is simply absent on a Jellyfin item.
-- **Never merge across servers.** Each server's libraries and Home rows show on
-  their own, labelled by server ("Plex - Movies", "Jellyfin - Continue Watching").
-  The user picks rows through the existing Home Rows setting.
+- **Never merge across servers, except Continue Watching.** Each server's
+  libraries and Home rows show on their own, labelled by server. With more than
+  one server signed in, Continue Watching is ONE row (`ContinueWatchingRow`,
+  `ContinueWatchingMerge`): the same title on two servers is one card, matched
+  on ids only (never title), episodes per show, the copy watched last shown.
+  Plex to Plex costs no request (`plex://` guids, `includeGuids=1` on the hub);
+  show ids for episodes come from one batched lookup per server, kept forever.
+  A card's Mark Watched / Remove reach every copy.
+- **The account's other Plex servers (#87) ride the same seam.** The selected
+  server keeps `PlexDataStore` and the legacy `.plex` paths; every other server
+  on the account is a `PlexProvider` from `PlexExtraServers` (RivuletCore:
+  per-profile list and tokens from `/resources`, shared with iOS), shown beside
+  Jellyfin by `ServerDataStore`. iOS keys the same servers on
+  `PlexMetadata.serverID` / `PlexLibrary.serverID` / `PlexHub.serverID` (nil is
+  the selected server) and resolves each through `IOSPlexSession.configuration(serverID:)`.
+  `MediaItemRef.isPlex` means the SELECTED server only, so an extra server's
+  item takes the provider path; never test `hasPrefix("plex:")` to mean
+  "the Plex server".
 - **A new feature is a protocol requirement plus one implementation per provider.**
   When a decision point names Jellyfin, generalize it onto the seam.
 - Server floor is 10.10 (`JellyfinSession.minimumVersion`), tested on 12.1. No
@@ -1124,8 +1147,8 @@ The Plex Discover API uses three different hosts:
 
 ## Plex server API gotchas
 
-**Hub items are not full metadata.** `/hubs/continueWatching` sends no `Guid`
-array (so no TMDB id) and only three `Role` entries. Anything keyed on external
+**Hub items are not full metadata.** `/hubs/continueWatching` sends the `Guid`
+array only with `includeGuids=1` (which `continueWatchingURL` sends), and only three `Role` entries. Anything keyed on external
 ids or the full cast reads `getFullMetadata` first, as Insights does
 (`insightsFullMetadata`).
 

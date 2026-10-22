@@ -37,22 +37,36 @@ struct RivuletApp: App {
             MusicQueue.shared.stop()
             MusicQueue.shared.clear()
             PlexDataStore.shared.reset()
+            PlexExtraServers.shared.clear()
             // Older builds recorded token-bearing URLs in the cache metadata.
             Task { await ImageCacheManager.shared.clearAll() }
         }
-        JellyfinSession.onChanged = { JellyfinDataStore.shared.reload() }
+        JellyfinSession.onChanged = { ServerDataStore.shared.reload() }
         PlexLiveTimelineKeepalive.releaseOtherSession = { JellyfinLiveTVProvider.closeLiveStream($0) }
         PlexUserProfileManager.onProfileChanged = {
             // The queue reports progress with whichever token is current.
             MusicQueue.shared.stop()
             MusicQueue.shared.clear()
             await PlexDataStore.shared.onProfileSwitched()
-            // A restricted profile does not see the Jellyfin server.
-            JellyfinDataStore.shared.reload()
+            // The previous profile's other Plex servers go now; a restricted
+            // profile does not see the Jellyfin server.
+            MediaProviderRegistry.shared.populateFromCurrentAuth()
+            ServerDataStore.shared.reload()
+        }
+        ContinueWatchingRow.shared.fetchShowKeys = { providerID, showIDs in
+            await MediaProviderRegistry.shared.provider(for: providerID)?.showIdentityKeys(for: showIDs) ?? [:]
+        }
+        ContinueWatchingRow.shared.onResolved = { await TopShelfFeed.refresh() }
+        PlexExtraServers.onChanged = {
+            MediaProviderRegistry.shared.populateFromCurrentAuth()
+            ServerDataStore.shared.reload()
+        }
+        PlexUserProfileManager.onProfileEntered = { token in
+            Task { await PlexExtraServers.shared.refresh(plexToken: token) }
         }
         PlexUserProfileManager.onInitialProfileSelected = {
             LibrarySettingsManager.shared.onProfileSwitched()
-            JellyfinDataStore.shared.reload()
+            ServerDataStore.shared.reload()
         }
 
         #if !DEBUG

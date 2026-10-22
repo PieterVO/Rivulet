@@ -150,6 +150,10 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (104)", [
+            "Every Plex server on your account now shows in the sidebar, Home and Search.",
+            "Continue Watching is now one row across all your servers, without duplicates.",
+            "Arrange libraries from all your servers in any order in Settings.",
+            "Top Shelf now shows Continue Watching from every server.",
             "New ratings card with Rotten Tomatoes, IMDb, Metacritic and Letterboxd.",
             "With Height Speakers on, FEL videos now keep FEL and play without heights.",
             "New Dolby Vision FEL setting in Playback. Turn it off to keep heights instead.",

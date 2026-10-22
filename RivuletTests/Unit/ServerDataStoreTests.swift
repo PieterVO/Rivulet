@@ -6,7 +6,7 @@ import XCTest
 @testable import Rivulet
 
 @MainActor
-final class JellyfinDataStoreTests: XCTestCase {
+final class ServerDataStoreTests: XCTestCase {
     private let jellyfin = StubMediaProvider(id: "jellyfin:srv", kind: .jellyfin)
     private let settings = LibrarySettingsManager.shared
     private var savedOrder: [String] = []
@@ -45,7 +45,7 @@ final class JellyfinDataStoreTests: XCTestCase {
         jellyfin.libraryList = [library("m", .movies), library("t", .shows), library("mu", .music),
                                 library("p", .photos), library("x", .mixed), library("l", .liveTV)]
         jellyfin.hubsByLibrary = ["p": [recentlyAdded("p", "z")], "mu": [recentlyAdded("mu", "y")]]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
 
         await store.load(from: jellyfin)
 
@@ -65,7 +65,7 @@ final class JellyfinDataStoreTests: XCTestCase {
                   recentlyAdded("m", "b")],
             "t": [recentlyAdded("t", "c")]
         ]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
 
         await store.load(from: jellyfin)
 
@@ -81,7 +81,7 @@ final class JellyfinDataStoreTests: XCTestCase {
 
     func test_load_failure_keepsWhatWasThere() async {
         jellyfin.libraryList = [library("m", .movies)]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         await store.load(from: jellyfin)
 
         jellyfin.librariesError = URLError(.timedOut)
@@ -95,7 +95,7 @@ final class JellyfinDataStoreTests: XCTestCase {
         jellyfin.libraryList = [library("m", .movies)]
         jellyfin.continueWatchingItems = [JellyfinFixtures.mediaItem("a")]
         jellyfin.hubsByLibrary = ["m": [recentlyAdded("m", "b")]]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         await store.load(from: jellyfin)
 
         jellyfin.continueWatchingError = URLError(.timedOut)
@@ -111,7 +111,7 @@ final class JellyfinDataStoreTests: XCTestCase {
     func test_load_hubsFailure_keepsThatLibrarysRow() async {
         jellyfin.libraryList = [library("m", .movies)]
         jellyfin.hubsByLibrary = ["m": [recentlyAdded("m", "b")]]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         await store.load(from: jellyfin)
 
         jellyfin.hubsError = URLError(.timedOut)
@@ -129,7 +129,7 @@ final class JellyfinDataStoreTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: JellyfinSession.accountKey)
         jellyfin.libraryList = [library("m", .movies)]
         jellyfin.hubsByLibrary = ["m": [recentlyAdded("m", "b")]]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         await store.load(from: jellyfin)
         XCTAssertFalse(store.homeRows.isEmpty)
 
@@ -142,7 +142,7 @@ final class JellyfinDataStoreTests: XCTestCase {
 
     func test_reload_withoutAccount_publishesNothingWhenAlreadyEmpty() {
         UserDefaults.standard.removeObject(forKey: JellyfinSession.accountKey)
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         var publishes = 0
         let sub = store.objectWillChange.sink { publishes += 1 }
         store.reload()
@@ -155,7 +155,7 @@ final class JellyfinDataStoreTests: XCTestCase {
         jellyfin.libraryList = [library("m", .movies), library("t", .shows)]
         jellyfin.continueWatchingItems = [JellyfinFixtures.mediaItem("a")]
         jellyfin.hubsByLibrary = ["m": [recentlyAdded("m", "b")], "t": [recentlyAdded("t", "c")]]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         await store.load(from: jellyfin)
         let cw = "jellyfin:srv|continueWatching"
         HomeRowSettings.setHidden(true, for: cw)
@@ -170,7 +170,7 @@ final class JellyfinDataStoreTests: XCTestCase {
 
     func test_visibleLibraries_followSidebarOrderAndVisibility() async {
         jellyfin.libraryList = [library("m", .movies), library("t", .shows), library("x", .mixed)]
-        let store = JellyfinDataStore(observesRefresh: false)
+        let store = ServerDataStore(observesRefresh: false)
         await store.load(from: jellyfin)
         settings.libraryOrder = [library("x", .mixed).settingsKey, library("m", .movies).settingsKey]
         settings.hiddenLibraryKeys.insert(library("t", .shows).settingsKey)
@@ -225,11 +225,48 @@ final class JellyfinDataStoreTests: XCTestCase {
     }
 
     func test_labelsServers_falseWithoutAJellyfinAccount() {
-        XCTAssertFalse(JellyfinDataStore(observesRefresh: false).labelsServers)
+        XCTAssertFalse(ServerDataStore(observesRefresh: false).labelsServers)
     }
 
     func test_displayName() {
         XCTAssertEqual(MediaProviderKind.plex.displayName, "Plex")
         XCTAssertEqual(MediaProviderKind.jellyfin.displayName, "Jellyfin")
+    }
+
+    // MARK: - Several servers (#87)
+
+    func test_twoServers_keepTheirOwnRows_evenWhenLibraryIDsCollide() async {
+        let office = StubMediaProvider(id: "plex:office", kind: .plex)
+        office.libraryList = [MediaLibrary(id: "1", providerID: "plex:office", title: "Movies", kind: .movies),
+                              MediaLibrary(id: "2", providerID: "plex:office", title: "Music", kind: .music)]
+        office.hubsByLibrary = ["1": [MediaHub(id: "1.recentlyAdded", providerID: "plex:office", title: "Recently Added in Movies",
+                                               style: .shelf, items: [JellyfinFixtures.mediaItem("o", providerID: "plex:office")])]]
+        jellyfin.libraryList = [MediaLibrary(id: "1", providerID: "jellyfin:srv", title: "Films", kind: .movies)]
+        jellyfin.hubsByLibrary = ["1": [MediaHub(id: "1.recentlyAdded", providerID: "jellyfin:srv", title: "Recently Added in Films",
+                                                 style: .shelf, items: [JellyfinFixtures.mediaItem("j")])]]
+        let store = ServerDataStore(observesRefresh: false)
+
+        await store.load(from: jellyfin)
+        await store.load(from: office)
+
+        XCTAssertEqual(store.libraries.map(\.settingsKey), ["jellyfin:srv/1", "plex:office/1"],
+                       "an extra Plex server's music stays on the selected server")
+        XCTAssertEqual(store.homeRowsInSidebarOrder.map(\.id),
+                       ["jellyfin:srv|1.recentlyAdded", "plex:office|1.recentlyAdded"],
+                       "each server's row matches its own library, not the other's with the same id")
+    }
+
+    func test_oneServerFailing_keepsTheOthersRows() async {
+        let office = StubMediaProvider(id: "plex:office", kind: .plex)
+        office.libraryList = [MediaLibrary(id: "1", providerID: "plex:office", title: "Movies", kind: .movies)]
+        jellyfin.libraryList = [library("m", .movies)]
+        let store = ServerDataStore(observesRefresh: false)
+        await store.load(from: jellyfin)
+        await store.load(from: office)
+
+        office.librariesError = URLError(.timedOut)
+        await store.load(from: office)
+
+        XCTAssertEqual(store.libraries.map(\.settingsKey), ["jellyfin:srv/m", "plex:office/1"])
     }
 }

@@ -341,6 +341,8 @@ struct IOSPlexHubRoute: Hashable {
 struct IOSPlexShelfHeader: View {
     let title: String
     var route: IOSPlexHubRoute?
+    /// The row's server, named while more than one is signed in, as on tvOS.
+    var badge: String?
 
     var body: some View {
         Group {
@@ -357,6 +359,16 @@ struct IOSPlexShelfHeader: View {
     private func label(chevron: Bool) -> some View {
         HStack(spacing: 4) {
             Text(title).font(.title3.bold())
+            if let badge {
+                Text(badge)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.quaternary, in: .capsule)
+                    .padding(.leading, 4)
+            }
             if chevron {
                 Image(systemName: "chevron.right")
                     .font(.subheadline.bold())
@@ -471,12 +483,14 @@ struct IOSPlexShelfView: View {
     var body: some View {
         let route = IOSPlexHubRoute(hub: hub)
         if hub.isContinueWatching {
+            // One row across every server, so no badge.
             IOSPlexRail(title: hub.displayTitle, route: route, kind: .landscape, items: hub.items) { item, width in
                 IOSPlexContinueCard(item: item, width: width)
                     .task(id: width) { await prefetchAhead(of: item, width: width) }
             }
         } else {
-            IOSPlexRail(title: hub.displayTitle, route: route, kind: .poster, items: hub.items) {
+            IOSPlexRail(title: hub.displayTitle, route: route, kind: .poster, items: hub.items,
+                        badge: plex.serverBadge(serverID: hub.serverID)) {
                 IOSPlexPosterCard(item: $0, width: $1)
             }
         }
@@ -500,6 +514,7 @@ struct IOSPlexRail<Tile: View>: View {
     var route: IOSPlexHubRoute?
     let kind: IOSShelfGeometry.Kind
     let items: [PlexMetadata]
+    var badge: String? = nil
     @ViewBuilder let tile: (PlexMetadata, CGFloat) -> Tile
 
     /// Each rail owns its zoom sources; an item can sit in several rows.
@@ -507,7 +522,7 @@ struct IOSPlexRail<Tile: View>: View {
 
     var body: some View {
         IOSShelfRow(kind: kind, items: items) {
-            IOSPlexShelfHeader(title: title, route: route)
+            IOSPlexShelfHeader(title: title, route: route, badge: badge)
         } tile: { item, width in
             NavigationLink(value: IOSPlexDetailRoute(item: item, scope: zoomScope)) { tile(item, width) }
                 .buttonStyle(.plain)

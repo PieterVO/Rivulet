@@ -42,7 +42,7 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     let seasonNumber: Int?               // episodes/seasons only — Plex `parentIndex`
     let childProgress: ChildProgress?    // shows/seasons only — for "12/24 watched"
 
-    let userState: MediaUserState
+    var userState: MediaUserState
 
     // Artwork — own + hierarchy
     let artwork: MediaArtwork
@@ -53,6 +53,9 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     let versionCount: Int?
     /// Plex edition name ("Director's Cut"); each edition is its own item.
     let editionTitle: String?
+    /// Keys naming the same title on any server (`ContinueWatchingMerge`); set
+    /// on Continue Watching items only. Optional so cached items still decode.
+    var identity: [String]?
 
     init(
         ref: MediaItemRef,
@@ -76,7 +79,8 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         parentArtwork: MediaArtwork?,
         grandparentArtwork: MediaArtwork?,
         versionCount: Int? = nil,
-        editionTitle: String? = nil
+        editionTitle: String? = nil,
+        identity: [String]? = nil
     ) {
         self.ref = ref
         self.kind = kind
@@ -100,6 +104,7 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         self.grandparentArtwork = grandparentArtwork
         self.versionCount = versionCount
         self.editionTitle = editionTitle
+        self.identity = identity
     }
 }
 
@@ -127,6 +132,17 @@ extension MediaItem {
     )
 
     var isGridPlaceholder: Bool { ref.itemID.isEmpty }
+
+    /// An episode's or season's show as `ContinueWatchingRow` keys it, "<providerID>|<show id>".
+    var showKey: String? {
+        let show: MediaItemRef? = switch kind {
+        case .episode: grandparentRef
+        case .season: parentRef
+        default: nil
+        }
+        guard let show, !show.itemID.isEmpty else { return nil }
+        return "\(show.providerID)|\(show.itemID)"
+    }
 }
 
 extension MediaItem {

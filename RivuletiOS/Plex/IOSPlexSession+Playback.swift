@@ -32,7 +32,8 @@ extension IOSPlexSession {
         func children(_ key: String?) async -> [PlexMetadata] {
             guard let key else { return [] }
             let items = (try? await network.getChildren(serverURL: request.serverURL, authToken: request.token, ratingKey: key)) ?? []
-            return items.sorted { ($0.index ?? 0) < ($1.index ?? 0) }
+            // The next episode is on the same server as this one.
+            return Self.onServer(items, episode.serverID).sorted { ($0.index ?? 0) < ($1.index ?? 0) }
         }
         if let next = await children(episode.parentRatingKey).first(where: { ($0.index ?? 0) > index }) {
             return next

@@ -18,6 +18,40 @@ struct ShellSidebarItem: Hashable {
     var avatarURL: URL?
     /// The profile row only: Select opens the profile switcher.
     var canSwitchProfile = false
+    /// The library's server, named on the row once libraries from several
+    /// servers are mixed together and no section header can name it.
+    var badge: String?
+}
+
+/// One library in the sidebar, any server's, in the user's order.
+struct SidebarLibrary: Hashable {
+    /// `LibrarySettingsManager`'s key, which names the server.
+    let key: String
+    let serverName: String
+    let item: ShellSidebarItem
+
+    init(plex library: PlexLibrary, serverName: String) {
+        key = library.key
+        self.serverName = serverName
+        item = ShellSidebarItem(tab: .library(key: library.key), title: library.title,
+                                icon: ShellSidebarModel.icon(forLibraryType: library.type))
+    }
+
+    init(_ library: MediaLibrary, serverName: String) {
+        key = library.settingsKey
+        self.serverName = serverName
+        item = ShellSidebarItem(tab: .providerLibrary(providerID: library.providerID, libraryID: library.id),
+                                title: library.title, icon: ShellSidebarModel.icon(forLibraryKind: library.kind))
+    }
+    /// Every server's visible libraries in the user's order across servers.
+    @MainActor static func current() -> [SidebarLibrary] {
+        let plexName = PlexAuthManager.shared.savedServerName ?? "Library"
+        let store = ServerDataStore.shared
+        let names = Dictionary(store.sources.map { ($0.providerID, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let all = PlexDataStore.shared.visibleSidebarLibraries.map { SidebarLibrary(plex: $0, serverName: plexName) }
+            + store.visibleLibraries.map { SidebarLibrary($0, serverName: names[$0.providerID] ?? "") }
+        return LibrarySettingsManager.shared.arrange(all, key: \.key)
+    }
 }
 
 /// A group of rows. `title` renders as a small section header; nil means the
@@ -35,19 +69,16 @@ enum ShellSidebarModel {
 
     // swiftlint:disable:next function_parameter_count
     static func sections(
-        libraries: [PlexLibrary],
+        libraries: [SidebarLibrary],
         liveTVSources: [LiveTVDataStore.LiveTVSourceInfo],
         combineLiveTV: Bool,
         showDiscover: Bool,
         discoverAbove: Bool,
         showWatchlist: Bool,
         liveTVAbove: Bool,
-        serverName: String?,
         profileName: String,
         profileAvatar: URL? = nil,
         canSwitchProfile: Bool = false,
-        jellyfinServerName: String? = nil,
-        jellyfinLibraries: [MediaLibrary] = [],
         hasMediaServer: Bool = true
     ) -> [ShellSidebarSection] {
         var sections: [ShellSidebarSection] = []
@@ -82,28 +113,11 @@ enum ShellSidebarModel {
             sections.append(ShellSidebarSection(title: nil, items: top))
         }
 
-        let librarySection = ShellSidebarSection(
-            title: serverName ?? "Library",
-            items: libraries.map {
-                ShellSidebarItem(tab: .library(key: $0.key),
-                                 title: $0.title,
-                                 icon: icon(forLibraryType: $0.type))
-            })
         let liveTVSection = ShellSidebarSection(
             title: "Live TV",
             items: liveTVItems(sources: liveTVSources, combined: combineLiveTV))
-
-        // Each server's libraries in their own section under that server's
-        // name, never merged. Plex first.
-        let jellyfinSection = ShellSidebarSection(
-            title: jellyfinServerName ?? "Jellyfin",
-            items: jellyfinLibraries.map {
-                ShellSidebarItem(tab: .providerLibrary(providerID: $0.providerID, libraryID: $0.id),
-                                 title: $0.title,
-                                 icon: icon(forLibraryKind: $0.kind))
-            })
-        let middle = liveTVAbove ? [liveTVSection, librarySection, jellyfinSection]
-                                 : [librarySection, jellyfinSection, liveTVSection]
+        let librarySections = self.librarySections(libraries)
+        let middle = liveTVAbove ? [liveTVSection] + librarySections : librarySections + [liveTVSection]
         sections.append(contentsOf: middle.filter { !$0.items.isEmpty })
 
         if showDiscover && !discoverAbove {
@@ -112,6 +126,32 @@ enum ShellSidebarModel {
         sections.append(ShellSidebarSection(
             title: nil,
             items: [ShellSidebarItem(tab: .settings, title: "Settings", icon: "gearshape.fill")]))
+        return sections
+    }
+
+    /// The libraries, already in the user's order. While each server's sit
+    /// together they get a section under the server's name, the selected Plex
+    /// server's first by default. Once the user mixes them, one Libraries
+    /// section, each row badged with its server.
+    static func librarySections(_ libraries: [SidebarLibrary]) -> [ShellSidebarSection] {
+        guard LibrarySettingsManager.isGroupedByServer(libraries.map(\.key)) else {
+            return [ShellSidebarSection(title: "Libraries", items: libraries.map { library in
+                var item = library.item
+                item.badge = library.serverName
+                return item
+            })]
+        }
+        var sections: [ShellSidebarSection] = []
+        var run: [SidebarLibrary] = []
+        for library in libraries {
+            if let first = run.first,
+               LibrarySettingsManager.serverID(ofKey: first.key) != LibrarySettingsManager.serverID(ofKey: library.key) {
+                sections.append(ShellSidebarSection(title: first.serverName, items: run.map(\.item)))
+                run = []
+            }
+            run.append(library)
+        }
+        if let first = run.first { sections.append(ShellSidebarSection(title: first.serverName, items: run.map(\.item))) }
         return sections
     }
 

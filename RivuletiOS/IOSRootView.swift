@@ -42,7 +42,8 @@ struct IOSRootView: View {
                     .defaultVisibility(.hidden, for: .tabBar)
                 }
                 ForEach(showsSidebarLibraries ? videoLibraries : []) { library in
-                    Tab(library.title, systemImage: library.icon, value: "library:\(library.key)") {
+                    Tab(plex.displayTitle(library.title, serverID: library.serverID), systemImage: library.icon,
+                        value: "library:\(library.id)") {
                         tabStack(sidebarZoom) { IOSPlexLibraryView(library: library, showsAccount: true) }
                     }
                     .defaultVisibility(.hidden, for: .tabBar)
@@ -111,7 +112,7 @@ struct IOSRootView: View {
     /// A sidebar library tab vanishes at compact width or on a server without that library.
     private func dropOrphanedLibraryTab() {
         guard selectedTab.hasPrefix("library:") || selectedTab == "downloads" else { return }
-        let live = showsSidebarLibraries ? videoLibraries.map { "library:\($0.key)" } + ["downloads"] : []
+        let live = showsSidebarLibraries ? videoLibraries.map { "library:\($0.id)" } + ["downloads"] : []
         if !live.contains(selectedTab) { selectedTab = "library" }
     }
 
@@ -126,7 +127,9 @@ struct IOSRootView: View {
         plex.libraries
             .filter { $0.type == "movie" || $0.type == "show" }
             .sorted { lhs, rhs in
-                lhs.type != rhs.type
+                // The selected server's first, then each other server's together.
+                guard lhs.serverID == rhs.serverID else { return lhs.serverID == nil }
+                return lhs.type != rhs.type
                     ? lhs.type == "movie"
                     : lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
             }

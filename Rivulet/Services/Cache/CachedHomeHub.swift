@@ -15,6 +15,9 @@ nonisolated struct CachedHomeHub: Codable, Sendable {
     var hubIdentifier: String?
     var totalSize: Int?
     var items: [MediaItem]
+    /// The library the row belongs to, as `LibrarySettingsManager` keys it, so
+    /// Home follows the sidebar's order across servers. nil for Continue Watching.
+    var libraryKey: String? = nil
 }
 
 /// An ordered list of home/library hub rows — the full projection for one

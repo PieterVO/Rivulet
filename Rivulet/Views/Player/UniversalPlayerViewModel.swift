@@ -472,6 +472,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     let serverURL: String
     let authToken: String
+    /// The item's own server, which may not be the selected one (#87).
+    private var plexServer: PlexServerAddress { PlexServerAddress(address: serverURL, token: authToken) }
     private(set) var startOffset: TimeInterval?
     /// Where the item comes from. `.plex` is the legacy path; every
     /// `.provider` branch below returns before any Plex request is built.
@@ -5792,7 +5794,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // Check if next episode was prefetched
-        if let ratingKey = metadata.ratingKey,
+        // The cache holds the selected server's ratingKeys; another server's can collide.
+        if let ratingKey = metadata.ratingKey, PlexAuthManager.shared.selectedServerURL == serverURL,
            let cached = await PlexDataStore.shared.getCachedNextEpisode(for: ratingKey) {
             return cached
         }
@@ -6275,7 +6278,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 ratingKey: self.metadata.ratingKey ?? "",
                 time: time,
                 duration: self.duration,
-                state: self.isPlaying ? "playing" : "paused"
+                state: self.isPlaying ? "playing" : "paused",
+                server: plexServer
             )
         }
     }
@@ -6308,7 +6312,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 time: self.currentTime,
                 duration: self.duration,
                 state: state,
-                forceReport: true
+                forceReport: true,
+                server: plexServer
             )
         }
     }
@@ -6335,13 +6340,15 @@ final class UniversalPlayerViewModel: ObservableObject {
             time: time,
             duration: duration,
             state: "stopped",
-            forceReport: true
+            forceReport: true,
+            server: plexServer
         )
 
         // 2. Mark as watched if > 90% complete
         if duration > 0 && time / duration > 0.9 {
             await PlexProgressReporter.shared.markAsWatched(
-                ratingKey: metadata.ratingKey ?? ""
+                ratingKey: metadata.ratingKey ?? "",
+                server: plexServer
             )
         }
 
@@ -6413,11 +6420,12 @@ final class UniversalPlayerViewModel: ObservableObject {
             ratingKey: ratingKey,
             time: currentTime,
             duration: duration,
-            state: "stopped"
+            state: "stopped",
+            server: plexServer
         )
 
         // Mark as watched (episode reached post-video, so it's effectively complete)
-        await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey)
+        await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey, server: plexServer)
     }
 
     // MARK: - Cleanup

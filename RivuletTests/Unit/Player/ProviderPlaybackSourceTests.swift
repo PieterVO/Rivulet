@@ -407,6 +407,24 @@ final class ProviderPlaybackSourceTests: XCTestCase {
             for: .provider(playback(provider: provider, stream: stream()))))
     }
 
+    /// Another Plex server's item resolves from its own server (#87), so the
+    /// selected server being offline must not refuse it.
+    func test_plexItemOnAnotherServer_skipsTheSelectedServersGate() {
+        XCTAssertTrue(PlayerPresenter.requiresPlexConnection(
+            for: .plex, serverURL: "http://main:32400", selectedServerURL: "http://main:32400"))
+        XCTAssertFalse(PlayerPresenter.requiresPlexConnection(
+            for: .plex, serverURL: "http://office:32400", selectedServerURL: "http://main:32400"))
+    }
+
+    func test_plexStartOffset_followsTheResumePolicy() {
+        var meta = PlexMetadata(ratingKey: "1", type: "movie", title: "M", duration: 6_000_000)
+        meta.viewOffset = 1_200_000
+        XCTAssertEqual(ProviderPlayer.plexStartOffset(meta, fromBeginning: false), 1200)
+        XCTAssertNil(ProviderPlayer.plexStartOffset(meta, fromBeginning: true))
+        meta.viewOffset = 30_000
+        XCTAssertNil(ProviderPlayer.plexStartOffset(meta, fromBeginning: false), "under the 2% floor")
+    }
+
     func test_play_ignoresASecondPressWhileOneIsPreparing() {
         XCTAssertTrue(ProviderPlayer.claimStart())
         XCTAssertFalse(ProviderPlayer.claimStart(), "a second press while preparing")

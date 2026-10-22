@@ -159,7 +159,7 @@ nonisolated struct PlexLibraryMediaContainer: Codable, Sendable {
 }
 
 nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
-    var id: String { key }
+    var id: String { serverID.map { "\($0)/\(key)" } ?? key }
     let key: String
     let type: String          // "movie", "show", "artist", etc.
     var title: String
@@ -178,6 +178,9 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
     /// 0 or absent pinned to Home, 1 hidden from Home, 2 hidden from Home and the
     /// sidebar. PMS 1.43.3: `hidden == 0` matches having a hub on Home exactly.
     var hidden: Int?
+
+    /// The other Plex server this library is on (`PlexMetadata.serverID`); nil for the selected one.
+    var serverID: String? = nil
 
     /// Whether the user pinned this library to their Plex home screen.
     var isPinnedToHome: Bool { (hidden ?? 0) == 0 }
@@ -236,7 +239,12 @@ nonisolated struct PlexExtrasContainerWrapper: Codable, Sendable {
 // MARK: - Hub (for home screen sections)
 
 nonisolated struct PlexHub: Codable, Identifiable, Hashable, Sendable {
-    var id: String { hubIdentifier ?? title ?? UUID().uuidString }
+    var id: String {
+        let id = hubIdentifier ?? title ?? UUID().uuidString
+        return serverID.map { "\($0)/\(id)" } ?? id
+    }
+    /// The other Plex server this row is from (`PlexMetadata.serverID`); nil for the selected one.
+    var serverID: String?
     var hubIdentifier: String?
     var title: String?
     var type: String?

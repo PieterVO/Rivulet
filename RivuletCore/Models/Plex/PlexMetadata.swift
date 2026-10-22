@@ -292,8 +292,13 @@ nonisolated struct PlexMarker: Codable, Identifiable, Sendable {
 /// Plex media item metadata (movie, show, season, episode)
 nonisolated struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     var id: String {
-        return ratingKey ?? UUID().uuidString
+        let key = ratingKey ?? UUID().uuidString
+        return serverID.map { "\($0)/\(key)" } ?? key
     }
+
+    /// The machineIdentifier of the account's other Plex server this came from;
+    /// nil for the selected server. Set by the app on fetch, never by Plex.
+    var serverID: String?
 
     // MARK: - Core Identifiers
     var ratingKey: String?
@@ -404,10 +409,11 @@ nonisolated struct PlexMetadata: Codable, Identifiable, Hashable, Sendable {
     // MARK: - Hashable
     func hash(into hasher: inout Hasher) {
         hasher.combine(ratingKey)
+        hasher.combine(serverID)
     }
 
     static func == (lhs: PlexMetadata, rhs: PlexMetadata) -> Bool {
-        lhs.ratingKey == rhs.ratingKey
+        lhs.ratingKey == rhs.ratingKey && lhs.serverID == rhs.serverID
     }
 
     // MARK: - Convenience Init for Previews/Testing

@@ -154,18 +154,22 @@ struct SettingsRowItem {
 @MainActor
 enum SettingsContent {
 
-    /// The run headers when both servers are listed (Home Rows, Sidebar
+    /// The run headers when several servers are listed (Home Rows, Sidebar
     /// Libraries). Two servers with one name would read as the same server
     /// twice, so then each also names its server type.
-    static func serverRunHeaders(plex: String, jellyfin: String) -> (plex: String, jellyfin: String) {
-        guard plex == jellyfin else { return (plex, jellyfin) }
-        return ("\(plex) (\(MediaProviderKind.plex.displayName))",
-                "\(jellyfin) (\(MediaProviderKind.jellyfin.displayName))")
+    static func serverRunHeaders(_ runs: [(name: String, kind: MediaProviderKind)]) -> [String] {
+        runs.map { run in
+            runs.filter { $0.name == run.name }.count > 1 ? "\(run.name) (\(run.kind.displayName))" : run.name
+        }
     }
 
-    private static var currentServerRunHeaders: (plex: String, jellyfin: String) {
-        serverRunHeaders(plex: PlexAuthManager.shared.savedServerName ?? "Plex",
-                         jellyfin: JellyfinDataStore.shared.account?.serverName ?? "Jellyfin")
+    /// Every server's run, the selected Plex server first: its name, kind and provider id
+    /// (nil for the selected Plex server, whose rows and libraries are PlexDataStore's).
+    private static var serverRuns: [(name: String, kind: MediaProviderKind, providerID: String?)] {
+        [(PlexAuthManager.shared.savedServerName ?? "Plex", .plex, nil)]
+            + ServerDataStore.shared.sources.map { source in
+                (source.name, source.providerID.hasPrefix("jellyfin:") ? .jellyfin : .plex, source.providerID)
+            }
     }
 
     /// Rows a restricted (managed) Plex profile does not get: other servers,
@@ -787,9 +791,10 @@ enum SettingsContent {
     /// sidebar order. Rows hidden here stay listed so they can be switched
     /// back on; rows of libraries hidden from the sidebar never draw on Home,
     /// so they are not offered.
-    static func jellyfinHomeRowEntries() -> [(id: String, title: String)] {
-        JellyfinDataStore.shared.homeRowsInSidebarOrder.compactMap { row in
-            row.hubIdentifier.map { ($0, row.title) }
+    static func serverHomeRowEntries(providerID: String) -> [(id: String, title: String)] {
+        ServerDataStore.shared.homeRowsInSidebarOrder.compactMap { row in
+            guard row.id.hasPrefix("\(providerID)|") else { return nil }
+            return row.hubIdentifier.map { ($0, row.title) }
         }
     }
 
@@ -823,10 +828,11 @@ enum SettingsContent {
                 return (id, row.title)
             }
             + hiddenRows
-        let jellyfinEntries = jellyfinHomeRowEntries()
+        let runs = serverRuns
+        let entriesByRun = runs.map { run in run.providerID.map(serverHomeRowEntries(providerID:)) ?? plexEntries }
 
         let pinRows = pinnedCollectionRows(store: store)
-        guard !plexEntries.isEmpty || !jellyfinEntries.isEmpty else {
+        guard entriesByRun.contains(where: { !$0.isEmpty }) else {
             // A pin can outlive every Plex row (its library taken off Home),
             // and this page is the only place left to unpin it.
             guard pinRows.isEmpty else { return pinRows }
@@ -842,14 +848,14 @@ enum SettingsContent {
                 (vc as? SettingsPageViewController)?.reloadRows()
             }))
         ]
-        // Both servers listed: each run under its server's name, as Sidebar
+        // Several servers listed: each run under its server's name, as Sidebar
         // Libraries does.
-        let labelsRuns = !plexEntries.isEmpty && !jellyfinEntries.isEmpty
+        let labelsRuns = entriesByRun.filter { !$0.isEmpty }.count > 1
         // De-dupe defensively: Continue Watching can be reported by both the
         // dedicated hub and the projection.
         var seen = Set<String>()
-        let headers = currentServerRunHeaders
-        for (header, entries) in [(headers.plex, plexEntries), (headers.jellyfin, jellyfinEntries)] {
+        let headers = serverRunHeaders(runs.map { ($0.name, $0.kind) })
+        for (header, entries) in zip(headers, entriesByRun) where !entries.isEmpty {
             if labelsRuns { rows.append(.header(header)) }
             for entry in entries where seen.insert(entry.id).inserted {
                 rows.append(SettingsRowItem(id: "homeRow_\(entry.id)", title: entry.title, kind: .toggle(
@@ -892,16 +898,15 @@ enum SettingsContent {
     private static var libraries: [SettingsRowItem] {
         let mgr = LibrarySettingsManager.shared
         let libs = mgr.sortLibraries(PlexDataStore.shared.libraries.filter(\.hasBrowseSurface))
-        // Jellyfin's in the user's order, hidden ones included so they can
-        // come back; each server reorders within its own run.
-        let jellyfinStore = JellyfinDataStore.shared
-        let jellyfinLibs = mgr.sort(jellyfinStore.libraries)
-        guard !libs.isEmpty || !jellyfinLibs.isEmpty else {
+        // Other servers' in the user's order, hidden ones included so they can come back.
+        let runs = serverRuns
+        let otherLibs = mgr.sort(ServerDataStore.shared.libraries)
+        guard !libs.isEmpty || !otherLibs.isEmpty else {
             return [SettingsRowItem(id: "noLibraries",
                                     title: "Connect a server to manage libraries",
                                     kind: .info(value: { "" }))]
         }
-        let keys = libs.map { $0.key } + jellyfinLibs.map(\.settingsKey)
+        let keys = libs.map { $0.key } + otherLibs.map(\.settingsKey)
         // Add All / Remove All live at the TOP of the list, above the per-library
         // toggles, so the bulk actions are the first thing the user lands on.
         var rows: [SettingsRowItem] = [
@@ -916,45 +921,36 @@ enum SettingsContent {
                 (vc as? SettingsPageViewController)?.reloadRows()
             }))
         ]
-        // Both servers listed: each run under its server's name. A header is
-        // not reorderable, so a move stops at it.
-        let labelsRuns = !libs.isEmpty && !jellyfinLibs.isEmpty
-        let headers = currentServerRunHeaders
-        if labelsRuns { rows.append(.header(headers.plex)) }
-        rows += libs.map { lib in
+        // One list across servers in the sidebar's order, so hold-Select can move
+        // a library past another server's (#87). With several servers each title
+        // names its server, since no header could stay true once they mix.
+        let counts = runs.map { run in run.providerID.map { id in otherLibs.filter { $0.providerID == id }.count } ?? libs.count }
+        let namesServer = counts.filter { $0 > 0 }.count > 1
+        let headers = serverRunHeaders(runs.map { ($0.name, $0.kind) })
+        let serverName = Dictionary(zip(runs.map { $0.providerID ?? "" }, headers), uniquingKeysWith: { first, _ in first })
+        let entries = libs.map { (key: $0.key, title: $0.title) } + otherLibs.map { (key: $0.settingsKey, title: $0.title) }
+        let ordered = mgr.arrange(entries, key: \.key)
+        rows += ordered.map { lib in
+            let server = serverName[LibrarySettingsManager.serverID(ofKey: lib.key)] ?? ""
             // Hold Select to grab + reorder (Apple-Home style). The page VC
             // animates the slot change; this just persists the new order.
-            SettingsRowItem(id: "lib_\(lib.key)", title: lib.title, kind: .toggle(
-                get: { LibrarySettingsManager.shared.isLibraryVisible(lib.key) },
-                set: { _ in LibrarySettingsManager.shared.toggleVisibility(for: lib.key) }),
-                onReorder: { up in moveMediaLibrary(key: lib.key, up: up) }, reorderGroup: "plex")
-        }
-        if labelsRuns { rows.append(.header(headers.jellyfin)) }
-        rows += jellyfinLibs.map { lib in
-            SettingsRowItem(id: "lib_\(lib.settingsKey)", title: lib.title, kind: .toggle(
-                get: { LibrarySettingsManager.shared.isLibraryVisible(lib.settingsKey) },
-                set: { _ in LibrarySettingsManager.shared.toggleVisibility(for: lib.settingsKey) }),
-                // Order re-read per move: the page is not rebuilt between moves.
-                onReorder: { up in
-                    let mgr = LibrarySettingsManager.shared
-                    mgr.moveLibrary(key: lib.settingsKey, up: up,
-                                    among: mgr.sort(JellyfinDataStore.shared.libraries).map(\.settingsKey))
-                },
-                reorderGroup: "jellyfin")
+            return SettingsRowItem(id: "lib_\(lib.key)", title: namesServer ? "\(lib.title) (\(server))" : lib.title,
+                                   kind: .toggle(
+                                    get: { LibrarySettingsManager.shared.isLibraryVisible(lib.key) },
+                                    set: { _ in LibrarySettingsManager.shared.toggleVisibility(for: lib.key) }),
+                                   onReorder: { up in moveSidebarLibrary(key: lib.key, up: up) }, reorderGroup: "libraries")
         }
         return rows + pinnedCollectionRows(store: PlexDataStore.shared, in: .library)
     }
 
-    /// Move a media library one slot up/down in the sidebar order. Reorders by
-    /// KEY (not the index-based `moveLibrary`, whose indices are into the raw
-    /// `libraryOrder` and don't line up with the displayed list), then rewrites
-    /// `libraryOrder` as [new media order] + [any non-media ordered keys], so
-    /// every shown library is explicitly ordered and nothing else is dropped.
-    private static func moveMediaLibrary(key: String, up: Bool) {
+    /// Move a library one slot up or down in the sidebar order, across servers.
+    /// Reorders by KEY over the displayed list (re-read per move: the page is
+    /// not rebuilt between moves), every server's libraries hidden ones included.
+    private static func moveSidebarLibrary(key: String, up: Bool) {
         let mgr = LibrarySettingsManager.shared
-        let mediaLibs = mgr.sortLibraries(
-            PlexDataStore.shared.libraries.filter(\.hasBrowseSurface))
-        mgr.moveLibrary(key: key, up: up, among: mediaLibs.map { $0.key })
+        let keys = mgr.sortLibraries(PlexDataStore.shared.libraries.filter(\.hasBrowseSurface)).map(\.key)
+            + mgr.sort(ServerDataStore.shared.libraries).map(\.settingsKey)
+        mgr.moveLibrary(key: key, up: up, among: mgr.arrange(keys) { $0 })
     }
 
     // MARK: Cache & Storage

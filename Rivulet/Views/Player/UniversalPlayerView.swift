@@ -1079,21 +1079,6 @@ struct UniversalPlayerView: View {
     }
 }
 
-// MARK: - Convenience Initializer
-
-extension UniversalPlayerView {
-    /// Creates a player view using the shared auth manager for credentials
-    init(metadata: PlexMetadata, startOffset: TimeInterval? = nil) {
-        let authManager = PlexAuthManager.shared
-        self.init(
-            metadata: metadata,
-            serverURL: authManager.selectedServerURL ?? "",
-            authToken: authManager.selectedServerToken ?? "",
-            startOffset: startOffset
-        )
-    }
-}
-
 /// Player error overlay with explicit default focus. The highlight reads its own
 /// `@FocusState`, since `AppStoreButtonStyle`'s does not track focus inside `makeBody`.
 @MainActor

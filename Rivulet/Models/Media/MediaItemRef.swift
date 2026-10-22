@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import Synchronization
 
 struct MediaItemRef: Hashable, Codable, Sendable {
     /// Provider identifier — "plex:<machineId>" / "tmdb" / future "jellyfin:<serverId>".
@@ -25,8 +26,14 @@ extension MediaItemRef {
     /// check this first.
     var isJellyfin: Bool { providerID.hasPrefix("jellyfin:") }
 
-    /// An item from a Plex server (`PlexProvider.id` is "plex:<machineId>").
-    /// The legacy Plex play path is the only one that resolves `itemID` as a
-    /// ratingKey; every other item plays through its own provider.
-    var isPlex: Bool { providerID.hasPrefix("plex:") }
+    /// An item from the selected Plex server. The legacy Plex play path is the
+    /// only one that resolves `itemID` as a ratingKey against that server; every
+    /// other item, an extra Plex server's included, plays through its own provider.
+    var isPlex: Bool {
+        providerID.hasPrefix("plex:") && !Self.extraPlexIDs.withLock { $0.contains(providerID) }
+    }
+
+    /// Provider ids of the Plex servers other than the selected one. Set by
+    /// `MediaProviderRegistry`; a lock because refs are read off the main actor.
+    static let extraPlexIDs = Mutex<Set<String>>([])
 }

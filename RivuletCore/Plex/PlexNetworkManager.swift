@@ -548,6 +548,23 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return item
     }
 
+    /// Several items' guids in one request: `/library/metadata/<k1>,<k2>,…` with
+    /// the `Guid` array and nothing heavy (measured: 6 shows, 2.5 KB).
+    func getGuids(serverURL: String, authToken: String, ratingKeys: [String]) async throws -> [PlexMetadata] {
+        guard !ratingKeys.isEmpty,
+              var components = URLComponents(string: "\(serverURL)/library/metadata/\(ratingKeys.joined(separator: ","))") else {
+            return []
+        }
+        components.queryItems = [
+            URLQueryItem(name: "includeGuids", value: "1"),
+            URLQueryItem(name: "excludeElements", value: "Role,Director,Writer,Genre,Country,Image,UltraBlurColors,Location,Field"),
+            URLQueryItem(name: "excludeFields", value: "summary")
+        ]
+        guard let url = components.url else { throw PlexAPIError.invalidURL }
+        let container: PlexMediaContainerWrapper = try await request(url, headers: plexHeaders(authToken: authToken))
+        return container.MediaContainer.Metadata ?? []
+    }
+
     /// Get full metadata including cast, crew, and extras
     func getFullMetadata(
         serverURL: String,
@@ -862,6 +879,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         components.queryItems = [
             URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
             URLQueryItem(name: "X-Plex-Container-Size", value: "\(count)"),
+            // External ids for the cross-server Continue Watching merge (+0.6% on PMS 1.43.4).
+            URLQueryItem(name: "includeGuids", value: "1"),
             URLQueryItem(name: "_", value: String(Int(now.timeIntervalSince1970 * 1000)))
         ]
         return components.url

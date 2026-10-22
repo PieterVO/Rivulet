@@ -86,7 +86,8 @@ struct ContentView: View {
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
             MusicQueue.shared.configure(registry: MusicProviderRegistry.shared)
-            JellyfinDataStore.shared.reload()
+            ServerDataStore.shared.reload()
+            PlexExtraServers.shared.refreshForAccount()
             StartupTimer.mark("registries bootstrapped")
 
             splashLog.info("Splash task started — hasCredentials=\(self.authManager.hasCredentials)")
@@ -105,17 +106,20 @@ struct ContentView: View {
         .onChange(of: authManager.selectedServerURL) { _, _ in
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
+            ServerDataStore.shared.reload()
         }
         .onChange(of: authManager.selectedServerToken) { _, _ in
             MediaProviderRegistry.shared.populateFromCurrentAuth()
             MusicProviderRegistry.shared.populateFromCurrentAuth()
+            // A PIN lock or another profile changes which other Plex servers show.
+            ServerDataStore.shared.reload()
         }
         // Refresh libraries on every return to .active: `loadLibrariesIfNeeded` stops at
         // the cache, so a library added on the server would never appear otherwise.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task { await dataStore.refreshLibraries() }
-                JellyfinDataStore.shared.reload()
+                ServerDataStore.shared.reload()
             }
         }
     }
@@ -204,6 +208,15 @@ private struct AutoPlayLauncherModifier: ViewModifier {
 
                 hasLaunched = true
                 print("[AutoPlay] Starting: ratingKey=\(ratingKey) duration=\(testDuration)s skipLifecycle=\(skipLifecycle) offset=\(startOffset.map { String(format: "%.0f", $0) } ?? "none")")
+
+                #if DEBUG
+                // RIVULET_AUTOPLAY_SERVER=<machineIdentifier>: play the key from
+                // another Plex server on the account, through the real tile route.
+                if let machineID = env["RIVULET_AUTOPLAY_SERVER"] {
+                    await ContentView.autoplayOnOtherServer(machineID, ratingKey: ratingKey, duration: testDuration)
+                    return
+                }
+                #endif
 
                 // Wait for auth to be ready
                 let authManager = PlexAuthManager.shared
@@ -310,6 +323,36 @@ private struct AutoPlayLauncherModifier: ViewModifier {
             }
     }
 }
+
+#if DEBUG
+extension ContentView {
+    /// The autoplay hook for an extra Plex server's item: waits for its provider,
+    /// then plays it the way a tile does (`ProviderPlayer.play`).
+    @MainActor
+    static func autoplayOnOtherServer(_ machineID: String, ratingKey: String, duration: TimeInterval) async {
+        let providerID = "plex:\(machineID)"
+        let deadline = Date().addingTimeInterval(45)
+        while MediaProviderRegistry.shared.provider(for: providerID) == nil {
+            guard Date() < deadline else { return print("[AutoPlay] ERROR: \(providerID) never registered") }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        guard let provider = MediaProviderRegistry.shared.provider(for: providerID),
+              let detail = try? await provider.fullDetail(for: MediaItemRef(providerID: providerID, itemID: ratingKey)),
+              let rootVC = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.windows.first?.rootViewController
+        else { return print("[AutoPlay] ERROR: could not resolve \(ratingKey) on \(providerID)") }
+        print("[AutoPlay] Other server: \(detail.item.title) on \(providerID) isPlex=\(detail.item.ref.isPlex)")
+        ProviderPlayer.play(detail.item, fromBeginning: false, from: rootVC, onDismiss: nil)
+        // Unstructured: presenting the player cancels the view's .task, which would end the sleep at once.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(duration))
+            print("[AutoPlay] Test duration elapsed (\(duration)s), exiting")
+            rootVC.dismiss(animated: false)
+            try? await Task.sleep(for: .seconds(2))
+            exit(0)
+        }
+    }
+}
+#endif
 
 #Preview {
     ContentView()

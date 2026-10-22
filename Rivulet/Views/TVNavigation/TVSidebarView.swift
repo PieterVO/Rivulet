@@ -26,8 +26,8 @@ struct TVSidebarView: View {
     // @StateObject here, SwiftUI doesn't see hiddenLibraryKeys updates.
     @StateObject private var librarySettings = LibrarySettingsManager.shared
     @StateObject private var liveTVDataStore = LiveTVDataStore.shared
-    // Jellyfin libraries (sidebar section) and its account (welcome gate).
-    @StateObject private var jellyfinStore = JellyfinDataStore.shared
+    // Other servers' libraries (sidebar sections) and sign-ins (welcome gate).
+    @StateObject private var serverStore = ServerDataStore.shared
     @StateObject private var profileManager = PlexUserProfileManager.shared
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
@@ -63,7 +63,7 @@ struct TVSidebarView: View {
 
     /// Home's welcome overlay stands down for any signed-in server.
     private var isSignedInToAnyServer: Bool {
-        authManager.hasCredentials || jellyfinStore.account != nil
+        authManager.hasCredentials || serverStore.isSignedIn
     }
 
     private var profileName: String {
@@ -99,19 +99,16 @@ struct TVSidebarView: View {
     /// sidebar wedged on live mutation; ours does not.
     private var shellSections: [ShellSidebarSection] {
         ShellSidebarModel.sections(
-            libraries: dataStore.visibleSidebarLibraries,
+            libraries: SidebarLibrary.current(),
             liveTVSources: liveTVDataStore.sources,
             combineLiveTV: combineLiveTVSources,
             showDiscover: showDiscoverTab,
             discoverAbove: discoverAboveLibraries,
             showWatchlist: showWatchlistTab,
             liveTVAbove: liveTVAboveLibraries,
-            serverName: authManager.savedServerName,
             profileName: profileName,
             profileAvatar: profileManager.selectedUser?.thumb.flatMap { URL(string: $0) },
             canSwitchProfile: profileManager.hasMultipleProfiles,
-            jellyfinServerName: jellyfinStore.account?.serverName,
-            jellyfinLibraries: jellyfinStore.visibleLibraries,
             hasMediaServer: isSignedInToAnyServer)
     }
 
@@ -199,9 +196,9 @@ struct TVSidebarView: View {
                 selectedTab = .home
             }
         }
-        .onChange(of: jellyfinStore.visibleLibraries) { _, libraries in
-            if case .providerLibrary(_, let libraryID) = selectedTab,
-               !libraries.contains(where: { $0.id == libraryID }) {
+        .onChange(of: serverStore.visibleLibraries) { _, libraries in
+            if case .providerLibrary(let providerID, let libraryID) = selectedTab,
+               !libraries.contains(where: { $0.providerID == providerID && $0.id == libraryID }) {
                 selectedTab = .home
             }
         }
@@ -521,9 +518,9 @@ struct TVSidebarView: View {
                     ? MusicLibraryViewController(libraryKey: lib.key, title: lib.title)
                     : PlexHomeViewController(mode: .library(key: lib.key, title: lib.title))
             }
-        case .providerLibrary(_, let libraryID):
+        case .providerLibrary(let providerID, let libraryID):
             // The same page as a Plex library, through the provider.
-            if let library = jellyfinStore.libraries.first(where: { $0.id == libraryID }) {
+            if let library = serverStore.libraries.first(where: { $0.providerID == providerID && $0.id == libraryID }) {
                 if library.browsesByFolder {
                     return FolderLibraryViewController(title: library.title) {
                         (MediaProviderRegistry.shared.provider(for: library.providerID) as? any FolderProvider)

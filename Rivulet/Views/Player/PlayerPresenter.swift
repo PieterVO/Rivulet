@@ -35,12 +35,15 @@ enum PlayerPresenter {
         return vc
     }
 
-    /// Only the Plex path needs the Plex server. A provider item has already
-    /// resolved its stream from its own server, so Plex being offline is no
-    /// reason to refuse it.
-    static func requiresPlexConnection(for source: PlaybackSource) -> Bool {
-        if case .plex = source { return true }
-        return false
+    /// Only the selected Plex server's items need it reachable. A provider item
+    /// has already resolved its stream from its own server, and so has another
+    /// Plex server's item (`serverURL` not the selected one), so the selected
+    /// server being offline is no reason to refuse either.
+    static func requiresPlexConnection(for source: PlaybackSource, serverURL: String? = nil,
+                                       selectedServerURL: String? = nil) -> Bool {
+        guard case .plex = source else { return false }
+        guard let serverURL, let selectedServerURL else { return true }
+        return serverURL == selectedServerURL
     }
 
     /// Present a playback session, walking to whatever is actually on screen
@@ -55,7 +58,8 @@ enum PlayerPresenter {
         animated: Bool = true,
         onDismiss: (() -> Void)? = nil
     ) -> Bool {
-        if requiresPlexConnection(for: viewModel.source) {
+        if requiresPlexConnection(for: viewModel.source, serverURL: viewModel.serverURL,
+                                  selectedServerURL: PlexAuthManager.shared.selectedServerURL) {
             let allowed = ConnectionAlert.allowPlayback(from: presenter) {
                 present(viewModel: viewModel, from: presenter,
                         animated: animated, onDismiss: onDismiss)

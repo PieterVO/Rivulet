@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Copyright (C) 2025-2026 Bain Gurley
 
-// The active MediaProvider instances (the Plex server and the Jellyfin server), keyed by id.
+// The active MediaProvider instances (the Plex servers and the Jellyfin server), keyed by id.
 
 import Foundation
 
@@ -32,6 +32,31 @@ final class MediaProviderRegistry {
         currentPlexID.flatMap { providers[$0] }
     }
 
+    /// The account's other Plex servers, by name (`PlexExtraServers`).
+    private var extraPlexIDs: [String] = [] {
+        didSet {
+            guard self === Self.shared else { return }
+            MediaItemRef.extraPlexIDs.withLock { [extraPlexIDs] in $0 = Set(extraPlexIDs) }
+        }
+    }
+
+    /// Every server Home and the sidebar show beside the selected Plex server:
+    /// the extra Plex servers by name, then Jellyfin.
+    var secondaryProviders: [any MediaProvider] {
+        extraPlexIDs.compactMap { providers[$0] } + providers.values.filter { $0.kind == .jellyfin }
+    }
+
+    /// The Plex server an item lives on: an extra server's own address and
+    /// token, else the selected server's (live, so a connection upgrade counts).
+    func plexServer(for providerID: String?) -> PlexServerAddress? {
+        if let providerID, extraPlexIDs.contains(providerID), let plex = providers[providerID] as? PlexProvider {
+            return PlexServerAddress(address: plex.serverURL, token: plex.authToken)
+        }
+        let auth = PlexAuthManager.shared
+        guard let url = auth.selectedServerURL, let token = auth.selectedServerToken else { return nil }
+        return PlexServerAddress(address: url, token: token)
+    }
+
     func register(_ provider: any MediaProvider) {
         providers[provider.id] = provider
         if provider.kind == .plex { currentPlexID = provider.id }
@@ -49,28 +74,34 @@ final class MediaProviderRegistry {
     /// time; Plex entries go only when Plex is signed out.
     func populateFromCurrentAuth() {
         let auth = PlexAuthManager.shared
+        let extras = PlexExtraServers.shared
         populate(
             plexServerURL: auth.selectedServerURL,
             plexToken: auth.selectedServerToken,
             plexMachineID: auth.selectedServer?.machineIdentifier,
             plexName: auth.selectedServer?.name
                 ?? UserDefaults.standard.string(forKey: "selectedServerName")
-                ?? "Plex"
+                ?? "Plex",
+            extraPlex: extras.current.compactMap { server in
+                extras.token(for: server).map { (server, $0) }
+            },
+            plexOwnerID: String(auth.contentOwnerID)
         )
     }
 
     /// `populateFromCurrentAuth` with the Plex sign-in passed in, so the
     /// registry's rules are testable without a real Plex account.
-    func populate(plexServerURL: String?, plexToken: String?, plexMachineID: String?, plexName: String) {
-        // Non-Plex servers' library settings belong to their own users, so
-        // they load and unload with the sign-in, not the Plex profile.
+    func populate(plexServerURL: String?, plexToken: String?, plexMachineID: String?, plexName: String,
+                  extraPlex: [(server: PlexExtraServers.Server, token: String)] = [], plexOwnerID: String? = nil) {
+        // Other servers' library settings belong to their own users (an extra
+        // Plex server's to the profile), so they load with the sign-in.
         defer {
-            LibrarySettingsManager.shared.setProviderScopes(providers.values
-                .filter { $0.kind != .plex }
+            LibrarySettingsManager.shared.setProviderScopes(secondaryProviders
                 .sorted { $0.id < $1.id }
                 .map { .init(providerID: $0.id, accountID: $0.accountID) })
         }
-        providers = providers.filter { $0.value.kind != .jellyfin }
+        providers = providers.filter { $0.value.kind != .jellyfin && !extraPlexIDs.contains($0.key) }
+        extraPlexIDs = []
         if let jellyfin = JellyfinSession.storedProvider() { register(jellyfin) }
         guard let serverURL = plexServerURL, let token = plexToken else {
             providers = providers.filter { $0.value.kind != .plex }
@@ -89,6 +120,11 @@ final class MediaProviderRegistry {
             serverURL: serverURL,
             authToken: token
         ))
+        for (server, token) in extraPlex where server.machineID != machineID {
+            providers[server.providerID] = PlexProvider(machineIdentifier: server.machineID, displayName: server.name,
+                                                        serverURL: server.url, authToken: token, accountID: plexOwnerID)
+            extraPlexIDs.append(server.providerID)
+        }
     }
 
     /// Process-stable hash. Avoid `String.hashValue` (per-process randomized).

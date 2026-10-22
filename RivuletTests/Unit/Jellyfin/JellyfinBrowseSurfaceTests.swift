@@ -132,6 +132,19 @@ final class JellyfinBrowseSurfaceTests: XCTestCase {
                       hubIdentifier: pin ? "rivulet.pin.\(id)" : id, totalSize: nil, items: [])
     }
 
+    func test_homeRail_followsTheLibraryOrderAcrossServers_pinsStayWithTheirLibrary() {
+        func lib(_ id: String, _ key: String?) -> CachedHomeHub {
+            var hub = row(id)
+            hub.libraryKey = key
+            return hub
+        }
+        let rail = PlexHomeViewController.homeRail(
+            plex: [row("plex-cw", cw: true), lib("angel-movies", "1"), lib("pin", nil), lib("angel-tv", "2")],
+            jellyfin: [lib("test-movies", "plex:test/1")],
+            libraryOrder: ["1", "plex:test/1", "2"])
+        XCTAssertEqual(rail.map(\.row.id), ["plex-cw", "angel-movies", "pin", "test-movies", "angel-tv"])
+    }
+
     func test_homeRail_pairsContinueWatching_thenEachServersLibraryRows_pinsInPlace() {
         let rail = PlexHomeViewController.homeRail(
             plex: [row("plex-cw", cw: true), row("plex-movies"), row("plex-tv"), row("pin", pin: true)],
@@ -184,12 +197,10 @@ final class JellyfinBrowseSurfaceTests: XCTestCase {
     // MARK: - Settings server headers
 
     func test_serverRunHeaders_suffixOnlyWhenNamesMatch() {
-        let same = SettingsContent.serverRunHeaders(plex: "Media", jellyfin: "Media")
-        XCTAssertEqual(same.plex, "Media (Plex)")
-        XCTAssertEqual(same.jellyfin, "Media (Jellyfin)")
-        let different = SettingsContent.serverRunHeaders(plex: "Den", jellyfin: "Attic")
-        XCTAssertEqual(different.plex, "Den")
-        XCTAssertEqual(different.jellyfin, "Attic")
+        XCTAssertEqual(SettingsContent.serverRunHeaders([("Media", .plex), ("Media", .jellyfin)]),
+                       ["Media (Plex)", "Media (Jellyfin)"])
+        XCTAssertEqual(SettingsContent.serverRunHeaders([("Den", .plex), ("Office", .plex), ("Attic", .jellyfin)]),
+                       ["Den", "Office", "Attic"])
     }
 
     func test_sourceBadgeView_hidesWithoutText() {

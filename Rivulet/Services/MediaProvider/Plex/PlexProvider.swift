@@ -24,12 +24,15 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
     let networkManager: PlexNetworkManager
     let dataStore: PlexDataStore
     let watchlistAPI: PlexWatchlistAPI
+    /// The Plex profile an extra server's library settings belong to; nil for the selected server.
+    nonisolated let accountID: String?
 
     init(
         machineIdentifier: String,
         displayName: String,
         serverURL: String,
         authToken: String,
+        accountID: String? = nil,
         networkManager: PlexNetworkManager = .shared,
         dataStore: PlexDataStore = .shared,
         watchlistAPI: PlexWatchlistAPI = PlexWatchlistAPI()
@@ -38,6 +41,7 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
         self.displayName = displayName
         self.serverURL = serverURL
         self.authToken = authToken
+        self.accountID = accountID
         self.networkManager = networkManager
         self.dataStore = dataStore
         self.watchlistAPI = watchlistAPI
@@ -85,16 +89,26 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
     }
 
     func search(_ query: String) async throws -> [MediaItem] {
-        // PlexNetworkManager doesn't expose a dedicated search method as of Wave 1.
-        // Plex search routes through /hubs/search via custom request shapes;
-        // wiring it here without a network-layer helper would duplicate that
-        // logic. Throwing rather than returning empty so callers can
-        // distinguish "search not implemented" from "no results."
-        // Post-Wave-1 task adds a search method to PlexNetworkManager and
-        // wires it through.
-        throw MediaProviderError.backendSpecific(
-            underlying: "Plex search not implemented in Wave 1"
-        )
+        try await search(query, sections: nil)
+    }
+
+    func search(_ query: String, inLibraries libraryIDs: [String]) async throws -> [MediaItem] {
+        try await search(query, sections: Set(libraryIDs))
+    }
+
+    /// Titles only (movies, shows, seasons, episodes), as Home's own Plex search shows.
+    private func search(_ query: String, sections: Set<String>?) async throws -> [MediaItem] {
+        try await plexCall {
+            let results = try await networkManager.search(
+                serverURL: serverURL, authToken: authToken, query: query, start: 0, size: 80)
+            return results
+                .filter { ["movie", "show", "season", "episode"].contains($0.type ?? "") }
+                .filter { meta in
+                    guard let sections else { return true }
+                    return meta.librarySectionID.map { sections.contains(String($0)) } ?? false
+                }
+                .map { PlexMediaMapper.item($0, providerID: id, serverURL: serverURL, authToken: authToken) }
+        }
     }
 
     func fullDetail(for itemRef: MediaItemRef) async throws -> MediaItemDetail {
@@ -245,10 +259,18 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
             )
             let metadata = hub?.Metadata ?? []
             return metadata.map {
-                PlexMediaMapper.item($0, providerID: id,
-                                    serverURL: serverURL, authToken: authToken)
+                var item = PlexMediaMapper.item($0, providerID: id, serverURL: serverURL, authToken: authToken)
+                item.identity = ContinueWatchingMerge.plexKeys($0)
+                return item
             }
         }
+    }
+
+    func showIdentityKeys(for showIDs: [String]) async -> [String: [String]] {
+        let shows = (try? await networkManager.getGuids(serverURL: serverURL, authToken: authToken, ratingKeys: showIDs)) ?? []
+        return Dictionary(shows.compactMap { show in
+            show.ratingKey.map { ($0, ContinueWatchingMerge.plexShowKeys(show)) }
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     func recentlyAdded(limit: Int) async throws -> [MediaItem] {
@@ -287,6 +309,13 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
                                    serverURL: serverURL, authToken: authToken)
             }
         }
+    }
+
+    /// The library's own Recently Added hub, re-keyed to the id Home looks up.
+    func recentlyAddedHub(in library: MediaLibrary) async throws -> MediaHub? {
+        guard let hub = try await hubs(in: library).first(where: { $0.id.lowercased().contains("recentlyadded") }),
+              !hub.items.isEmpty else { return nil }
+        return MediaHub(id: "\(library.id).recentlyAdded", providerID: id, title: hub.title, style: hub.style, items: hub.items)
     }
 
     // MARK: - Playback

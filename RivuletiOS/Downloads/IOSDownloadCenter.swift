@@ -174,7 +174,7 @@ final class IOSDownloadCenter: ObservableObject {
             ? WatchProgressPolicy.hasResumePoint(offsetSeconds: resume, runtimeSeconds: meta.durationSeconds)
             : WatchProgressPolicy.hasResumePoint(offsetSeconds: resume)
         // Progress reports go to the server only when it is the one that made the download.
-        let session = record.serverID == currentServerID ? config() : nil
+        let session = record.serverID == currentServerID ? config() : otherServerConfig(record.serverID)
 
         var request = IOSPlexPlaybackRequest(
             item: meta,
@@ -219,8 +219,8 @@ final class IOSDownloadCenter: ObservableObject {
 
     /// Starts a download at `quality`, or the Download Quality setting. A failed one retries.
     func download(_ item: PlexMetadata, quality: StreamingQuality? = nil) {
-        guard let key = item.ratingKey, config() != nil else { return }
-        if let existing = record(for: key) {
+        guard let key = item.ratingKey, (item.serverID.map(otherServerConfig) ?? config()) != nil else { return }
+        if let existing = record(for: key, serverID: item.serverID) {
             if case .failed = existing.state { retry(recordID: existing.id) }
             return
         }
@@ -231,7 +231,7 @@ final class IOSDownloadCenter: ObservableObject {
             chosen = .step(step)
         }
         records.append(DownloadRecord(
-            serverID: currentServerID ?? "", profileID: currentProfileID, ratingKey: key, mediaID: 0,
+            serverID: item.serverID ?? currentServerID ?? "", profileID: currentProfileID, ratingKey: key, mediaID: 0,
             quality: chosen.rawValue, state: .waitingForServer, metadata: item))
         save()
         ensureTicking()
@@ -239,8 +239,11 @@ final class IOSDownloadCenter: ObservableObject {
 
     /// Every episode of a season, started together so the session queues them at once.
     func downloadSeason(_ season: PlexMetadata, quality: StreamingQuality? = nil) async throws {
-        guard let key = season.ratingKey, let (serverURL, token) = config() else { throw IOSPlexSessionError.notConfigured }
-        let episodes = try await network.getChildren(serverURL: serverURL, authToken: token, ratingKey: key)
+        guard let key = season.ratingKey, let (serverURL, token) = season.serverID.map(otherServerConfig) ?? config() else {
+            throw IOSPlexSessionError.notConfigured
+        }
+        let episodes = IOSPlexSession.onServer(
+            try await network.getChildren(serverURL: serverURL, authToken: token, ratingKey: key), season.serverID)
         for episode in episodes.sorted(by: { ($0.index ?? 0) < ($1.index ?? 0) }) {
             download(episode, quality: quality)
         }
@@ -366,15 +369,19 @@ final class IOSDownloadCenter: ObservableObject {
         guard busy.insert(id).inserted else { return }
         defer { busy.remove(id) }
         guard let record = record(id), !record.state.isSettled, activeTasks[id] == nil else { return }
-        guard let (serverURL, token) = config() else { return set(id, .waitingForServer) }
+        if currentServerID == nil { await refreshServerID() }
+        // Another of the account's servers downloads from that server directly.
+        let other = otherServerConfig(record.serverID)
+        guard let (serverURL, token) = other ?? config() else { return set(id, .waitingForServer) }
         if ServerLocation.classify(serverURL) == .relay {
             return record.mediaID == 0 ? fail(id, DownloadRules.relayReason) : set(id, .waitingForServer)
         }
-        if currentServerID == nil { await refreshServerID() }
-        guard let serverID = currentServerID else { return set(id, .waitingForServer) }
-        if record.serverID.isEmpty { update(id) { $0.serverID = serverID } }
-        // Another server's download waits until that server is selected again.
-        guard self.record(id)?.serverID == serverID else { return set(id, .waitingForServer) }
+        if other == nil {
+            guard let serverID = currentServerID else { return set(id, .waitingForServer) }
+            if record.serverID.isEmpty { update(id) { $0.serverID = serverID } }
+            // A server this profile no longer sees waits until it is back.
+            guard self.record(id)?.serverID == serverID else { return set(id, .waitingForServer) }
+        }
 
         do {
             if record.mediaID == 0 {
@@ -587,6 +594,15 @@ final class IOSDownloadCenter: ObservableObject {
     private func config() -> (serverURL: String, token: String)? {
         guard let url = auth.selectedServerURL, let token = auth.selectedServerToken else { return nil }
         return (url, token)
+    }
+
+    /// One of the account's other Plex servers (#87), by machineIdentifier; nil for
+    /// the selected server or one this profile no longer sees.
+    private func otherServerConfig(_ serverID: String?) -> (serverURL: String, token: String)? {
+        guard let serverID, !serverID.isEmpty, serverID != currentServerID,
+              let server = PlexExtraServers.shared.current.first(where: { $0.machineID == serverID }),
+              let token = PlexExtraServers.shared.token(for: server) else { return nil }
+        return (server.url, token)
     }
 
     private func refreshServerID() async {

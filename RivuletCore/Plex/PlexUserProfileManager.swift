@@ -23,6 +23,9 @@ class PlexUserProfileManager: ObservableObject {
     /// caches that were just populated.
     static var onProfileChanged: (@MainActor () async -> Void)?
     static var onInitialProfileSelected: (@MainActor () -> Void)?
+    /// Set by the host: the entered profile's plex.tv token, which reaches its
+    /// other servers (tvOS `PlexExtraServers`). Not stored.
+    static var onProfileEntered: (@MainActor (_ plexToken: String) -> Void)?
 
     // MARK: - Published State
 
@@ -245,6 +248,7 @@ class PlexUserProfileManager: ObservableObject {
                     Self.onInitialProfileSelected?()
                 }
             }
+            Self.onProfileEntered?(userPlexToken)
 
             return .entered
         } catch {

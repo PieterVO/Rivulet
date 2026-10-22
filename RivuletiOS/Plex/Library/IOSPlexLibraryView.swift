@@ -25,10 +25,13 @@ struct IOSPlexLibrariesView: View {
                     } else if plex.libraries.isEmpty {
                         status.frame(maxWidth: .infinity).listRowBackground(Color.clear)
                     } else {
-                        Section {
-                            ForEach(plex.libraries) { library in
-                                NavigationLink(value: library) {
-                                    Label(library.title, systemImage: library.icon)
+                        // One section per server, under its name once there are several.
+                        ForEach(serverGroups, id: \.id) { group in
+                            Section(group.name ?? "") {
+                                ForEach(group.libraries) { library in
+                                    NavigationLink(value: library) {
+                                        Label(library.title, systemImage: library.icon)
+                                    }
                                 }
                             }
                         }
@@ -42,6 +45,15 @@ struct IOSPlexLibrariesView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             IOSAccountToolbarItem()
+        }
+    }
+
+    private var serverGroups: [(id: String, name: String?, libraries: [PlexLibrary])] {
+        let names = plex.otherServerNames
+        let ids = plex.libraries.reduce(into: [String?]()) { if !$0.contains($1.serverID) { $0.append($1.serverID) } }
+        return ids.map { id in
+            (id ?? "", ids.count > 1 ? id.flatMap { names[$0] } ?? plex.auth.savedServerName : nil,
+             plex.libraries.filter { $0.serverID == id })
         }
     }
 
@@ -111,7 +123,7 @@ struct IOSPlexLibraryView: View {
                 .refreshable { await reload() }
             }
         }
-        .navigationTitle(library.title)
+        .navigationTitle(plex.displayTitle(library.title, serverID: library.serverID))
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

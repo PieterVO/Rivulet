@@ -1213,14 +1213,16 @@ class PlexDataStore: ObservableObject {
                 guard !HomeRowSettings.isHidden(hub.hubIdentifier) else { continue }
                 guard let metas = hub.Metadata, !metas.isEmpty else { continue }
 
-                rail.append(makeCachedHub(
+                var row = makeCachedHub(
                     id: "hub:\(hub.id)",
                     title: hub.title ?? "",
                     isContinueWatching: false,
                     hubKey: hub.key ?? hub.hubKey,
                     hubIdentifier: hub.hubIdentifier,
                     metas: metas
-                ))
+                )
+                row.libraryKey = library.key
+                rail.append(row)
             }
 
             // Collections pinned in Rivulet (see `HomeCollectionPins`), after
@@ -1235,16 +1237,21 @@ class PlexDataStore: ObservableObject {
                     hasCachedRow: cachedRow != nil
                 ) {
                 case .render:
-                    rail.append(makeCachedHub(
+                    var row = makeCachedHub(
                         id: rowID,
                         title: pin.title,
                         isContinueWatching: false,
                         hubKey: pin.childrenKey,
                         hubIdentifier: pin.rowIdentifier,
                         metas: pinnedCollectionItems[pin.id] ?? []
-                    ))
+                    )
+                    row.libraryKey = library.key
+                    rail.append(row)
                 case .carryOver:
-                    if let cachedRow { rail.append(cachedRow) }
+                    if var cachedRow {
+                        cachedRow.libraryKey = library.key
+                        rail.append(cachedRow)
+                    }
                 case .omit:
                     break
                 }
@@ -1360,7 +1367,9 @@ class PlexDataStore: ObservableObject {
         let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
         var seen = Set<String>()
         let items: [MediaItem] = metas.compactMap { meta in
-            let item = PlexMediaMapper.item(meta, providerID: providerID, serverURL: serverURL, authToken: token)
+            var item = PlexMediaMapper.item(meta, providerID: providerID, serverURL: serverURL, authToken: token)
+            // The cross-server Continue Watching merge matches on these.
+            if isContinueWatching { item.identity = ContinueWatchingMerge.plexKeys(meta) }
             // De-dupe by ref.itemID (== ratingKey). computeSections drops
             // repeated ratingKeys; an empty itemID (no ratingKey) can't be
             // identity-keyed, so keep it (matches the snapshot's fallback id).
