@@ -16,6 +16,8 @@ actor RatingsClient {
 
     private let session: URLSession
     private let baseURL: URL
+    /// Answers by "type/tmdbID", so the info popup reuses what the detail page already fetched.
+    private var cache: [String: [MediaRating]] = [:]
 
     init(baseURL: URL = InsightsConfig.apiBaseURL, session: URLSession? = nil) {
         self.baseURL = baseURL
@@ -38,10 +40,25 @@ actor RatingsClient {
         default: return []
         }
         guard let id = detail.externalIDs["tmdb"], !id.isEmpty, id.allSatisfy(\.isNumber) else { return [] }
-        let url = baseURL.appendingPathComponent("v1/ratings/\(type)/\(id)")
+        let key = "\(type)/\(id)"
+        if let cached = cache[key] { return cached }
+        let url = baseURL.appendingPathComponent("v1/ratings/\(key)")
         guard let (data, response) = try? await session.attestedData(for: URLRequest(url: url)),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return [] }
-        return Self.decode(data)
+        let ratings = Self.decode(data)
+        cache[key] = ratings
+        return ratings
+    }
+
+    /// `ratings(for:)`, giving up with an empty list after `seconds`.
+    func ratings(for detail: MediaItemDetail, within seconds: Double) async -> [MediaRating] {
+        await withTaskGroup(of: [MediaRating]?.self) { group in
+            group.addTask { await self.ratings(for: detail) }
+            group.addTask { try? await Task.sleep(for: .seconds(seconds)); return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? []
+        }
     }
 
     private struct Payload: Decodable {

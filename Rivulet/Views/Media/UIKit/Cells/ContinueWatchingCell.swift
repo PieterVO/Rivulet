@@ -12,7 +12,7 @@
 //      its mirrored, blurred continuation in the bottom 48pt
 //    title logo on the edge and at the height the still's analysis picks
 //      (`ContinueWatchingCardPlacement`; text fallback)
-//    status row 14pt from the bottom-left (play glyph + progress + "S1, E2 · 35m")
+//    status row at the bottom-left (play glyph + progress + "S1, E2 · 35m")
 //
 //  Wrapped in `TVCardView` for native tvOS focus motion (parallax, glow).
 //
@@ -38,8 +38,8 @@ final class ContinueWatchingCell: UICollectionViewCell {
     // clip shows the platter past the corners (#343).
     private let cornerRadius: CGFloat = 20
 
-    fileprivate static let geometry = ContinueWatchingCardCompositor.Geometry(
-        cardWidth: MediaRowMetrics.continueWatching.art.width)
+    fileprivate static let tile = MediaRowMetrics.continueWatching
+    fileprivate static let geometry = ContinueWatchingCardCompositor.Geometry(cardWidth: tile.art.width)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -54,13 +54,15 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
         // TVCardView provides Apple's tvOS focus motion (parallax + glow).
         card.translatesAutoresizingMaskIntoConstraints = false
-        card.contentSize = CGSize(width: MediaRowMetrics.cwWidth, height: MediaRowMetrics.cwHeight)
+        // The host is TVUIKit's focused size; `focusScale` trims it to the cell on focus.
+        let host = Self.tile.hostSize
+        card.contentSize = host
         contentView.addSubview(card)
         NSLayoutConstraint.activate([
-            card.topAnchor.constraint(equalTo: contentView.topAnchor),
+            card.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             card.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            card.widthAnchor.constraint(equalToConstant: MediaRowMetrics.cwWidth),
-            card.heightAnchor.constraint(equalToConstant: MediaRowMetrics.cwHeight)
+            card.widthAnchor.constraint(equalToConstant: host.width),
+            card.heightAnchor.constraint(equalToConstant: host.height)
         ])
 
         // No resting drop shadow (ATV+ reference: cards float clean over the
@@ -93,7 +95,6 @@ final class ContinueWatchingCell: UICollectionViewCell {
         card.contentView.addSubview(infoBar)
         card.contentView.layer.borderColor = Self.restingRim
 
-        let pad = ContinueWatchingCardCompositor.padding
         NSLayoutConstraint.activate([
             placeholderView.topAnchor.constraint(equalTo: card.contentView.topAnchor),
             placeholderView.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor),
@@ -116,10 +117,13 @@ final class ContinueWatchingCell: UICollectionViewCell {
             titleLogoView.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
             titleLogoView.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
 
-            // Apple's status row: 14pt from the card's edges.
-            infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad).withPriority(999),
-            infoBar.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad).withPriority(999),
-            infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad)
+            // Apple's status row, measured on device.
+            infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor,
+                                             constant: MediaProgressInfoBar.leadingInset).withPriority(999),
+            infoBar.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor,
+                                              constant: -MediaProgressInfoBar.leadingInset).withPriority(999),
+            infoBar.centerYAnchor.constraint(equalTo: card.contentView.bottomAnchor,
+                                             constant: -MediaProgressInfoBar.centerFromBottom)
         ])
     }
 
@@ -129,7 +133,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
         super.didUpdateFocus(in: context, with: coordinator)
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
-        coordinator.addCoordinatedAnimations({ self.infoBar.setFocused(nowFocused) }, completion: nil)
+        coordinator.addCoordinatedAnimations({
+            self.card.transform = nowFocused ? Self.tile.focusScale : .identity
+            self.infoBar.setFocused(nowFocused)
+        }, completion: nil)
         // Apple's floating view clears its rim while focused.
         card.contentView.layer.borderColor = nowFocused ? UIColor.clear.cgColor : Self.restingRim
     }

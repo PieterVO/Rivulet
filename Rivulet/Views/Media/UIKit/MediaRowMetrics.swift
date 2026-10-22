@@ -34,8 +34,11 @@ enum MediaRowMetrics {
     // MARK: Lockup frames
     //
     // TVPosterView and TVCardView rest their artwork short of their frame and
-    // grow it to fill the frame on focus. A poster grows `focusGrowth` on its
-    // long side and the other side in proportion; a card grows it on both.
+    // grow it to fill the frame on focus, by `focusGrowth` (a poster on its
+    // long side and the other side in proportion; a card on both). Apple's
+    // growth differs per tile (`Tile.growth`), so a cell is the frame Apple's
+    // focused tile fills, the TVUIKit host stays at `Tile.hostSize` and a small
+    // scale on focus (`Tile.focusScale`) trims it down to the cell.
     static let focusGrowth: CGFloat = 40
 
     /// A tile: its resting artwork, and the lockup frame (the cell) around it.
@@ -43,18 +46,29 @@ enum MediaRowMetrics {
         enum Lockup { case poster, card }
         let art: CGSize
         var lockup = Lockup.poster
+        /// Growth on focus (width, height), measured on device, tvOS 27.
+        var growth = CGSize(width: MediaRowMetrics.focusGrowth, height: MediaRowMetrics.focusGrowth)
 
         /// Whole points: compositional layout floors a fractional item width,
         /// which would shorten the pitch.
         var frame: CGSize {
-            let growth = MediaRowMetrics.focusGrowth
+            CGSize(width: (art.width + growth.width).rounded(), height: (art.height + growth.height).rounded())
+        }
+        /// The size TVUIKit's own focus growth fills: the host view takes this size so the
+        /// artwork rests at `art`.
+        var hostSize: CGSize {
+            let g = MediaRowMetrics.focusGrowth
             switch lockup {
             case .card:
-                return CGSize(width: art.width + growth, height: art.height + growth)
+                return CGSize(width: art.width + g, height: art.height + g)
             case .poster:
-                let scale = 1 + growth / max(art.width, art.height)
+                let scale = 1 + g / max(art.width, art.height)
                 return CGSize(width: (art.width * scale).rounded(), height: (art.height * scale).rounded())
             }
+        }
+        /// Scale that takes the host's focused size to `frame`; identity when they agree.
+        var focusScale: CGAffineTransform {
+            CGAffineTransform(scaleX: frame.width / hostSize.width, y: frame.height / hostSize.height)
         }
         /// Spacing between frames that leaves `tileGap` between the artwork.
         var gap: CGFloat { MediaRowMetrics.tileGap - (frame.width - art.width) }
@@ -67,7 +81,7 @@ enum MediaRowMetrics {
     /// 2:3 poster (PosterCell, WatchlistPosterCell, detail Related row).
     static let poster: Tile = {
         let width = gridWidth(columns: posterFullCount)
-        return Tile(art: CGSize(width: width, height: width * 1.5))
+        return Tile(art: CGSize(width: width, height: width * 1.5), growth: CGSize(width: 20, height: 30))
     }()
     static let posterWidth = poster.frame.width
     static let posterHeight = poster.frame.height
@@ -80,6 +94,7 @@ enum MediaRowMetrics {
     /// Continue Watching card: a 16:9 still over a 48pt band (Apple's Up Next).
     static let continueWatching: Tile = {
         let width = gridWidth(columns: cwFullCount)
+        // Apple grows it 40 x 29; TVCardView's fixed 40 x 40 stays, since trimming it would squash the art.
         return Tile(art: CGSize(width: width, height: (width * 9 / 16 + 48).rounded()), lockup: .card)
     }()
     static let cwWidth = continueWatching.frame.width
@@ -110,6 +125,30 @@ enum MediaRowMetrics {
     /// Vertical insets around each row section. (Were 12 / 15.)
     static let rowTopInset: CGFloat = 8
     static let rowBottomInset: CGFloat = 8
+
+    // MARK: Shelf header (measured on device, tvOS 27)
+
+    /// Section header box, and how far its text baseline sits above the box bottom.
+    static let headerHeight: CGFloat = 40
+    static let headerBaselineInset: CGFloat = 8
+    /// Header baseline to the resting artwork's top, and one row's artwork bottom to the next's top.
+    static let headerBaselineToArt: CGFloat = 21.5
+    static let shelfArtGap: CGFloat = 126
+
+    static var headerFont: UIFont { .systemFont(ofSize: 31, weight: .semibold) }
+    static var headerColor: UIColor { UIColor.white.withAlphaComponent(0.55) }
+
+    /// Section insets (top, bottom) of a titled shelf row of `tile`s. The row's flow layout
+    /// centres the frames in their focus padding, so half of it plus half the growth sits
+    /// between the row edge and the artwork.
+    static func shelfInsets(for tile: Tile) -> (top: CGFloat, bottom: CGFloat) {
+        let half = (tile.growth.height + focusGrowthPadding) / 2
+        let artBelowHeader = headerBaselineToArt - headerBaselineInset
+        return (artBelowHeader - half, shelfArtGap - half - headerHeight - artBelowHeader)
+    }
+
+    /// Library poster grid: artwork top to the next row's artwork top (Apple's 55 between 390-tall tiles).
+    static var posterGridPitch: CGFloat { poster.art.height + 55 }
 }
 
 extension NSLayoutConstraint {

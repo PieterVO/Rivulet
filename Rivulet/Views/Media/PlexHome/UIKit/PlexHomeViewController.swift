@@ -2801,7 +2801,10 @@ final class PlexHomeViewController: UIViewController {
         let tile = isPlaylists ? MediaRowMetrics.playlist
             : (data.isMusic ? MediaRowMetrics.music : MediaRowMetrics.poster)
         let columns = isPlaylists ? MediaRowMetrics.playlistFullCount : MediaRowMetrics.posterFullCount
-        let groupHeight = tile.frame.height + MediaRowMetrics.focusGrowthPadding
+        // Posters sit on Apple's row pitch; the other tiles keep their padded rows with a gap.
+        let isPosterGrid = !isPlaylists && !data.isMusic
+        let groupHeight = isPosterGrid ? MediaRowMetrics.posterGridPitch
+            : tile.frame.height + MediaRowMetrics.focusGrowthPadding
 
         let itemSize = NSCollectionLayoutSize(
             widthDimension: .fractionalWidth(1.0 / CGFloat(columns)),
@@ -2823,7 +2826,7 @@ final class PlexHomeViewController: UIViewController {
         let section = NSCollectionLayoutSection(group: group)
         // Margins from the PANEL edge to match the shelves (not the safe area).
         section.contentInsetsReference = .none
-        section.interGroupSpacing = 24
+        section.interGroupSpacing = isPosterGrid ? 0 : 24
         section.contentInsets = NSDirectionalEdgeInsets(
             top: 24,
             leading: tile.leading,
@@ -2910,10 +2913,10 @@ final class PlexHomeViewController: UIViewController {
     /// One full-width ShelfRowCell per hub section, scrolling itself rather than an orthogonal section
     /// (see ShelfRowCell for why and for the landing math).
     private func makeHubSectionLayout(section: HomeSectionData, isContinueWatching: Bool) -> NSCollectionLayoutSection {
-        let tileHeight: CGFloat = isContinueWatching
-            ? MediaRowMetrics.cwHeight
-            : (section.isMusic ? MediaRowMetrics.musicHeight : MediaRowMetrics.posterHeight)
-        let rowHeight = tileHeight + MediaRowMetrics.focusGrowthPadding  // room for focus growth
+        let tile = isContinueWatching
+            ? MediaRowMetrics.continueWatching
+            : (section.isMusic ? MediaRowMetrics.music : MediaRowMetrics.poster)
+        let rowHeight = tile.frame.height + MediaRowMetrics.focusGrowthPadding  // room for focus growth
 
         let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
                                               heightDimension: .absolute(rowHeight))
@@ -2925,22 +2928,22 @@ final class PlexHomeViewController: UIViewController {
         // ShelfRowCell carries the margin and the peeking sliver
         // internally.
         layoutSection.contentInsetsReference = .none
-        // top: header-to-first-card gap. The row's flow layout centres the
-        // tiles in their focus padding, so a titled row rises by the top half
-        // of it: title baseline to artwork ~36 pt, Apple's ~39.
-        // bottom: gap to the next section.
-        let headerPull = section.title != nil ? MediaRowMetrics.focusGrowthPadding / 2 : 0
+        // Titled rows: header baseline to artwork and artwork to next artwork follow Apple's
+        // measured spacing (`shelfInsets`). The row's flow layout centres the tiles in their padding.
+        let insets = section.title != nil
+            ? MediaRowMetrics.shelfInsets(for: tile)
+            : (top: MediaRowMetrics.rowTopInset, bottom: MediaRowMetrics.rowBottomInset)
         layoutSection.contentInsets = NSDirectionalEdgeInsets(
-            top: MediaRowMetrics.rowTopInset - headerPull,
+            top: insets.top,
             leading: 0,
-            bottom: MediaRowMetrics.rowBottomInset,
+            bottom: insets.bottom,
             trailing: 0
         )
 
         if section.title != nil {
             let headerSize = NSCollectionLayoutSize(
                 widthDimension: .fractionalWidth(1),
-                heightDimension: .estimated(40)
+                heightDimension: .absolute(MediaRowMetrics.headerHeight)
             )
             let header = NSCollectionLayoutBoundarySupplementaryItem(
                 layoutSize: headerSize,

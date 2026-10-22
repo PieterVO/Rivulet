@@ -62,10 +62,11 @@ final class SeasonPillView: UIControl {
         NSLayoutConstraint.activate([
             // Capsule padding. The capsule's LEFT edge sits on the shared content
             // edge (the row leading); the text is naturally indented inside it.
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 32),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -32),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // Measured on device (tvOS 27): 66 tall, radius 33.
+            heightAnchor.constraint(equalToConstant: 66),
         ])
         applyStyle()
     }
@@ -106,9 +107,13 @@ final class SeasonPillView: UIControl {
 
         let fill: UIColor
         let textColor: UIColor
-        if isFocusedPill || isSelectedSeason {
+        if isFocusedPill {
             fill = UIColor.white.withAlphaComponent(0.88)
             textColor = .black
+        } else if isSelectedSeason {
+            // Selected but unfocused: translucent grey, white text.
+            fill = UIColor.white.withAlphaComponent(0.35)
+            textColor = .white
         } else {
             fill = .clear
             textColor = UIColor.white.withAlphaComponent(0.72)

@@ -39,10 +39,10 @@ private enum Metrics {
     static let sectionGap: CGFloat = 70
     static let pillOrigin = CGPoint(x: 50, y: 50)
     static let pillHeight: CGFloat = 60
-    /// The TV app's 46pt icon box, centred in the 60pt pill.
-    static let pillDiscSize: CGFloat = 46
+    /// The TV app's 50pt icon disc, centred in the 60pt pill.
+    static let pillDiscSize: CGFloat = 50
     static var pillDiscInset: CGFloat { (pillHeight - pillDiscSize) / 2 }
-    static let pillTrailing: CGFloat = 24
+    static let pillTrailing: CGFloat = 41
     /// The TV app's sidebar avatar, and how much it grows under focus.
     static let avatarSize: CGFloat = 50
     static let avatarFocusGrowth: CGFloat = 4
@@ -52,7 +52,12 @@ private enum Metrics {
     /// three-phase timing from 120fps frame analysis looked worse on screen.
     static let morphDuration: TimeInterval = 0.45
     static let morphDamping: CGFloat = 0.9
-    static let dimAlpha: CGFloat = 0.35
+    /// Profile header, measured on device (tvOS 27): avatar centre 26pt below
+    /// the list top, clock right edge 12.5pt inside it, name 8.5pt further
+    /// right while focused.
+    static let headerCenterY: CGFloat = 26
+    static let headerTrailing: CGFloat = 12.5
+    static let focusedNameShift: CGFloat = 8.5
     /// Darkens the glass toward the system sidebar's tone; the sole knob for
     /// the material tuning pass, to be converged against sampled pixels.
     static let glassTint = UIColor.black.withAlphaComponent(0.12)
@@ -74,7 +79,7 @@ enum ShellPillMetrics {
 /// Resting 0.7 is the TV app's value; its focused 0.9 / 0.7 pair rides a
 /// PlusL / PlusD layer this sidebar does not have.
 private func sidebarRowColors(focused: Bool, selected: Bool) -> (background: UIColor, content: UIColor) {
-    if focused { return (.white, .black) }
+    if focused { return (UIColor.white.withAlphaComponent(0.91), .black) }
     if selected { return (UIColor.white.withAlphaComponent(0.1), .white) }
     return (.clear, UIColor.white.withAlphaComponent(0.7))
 }
@@ -233,9 +238,9 @@ final class ShellSidebarRowCell: UICollectionViewCell {
 
 // MARK: - Profile header cell
 
-/// The profile entry, above the tabs: avatar and first name, no focus capsule.
-/// Focus grows the avatar and, where there is a profile to switch to, fades a
-/// "Switch Profile" caption in under the name.
+/// The profile entry, above the tabs: avatar, first name and the time, no focus
+/// platter. Focus grows the avatar, brightens the name and, where there is a
+/// profile to switch to, swaps the clock for a "Switch Profile" caption.
 final class ShellSidebarProfileCell: UICollectionViewCell {
     static let reuseIdentifier = "ShellSidebarProfileCell"
 
@@ -243,52 +248,79 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
     private let avatarView = SidebarAvatarView(diameter: Metrics.avatarSize)
     private let nameLabel = UILabel()
     private let captionLabel = UILabel()
-    private let separator = UIView()
+    private let clockLabel = UILabel()
     private var nameCenterY: NSLayoutConstraint!
+    private var nameLeading: NSLayoutConstraint!
     private var canSwitch = false
+    private var clockTimer: Timer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44, weight: .regular)
         nameLabel.font = .preferredFont(forTextStyle: .caption1)
-        captionLabel.font = .preferredFont(forTextStyle: .caption2)
+        captionLabel.font = .systemFont(ofSize: 21, weight: .regular)
         captionLabel.text = "Switch Profile"
-        captionLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        separator.backgroundColor = UIColor.white.withAlphaComponent(0.1)
-        for view in [iconView, avatarView, nameLabel, captionLabel, separator] {
+        captionLabel.textColor = UIColor.white.withAlphaComponent(0.3)
+        clockLabel.font = .preferredFont(forTextStyle: .caption2)
+        clockLabel.textColor = UIColor.white.withAlphaComponent(0.3)
+        clockLabel.isAccessibilityElement = false
+        for view in [iconView, avatarView, nameLabel, captionLabel, clockLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(view)
         }
-        // The entry occupies the band's top row; the separator halves the rest.
-        let rowCenter = Metrics.rowPitch / 2
-        nameCenterY = nameLabel.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: rowCenter)
+        nameCenterY = nameLabel.centerYAnchor.constraint(equalTo: contentView.topAnchor,
+                                                         constant: Metrics.headerCenterY)
+        nameLeading = nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                                         constant: Metrics.titleLeading)
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: contentView.leadingAnchor,
                                               constant: Metrics.iconCenterX),
-            iconView.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: rowCenter),
+            iconView.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: Metrics.headerCenterY),
             avatarView.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
             avatarView.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
-            nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
-                                               constant: Metrics.titleLeading),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
-                                                constant: -Metrics.titleTrailing),
+            nameLeading,
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: clockLabel.leadingAnchor, constant: -8),
             nameCenterY,
             captionLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             captionLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
                                                    constant: -Metrics.titleTrailing),
             captionLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor),
-            separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 15),
-            separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            separator.heightAnchor.constraint(equalToConstant: 1),
-            separator.centerYAnchor.constraint(
-                equalTo: contentView.topAnchor,
-                constant: (Metrics.rowPitch + Metrics.profileBandHeight) / 2),
+            clockLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor,
+                                                 constant: -Metrics.headerTrailing),
+            clockLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
         ])
+        clockLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         isAccessibilityElement = true
         applyAppearance(focused: false)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshClock),
+                                               name: UIApplication.willEnterForegroundNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit { clockTimer?.invalidate() }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { clockTimer?.invalidate(); clockTimer = nil } else { refreshClock() }
+    }
+
+    /// Redraws the time in the user's 12/24-hour style and re-arms the timer for
+    /// the next minute boundary, so there is no per-second tick.
+    @objc private func refreshClock() {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("jmm")
+        clockLabel.text = formatter.string(from: Date())
+        clockTimer?.invalidate()
+        guard window != nil else { return }
+        let next = Calendar.current.nextDate(after: Date(), matching: DateComponents(second: 0),
+                                             matchingPolicy: .nextTime) ?? Date().addingTimeInterval(60)
+        let timer = Timer(fire: next, interval: 0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshClock() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        clockTimer = timer
+    }
 
     func configure(item: ShellSidebarItem) {
         iconView.image = UIImage(systemName: item.icon)
@@ -311,13 +343,14 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
     }
 
     private func applyAppearance(focused: Bool) {
-        let content = sidebarRowColors(focused: false, selected: focused).content
-        iconView.tintColor = content
-        nameLabel.textColor = content
+        iconView.tintColor = .white
+        nameLabel.textColor = focused ? .white : UIColor.white.withAlphaComponent(0.5)
         let captioned = focused && canSwitch
         captionLabel.alpha = captioned ? 1 : 0
+        clockLabel.alpha = focused ? 0 : 1
         // The name rises by half the caption so the pair stays centred on the avatar.
-        nameCenterY.constant = Metrics.rowPitch / 2 - (captioned ? captionLabel.font.lineHeight / 2 : 0)
+        nameCenterY.constant = Metrics.headerCenterY - (captioned ? captionLabel.font.lineHeight / 2 : 0)
+        nameLeading.constant = Metrics.titleLeading + (focused ? Metrics.focusedNameShift : 0)
         let scale = focused ? (Metrics.avatarSize + Metrics.avatarFocusGrowth) / Metrics.avatarSize : 1
         avatarView.transform = CGAffineTransform(scaleX: scale, y: scale)
         iconView.transform = avatarView.transform
@@ -357,7 +390,6 @@ final class ShellSidebarViewController: UIViewController {
     private var sections: [ShellSidebarSection] = []
     private var selectedTab: SidebarTab = .home
 
-    private let dimmingView = UIView()
     /// ONE glass card morphs between panel and pill, as the trace showed the
     /// system does: frame and corner radius animate together on one spring;
     /// the list fades out and clips inside the shrinking card while the pill
@@ -537,7 +569,6 @@ final class ShellSidebarViewController: UIViewController {
         guard animated else {
             cardView.frame = targetFrame
             cardView.layer.cornerRadius = targetRadius
-            dimmingView.alpha = expanded ? Metrics.dimAlpha : 0
             collectionView.alpha = expanded ? 1 : 0
             pillStack.alpha = expanded ? 0 : 1
             pillChevron.alpha = chevronTarget
@@ -552,7 +583,6 @@ final class ShellSidebarViewController: UIViewController {
                                               dampingRatio: Metrics.morphDamping) {
             self.cardView.frame = targetFrame
             self.cardView.layer.cornerRadius = targetRadius
-            self.dimmingView.alpha = expanded ? Metrics.dimAlpha : 0
             self.collectionView.alpha = expanded ? 1 : 0
             self.pillStack.alpha = expanded ? 0 : 1
             self.pillChevron.alpha = chevronTarget
@@ -582,11 +612,6 @@ final class ShellSidebarViewController: UIViewController {
     // MARK: Views
 
     private func buildViews() {
-        dimmingView.backgroundColor = .black
-        dimmingView.frame = view.bounds
-        dimmingView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(dimmingView)
-
         cardView.layer.cornerCurve = .continuous
         cardView.layer.masksToBounds = true
         view.addSubview(cardView)

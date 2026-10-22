@@ -67,8 +67,8 @@ final class PosterCell: UICollectionViewCell {
 
     /// The system image corner on tvOS 26.
     private let cornerRadius: CGFloat = 20
-    private let posterWidth: CGFloat = MediaRowMetrics.posterWidth
-    private let posterHeight: CGFloat = MediaRowMetrics.posterHeight
+    /// The tile the cell shows; the host view is TVUIKit's focused size (`hostSize`).
+    private var tile = MediaRowMetrics.poster
 
     /// Swappable so music tiles render the 1:1 square lockup instead of the
     /// 2:3 poster one. Set per item in `configure(...)`.
@@ -145,10 +145,10 @@ final class PosterCell: UICollectionViewCell {
         watchedGlyph.isHidden = true
         overlayContainer.addSubview(watchedGlyph)
 
-        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: posterWidth)
-        posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: posterHeight)
+        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: tile.hostSize.width)
+        posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: tile.hostSize.height)
         NSLayoutConstraint.activate([
-            posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            posterView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             posterWidthConstraint,
             posterHeightConstraint,
@@ -161,10 +161,13 @@ final class PosterCell: UICollectionViewCell {
             overlayContainer.leadingAnchor.constraint(equalTo: posterView.imageView.leadingAnchor),
             overlayContainer.trailingAnchor.constraint(equalTo: posterView.imageView.trailingAnchor),
 
-            // Insets match ContinueWatchingCell (16 leading, 15 bottom).
-            progressInfoBar.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 16),
-            progressInfoBar.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -16),
-            progressInfoBar.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor, constant: -15),
+            // Same slot as ContinueWatchingCell's status row.
+            progressInfoBar.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor,
+                                                     constant: MediaProgressInfoBar.leadingInset),
+            progressInfoBar.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor,
+                                                      constant: -MediaProgressInfoBar.leadingInset),
+            progressInfoBar.centerYAnchor.constraint(equalTo: overlayContainer.bottomAnchor,
+                                                     constant: -MediaProgressInfoBar.centerFromBottom),
 
             watchedBadge.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: 10),
             watchedBadge.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -10),
@@ -185,15 +188,17 @@ final class PosterCell: UICollectionViewCell {
             loadingSpinner.centerYAnchor.constraint(equalTo: overlayContainer.centerYAnchor),
 
             // Watched glyph shares the progress bar's bottom-left anchor.
-            watchedGlyph.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 16),
-            watchedGlyph.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor, constant: -15)
+            watchedGlyph.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor,
+                                                  constant: MediaProgressInfoBar.leadingInset),
+            watchedGlyph.centerYAnchor.constraint(equalTo: overlayContainer.bottomAnchor,
+                                                  constant: -MediaProgressInfoBar.centerFromBottom)
         ])
     }
 
     // MARK: - Focus zoom sync
 
-    /// The focused image grows by `focusGrowth` on its longer side, and that
-    /// growth doesn't reach our sibling `overlayContainer`, so mirror it here.
+    /// The overlay doesn't follow the poster's focus growth, so mirror the tile's
+    /// here; the host's own growth is trimmed to the tile's by `focusScale`.
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
@@ -201,8 +206,9 @@ final class PosterCell: UICollectionViewCell {
                       || context.nextFocusedView?.isDescendant(of: self) == true
         let artSize = posterView.imageView.bounds.size
         let longSide = max(artSize.width, artSize.height)
-        let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1
+        let scale = longSide > 0 ? 1 + tile.growth.height / longSide : 1.1
         coordinator.addCoordinatedAnimations({
+            self.posterView.transform = nowFocused ? self.tile.focusScale : .identity
             self.progressInfoBar.setFocused(nowFocused)
             self.overlayContainer.transform = nowFocused
                 ? CGAffineTransform(scaleX: scale, y: scale)
@@ -260,10 +266,11 @@ final class PosterCell: UICollectionViewCell {
 
     /// Music tiles are 1:1 square; everything else keeps the 2:3 poster ratio.
     private func setSquare(_ square: Bool) {
-        let height = square ? MediaRowMetrics.musicHeight : posterHeight
-        if posterHeightConstraint.constant != height {
-            posterWidthConstraint.constant = square ? MediaRowMetrics.musicWidth : posterWidth
-            posterHeightConstraint.constant = height
+        tile = square ? MediaRowMetrics.music : MediaRowMetrics.poster
+        let host = tile.hostSize
+        if posterHeightConstraint.constant != host.height {
+            posterWidthConstraint.constant = host.width
+            posterHeightConstraint.constant = host.height
         }
     }
 

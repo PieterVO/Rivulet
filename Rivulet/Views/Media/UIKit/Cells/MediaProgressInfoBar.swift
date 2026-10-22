@@ -51,7 +51,7 @@ final class MediaProgressInfoBar: UIView {
         setFocused(false)
 
         stack.axis = .horizontal
-        stack.spacing = 8
+        stack.spacing = 9
         stack.alignment = .center
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(playIcon)
@@ -86,6 +86,11 @@ final class MediaProgressInfoBar: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private static let barSize = CGSize(width: 34, height: 6)
+
+    /// Where the row sits on a card (measured on device, tvOS 27): inset from the leading
+    /// edge, and its mid-line above the bottom edge.
+    static let leadingInset: CGFloat = 16
+    static let centerFromBottom: CGFloat = 27.5
 
     /// Glyph, label and bar fill go full white on the focused card. Call it
     /// inside the focus animation coordinator.

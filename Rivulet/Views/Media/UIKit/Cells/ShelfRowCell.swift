@@ -109,8 +109,8 @@ final class ShelfRowCell: UICollectionViewCell {
     private let headerLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: 32, weight: .semibold)
-        l.textColor = .white
+        l.font = MediaRowMetrics.headerFont
+        l.textColor = MediaRowMetrics.headerColor
         l.isHidden = true
         return l
     }()

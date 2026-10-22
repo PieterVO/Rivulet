@@ -13,25 +13,28 @@ final class PersonHeaderCell: UICollectionViewCell {
     /// Bio is truncated to this many lines; MORE appears only when it overflows.
     private static let bioLineLimit = 3
 
-    private static let nameFont = UIFont.systemFont(ofSize: 48, weight: .semibold)
-    private static let bioFont = UIFont.systemFont(ofSize: 24, weight: .medium)
-    private static let moreFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
+    // Metrics measured on device, tvOS 27.
+    private static let nameFont = UIFont.systemFont(ofSize: 57, weight: .medium)
+    private static let bioFont = UIFont.systemFont(ofSize: 25, weight: .regular)
+    private static let moreFont = UIFont.systemFont(ofSize: 23, weight: .semibold)
+    private static let bioLinePitch: CGFloat = 32
 
-    /// Portrait diameter — a header avatar, slightly larger than a cast thumb.
-    private static let portraitSize: CGFloat = 215
-    /// The name + bio sit in a narrow column (the reference bio spans ~45% of the
-    /// screen, not edge-to-edge); cap the column so it reads like the reference.
-    private static let textColumnMaxWidth: CGFloat = 900
+    private static let portraitSize: CGFloat = 250
+    private static let portraitTextGap: CGFloat = 50
+    private static let textColumnWidth: CGFloat = 844
+    /// Name baseline to the bio's first cap top.
+    private static let nameToBioCapGap: CGFloat = 38.5
+    /// Focus panel overhang around the bio text.
+    private static let panelPad: CGFloat = 15
 
     private let headerContent = UIView()
     private let portraitContainer = UIView()
     private let portraitImageView = UIImageView()
     private let fallbackIcon = UIImageView()
     private let nameLabel = UILabel()
-    /// A FocusableActionButton for its Select handling, in the glass focus style.
-    private let bioPanel = FocusableActionButton()
+    /// Focusable bio; shows a glass panel only while focused.
+    private let bioPanel = BioPanel()
     private let bioLabel = UILabel()
-    private let moreLabel = UILabel()
     /// Circular spinner shown inside the panel while the biography loads, so the
     /// page reads as "working" and the panel is a focus target from first paint.
     private let loadingSpinner = UIActivityIndicatorView(style: .medium)
@@ -92,33 +95,19 @@ final class PersonHeaderCell: UICollectionViewCell {
         nameLabel.numberOfLines = 1
         headerContent.addSubview(nameLabel)
 
-        // Bio text plus an optional MORE hint.
         bioPanel.translatesAutoresizingMaskIntoConstraints = false
-        bioPanel.focusStyle = .glass
-        bioPanel.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        bioPanel.layer.cornerRadius = 14
-        bioPanel.layer.borderWidth = 1
-        bioPanel.layer.borderColor = UIColor.white.withAlphaComponent(0.08).cgColor
         bioPanel.isHidden = true
         bioPanel.onPrimaryAction = { [weak self] in self?.onMore?() }
         headerContent.addSubview(bioPanel)
 
+        // MORE rides inline after the ellipsis (built in updateBioText).
         bioLabel.translatesAutoresizingMaskIntoConstraints = false
         bioLabel.font = Self.bioFont
-        bioLabel.textColor = UIColor.white.withAlphaComponent(0.85)
+        bioLabel.textColor = .white
         bioLabel.numberOfLines = Self.bioLineLimit
         bioLabel.lineBreakMode = .byTruncatingTail
         bioLabel.isUserInteractionEnabled = false
         bioPanel.addSubview(bioLabel)
-
-        // MORE: an uppercase hint shown inside the panel only when the bio
-        // overflows — signals there's more behind Select. Not itself focusable.
-        moreLabel.translatesAutoresizingMaskIntoConstraints = false
-        moreLabel.text = "MORE"
-        moreLabel.font = Self.moreFont
-        moreLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-        moreLabel.isHidden = true
-        bioPanel.addSubview(moreLabel)
 
         // Loading spinner: centered in the panel (the panel is already at its
         // final 3-line height, so the spinner sits in that reserved space).
@@ -128,23 +117,25 @@ final class PersonHeaderCell: UICollectionViewCell {
         loadingSpinner.hidesWhenStopped = true
         bioPanel.addSubview(loadingSpinner)
 
-        // Fixed width, centred; the bottom pin lets the estimated-height section measure it.
-        let containerWidth = Self.portraitSize + 36 + Self.textColumnMaxWidth
+        // Portrait left, text column right, the pair centred; the column is centred on the portrait.
+        let containerWidth = Self.portraitSize + Self.portraitTextGap + Self.textColumnWidth
+        let textColumn = UIView()
+        textColumn.translatesAutoresizingMaskIntoConstraints = false
+        headerContent.addSubview(textColumn)
+        // Bio line box top = name baseline + gap - the cap's offset inside a pitch-high line.
+        let bioBoxTop = Self.nameFont.ascender + Self.nameToBioCapGap
+            - (Self.bioLinePitch - Self.bioFont.lineHeight + Self.bioFont.ascender - Self.bioFont.capHeight)
         NSLayoutConstraint.activate([
-            // Container anchors
             headerContent.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             headerContent.topAnchor.constraint(equalTo: contentView.topAnchor),
             headerContent.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             headerContent.widthAnchor.constraint(equalToConstant: containerWidth),
 
-            // Portrait — fixed-size circle, TOP aligned with the name top so it
-            // lines up with the name + bio block (its bottom lands ≈ the bio
-            // panel bottom since the size ≈ the column span).
-            portraitContainer.topAnchor.constraint(equalTo: nameLabel.topAnchor),
+            portraitContainer.topAnchor.constraint(equalTo: headerContent.topAnchor),
             portraitContainer.leadingAnchor.constraint(equalTo: headerContent.leadingAnchor),
             portraitContainer.widthAnchor.constraint(equalToConstant: Self.portraitSize),
             portraitContainer.heightAnchor.constraint(equalToConstant: Self.portraitSize),
-            portraitContainer.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
+            portraitContainer.bottomAnchor.constraint(equalTo: headerContent.bottomAnchor),
 
             portraitImageView.topAnchor.constraint(equalTo: portraitContainer.topAnchor),
             portraitImageView.leadingAnchor.constraint(equalTo: portraitContainer.leadingAnchor),
@@ -154,46 +145,31 @@ final class PersonHeaderCell: UICollectionViewCell {
             fallbackIcon.centerXAnchor.constraint(equalTo: portraitContainer.centerXAnchor),
             fallbackIcon.centerYAnchor.constraint(equalTo: portraitContainer.centerYAnchor),
 
-            // Name + bio block to the RIGHT of the portrait. Name defines the
-            // column top.
-            nameLabel.topAnchor.constraint(equalTo: headerContent.topAnchor),
-            nameLabel.leadingAnchor.constraint(equalTo: portraitContainer.trailingAnchor, constant: 36),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: headerContent.trailingAnchor),
+            textColumn.leadingAnchor.constraint(equalTo: portraitContainer.trailingAnchor, constant: Self.portraitTextGap),
+            textColumn.widthAnchor.constraint(equalToConstant: Self.textColumnWidth),
+            textColumn.centerYAnchor.constraint(equalTo: portraitContainer.centerYAnchor),
+            textColumn.topAnchor.constraint(equalTo: nameLabel.topAnchor),
+            textColumn.bottomAnchor.constraint(equalTo: bioLabel.bottomAnchor),
 
-            // Bio panel: under the name, spanning the text column. Glass padding
-            // (18 h / 14 v) insets the bio + MORE from the panel edge.
-            bioPanel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 14),
-            bioPanel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            bioPanel.trailingAnchor.constraint(equalTo: headerContent.trailingAnchor),
-            bioPanel.bottomAnchor.constraint(lessThanOrEqualTo: headerContent.bottomAnchor),
+            nameLabel.leadingAnchor.constraint(equalTo: textColumn.leadingAnchor),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: textColumn.trailingAnchor),
 
-            bioLabel.topAnchor.constraint(equalTo: bioPanel.topAnchor, constant: 14),
-            bioLabel.leadingAnchor.constraint(equalTo: bioPanel.leadingAnchor, constant: 18),
-            bioLabel.trailingAnchor.constraint(equalTo: bioPanel.trailingAnchor, constant: -18),
-            // Fixed 3-line height so the panel is its FINAL size from first paint
-            // (loading or short bio won't shrink it → no expand when the bio
-            // arrives). lineHeight × bioLineLimit.
-            bioLabel.heightAnchor.constraint(equalToConstant: Self.bioBlockHeight),
+            bioLabel.topAnchor.constraint(equalTo: nameLabel.topAnchor, constant: bioBoxTop),
+            bioLabel.leadingAnchor.constraint(equalTo: textColumn.leadingAnchor),
+            bioLabel.trailingAnchor.constraint(equalTo: textColumn.trailingAnchor),
+            // Fixed 3-line height so the panel is final-size from first paint.
+            bioLabel.heightAnchor.constraint(equalToConstant: Self.bioLinePitch * CGFloat(Self.bioLineLimit)),
 
-            // MORE hint under the bio, leading-aligned; pins the panel bottom.
-            moreLabel.topAnchor.constraint(equalTo: bioLabel.bottomAnchor, constant: 10),
-            moreLabel.leadingAnchor.constraint(equalTo: bioLabel.leadingAnchor),
-            moreLabel.bottomAnchor.constraint(equalTo: bioPanel.bottomAnchor, constant: -14),
+            // The panel overhangs the text by panelPad on every side.
+            bioPanel.topAnchor.constraint(equalTo: bioLabel.topAnchor, constant: -Self.panelPad),
+            bioPanel.bottomAnchor.constraint(equalTo: bioLabel.bottomAnchor, constant: Self.panelPad),
+            bioPanel.leadingAnchor.constraint(equalTo: bioLabel.leadingAnchor, constant: -Self.panelPad),
+            bioPanel.trailingAnchor.constraint(equalTo: bioLabel.trailingAnchor, constant: Self.panelPad),
 
-            // Spinner centered in the panel's reserved (final-size) area.
             loadingSpinner.centerXAnchor.constraint(equalTo: bioPanel.centerXAnchor),
             loadingSpinner.centerYAnchor.constraint(equalTo: bioLabel.centerYAnchor),
-
-            // Container bottom hugs tallest column (portrait vs text+panel)
-            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: portraitContainer.bottomAnchor),
-            headerContent.bottomAnchor.constraint(greaterThanOrEqualTo: bioPanel.bottomAnchor),
         ])
     }
-
-    /// Fixed height of the 3-line bio block — keeps the panel a constant size
-    /// whether loading, empty, or showing a bio.
-    private static let bioBlockHeight: CGFloat =
-        ceil(bioFont.lineHeight * CGFloat(bioLineLimit))
 
     // MARK: - Configure
 
@@ -210,23 +186,20 @@ final class PersonHeaderCell: UICollectionViewCell {
         let bio = (biography ?? "")
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        self.fullBiography = bio
-        bioLabel.text = bio.isEmpty && !isLoading ? "No biography available." : bio
+        self.fullBiography = bio.isEmpty && !isLoading ? "No biography available." : bio
 
         // The panel always shows (dots, bio, or a placeholder), so the page always has a focus target.
         if isLoading {
             bioPanel.isHidden = false
             loadingSpinner.startAnimating()
             bioLabel.isHidden = true
-            moreLabel.isHidden = true
         } else {
             loadingSpinner.stopAnimating()
             bioLabel.isHidden = false
             bioPanel.isHidden = false
-            moreLabel.isHidden = true   // re-measured in layoutSubviews
         }
-        // Truncation (and thus MORE visibility) can only be measured after the
-        // bio label has a real width — defer to layoutSubviews.
+        // Truncation needs the label's real width, so the text is set in layoutSubviews.
+        builtBioKey = nil
         setNeedsLayout()
 
         loadPortrait(url: portraitURL)
@@ -234,31 +207,54 @@ final class PersonHeaderCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        updateMoreVisibility()
+        updateBioText()
     }
 
-    /// Show MORE only when the full biography doesn't fit in the line-limited
-    /// label. Measured by comparing the unbounded text height against the
-    /// height the capped label actually occupies.
-    private func updateMoreVisibility() {
-        guard let bio = fullBiography, !bio.isEmpty, bioLabel.bounds.width > 1 else {
-            if !moreLabel.isHidden { moreLabel.isHidden = true }
-            return
-        }
+    private var builtBioKey: String?
+
+    /// Sets the bio at the line pitch; when it overflows three lines, cuts the third at "... MORE".
+    private func updateBioText() {
         let width = bioLabel.bounds.width
-        let attrs: [NSAttributedString.Key: Any] = [.font: bioLabel.font as Any]
-        let fullHeight = (bio as NSString).boundingRect(
-            with: CGSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: attrs,
-            context: nil
-        ).height
-        let lineHeight = bioLabel.font.lineHeight
-        let cappedHeight = lineHeight * CGFloat(Self.bioLineLimit)
-        let truncated = fullHeight > cappedHeight + 1
-        if moreLabel.isHidden == truncated {
-            moreLabel.isHidden = !truncated
+        guard let bio = fullBiography, !bio.isEmpty, width > 1 else { return }
+        let key = "\(Int(width))|\(bio)"
+        guard key != builtBioKey else { return }
+        builtBioKey = key
+
+        let para = NSMutableParagraphStyle()
+        para.minimumLineHeight = Self.bioLinePitch
+        para.maximumLineHeight = Self.bioLinePitch
+        para.lineBreakMode = .byWordWrapping
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: Self.bioFont, .foregroundColor: UIColor.white, .paragraphStyle: para]
+        let moreAttrs: [NSAttributedString.Key: Any] = [
+            .font: Self.moreFont, .foregroundColor: UIColor.white.withAlphaComponent(0.5), .paragraphStyle: para]
+
+        let full = NSAttributedString(string: bio, attributes: attrs)
+        let typesetter = CTTypesetterCreateWithAttributedString(full)
+        let ns = bio as NSString
+        var start = 0
+        for _ in 0..<(Self.bioLineLimit - 1) where start < ns.length {
+            start += CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
         }
+        let lineEnd = start + CTTypesetterSuggestLineBreak(typesetter, start, Double(width))
+        guard start < ns.length, lineEnd < ns.length else { bioLabel.attributedText = full; return }
+
+        // Shorten the third line until the ellipsis and MORE fit.
+        let more = NSAttributedString(string: " MORE", attributes: moreAttrs)
+        var end = lineEnd
+        var tail = NSMutableAttributedString()
+        while end > start {
+            let head = ns.substring(with: NSRange(location: start, length: end - start))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            tail = NSMutableAttributedString(string: head + "\u{2026}", attributes: attrs)
+            tail.append(more)
+            if tail.size().width <= width { break }
+            end -= 1
+        }
+        let result = NSMutableAttributedString(
+            attributedString: full.attributedSubstring(from: NSRange(location: 0, length: start)))
+        result.append(tail)
+        bioLabel.attributedText = result
     }
 
     private func loadPortrait(url: URL?) {
@@ -288,12 +284,12 @@ final class PersonHeaderCell: UICollectionViewCell {
         portraitImageView.image = nil
         fallbackIcon.isHidden = false
         nameLabel.text = nil
-        bioLabel.text = nil
+        bioLabel.attributedText = nil
         bioLabel.isHidden = false
         fullBiography = nil
+        builtBioKey = nil
         bioPanel.isHidden = true
         loadingSpinner.stopAnimating()
-        moreLabel.isHidden = true
         onMore = nil
     }
 
@@ -301,4 +297,50 @@ final class PersonHeaderCell: UICollectionViewCell {
     // focus target (focusable whenever a bio exists); otherwise focus falls
     // through to the poster rows. Matches AboutCollectionCell / ShelfRowCell.
     override var canBecomeFocused: Bool { false }
+}
+
+/// The focusable bio: invisible at rest, a glass panel with a rim when focused.
+private final class BioPanel: UIControl {
+    var onPrimaryAction: (() -> Void)?
+    private var lastFire: CFTimeInterval = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.cornerRadius = 20
+        layer.cornerCurve = .continuous
+        layer.borderWidth = 1
+        addTarget(self, action: #selector(fire), for: .primaryActionTriggered)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var canBecomeFocused: Bool { true }
+
+    // A bare UIControl misses Select on tvOS, so presses fire too, debounced.
+    @objc private func fire() {
+        let now = CACurrentMediaTime()
+        guard now - lastFire > 0.3 else { return }
+        lastFire = now
+        onPrimaryAction?()
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.contains(where: { $0.type == .select }) { return }
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.contains(where: { $0.type == .select }) { fire(); return }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        let focused = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations { [weak self] in
+            self?.transform = focused ? CGAffineTransform(scaleX: 1.02, y: 1.02) : .identity
+            self?.backgroundColor = focused ? UIColor.white.withAlphaComponent(0.06) : .clear
+            self?.layer.borderColor = (focused ? UIColor.white.withAlphaComponent(0.35) : UIColor.clear).cgColor
+        }
+    }
 }

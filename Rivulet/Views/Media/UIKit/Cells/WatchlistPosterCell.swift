@@ -24,8 +24,7 @@ final class WatchlistPosterCell: UICollectionViewCell {
     private var hasArtwork = false
 
     private let cornerRadius: CGFloat = 20
-    private let posterWidth: CGFloat = MediaRowMetrics.posterWidth
-    private let posterHeight: CGFloat = MediaRowMetrics.posterHeight
+    private let tile = MediaRowMetrics.poster
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -68,10 +67,10 @@ final class WatchlistPosterCell: UICollectionViewCell {
         contentView.insertSubview(placeholderView, belowSubview: posterView)
 
         NSLayoutConstraint.activate([
-            posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            posterView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            posterView.widthAnchor.constraint(equalToConstant: posterWidth),
-            posterView.heightAnchor.constraint(equalToConstant: posterHeight),
+            posterView.widthAnchor.constraint(equalToConstant: tile.hostSize.width),
+            posterView.heightAnchor.constraint(equalToConstant: tile.hostSize.height),
 
             placeholderView.topAnchor.constraint(equalTo: posterView.imageView.topAnchor),
             placeholderView.bottomAnchor.constraint(equalTo: posterView.imageView.bottomAnchor),
@@ -83,6 +82,17 @@ final class WatchlistPosterCell: UICollectionViewCell {
             placeholderIcon.widthAnchor.constraint(equalToConstant: 32),
             placeholderIcon.heightAnchor.constraint(equalToConstant: 32)
         ])
+    }
+
+    /// Trims TVUIKit's focus growth to the tile's.
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let nowFocused = context.nextFocusedView === self
+                      || context.nextFocusedView?.isDescendant(of: self) == true
+        coordinator.addCoordinatedAnimations({
+            self.posterView.transform = nowFocused ? self.tile.focusScale : .identity
+        }, completion: nil)
     }
 
     override func layoutSubviews() {

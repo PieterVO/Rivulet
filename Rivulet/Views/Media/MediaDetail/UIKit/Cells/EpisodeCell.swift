@@ -80,7 +80,10 @@ final class EpisodeCell: UIView {
     // thumbnail card overhangs it by its focus reserve on both sides, so the
     // focus engine lands cell edges, and with them the artwork, on the margin.
     static let cardWidth = MediaRowMetrics.gridWidth(columns: 4)
-    static let thumbHeight: CGFloat = 245   // the card's frame, reserve included
+    /// The card's frame, reserve included: 16:9 artwork (measured on device, tvOS 27).
+    static let thumbHeight: CGFloat = (cardWidth * 9 / 16).rounded() + MediaRowMetrics.focusGrowth
+    /// A trailer's frame: 410 x 278 artwork with the title inside it.
+    static let trailerThumbHeight: CGFloat = 278 + MediaRowMetrics.focusGrowth
     private static let cornerRadius: CGFloat = 16
 
     // MARK: - Subviews
@@ -90,6 +93,10 @@ final class EpisodeCell: UIView {
     /// home-screen cards. Image + overlays live in `thumbnailCard.contentView`.
     private let thumbnailCard = EpisodeThumbCardView()
     private let thumbnailImageView = UIImageView()
+
+    private var thumbHeightConstraint: NSLayoutConstraint!
+    private let trailerScrim = TrailerScrimView()
+    private let trailerTitleLabel = UILabel()
 
     private let durationBadge = UIView()
     private let durationIcon = UIImageView()
@@ -156,6 +163,16 @@ final class EpisodeCell: UIView {
         thumbnailImageView.contentMode = .scaleAspectFill
         thumbnailImageView.clipsToBounds = true
         thumbnailCard.contentView.addSubview(thumbnailImageView)
+
+        // A trailer's title rides inside the artwork, over a scrim.
+        trailerScrim.translatesAutoresizingMaskIntoConstraints = false
+        trailerScrim.isHidden = true
+        thumbnailCard.contentView.addSubview(trailerScrim)
+        trailerTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        trailerTitleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        trailerTitleLabel.textColor = .white
+        trailerTitleLabel.isHidden = true
+        thumbnailCard.contentView.addSubview(trailerTitleLabel)
 
         // Duration badge (bottom-leading)
         durationBadge.translatesAutoresizingMaskIntoConstraints = false
@@ -267,11 +284,12 @@ final class EpisodeCell: UIView {
         footerRow.addArrangedSubview(ratingBadge)
 
         progressFillWidth = progressFill.widthAnchor.constraint(equalToConstant: 0)
+        thumbHeightConstraint = thumbnailCard.heightAnchor.constraint(equalToConstant: Self.thumbHeight)
 
-        let episodeLeading = episodeLabel.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 14)
-        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 14)
-        let summaryLeading = summaryLabel.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 14)
-        let footerLeading = footerRow.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 14)
+        let episodeLeading = episodeLabel.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 20)
+        let titleLeading = titleLabel.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 20)
+        let summaryLeading = summaryLabel.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 20)
+        let footerLeading = footerRow.leadingAnchor.constraint(equalTo: descriptionBlock.leadingAnchor, constant: 20)
 
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: Self.cardWidth),
@@ -279,7 +297,15 @@ final class EpisodeCell: UIView {
             thumbnailCard.topAnchor.constraint(equalTo: topAnchor),
             thumbnailCard.leadingAnchor.constraint(equalTo: leadingAnchor, constant: -MediaRowMetrics.focusGrowth / 2),
             thumbnailCard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: MediaRowMetrics.focusGrowth / 2),
-            thumbnailCard.heightAnchor.constraint(equalToConstant: Self.thumbHeight),
+            thumbHeightConstraint,
+
+            trailerScrim.leadingAnchor.constraint(equalTo: thumbnailCard.contentView.leadingAnchor),
+            trailerScrim.trailingAnchor.constraint(equalTo: thumbnailCard.contentView.trailingAnchor),
+            trailerScrim.bottomAnchor.constraint(equalTo: thumbnailCard.contentView.bottomAnchor),
+            trailerScrim.heightAnchor.constraint(equalToConstant: 120),
+            trailerTitleLabel.leadingAnchor.constraint(equalTo: durationBadge.leadingAnchor),
+            trailerTitleLabel.trailingAnchor.constraint(equalTo: thumbnailCard.contentView.trailingAnchor, constant: -16),
+            trailerTitleLabel.bottomAnchor.constraint(equalTo: durationBadge.topAnchor, constant: -2),
 
             thumbnailImageView.topAnchor.constraint(equalTo: thumbnailCard.contentView.topAnchor),
             thumbnailImageView.leadingAnchor.constraint(equalTo: thumbnailCard.contentView.leadingAnchor),
@@ -326,19 +352,19 @@ final class EpisodeCell: UIView {
             // under the title instead of vertical-centering in a fixed box.
             episodeLabel.topAnchor.constraint(equalTo: descriptionBlock.topAnchor, constant: 12),
             episodeLeading,
-            episodeLabel.trailingAnchor.constraint(equalTo: descriptionBlock.trailingAnchor, constant: -14),
+            episodeLabel.trailingAnchor.constraint(equalTo: descriptionBlock.trailingAnchor, constant: -20),
 
             titleLabel.topAnchor.constraint(equalTo: episodeLabel.bottomAnchor, constant: 2),
             titleLeading,
-            titleLabel.trailingAnchor.constraint(equalTo: descriptionBlock.trailingAnchor, constant: -14),
+            titleLabel.trailingAnchor.constraint(equalTo: descriptionBlock.trailingAnchor, constant: -20),
 
             summaryLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             summaryLeading,
-            summaryLabel.trailingAnchor.constraint(equalTo: descriptionBlock.trailingAnchor, constant: -14),
+            summaryLabel.trailingAnchor.constraint(equalTo: descriptionBlock.trailingAnchor, constant: -20),
 
             footerRow.topAnchor.constraint(equalTo: summaryLabel.bottomAnchor, constant: 5),
             footerLeading,
-            footerRow.trailingAnchor.constraint(lessThanOrEqualTo: descriptionBlock.trailingAnchor, constant: -14),
+            footerRow.trailingAnchor.constraint(lessThanOrEqualTo: descriptionBlock.trailingAnchor, constant: -20),
             descriptionBlock.bottomAnchor.constraint(equalTo: footerRow.bottomAnchor, constant: 14),
         ])
     }
@@ -347,6 +373,7 @@ final class EpisodeCell: UIView {
 
     func configure(episode: MediaItem, showSeasonPrefix: Bool = false) {
         // The description starts unfocusable; see applyReachability.
+        setTrailerLayout(false)
         subtypeIcon.isHidden = true
         splitFocus = true
         descriptionBlock.isFocusEligible = false
@@ -408,9 +435,11 @@ final class EpisodeCell: UIView {
     func configure(trailer: BelowFoldTrailer) {
         // Trailers keep a single focus stop on the thumb (no description target).
         splitFocus = false
+        setTrailerLayout(true)
         descriptionBlock.isFocusEligible = false
         episodeLabel.text = nil
         episodeLabel.isHidden = true
+        trailerTitleLabel.text = trailer.title
         titleLabel.text = trailer.title
         summaryLabel.text = nil
         summaryLabel.isHidden = true
@@ -444,6 +473,16 @@ final class EpisodeCell: UIView {
                 }
             }
         }
+    }
+
+    /// A trailer is a taller thumb with its title inside and no description block below.
+    private func setTrailerLayout(_ trailer: Bool) {
+        let height = trailer ? Self.trailerThumbHeight : Self.thumbHeight
+        thumbHeightConstraint.constant = height
+        thumbnailCard.contentSize = CGSize(width: Self.cardWidth + MediaRowMetrics.focusGrowth, height: height)
+        trailerScrim.isHidden = !trailer
+        trailerTitleLabel.isHidden = !trailer
+        descriptionBlock.isHidden = trailer
     }
 
     // MARK: - Focus visuals
@@ -535,6 +574,19 @@ final class EpisodeCell: UIView {
         formatter.dateFormat = "MMM d, yyyy"
         return formatter
     }()
+}
+
+/// Bottom darkening behind a trailer's in-card title.
+private final class TrailerScrimView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        let layer = self.layer as! CAGradientLayer
+        layer.colors = [UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.6).cgColor]
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 private final class PaddingLabel: UILabel {
