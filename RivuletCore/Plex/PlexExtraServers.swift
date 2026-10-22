@@ -124,5 +124,6 @@ final class PlexExtraServers {
         }
         guard changed else { return }
         Self.onChanged?()
+        LiveTVDataStore.shared.plexContentTokenChanged()
     }
 }

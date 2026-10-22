@@ -268,15 +268,15 @@ enum SettingsDescriptorStore {
         // MARK: Servers
         "plexServer": SettingDescriptor(
             icon: "server.rack",
-            description: "Manage your Plex server connection, switch to another server on your account, or sign out."
-        ),
-        "plexServerPicker": SettingDescriptor(
-            icon: "server.rack",
-            description: "The Plex server Rivulet browses and plays from. Choose another server on your account to switch to it."
+            description: "Every Plex server on your account. Select one to see its details."
         ),
         "plexServerOption": SettingDescriptor(
             icon: "server.rack",
-            description: "Switch to this server. Home and your libraries reload from it. A server shared with you shows who owns it."
+            description: "See this server's details. A server shared with you shows who owns it."
+        ),
+        "plexServerRefresh": SettingDescriptor(
+            icon: "arrow.clockwise",
+            description: "Ask Plex for this server's latest status."
         ),
         "plexServersLoading": SettingDescriptor(
             icon: "server.rack",
@@ -288,7 +288,7 @@ enum SettingsDescriptorStore {
         ),
         "signOut": SettingDescriptor(
             icon: "rectangle.portrait.and.arrow.right",
-            description: "Sign out of your Plex server and remove all saved credentials. You'll need to sign in again to access your media."
+            description: "Sign out of your Plex account. Every Plex server on it leaves Rivulet until you sign in again."
         ),
         "jellyfinServer": SettingDescriptor(
             icon: "server.rack",
@@ -492,7 +492,7 @@ enum SettingsDescriptorStore {
         case .servers: return ("server.rack", .systemOrange)
         case .about: return ("info.circle.fill", .systemGray)
         case .plex: return ("server.rack", .systemOrange)
-        case .plexServerPicker: return ("server.rack", .systemOrange)
+        case .plexServerDetail: return ("server.rack", .systemOrange)
         case .jellyfin: return ("server.rack", .systemPurple)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)

@@ -94,8 +94,8 @@ class LiveTVDataStore: ObservableObject {
     /// Bumped when the source set changes. A load started for an older set is
     /// cancelled; one for the current set is waited on (see `loadChannels`).
     private var providersGeneration = 0
-    /// Server and token the Plex source was confirmed under; nil while there is none.
-    private var plexSourceKey: String?
+    /// Servers and tokens the Plex sources were checked under.
+    private var plexSourceKeys: Set<String> = []
     private var plexSync: Task<Void, Never>?
     /// IPTV sources kept from a restricted profile; still saved, back on an unrestricted one.
     private var withheldIPTVProviders: [String: any LiveTVProvider] = [:]
@@ -494,36 +494,51 @@ class LiveTVDataStore: ObservableObject {
         }
     }
 
-    /// The Plex content token changed (sign-in, sign-out, server or profile
-    /// switch): the server's DVR, when `/livetv/dvrs` lists one, is the Plex
-    /// source, found again under the new token. IPTV sources hold no Plex
-    /// token and only move for a restricted profile.
+    /// The Plex content token or the account's servers changed (sign-in,
+    /// sign-out, server or profile switch): each server whose `/livetv/dvrs`
+    /// lists a DVR is a Plex source, found again under the new tokens. IPTV
+    /// sources hold no Plex token and only move for a restricted profile.
     func plexContentTokenChanged() {
         let restrictionsChanged = applyProfileRestrictions()
         let auth = PlexAuthManager.shared
-        let key = Self.plexSourceKey(serverURL: auth.selectedServerURL, token: auth.selectedServerToken)
-        if key != nil, key == plexSourceKey {
+        var servers: [(key: String, url: String, token: String, name: String)] = []
+        if let key = Self.plexSourceKey(serverURL: auth.selectedServerURL, token: auth.selectedServerToken),
+           let url = auth.selectedServerURL, let token = auth.selectedServerToken {
+            servers.append((key, url, token, auth.savedServerName ?? "Plex"))
+        }
+        for extra in PlexExtraServers.shared.current {
+            guard let token = PlexExtraServers.shared.token(for: extra),
+                  let key = Self.plexSourceKey(serverURL: extra.url, token: token) else { continue }
+            servers.append((key, extra.url, token, extra.name))
+        }
+        let keys = Set(servers.map(\.key))
+        if !keys.isEmpty, keys == plexSourceKeys {
             if restrictionsChanged { reloadSources() }
             return
         }
         plexSync?.cancel()
-        plexSourceKey = nil
+        plexSourceKeys = []
         let stale = Set(providers.filter { $0.value.sourceType == .plex }.keys)
         dropSources(stale)
-        guard let key, let serverURL = auth.selectedServerURL, let token = auth.selectedServerToken else {
+        guard !servers.isEmpty else {
             if restrictionsChanged || !stale.isEmpty { reloadSources() }
             return
         }
-        let name = auth.savedServerName ?? "Plex"
         plexSync = Task { [weak self] in
-            let hasDVR = await PlexLiveTVProvider.checkAvailability(serverURL: serverURL, authToken: token)
+            let hasDVR = await withTaskGroup(of: (Int, Bool).self) { group in
+                for (index, server) in servers.enumerated() {
+                    group.addTask { (index, await PlexLiveTVProvider.checkAvailability(serverURL: server.url, authToken: server.token)) }
+                }
+                return await group.reduce(into: Set<Int>()) { if $1.1 { $0.insert($1.0) } }
+            }
             guard let self, !Task.isCancelled else { return }
-            if hasDVR {
-                let provider = PlexLiveTVProvider(serverURL: serverURL, authToken: token, serverName: name)
-                plexSourceKey = key
+            for index in hasDVR.sorted() {
+                let server = servers[index]
+                let provider = PlexLiveTVProvider(serverURL: server.url, authToken: server.token, serverName: server.name)
                 providers[provider.sourceId] = provider
             }
-            if hasDVR || restrictionsChanged || !stale.isEmpty { reloadSources() }
+            plexSourceKeys = keys
+            if !hasDVR.isEmpty || restrictionsChanged || !stale.isEmpty { reloadSources() }
         }
     }
 

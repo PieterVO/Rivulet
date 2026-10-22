@@ -113,7 +113,7 @@ final class PlexServerSwitchTests: XCTestCase {
     // MARK: Settings wiring
 
     func test_pickerRows_haveDescriptors() {
-        for id in ["plexServerPicker", "plexServer_abc123", "plexServersLoading", "plexServersRetry"] {
+        for id in ["plexServer", "plexServer_abc123", "plexServersLoading", "plexServersRetry"] {
             XCTAssertNotNil(SettingsDescriptorStore.descriptor(for: id), "\(id) has no description panel entry")
         }
     }

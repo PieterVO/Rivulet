@@ -174,7 +174,7 @@ enum SettingsContent {
 
     /// Rows a restricted (managed) Plex profile does not get: other servers,
     /// sources, sign-out, and the parental controls themselves.
-    static let ownerOnlyRowIDs: Set<String> = ["cat_servers", "liveTVSources", "cat_contentFilter", "profilePickerOnLaunch"]
+    static let ownerOnlyRowIDs: Set<String> = ["cat_servers", "liveTVSources", "hdr_Filtering", "cat_contentFilter", "profilePickerOnLaunch"]
 
     static func rows(for page: SettingsPage) -> [SettingsRowItem] {
         let rows = allRows(for: page)
@@ -191,7 +191,7 @@ enum SettingsContent {
         case .music:       return music
         case .servers:     return servers
         case .plex:        return plex
-        case .plexServerPicker: return plexServerPicker
+        case .plexServerDetail: return plexServerDetail
         case .jellyfin:    return jellyfin
         case .libraries:   return libraries
         case .homeRows:    return homeRows
@@ -460,13 +460,29 @@ enum SettingsContent {
 
     private static var playback: [SettingsRowItem] {
         let subtitlesOn = { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent) != .off }
-        // Leading block unheaded, like Appearance; the rest grouped under
-        // headers whose titles the rows then drop ("Intro" under AUTO-SKIP).
+        // Grouped under headers whose titles the rows then drop ("Intro" under AUTO-SKIP).
         return [
-            SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
-                            kind: .navigationValue(.contentFilter, value: {
-                                SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
+            .header("Audio & Subtitles"),
+            SettingsRowItem(id: "audioLanguage", title: "Audio Language",
+                            kind: .navigationValue(.audioLanguagePicker, value: {
+                                audioLanguageName(TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language))
                             })),
+            SettingsRowItem(id: "subtitleMode", title: "Subtitles",
+                            kind: .navigationValue(.subtitleModePicker, value: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).rawValue })),
+            SettingsRowItem(id: "subtitleLanguage", title: "Subtitle Language",
+                            kind: .navigationValue(.subtitleLanguagePicker, value: {
+                                TrackLanguage.displayName(TrackLanguage.normalize(subtitleLanguage))
+                            }), isEnabled: subtitlesOn),
+            SettingsRowItem(id: "subtitleSDH", title: "SDH Subtitles",
+                            kind: .toggle(get: { subtitleSDH },
+                                          set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
+                            isEnabled: subtitlesOn),
+            .header("Resume"),
+            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
+            // The prompt only has anything to interrupt while a Continue
+            // Watching tile plays on Select, so it dims with Instant Resume off.
+            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
+                   enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
             .header("Streaming Quality"),
             SettingsRowItem(id: "homeStreamingQuality", title: "Home",
                             kind: .navigationValue(.homeQualityPicker, value: {
@@ -491,21 +507,6 @@ enum SettingsContent {
             toggle("autoSkipAds", "Ads", key: "autoSkipAds", default: false),
             toggle("autoSkipRecap", "Recap", key: "autoSkipRecap", default: false),
             toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
-            .header("Audio & Subtitles"),
-            SettingsRowItem(id: "audioLanguage", title: "Audio Language",
-                            kind: .navigationValue(.audioLanguagePicker, value: {
-                                audioLanguageName(TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language))
-                            })),
-            SettingsRowItem(id: "subtitleMode", title: "Subtitles",
-                            kind: .navigationValue(.subtitleModePicker, value: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).rawValue })),
-            SettingsRowItem(id: "subtitleLanguage", title: "Subtitle Language",
-                            kind: .navigationValue(.subtitleLanguagePicker, value: {
-                                TrackLanguage.displayName(TrackLanguage.normalize(subtitleLanguage))
-                            }), isEnabled: subtitlesOn),
-            SettingsRowItem(id: "subtitleSDH", title: "SDH Subtitles",
-                            kind: .toggle(get: { subtitleSDH },
-                                          set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
-                            isEnabled: subtitlesOn),
             .header("Autoplay"),
             SettingsRowItem(id: "autoplayCountdown", title: "Countdown",
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
@@ -514,16 +515,15 @@ enum SettingsContent {
             SettingsRowItem(id: "autoplayLimit", title: "Limit",
                             kind: .navigationValue(.autoplayLimitPicker, value: { AutoplayLimit.current.description })),
             toggle("showPostVideoUpNext", "Up Next Panel", key: "showPostVideoUpNext", default: true),
-            .header("Resume"),
-            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
-            // The prompt only has anything to interrupt while a Continue
-            // Watching tile plays on Select, so it dims with Instant Resume off.
-            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
-                   enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
             .header("Home Theater"),
             toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: true),
             SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
                             kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
+            .header("Filtering"),
+            SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
+                            kind: .navigationValue(.contentFilter, value: {
+                                SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
+                            })),
         ]
     }
 
@@ -673,7 +673,7 @@ enum SettingsContent {
 
     private static var servers: [SettingsRowItem] {
         [
-            SettingsRowItem(id: "plexServer", title: "Plex Server", kind: .navigation(.plex)),
+            SettingsRowItem(id: "plexServer", title: "Plex", kind: .navigation(.plex)),
             SettingsRowItem(
                 id: "jellyfinServer", title: "Jellyfin Server",
                 kind: .navigationAction(.jellyfin,
@@ -686,27 +686,7 @@ enum SettingsContent {
 
     private static var plex: [SettingsRowItem] {
         let auth = PlexAuthManager.shared
-        if auth.isAuthenticated {
-            var rows: [SettingsRowItem] = []
-            rows.append(SettingsRowItem(id: "plexServerPicker", title: "Server",
-                                        kind: .navigationValue(.plexServerPicker, value: {
-                PlexAuthManager.shared.savedServerName ?? ""
-            })))
-            rows.append(SettingsRowItem(id: "signOut", title: "Sign Out",
-                                        kind: .action(destructive: true, handler: { vc in
-                // Ask first. An accidental Select must not sign out.
-                presentConfirm(on: vc, title: "Sign Out of Plex?",
-                               message: "You can sign in again from this page.",
-                               confirmTitle: "Sign Out", destructive: true) {
-                    PlexAuthManager.shared.signOut()
-                    // Rebuild the page in place so it flips to "Connect to Plex"
-                    // immediately (Sign Out is an in-place action — unlike the
-                    // sign-in modal, nothing else triggers viewWillAppear here).
-                    (vc as? SettingsPageViewController)?.reloadRows()
-                }
-            })))
-            return rows
-        } else {
+        guard auth.isAuthenticated else {
             return [
                 SettingsRowItem(id: "connectPlex", title: "Connect to Plex",
                                 kind: .action(destructive: false, handler: { presenter in
@@ -716,18 +696,31 @@ enum SettingsContent {
                 }))
             ]
         }
+        return plexServerRows + [
+            SettingsRowItem(id: "signOut", title: "Sign Out",
+                            kind: .action(destructive: true, handler: { vc in
+                // Ask first. An accidental Select must not sign out.
+                presentConfirm(on: vc, title: "Sign Out of Plex?",
+                               message: "This signs out of every Plex server on your account.",
+                               confirmTitle: "Sign Out", destructive: true) {
+                    PlexAuthManager.shared.signOut()
+                    // Sign Out is in place, so nothing else rebuilds the page.
+                    (vc as? SettingsPageViewController)?.reloadRows()
+                }
+            }))
+        ]
     }
 
-    // MARK: Plex server picker
+    // MARK: Plex servers
 
     /// The servers on the account. The page loads them each time it opens.
     /// The value is nil until they arrive.
     private static var plexServers: [PlexDevice]?
     private static var plexServersFailed = false
-    /// The server of the current switch. The page ignores other selections until the switch completes.
-    private static var connectingPlexServerID: String?
+    /// The server whose page is open, stashed by its row's `prepare`.
+    private static var pendingPlexServer: PlexDevice?
 
-    private static var plexServerPicker: [SettingsRowItem] {
+    private static var plexServerRows: [SettingsRowItem] {
         // This row can get focus. The container sets focus only on push.
         // If no row can get focus, focus is lost when the servers arrive.
         guard let servers = plexServers, !servers.isEmpty else {
@@ -742,14 +735,50 @@ enum SettingsContent {
                                     kind: .action(destructive: false, handler: { _ in }))]
         }
         return servers.map { server in
-            SettingsRowItem(id: "plexServer_\(server.clientIdentifier)", title: server.name, kind: .selectable(
-                isSelected: { connectingPlexServerID == nil && PlexAuthManager.shared.isCurrentServer(server) },
-                value: {
-                    if connectingPlexServerID == server.clientIdentifier { return "Connecting…" }
-                    return server.owned == false ? server.sourceTitle : nil
-                },
-                handler: { vc in switchPlexServer(to: server, on: vc) }))
+            SettingsRowItem(id: "plexServer_\(server.clientIdentifier)", title: server.name,
+                            kind: .navigationAction(.plexServerDetail,
+                                                    value: { server.owned == false ? server.sourceTitle ?? "" : "" },
+                                                    prepare: { pendingPlexServer = server }))
         }
+    }
+
+    private static var plexServerDetail: [SettingsRowItem] {
+        guard let server = pendingPlexServer else { return [] }
+        let auth = PlexAuthManager.shared
+        let url = auth.isCurrentServer(server) ? auth.selectedServerURL
+            : PlexExtraServers.shared.current.first { $0.machineID == server.machineIdentifier }?.url
+        let connection = url.flatMap { url in server.connections?.first { url.contains($0.address) || url == $0.uri } }
+        let liveTV = url.flatMap { url in LiveTVDataStore.shared.sources.first { $0.id == "plex:\(url)" } }
+        var rows: [SettingsRowItem] = [
+            info("plexServerStatus", "Status", server.presence == false ? "Offline" : "Online"),
+            info("plexServerOwner", "Owner", server.owned == false ? (server.sourceTitle ?? "Shared") : "You"),
+            info("plexServerVersion", "Version", server.productVersion)
+        ]
+        if let platform = server.platform {
+            rows.append(info("plexServerPlatform", "Platform", [platform, server.platformVersion].compactMap { $0 }.joined(separator: " ")))
+        }
+        if let connection {
+            let kind = connection.relay ? "Relay" : connection.local ? "Local" : "Remote"
+            rows.append(info("plexServerConnection", "Connection", connection.protocolType == "https" ? "\(kind), Secure" : kind))
+        }
+        rows.append(info("plexServerLiveTV", "Live TV", liveTV.map { "\($0.channelCount) Channels" } ?? "No DVR"))
+        if let created = ISO8601DateFormatter().date(from: server.createdAt) {
+            rows.append(info("plexServerCreated", "On Plex Since", created.formatted(date: .abbreviated, time: .omitted)))
+        }
+        // The page needs one focusable row, or focus has nowhere to land.
+        rows.append(SettingsRowItem(id: "plexServerRefresh", title: "Refresh", kind: .action(destructive: false, handler: { vc in
+            loadPlexServers { [weak vc] in
+                if let fresh = plexServers?.first(where: { $0.clientIdentifier == server.clientIdentifier }) {
+                    pendingPlexServer = fresh
+                }
+                (vc as? SettingsPageViewController)?.reloadRows()
+            }
+        })))
+        return rows
+    }
+
+    private static func info(_ id: String, _ title: String, _ value: String) -> SettingsRowItem {
+        SettingsRowItem(id: id, title: title, kind: .info(value: { value }))
     }
 
     private static func loadPlexServers(reload: @escaping () -> Void) {
@@ -764,24 +793,6 @@ enum SettingsContent {
                 plexServersFailed = true
             }
             reload()
-        }
-    }
-
-    private static func switchPlexServer(to server: PlexDevice, on vc: UIViewController) {
-        guard connectingPlexServerID == nil, !PlexAuthManager.shared.isCurrentServer(server) else { return }
-        let current = PlexAuthManager.shared.savedServerName ?? "your current server"
-        connectingPlexServerID = server.clientIdentifier
-        (vc as? SettingsPageViewController)?.reloadRows()
-        Task { @MainActor [weak vc] in
-            let switched = await PlexDataStore.shared.switchServer(to: server)
-            connectingPlexServerID = nil
-            guard let page = vc as? SettingsPageViewController else { return }
-            page.reloadRows()
-            guard !switched else { return }
-            page.present(ConfirmationPopupViewController(
-                title: "Couldn’t Connect",
-                message: "\(server.name) isn’t reachable right now. Rivulet is still using \(current).",
-                confirmTitle: "OK", cancelTitle: nil, onConfirm: {}), animated: true)
         }
     }
 
@@ -1087,7 +1098,7 @@ enum SettingsContent {
             // failure text must not survive leaving the flow.
             resetAddSourceFlow()
             reload()
-        case .plexServerPicker:
+        case .plex where PlexAuthManager.shared.isAuthenticated:
             loadPlexServers(reload: reload)
         case .liveTVFavorites where LiveTVDataStore.shared.channels.isEmpty:
             // Settings can open before Live TV has loaded its channels.
