@@ -149,7 +149,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.1.0 (104)", [
+        ("1.1.0 (105)", [
             "Initial multiserver support. I've tested, but don't regularly use multiple servers, so please provide feedback and bugs on GitHub.",
             "Top Shelf now shows Continue Watching from all servers (including Jellyfin).",
             "Added new ratings card at the bottom of an item's page.",
