@@ -177,4 +177,30 @@ final class MediaSourceQualityBadgesTests: XCTestCase {
         )
         XCTAssertTrue(source.qualityBadges().isEmpty)
     }
+
+    private func source(range: VideoTrack.VideoRange, hdr10Plus: Bool) -> MediaSource {
+        let video = VideoTrack(
+            id: "v1", codec: "hevc", profile: "Main 10", level: nil,
+            width: 3840, height: 2160, frameRate: 24, bitrate: nil,
+            videoRange: range, isDefault: true, scanType: "progressive", hasHDR10Plus: hdr10Plus
+        )
+        return MediaSource(
+            id: "1", container: "mkv", duration: 7200,
+            bitrate: nil, fileSize: nil, fileName: nil, videoResolution: "4k",
+            videoTracks: [video], audioTracks: [], subtitleTracks: [],
+            streamKind: .directPlay, streamURL: nil
+        )
+    }
+
+    func test_dolbyVisionWithHDR10Plus_showsBoth() {
+        XCTAssertEqual(source(range: .dolbyVision(profile: 8), hdr10Plus: true).qualityBadges(), ["4K", "DV", "HDR10+"])
+    }
+
+    func test_hdr10Plus_isNamed() {
+        XCTAssertEqual(source(range: .hdr10Plus, hdr10Plus: true).qualityBadges(), ["4K", "HDR10+"])
+    }
+
+    func test_dolbyVisionWithoutHDR10Plus_showsDVOnly() {
+        XCTAssertEqual(source(range: .dolbyVision(profile: 8), hdr10Plus: false).qualityBadges(), ["4K", "DV"])
+    }
 }

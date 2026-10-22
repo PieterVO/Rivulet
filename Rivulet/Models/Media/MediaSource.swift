@@ -40,19 +40,24 @@ extension MediaSource {
     /// Display badges for the hero quality row, e.g. ["4K", "DV", "E-AC3 5.1"].
     /// Order is stable: resolution first, then HDR/range, then audio.
     func qualityBadges() -> [String] {
-        [resolutionBadge, rangeBadge, audioBadge].compactMap { $0 }
+        ([resolutionBadge] + rangeBadges + [audioBadge]).compactMap { $0 }
     }
 
     var resolutionBadge: String? { videoTracks.first.flatMap(resolutionLabel) }
 
-    var rangeBadge: String? {
-        switch videoTracks.first?.videoRange {
-        case .dolbyVision: "DV"
-        case .hdr10, .hdr10Plus: "HDR"
-        case .hlg: "HLG"
-        case .sdr, nil: nil
+    /// Range badges; a Dolby Vision file that also carries HDR10+ gets both (#371).
+    var rangeBadges: [String] {
+        guard let video = videoTracks.first else { return [] }
+        switch video.videoRange {
+        case .dolbyVision: return video.hasHDR10Plus ? ["DV", "HDR10+"] : ["DV"]
+        case .hdr10Plus: return ["HDR10+"]
+        case .hdr10: return video.hasHDR10Plus ? ["HDR10+"] : ["HDR"]
+        case .hlg: return ["HLG"]
+        case .sdr: return []
         }
     }
+
+    var rangeBadge: String? { rangeBadges.isEmpty ? nil : rangeBadges.joined(separator: " · ") }
 
     var audioBadge: String? {
         (audioTracks.first(where: { $0.isDefault }) ?? audioTracks.first)?.qualityLabel

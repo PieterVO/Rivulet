@@ -170,6 +170,13 @@ final class JellyfinMediaMapperTests: XCTestCase {
         return JellyfinMediaMapper.videoTrack(stream)?.videoRange
     }
 
+    func test_dolbyVisionWithHDR10Plus_keepsHDR10PlusFlag() {
+        let stream: JFMediaStream = JellyfinFixtures.decode(JellyfinFixtures.videoStream(rangeType: "DOVIWithHDR10Plus", transfer: "smpte2084"))
+        let track = JellyfinMediaMapper.videoTrack(stream)
+        XCTAssertEqual(track?.videoRange, .dolbyVision(profile: 0))
+        XCTAssertEqual(track?.hasHDR10Plus, true)
+    }
+
     func test_dolbyVisionVariants_mapToDolbyVision() {
         XCTAssertEqual(range("DOVI", transfer: "smpte2084"), .dolbyVision(profile: 0))
         XCTAssertEqual(range("DOVIWithHDR10", transfer: "smpte2084"), .dolbyVision(profile: 0))

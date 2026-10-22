@@ -22,6 +22,8 @@ struct VideoTrack: Hashable, Sendable, Identifiable {
     let videoRange: VideoRange
     let isDefault: Bool
     let scanType: String?           // Plex "progressive" / "interlaced"; nil if unknown
+    /// HDR10+ dynamic metadata alongside the range, e.g. a Dolby Vision file that also carries HDR10+.
+    var hasHDR10Plus = false
 
     var isInterlaced: Bool { scanType?.lowercased() == "interlaced" }
 

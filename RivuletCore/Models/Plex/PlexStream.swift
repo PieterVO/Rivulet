@@ -49,6 +49,7 @@ nonisolated struct PlexStream: Codable, Identifiable, Sendable {
     let DOVIProfile: Int?
     let DOVIRPUPresent: Bool?
     let DOVIVersion: String?
+    let HDR10PlusPresent: Bool?
     let frameRate: Double?
     let height: Int?
     let width: Int?
@@ -94,6 +95,7 @@ nonisolated struct PlexStream: Codable, Identifiable, Sendable {
         case DOVIBLCompatID, DOVIBLPresent, DOVIELPresent
         case DOVILevel, DOVIPresent, DOVIProfile
         case DOVIRPUPresent, DOVIVersion
+        case HDR10PlusPresent
         case frameRate, height, width, level, profile, refFrames, scanType
         case audioChannelLayout, channels, bitrate, samplingRate
         case format, key, extendedDisplayTitle, hearingImpaired
