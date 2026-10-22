@@ -462,6 +462,30 @@ enum SettingsContent {
                             kind: .navigationValue(.contentFilter, value: {
                                 SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
                             })),
+            .header("Streaming Quality"),
+            SettingsRowItem(id: "homeStreamingQuality", title: "Home",
+                            kind: .navigationValue(.homeQualityPicker, value: {
+                                StreamingQuality.setting(home: true).label
+                            })),
+            SettingsRowItem(id: "awayStreamingQuality", title: "Away",
+                            kind: .navigationValue(.awayQualityPicker, value: {
+                                StreamingQuality.setting(home: false).label
+                            })),
+            .header("Remote"),
+            SettingsRowItem(id: "skipLength", title: "Skip Forward",
+                            kind: .navigationValue(.skipIntervalPicker, value: {
+                                SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
+                            })),
+            SettingsRowItem(id: "skipBackLength", title: "Skip Back",
+                            kind: .navigationValue(.skipBackIntervalPicker, value: {
+                                SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
+                            })),
+            .header("Auto-Skip"),
+            toggle("autoSkipIntro", "Intro", key: "autoSkipIntro", default: false),
+            toggle("autoSkipCredits", "Credits", key: "autoSkipCredits", default: false),
+            toggle("autoSkipAds", "Ads", key: "autoSkipAds", default: false),
+            toggle("autoSkipRecap", "Recap", key: "autoSkipRecap", default: false),
+            toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
             .header("Audio & Subtitles"),
             SettingsRowItem(id: "audioLanguage", title: "Audio Language",
                             kind: .navigationValue(.audioLanguagePicker, value: {
@@ -477,40 +501,6 @@ enum SettingsContent {
                             kind: .toggle(get: { subtitleSDH },
                                           set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
                             isEnabled: subtitlesOn),
-            .header("Home Theater"),
-            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: true),
-            SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
-                            kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
-            .header("Auto-Skip"),
-            toggle("autoSkipIntro", "Intro", key: "autoSkipIntro", default: false),
-            toggle("autoSkipCredits", "Credits", key: "autoSkipCredits", default: false),
-            toggle("autoSkipAds", "Ads", key: "autoSkipAds", default: false),
-            toggle("autoSkipRecap", "Recap", key: "autoSkipRecap", default: false),
-            toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
-            .header("Remote"),
-            SettingsRowItem(id: "skipLength", title: "Skip Forward",
-                            kind: .navigationValue(.skipIntervalPicker, value: {
-                                SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
-                            })),
-            SettingsRowItem(id: "skipBackLength", title: "Skip Back",
-                            kind: .navigationValue(.skipBackIntervalPicker, value: {
-                                SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
-                            })),
-            .header("Streaming Quality"),
-            SettingsRowItem(id: "homeStreamingQuality", title: "Home",
-                            kind: .navigationValue(.homeQualityPicker, value: {
-                                StreamingQuality.setting(home: true).label
-                            })),
-            SettingsRowItem(id: "awayStreamingQuality", title: "Away",
-                            kind: .navigationValue(.awayQualityPicker, value: {
-                                StreamingQuality.setting(home: false).label
-                            })),
-            .header("Resume"),
-            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
-            // The prompt only has anything to interrupt while a Continue
-            // Watching tile plays on Select, so it dims with Instant Resume off.
-            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
-                   enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
             .header("Autoplay"),
             SettingsRowItem(id: "autoplayCountdown", title: "Countdown",
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
@@ -519,6 +509,16 @@ enum SettingsContent {
             SettingsRowItem(id: "autoplayLimit", title: "Limit",
                             kind: .navigationValue(.autoplayLimitPicker, value: { AutoplayLimit.current.description })),
             toggle("showPostVideoUpNext", "Up Next Panel", key: "showPostVideoUpNext", default: true),
+            .header("Resume"),
+            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
+            // The prompt only has anything to interrupt while a Continue
+            // Watching tile plays on Select, so it dims with Instant Resume off.
+            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
+                   enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
+            .header("Home Theater"),
+            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: true),
+            SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
+                            kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
         ]
     }
 
