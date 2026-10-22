@@ -11,6 +11,11 @@ enum IOSChangelog {
         ("1.0.7 (79)", [
             "Every Plex server on your account now shows in Home, Library and Search",
             "Continue Watching is now one row across all your servers, without duplicates",
+            "Add Xtream Codes IPTV sources in Live TV settings",
+            "Your Plex server's Live TV now shows up automatically",
+            "Live TV guide now loads days ahead and stays up to date",
+            "Fixed PIN-protected Plex Home profiles not opening",
+            "Updated AetherEngine to 7.44.0",
             "Fixed the Plex Live TV guide failing to load on slower servers",
             "Fixed a managed profile briefly showing the owner's library at launch",
             "Fixed libraries not loading when one is missing details",

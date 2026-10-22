@@ -150,11 +150,11 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (104)", [
-            "Every Plex server on your account now shows in the sidebar, Home and Search.",
-            "Continue Watching is now one row across all your servers, without duplicates.",
-            "Arrange libraries from all your servers in any order in Settings.",
-            "Top Shelf now shows Continue Watching from every server.",
-            "New ratings card with Rotten Tomatoes, IMDb, Metacritic and Letterboxd.",
+            "Initial multiserver support. I've tested, but don't regularly use multiple servers, so please provide feedback and bugs on GitHub.",
+            "Top Shelf now shows Continue Watching from all servers (including Jellyfin).",
+            "Added new ratings card at the bottom of an item's page.",
+            "Added clarity to settings options.",
+            "Reorganized Playback settings.",
             "With Height Speakers on, FEL videos now keep FEL and play without heights.",
             "New Dolby Vision FEL setting in Playback. Turn it off to keep heights instead.",
             "Fixed the player's Details panel showing SDR for Dolby Vision FEL videos.",
