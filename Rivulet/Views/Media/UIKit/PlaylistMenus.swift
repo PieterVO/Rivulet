@@ -13,23 +13,17 @@ import UIKit
 
 enum PlaylistMenus {
     enum PickerRow: Equatable { case newPlaylist, playlist(MediaPlaylist) }
-    enum EntryAction: Equatable { case playFromHere, move, remove }
-    enum PlaylistAction: Equatable { case play, shuffle, rename, delete }
+    typealias EntryAction = PlaylistRules.EntryAction
+    typealias PlaylistAction = PlaylistRules.PlaylistAction
 
     /// New Playlist first, then the regular playlists by title. Smart ones reject additions.
     static func pickerRows(playlists: [MediaPlaylist]) -> [PickerRow] {
-        [.newPlaylist] + playlists.filter { !$0.isSmart }
-            .sorted { $0.item.title.localizedCaseInsensitiveCompare($1.item.title) == .orderedAscending }
-            .map { .playlist($0) }
+        [.newPlaylist] + PlaylistRules.addTargets(playlists, isSmart: \.isSmart, title: \.item.title).map { .playlist($0) }
     }
 
-    static func entryActions(isSmart: Bool) -> [EntryAction] {
-        isSmart ? [.playFromHere] : [.playFromHere, .move, .remove]
-    }
+    static func entryActions(isSmart: Bool) -> [EntryAction] { PlaylistRules.entryActions(isSmart: isSmart) }
 
-    static func playlistTileActions(isSmart: Bool) -> [PlaylistAction] {
-        isSmart ? [.play, .shuffle, .delete] : [.play, .shuffle, .rename, .delete]
-    }
+    static func playlistTileActions(isSmart: Bool) -> [PlaylistAction] { PlaylistRules.playlistActions(isSmart: isSmart) }
 
     /// The tile kinds a playlist takes, on a server that has playlists. A folder's
     /// video entry is a playable file whatever its kind (a home video maps to `.unknown`).

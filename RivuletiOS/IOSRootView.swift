@@ -15,6 +15,7 @@ struct IOSRootView: View {
     @ObservedObject private var profiles = PlexUserProfileManager.shared
     @State private var choosingProfile = false
     @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
+    @AppStorage(IOSLibrarySettingsView.showPlaylistsKey) private var showPlaylists = true
     @State private var backgroundedAt: Date?
     /// The Library stack's path, so "Go to Downloads" can push the list from any tab.
     @State private var libraryPath = NavigationPath()
@@ -115,7 +116,7 @@ struct IOSRootView: View {
         .onChange(of: plex.libraries) { _, libraries in
             if !libraries.isEmpty { dropOrphanedLibraryTab() }
         }
-        .onChange(of: plex.videoPlaylists.keys.sorted()) { dropOrphanedLibraryTab() }
+        .onChange(of: playlistServers) { dropOrphanedLibraryTab() }
     }
 
     /// A sidebar library tab vanishes at compact width or on a server without that library.
@@ -134,7 +135,8 @@ struct IOSRootView: View {
 
     /// Servers with video playlists, by `serverID ?? ""`: the selected one first.
     private var playlistServers: [String] {
-        plex.videoPlaylists.keys.sorted { lhs, rhs in lhs.isEmpty || (!rhs.isEmpty && lhs < rhs) }
+        guard showPlaylists else { return [] }
+        return plex.videoPlaylists.keys.sorted { lhs, rhs in lhs.isEmpty || (!rhs.isEmpty && lhs < rhs) }
     }
 
     /// Movie and TV libraries only: iOS has no music player.

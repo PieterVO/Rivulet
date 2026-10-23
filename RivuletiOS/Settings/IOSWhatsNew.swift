@@ -10,6 +10,7 @@ enum IOSChangelog {
     static let entries: [(version: String, lines: [String])] = [
         // confirm build number at release
         ("1.0.7 (81)", [
+            "Video playlists: play, shuffle, add, reorder, rename and delete",
             "Updated AetherEngine to 7.46.0",
         ]),
         ("1.0.7 (80)", [

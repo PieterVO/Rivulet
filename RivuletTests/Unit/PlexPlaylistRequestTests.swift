@@ -77,9 +77,9 @@ final class PlexPlaylistRequestTests: XCTestCase {
     // Plex `after` is the entry that precedes the moved one once it lands.
     func test_moveAfter_derivesPrecedingEntry() {
         let ids = ["a", "b", "c", "d"]
-        XCTAssertNil(PlexProvider.moveAfter(entryID: "c", toIndex: 0, in: ids))
-        XCTAssertEqual(PlexProvider.moveAfter(entryID: "a", toIndex: 2, in: ids), "c")
-        XCTAssertEqual(PlexProvider.moveAfter(entryID: "d", toIndex: 1, in: ids), "a")
-        XCTAssertEqual(PlexProvider.moveAfter(entryID: "b", toIndex: 3, in: ids), "d")
+        XCTAssertNil(PlexNetworkManager.moveAfter(entryID: "c", toIndex: 0, in: ids))
+        XCTAssertEqual(PlexNetworkManager.moveAfter(entryID: "a", toIndex: 2, in: ids), "c")
+        XCTAssertEqual(PlexNetworkManager.moveAfter(entryID: "d", toIndex: 1, in: ids), "a")
+        XCTAssertEqual(PlexNetworkManager.moveAfter(entryID: "b", toIndex: 3, in: ids), "d")
     }
 }

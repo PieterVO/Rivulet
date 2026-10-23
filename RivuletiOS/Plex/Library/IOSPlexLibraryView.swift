@@ -8,6 +8,7 @@ import SwiftUI
 struct IOSPlexLibrariesView: View {
     @EnvironmentObject private var plex: IOSPlexSession
     @EnvironmentObject private var downloads: IOSDownloadCenter
+    @AppStorage(IOSLibrarySettingsView.showPlaylistsKey) private var showPlaylists = true
 
     var body: some View {
         Group {
@@ -33,7 +34,7 @@ struct IOSPlexLibrariesView: View {
                                         Label(library.title, systemImage: library.icon)
                                     }
                                 }
-                                if !plex.playlists(serverID: group.serverID).isEmpty {
+                                if showPlaylists, !plex.playlists(serverID: group.serverID).isEmpty {
                                     NavigationLink(value: IOSPlexPlaylistsRoute(serverID: group.serverID)) {
                                         Label("Playlists", systemImage: "list.and.film")
                                     }

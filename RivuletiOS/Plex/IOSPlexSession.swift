@@ -236,6 +236,11 @@ final class IOSPlexSession: ObservableObject {
         await refresh()
     }
 
+    /// After a playlist edit: the Library rows and sidebar tabs follow the new lists.
+    func refreshPlaylists() async {
+        videoPlaylists = await fetchVideoPlaylists()
+    }
+
     /// A server or profile switch: open pages belong to the old one, so the tab stacks reset.
     func contentSessionChanged() { sessionGeneration += 1 }
 

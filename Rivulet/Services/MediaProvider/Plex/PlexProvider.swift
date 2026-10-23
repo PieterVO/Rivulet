@@ -599,20 +599,13 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
     }
 
     func movePlaylistEntry(_ playlist: MediaItemRef, entryID: String, toIndex: Int, in entries: [PlaylistEntry]) async throws {
-        let after = Self.moveAfter(entryID: entryID, toIndex: toIndex, in: entries.map(\.entryID))
+        let after = PlexNetworkManager.moveAfter(entryID: entryID, toIndex: toIndex, in: entries.map(\.entryID))
         try await plexCall {
             try await networkManager.movePlaylistItem(
                 serverURL: serverURL, authToken: authToken, playlistRatingKey: playlist.itemID,
                 playlistItemID: entryID, after: after
             )
         }
-    }
-
-    /// The row the moved one lands after, nil for the top: what Plex's `after` takes.
-    nonisolated static func moveAfter(entryID: String, toIndex: Int, in entryIDs: [String]) -> String? {
-        let others = entryIDs.filter { $0 != entryID }
-        let landed = min(max(toIndex, 0), others.count)
-        return landed > 0 ? others[landed - 1] : nil
     }
 
     func renamePlaylist(_ playlist: MediaItemRef, title: String) async throws {

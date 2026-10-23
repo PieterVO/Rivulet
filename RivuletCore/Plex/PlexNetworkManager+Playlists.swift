@@ -160,6 +160,13 @@ extension PlexNetworkManager {
         _ = try await requestData(url, method: "DELETE", headers: plexHeaders(authToken: authToken))
     }
 
+    /// The row the moved one lands after, nil for the top: what `after` takes.
+    nonisolated static func moveAfter(entryID: String, toIndex: Int, in entryIDs: [String]) -> String? {
+        let others = entryIDs.filter { $0 != entryID }
+        let landed = min(max(toIndex, 0), others.count)
+        return landed > 0 ? others[landed - 1] : nil
+    }
+
     /// The `uri` a playlist write takes. The host is the SERVER's machine identifier.
     nonisolated static func libraryURI(machineIdentifier: String, ratingKeys: [String]) -> String {
         "server://\(machineIdentifier)/com.plexapp.plugins.library/library/metadata/\(ratingKeys.joined(separator: ","))"

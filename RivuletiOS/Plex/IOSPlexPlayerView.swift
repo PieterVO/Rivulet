@@ -18,7 +18,7 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
     @Published private(set) var chosenSubtitleID: Int?
     var onItemChange: (() -> Void)?
     /// A playlist plays through this instead of the show's next episode.
-    private(set) var queue: PlayQueue<PlexMetadata>?
+    @Published private(set) var queue: PlayQueue<PlexMetadata>?
 
     private let plex: IOSPlexSession
     private var skippedMarkerIDs: Set<String> = []
@@ -451,6 +451,16 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
 
     func playNext() {
         guard let next = nextEpisode else { return }
+        switchItem(to: next, queueIndex: queue.map { $0.index + 1 })
+    }
+
+    /// The Playlist pane's pick, by position: a title can be in the list twice.
+    func playEntry(at index: Int) {
+        guard let queue, queue.entries.indices.contains(index), index != queue.index else { return }
+        switchItem(to: queue.entries[index], queueIndex: index)
+    }
+
+    private func switchItem(to next: PlexMetadata, queueIndex: Int?) {
         countdownTask?.cancel()
         upNextCountdown = nil
         finishItem(at: player.currentTime)
@@ -466,7 +476,7 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
             let plex = plex
             Task { await plex.stopTranscode(previous) }
             request = nextRequest
-            queue?.advance()
+            if let queueIndex { queue?.jump(to: queueIndex) }
             chosenAudioID = nil
             chosenSubtitleID = nil
             didFallBack = false
@@ -488,6 +498,7 @@ private struct IOSPlexPlayerScreen: View {
     @ObservedObject var player: AetherPlayer
     @ObservedObject var controller: IOSPlaybackController
     @State private var captionStyle = CaptionAppearance.current()
+    @State private var showsPlaylist = false
 
     var body: some View {
         let item = session.request.item
@@ -543,6 +554,24 @@ private struct IOSPlexPlayerScreen: View {
                     fillsScreen: player.fillsScreen
                 )
             }
+        } trailing: {
+            if session.queue != nil {
+                Button { showsPlaylist = true } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                }
+                .accessibilityLabel("Playlist")
+            }
+        }
+        .sheet(isPresented: $showsPlaylist) {
+            if let queue = session.queue {
+                IOSPlayerPlaylistPane(queue: queue) { index in
+                    showsPlaylist = false
+                    session.playEntry(at: index)
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: CaptionAppearance.changedNotification)) { _ in
             captionStyle = CaptionAppearance.current()
@@ -575,5 +604,61 @@ private struct IOSPlexPlayerScreen: View {
             )
         }
         return nil
+    }
+}
+
+/// The playlist around the playing entry: 5 before it and 30 after, as on tvOS.
+private struct IOSPlayerPlaylistPane: View {
+    let queue: PlayQueue<PlexMetadata>
+    let onPick: (Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(Array(window), id: \.self) { index in
+                        let item = queue.entries[index]
+                        Button { onPick(index) } label: {
+                            HStack(spacing: 12) {
+                                IOSPlexArtwork(item: item, kind: item.type == "episode" ? .thumb : .backdrop,
+                                               width: 96, aspectRatio: 16 / 9)
+                                    .frame(width: 96, height: 54)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.displayTitle).font(.headline).lineLimit(2)
+                                    if let subtitle = item.subtitle {
+                                        Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                                if index == queue.index {
+                                    Image(systemName: "speaker.wave.2.fill").foregroundStyle(.tint)
+                                        .accessibilityLabel("Now Playing")
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(index == queue.index)
+                        .id(index)
+                    }
+                }
+                .listStyle(.plain)
+                .onAppear { proxy.scrollTo(queue.index, anchor: .top) }
+            }
+            .navigationTitle("Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(role: .confirm) { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var window: Range<Int> {
+        max(0, queue.index - 5)..<min(queue.entries.count, queue.index + 31)
     }
 }

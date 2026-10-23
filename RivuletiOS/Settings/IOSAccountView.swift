@@ -28,6 +28,11 @@ struct IOSAccountView: View {
                         Label("Home", systemImage: "house")
                     }
                     NavigationLink {
+                        IOSLibrarySettingsView()
+                    } label: {
+                        Label("Library", systemImage: "rectangle.stack")
+                    }
+                    NavigationLink {
                         IOSPlaybackSettingsView()
                     } label: {
                         Label("Playback", systemImage: "play.rectangle")

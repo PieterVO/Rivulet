@@ -20,6 +20,24 @@ struct IOSHomeSettingsView: View {
     }
 }
 
+/// Account > Library.
+struct IOSLibrarySettingsView: View {
+    @AppStorage(IOSLibrarySettingsView.showPlaylistsKey) private var showPlaylists = true
+
+    static let showPlaylistsKey = "iosShowPlaylists"
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Playlists", isOn: $showPlaylists)
+            } footer: {
+                Text("Lists each server's video playlists under Library.")
+            }
+        }
+        .navigationTitle("Library")
+    }
+}
+
 /// Account > Playback: streaming quality, skip buttons, automatic skips and the markers they use.
 struct IOSPlaybackSettingsView: View {
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10

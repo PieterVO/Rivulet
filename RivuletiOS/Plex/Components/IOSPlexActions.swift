@@ -9,6 +9,8 @@ struct IOSPlexActions {
     var play: (PlexMetadata) -> Void = { _ in }
     /// Plays a playlist from its current entry, then on through the rest.
     var playQueue: (PlayQueue<PlexMetadata>) -> Void = { _ in }
+    /// Adds to `playlist`, or asks for a name and makes a new one seeded with the item when nil.
+    var addToPlaylist: (PlexMetadata, PlexPlaylist?) -> Void = { _, _ in }
     var open: (PlexMetadata) -> Void = { _ in }
     var setWatched: (PlexMetadata, Bool) -> Void = { _, _ in }
     var setWatchlisted: (PlexMetadata, Bool) -> Void = { _, _ in }
@@ -37,12 +39,22 @@ private struct IOSPlexActionHost: ViewModifier {
     @State private var preparingID: String?
     @State private var pushed: PlexMetadata?
     @State private var failure: (title: String, message: String)?
+    @State private var newPlaylistSeed: PlexMetadata?
+    @State private var newPlaylistName = ""
 
     func body(content: Content) -> some View {
         content
             .environment(\.plexActions, IOSPlexActions(
                 play: play,
                 playQueue: playQueue,
+                addToPlaylist: { item, playlist in
+                    if let playlist {
+                        run("Couldn't Add to Playlist") { try await plex.addToPlaylist(playlist, item: item) }
+                    } else {
+                        newPlaylistName = ""
+                        newPlaylistSeed = item
+                    }
+                },
                 open: { pushed = $0 },
                 setWatched: { item, watched in
                     run("Couldn't Update") { try await plex.setWatched(watched, for: item) }
@@ -60,6 +72,16 @@ private struct IOSPlexActionHost: ViewModifier {
                 preparingID: preparingID
             ))
             .navigationDestination(item: $pushed) { IOSPlexDetailView(item: $0).iosPlexActionHost() }
+            .alert("New Playlist", isPresented: Binding(get: { newPlaylistSeed != nil },
+                                                        set: { if !$0 { newPlaylistSeed = nil } })) {
+                TextField("Playlist Name", text: $newPlaylistName)
+                Button("Cancel", role: .cancel) {}
+                Button("Create") {
+                    let name = newPlaylistName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let item = newPlaylistSeed, !name.isEmpty else { return }
+                    run("Couldn't Create Playlist") { try await plex.createPlaylist(title: name, seededWith: item) }
+                }
+            }
             .alert(
                 failure?.title ?? "",
                 isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } }),
@@ -161,6 +183,16 @@ struct IOSPlexItemMenu: View {
                     onList ? "Remove from Watchlist" : (standsForShow ? "Add Show to Watchlist" : "Add to Watchlist"),
                     systemImage: onList ? "minus.circle" : "plus.circle"
                 ) { actions.setWatchlisted(item, !onList) }
+            }
+        }
+        if IOSPlexSession.canAddToPlaylist(item) {
+            Menu("Add to Playlist", systemImage: "text.badge.plus") {
+                Button("New Playlist", systemImage: "plus") { actions.addToPlaylist(item, nil) }
+                Section {
+                    ForEach(plex.addTargets(for: item), id: \.ratingKey) { playlist in
+                        Button(playlist.title ?? "Untitled") { actions.addToPlaylist(item, playlist) }
+                    }
+                }
             }
         }
         downloadItems
