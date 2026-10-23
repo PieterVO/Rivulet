@@ -888,7 +888,7 @@
 			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
 			requirement = {
 				kind = exactVersion;
-				version = 7.44.0;
+				version = 7.46.0;
 			};
 			traits = (
 				DualLayerDolbyVision,

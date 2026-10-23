@@ -149,6 +149,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        // confirm build number at release
+        ("1.1.0 (108)", [
+            "Updated AetherEngine to 7.46.0",
+        ]),
         ("1.1.0 (107)", [
             "New in Live TV: switch between a Dispatcharr channel's streams from the player.",
             "New App Icon setting in Appearance, with three new icons by @tresby.",

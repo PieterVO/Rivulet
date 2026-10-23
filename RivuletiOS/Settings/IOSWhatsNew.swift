@@ -8,6 +8,10 @@ import SwiftUI
 /// A line starting with "## " is a heading; any other line is a bullet.
 enum IOSChangelog {
     static let entries: [(version: String, lines: [String])] = [
+        // confirm build number at release
+        ("1.0.7 (81)", [
+            "Updated AetherEngine to 7.46.0",
+        ]),
         ("1.0.7 (80)", [
             "New App Icon setting in Account, with three new icons by @tresby",
             "Captions now match the system player's size and placement (@tresby)",
