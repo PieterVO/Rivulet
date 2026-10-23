@@ -11,7 +11,7 @@ enum IOSChangelog {
         // confirm build number at release
         ("1.0.7 (81)", [
             "Video playlists: play, shuffle, add, reorder, rename and delete",
-            "Updated AetherEngine to 7.46.0",
+            "Updated AetherEngine to 7.47.0",
         ]),
         ("1.0.7 (80)", [
             "New App Icon setting in Account, with three new icons by @tresby",
