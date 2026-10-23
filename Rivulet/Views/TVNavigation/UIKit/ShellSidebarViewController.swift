@@ -37,22 +37,29 @@ private enum Metrics {
     static var capsuleRadius: CGFloat { capsuleHeight / 2 }
     static var capsuleVerticalInset: CGFloat { (rowPitch - capsuleHeight) / 2 }
     static let sectionGap: CGFloat = 70
+    /// A break with no header and no Settings below it: the arranged rows after Home.
+    static let quietSectionGap: CGFloat = 30
     static let pillOrigin = CGPoint(x: 50, y: 50)
     static let pillHeight: CGFloat = 60
-    /// The TV app's 46pt icon box, centred in the 60pt pill.
-    static let pillDiscSize: CGFloat = 46
+    /// The TV app's 50pt icon disc, centred in the 60pt pill.
+    static let pillDiscSize: CGFloat = 50
     static var pillDiscInset: CGFloat { (pillHeight - pillDiscSize) / 2 }
-    static let pillTrailing: CGFloat = 24
+    static let pillTrailing: CGFloat = 41
     /// The TV app's sidebar avatar, and how much it grows under focus.
     static let avatarSize: CGFloat = 50
     static let avatarFocusGrowth: CGFloat = 4
-    /// The TV app's profile header band: the first tab sits 125pt below the list top.
-    static let profileBandHeight: CGFloat = 125
+    /// The profile header band: the first tab sits this far below the list top.
+    static let profileBandHeight: CGFloat = 90
     /// One spring crossfade, checked by eye against the system morph. A
     /// three-phase timing from 120fps frame analysis looked worse on screen.
     static let morphDuration: TimeInterval = 0.45
     static let morphDamping: CGFloat = 0.9
-    static let dimAlpha: CGFloat = 0.35
+    /// Profile header, measured on device (tvOS 27): avatar centre 26pt below
+    /// the list top, clock right edge 12.5pt inside it, name 8.5pt further
+    /// right while focused.
+    static let headerCenterY: CGFloat = 26
+    static let headerTrailing: CGFloat = 12.5
+    static let focusedNameShift: CGFloat = 8.5
     /// Darkens the glass toward the system sidebar's tone; the sole knob for
     /// the material tuning pass, to be converged against sampled pixels.
     static let glassTint = UIColor.black.withAlphaComponent(0.12)
@@ -74,7 +81,7 @@ enum ShellPillMetrics {
 /// Resting 0.7 is the TV app's value; its focused 0.9 / 0.7 pair rides a
 /// PlusL / PlusD layer this sidebar does not have.
 private func sidebarRowColors(focused: Bool, selected: Bool) -> (background: UIColor, content: UIColor) {
-    if focused { return (.white, .black) }
+    if focused { return (UIColor.white.withAlphaComponent(0.91), .black) }
     if selected { return (UIColor.white.withAlphaComponent(0.1), .white) }
     return (.clear, UIColor.white.withAlphaComponent(0.7))
 }
@@ -233,9 +240,9 @@ final class ShellSidebarRowCell: UICollectionViewCell {
 
 // MARK: - Profile header cell
 
-/// The profile entry, above the tabs: avatar and first name, no focus capsule.
-/// Focus grows the avatar and, where there is a profile to switch to, fades a
-/// "Switch Profile" caption in under the name.
+/// The profile entry, above the tabs: avatar, first name and the time, no focus
+/// platter. Focus grows the avatar, brightens the name and, where there is a
+/// profile to switch to, swaps the clock for a "Switch Profile" caption.
 final class ShellSidebarProfileCell: UICollectionViewCell {
     static let reuseIdentifier = "ShellSidebarProfileCell"
 
@@ -243,52 +250,79 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
     private let avatarView = SidebarAvatarView(diameter: Metrics.avatarSize)
     private let nameLabel = UILabel()
     private let captionLabel = UILabel()
-    private let separator = UIView()
+    private let clockLabel = UILabel()
     private var nameCenterY: NSLayoutConstraint!
+    private var nameLeading: NSLayoutConstraint!
     private var canSwitch = false
+    private var clockTimer: Timer?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44, weight: .regular)
         nameLabel.font = .preferredFont(forTextStyle: .caption1)
-        captionLabel.font = .preferredFont(forTextStyle: .caption2)
+        captionLabel.font = .systemFont(ofSize: 21, weight: .regular)
         captionLabel.text = "Switch Profile"
-        captionLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        separator.backgroundColor = UIColor.white.withAlphaComponent(0.1)
-        for view in [iconView, avatarView, nameLabel, captionLabel, separator] {
+        captionLabel.textColor = UIColor.white.withAlphaComponent(0.3)
+        clockLabel.font = .preferredFont(forTextStyle: .caption2)
+        clockLabel.textColor = UIColor.white.withAlphaComponent(0.3)
+        clockLabel.isAccessibilityElement = false
+        for view in [iconView, avatarView, nameLabel, captionLabel, clockLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(view)
         }
-        // The entry occupies the band's top row; the separator halves the rest.
-        let rowCenter = Metrics.rowPitch / 2
-        nameCenterY = nameLabel.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: rowCenter)
+        nameCenterY = nameLabel.centerYAnchor.constraint(equalTo: contentView.topAnchor,
+                                                         constant: Metrics.headerCenterY)
+        nameLeading = nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                                         constant: Metrics.titleLeading)
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: contentView.leadingAnchor,
                                               constant: Metrics.iconCenterX),
-            iconView.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: rowCenter),
+            iconView.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: Metrics.headerCenterY),
             avatarView.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
             avatarView.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
-            nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
-                                               constant: Metrics.titleLeading),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
-                                                constant: -Metrics.titleTrailing),
+            nameLeading,
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: clockLabel.leadingAnchor, constant: -8),
             nameCenterY,
             captionLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             captionLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
                                                    constant: -Metrics.titleTrailing),
             captionLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor),
-            separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 15),
-            separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            separator.heightAnchor.constraint(equalToConstant: 1),
-            separator.centerYAnchor.constraint(
-                equalTo: contentView.topAnchor,
-                constant: (Metrics.rowPitch + Metrics.profileBandHeight) / 2),
+            clockLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor,
+                                                 constant: -Metrics.headerTrailing),
+            clockLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
         ])
+        clockLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         isAccessibilityElement = true
         applyAppearance(focused: false)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshClock),
+                                               name: UIApplication.willEnterForegroundNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    deinit { clockTimer?.invalidate() }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { clockTimer?.invalidate(); clockTimer = nil } else { refreshClock() }
+    }
+
+    /// Redraws the time in the user's 12/24-hour style and re-arms the timer for
+    /// the next minute boundary, so there is no per-second tick.
+    @objc private func refreshClock() {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("jmm")
+        clockLabel.text = formatter.string(from: Date())
+        clockTimer?.invalidate()
+        guard window != nil else { return }
+        let next = Calendar.current.nextDate(after: Date(), matching: DateComponents(second: 0),
+                                             matchingPolicy: .nextTime) ?? Date().addingTimeInterval(60)
+        let timer = Timer(fire: next, interval: 0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshClock() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        clockTimer = timer
+    }
 
     func configure(item: ShellSidebarItem) {
         iconView.image = UIImage(systemName: item.icon)
@@ -311,13 +345,14 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
     }
 
     private func applyAppearance(focused: Bool) {
-        let content = sidebarRowColors(focused: false, selected: focused).content
-        iconView.tintColor = content
-        nameLabel.textColor = content
+        iconView.tintColor = .white
+        nameLabel.textColor = focused ? .white : UIColor.white.withAlphaComponent(0.5)
         let captioned = focused && canSwitch
         captionLabel.alpha = captioned ? 1 : 0
+        clockLabel.alpha = focused ? 0 : 1
         // The name rises by half the caption so the pair stays centred on the avatar.
-        nameCenterY.constant = Metrics.rowPitch / 2 - (captioned ? captionLabel.font.lineHeight / 2 : 0)
+        nameCenterY.constant = Metrics.headerCenterY - (captioned ? captionLabel.font.lineHeight / 2 : 0)
+        nameLeading.constant = Metrics.titleLeading + (focused ? Metrics.focusedNameShift : 0)
         let scale = focused ? (Metrics.avatarSize + Metrics.avatarFocusGrowth) / Metrics.avatarSize : 1
         avatarView.transform = CGAffineTransform(scaleX: scale, y: scale)
         iconView.transform = avatarView.transform
@@ -357,7 +392,6 @@ final class ShellSidebarViewController: UIViewController {
     private var sections: [ShellSidebarSection] = []
     private var selectedTab: SidebarTab = .home
 
-    private let dimmingView = UIView()
     /// ONE glass card morphs between panel and pill, as the trace showed the
     /// system does: frame and corner radius animate together on one spring;
     /// the list fades out and clips inside the shrinking card while the pill
@@ -392,6 +426,12 @@ final class ShellSidebarViewController: UIViewController {
     private var lastFocusMoveGesture = -1
     /// While the profile panel is up the pill names the user, not the tab.
     private var pillShowsProfile = false
+    /// Move from a row's long-press menu: the held row's key, and the order to put back on Menu.
+    private var rowMove: GrabReorderController?
+    private var heldKey: String?
+    private var orderBeforeMove: [String] = []
+    /// The row focus follows to once the next sections arrive (a step or a cancel).
+    private var pendingFocusKey: String?
 
     var isExpanded: Bool { state == .expanded }
     var focusTarget: UIView { collectionView }
@@ -453,6 +493,7 @@ final class ShellSidebarViewController: UIViewController {
         guard isViewLoaded else { return }
         collectionView.reloadData()
         configurePill()
+        if let key = pendingFocusKey ?? heldKey { focusRow(key) }
     }
 
     /// Collapsed-state pill visibility, driven by the below-top focus signal.
@@ -490,6 +531,9 @@ final class ShellSidebarViewController: UIViewController {
     // MARK: Input
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // A row on the move keeps the sidebar open.
+        if rowMove?.handleKeyPresses(presses) == true { return }
+        guard rowMove?.isMoving != true else { return }
         for press in presses {
             switch (press.type, state) {
             case (.rightArrow, .expanded):
@@ -537,7 +581,6 @@ final class ShellSidebarViewController: UIViewController {
         guard animated else {
             cardView.frame = targetFrame
             cardView.layer.cornerRadius = targetRadius
-            dimmingView.alpha = expanded ? Metrics.dimAlpha : 0
             collectionView.alpha = expanded ? 1 : 0
             pillStack.alpha = expanded ? 0 : 1
             pillChevron.alpha = chevronTarget
@@ -552,7 +595,6 @@ final class ShellSidebarViewController: UIViewController {
                                               dampingRatio: Metrics.morphDamping) {
             self.cardView.frame = targetFrame
             self.cardView.layer.cornerRadius = targetRadius
-            self.dimmingView.alpha = expanded ? Metrics.dimAlpha : 0
             self.collectionView.alpha = expanded ? 1 : 0
             self.pillStack.alpha = expanded ? 0 : 1
             self.pillChevron.alpha = chevronTarget
@@ -582,11 +624,6 @@ final class ShellSidebarViewController: UIViewController {
     // MARK: Views
 
     private func buildViews() {
-        dimmingView.backgroundColor = .black
-        dimmingView.frame = view.bounds
-        dimmingView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(dimmingView)
-
         cardView.layer.cornerCurve = .continuous
         cardView.layer.masksToBounds = true
         view.addSubview(cardView)
@@ -613,6 +650,7 @@ final class ShellSidebarViewController: UIViewController {
                                 forSupplementaryViewOfKind: ShellSidebarHeaderView.elementKind,
                                 withReuseIdentifier: ShellSidebarHeaderView.reuseIdentifier)
         cardView.addSubview(collectionView)
+        installRowMenu()
 
         // Back-chevron, as the system pill shows: OUTSIDE the capsule, to its
         // left, white. Lives on the main view (not the glass card) so it sits
@@ -706,7 +744,8 @@ final class ShellSidebarViewController: UIViewController {
                         alignment: .top)
                 ]
             } else if sectionIndex > 0, !followsProfile {
-                section.contentInsets = NSDirectionalEdgeInsets(top: Metrics.sectionGap,
+                let isSettings = self?.sections[sectionIndex].items.first?.tab == .settings
+                section.contentInsets = NSDirectionalEdgeInsets(top: isSettings ? Metrics.sectionGap : Metrics.quietSectionGap,
                                                                 leading: 0, bottom: 0, trailing: 0)
             }
             return section
@@ -728,9 +767,9 @@ final class ShellSidebarViewController: UIViewController {
             liveTVSources: LiveTVDataStore.shared.sources,
             combineLiveTV: flag("combineLiveTVSources", default: true),
             showDiscover: flag("showDiscoverTab", default: true),
-            discoverAbove: flag("discoverAboveLibraries", default: true),
             showWatchlist: flag("showWatchlistTab", default: true),
-            liveTVAbove: flag("liveTVAboveLibraries", default: false),
+            order: LibrarySettingsManager.shared.libraryOrder,
+            hiddenKeys: LibrarySettingsManager.shared.hiddenLibraryKeys,
             profileName: profileName)
     }
 
@@ -766,6 +805,7 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
             withReuseIdentifier: ShellSidebarRowCell.reuseIdentifier,
             for: indexPath) as! ShellSidebarRowCell
         cell.configure(item: item, isSelectedTab: item.tab == selectedTab)
+        cell.contentView.setReorderWiggle(heldKey != nil && item.arrangeKey == heldKey)
         return cell
     }
 
@@ -781,6 +821,8 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        if let rowMove, rowMove.swallowsNextSelect { rowMove.swallowsNextSelect = false; return }
+        guard rowMove?.isMoving != true else { return }
         let tab = sections[indexPath.section].items[indexPath.item].tab
         if tab != .account { select(tab: tab) }
         if embedded { onTabSelected?(tab) }
@@ -788,6 +830,11 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
 
     func collectionView(_ collectionView: UICollectionView,
                         shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
+        // Move: focus stays on the held row; only the follow-the-step request passes.
+        if let heldKey, rowMove?.isMoving == true {
+            return context.focusHeading.isEmpty
+                && context.nextFocusedIndexPath.flatMap(item(at:))?.arrangeKey == heldKey
+        }
         if ShellSidebarModel.stopsUpwardRun(
             from: context.previouslyFocusedIndexPath.flatMap(tab(at:)),
             to: context.nextFocusedIndexPath.flatMap(tab(at:)),
@@ -814,13 +861,133 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
     }
 
     private func tab(at indexPath: IndexPath) -> SidebarTab? {
-        sections.indices.contains(indexPath.section)
-            ? sections[indexPath.section].items[safe: indexPath.item]?.tab : nil
+        item(at: indexPath)?.tab
+    }
+
+    private func item(at indexPath: IndexPath) -> ShellSidebarItem? {
+        sections.indices.contains(indexPath.section) ? sections[indexPath.section].items[safe: indexPath.item] : nil
     }
 
     private func select(tab: SidebarTab) {
         selectedTab = tab
         configurePill()
         collectionView.reloadData()
+    }
+}
+
+// MARK: - Row menu and Move
+
+extension ShellSidebarViewController {
+    /// The arrangeable rows shown, in order.
+    private var arrangeKeys: [String] { sections.flatMap(\.items).compactMap(\.arrangeKey) }
+
+    fileprivate func installRowMenu() {
+        collectionView.addGestureRecognizer(TileLongPress.makeRecognizer(target: self, action: #selector(handleRowLongPress(_:))))
+        rowMove = GrabReorderController(
+            view: collectionView, axis: .vertical,
+            count: { [weak self] in self?.arrangeKeys.count ?? 0 },
+            canMove: { _, _ in true },
+            onStep: { [weak self] from, to in
+                guard let self, let key = heldKey else { return }
+                // Saved at each step; the sidebar redraws from it and focus follows in setSections.
+                LibrarySettingsManager.shared.moveSidebarRow(key: key, up: to < from, visible: arrangeKeys)
+            },
+            onDrop: { [weak self] _, _ in self?.endRowMove(restoring: false) },
+            onCancel: { [weak self] _ in self?.endRowMove(restoring: true) })
+    }
+
+    /// Menu while a row is on the move: put the order back. True when it did.
+    func cancelRowMove() -> Bool {
+        guard let rowMove, rowMove.isMoving else { return false }
+        rowMove.cancel()
+        return true
+    }
+
+    @objc private func handleRowLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began, state == .expanded, rowMove?.isMoving != true,
+              let indexPath = TileLongPress.focusedCell(in: collectionView),
+              let item = item(at: indexPath), let key = item.arrangeKey else { return }
+        var top: UIViewController = view.window?.rootViewController ?? self
+        while let presented = top.presentedViewController { top = presented }
+        guard top.presentedViewController == nil, !(top is TileMenuPopupViewController) else { return }
+        let frame = collectionView.cellForItem(at: indexPath).map { $0.convert($0.bounds, to: nil) }
+        top.present(TileMenuPopupViewController(sections: rowMenu(for: key), sourceFrame: frame), animated: false)
+    }
+
+    private func rowMenu(for key: String) -> [[TileMenuAction]] {
+        let move = TileMenuAction(title: "Move", systemImage: "arrow.up.arrow.down") { [weak self] in
+            self?.beginRowMove(key)
+        }
+        if SidebarArrangement.isLiveTV(key) {
+            let current = LiveTVLayout(rawValue: UserDefaults.standard.string(forKey: "liveTVLayout") ?? "") ?? .fallback
+            let layouts = [LiveTVLayout.browse, .guide].map { layout in
+                TileMenuAction(title: layout.description,
+                               systemImage: layout == current ? "checkmark" : (layout == .guide ? "list.bullet.rectangle" : "square.grid.2x2")) {
+                    UserDefaults.standard.set(layout.rawValue, forKey: "liveTVLayout")
+                }
+            }
+            return [layouts, [move]]
+        }
+        guard SidebarArrangement.server(ofKey: key) != nil else { return [[move]] }
+        let hide = TileMenuAction(title: "Hide from Sidebar", systemImage: "eye.slash") { [weak self] in
+            self?.hideRow(key)
+        }
+        return [[move], [hide]]
+    }
+
+    private func hideRow(_ key: String) {
+        let settings = LibrarySettingsManager.shared
+        if SidebarArrangement.isAppRow(key) {
+            let playlists = arrangeKeys.filter { SidebarArrangement.isAppRow($0) && SidebarArrangement.server(ofKey: $0) != nil }
+            settings.setPlaylistsRow(key, visible: false, allKeys: playlists)
+        } else {
+            settings.hideLibrary(key)
+        }
+    }
+
+    private func beginRowMove(_ key: String) {
+        guard let rowMove, !rowMove.isMoving, let index = arrangeKeys.firstIndex(of: key) else { return }
+        orderBeforeMove = LibrarySettingsManager.shared.libraryOrder
+        heldKey = key
+        rowMove.begin(at: index)
+        updateRowWiggle()
+        focusRow(key)
+    }
+
+    private func endRowMove(restoring: Bool) {
+        let key = heldKey
+        heldKey = nil
+        updateRowWiggle()
+        guard restoring else { return }
+        pendingFocusKey = key
+        LibrarySettingsManager.shared.libraryOrder = orderBeforeMove
+    }
+
+    private func updateRowWiggle() {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            let held = heldKey != nil && item(at: indexPath)?.arrangeKey == heldKey
+            collectionView.cellForItem(at: indexPath)?.contentView.setReorderWiggle(held)
+        }
+    }
+
+    /// Focus onto `key`'s row; the sidebar already holds focus, so the request is honoured.
+    private func focusRow(_ key: String) {
+        pendingFocusKey = nil
+        guard let indexPath = sections.indices.lazy.compactMap({ s in
+            self.sections[s].items.firstIndex { $0.arrangeKey == key }.map { IndexPath(item: $0, section: s) }
+        }).first else { return }
+        collectionView.preferredFocusIndexPath = indexPath
+        collectionView.layoutIfNeeded()
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
+        collectionView.layoutIfNeeded()
+        // Only an environment holding focus may move it. After the menu closes
+        // nothing holds it, so the request goes from the top, through the shell's
+        // preferred environments down to this row.
+        let holdsFocus = (UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView)?
+            .isDescendant(of: collectionView) == true
+        let requester: UIFocusEnvironment = holdsFocus ? collectionView : (view.window?.rootViewController ?? self)
+        requester.setNeedsFocusUpdate()
+        requester.updateFocusIfNeeded()
+        updateRowWiggle()
     }
 }

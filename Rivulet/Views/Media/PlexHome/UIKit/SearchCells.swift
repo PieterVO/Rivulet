@@ -18,7 +18,7 @@ final class SearchRecentsCell: UICollectionViewCell {
     /// The Apple TV app's recent-search card. Its corner radius is our own.
     private enum Metrics {
         static let cardWidth: CGFloat = MediaRowMetrics.gridWidth(columns: 3)
-        static let cardHeight: CGFloat = 160
+        static let cardHeight: CGFloat = 170   // card 560x170, measured on device (tvOS 27)
         static let cardSpacing: CGFloat = MediaRowMetrics.tileGap
         /// Poster inset inside the card. The poster is the card's full height
         /// minus this top and bottom, at the 2:3 poster ratio.
@@ -26,12 +26,14 @@ final class SearchRecentsCell: UICollectionViewCell {
         static let posterHeight: CGFloat = cardHeight - posterInset * 2
         static let posterWidth: CGFloat = (cardHeight - posterInset * 2) * 2 / 3
         static let posterToText: CGFloat = 20
-        static let cardRadius: CGFloat = 20
-        static let posterRadius: CGFloat = 6
+        static let cardRadius: CGFloat = 28
+        static let posterRadius: CGFloat = 9
         /// Gap below the keyboard's separator: the search controller leaves ~43pt, this adds the rest of
         /// the Apple TV app's ~57pt. The only top spacing; `contentInset.top` is 0 in search mode.
         static let topPadding: CGFloat = 17
-        static let headerToRow: CGFloat = 16
+        static let headerFont = UIFont.systemFont(ofSize: 31, weight: .semibold)
+        /// Header baseline to card top is 21.5, measured on device (tvOS 27).
+        static let headerToRow: CGFloat = 21.5 + headerFont.descender
     }
 
     private let headerLabel = UILabel()
@@ -62,8 +64,8 @@ final class SearchRecentsCell: UICollectionViewCell {
         // Matches the shelf row headers (ShelfRowCell) so Search reads as the
         // same page as Home, not a separate design.
         headerLabel.text = "Recently Searched"
-        headerLabel.font = .systemFont(ofSize: 32, weight: .semibold)
-        headerLabel.textColor = .secondaryLabel
+        headerLabel.font = Metrics.headerFont
+        headerLabel.textColor = UIColor.white.withAlphaComponent(0.5)
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
 
         cardStack.axis = .horizontal
@@ -179,7 +181,7 @@ final class SearchRecentsCell: UICollectionViewCell {
         let subtitle = UILabel()
         subtitle.text = subtitleText(for: item)
         subtitle.font = .preferredFont(forTextStyle: .caption1)
-        subtitle.textColor = UIColor.white.withAlphaComponent(0.6)
+        subtitle.textColor = UIColor.white.withAlphaComponent(0.5)
         subtitle.numberOfLines = 2
         subtitle.lineBreakMode = .byTruncatingTail
 
@@ -276,7 +278,7 @@ final class SearchStateCell: UICollectionViewCell {
         iconView.tintColor = .secondaryLabel
         iconView.contentMode = .scaleAspectFit
 
-        titleLabel.font = .systemFont(ofSize: 38, weight: .medium)
+        titleLabel.font = .systemFont(ofSize: 48, weight: .bold)
         titleLabel.textColor = .label
         titleLabel.textAlignment = .center
 

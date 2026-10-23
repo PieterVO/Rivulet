@@ -21,7 +21,7 @@ final class HeroSlideView: UIView {
 
     static let maxLogoHeight: CGFloat = 180, maxTaglineWidth: CGFloat = 720, rowSpacing: CGFloat = 18
     private static let metadataFont = UIFont.systemFont(ofSize: 25, weight: .medium)
-    private static let taglineFont = UIFont.systemFont(ofSize: 22, weight: .regular)
+    private static let taglineFont = UIFont.systemFont(ofSize: 25, weight: .regular)
     /// The stack at its tallest: a full-height logo, the metadata row, two tagline lines.
     static var maxHeight: CGFloat {
         maxLogoHeight + rowSpacing + ceil(metadataFont.lineHeight) + rowSpacing + 2 * ceil(taglineFont.lineHeight)
@@ -64,14 +64,14 @@ final class HeroSlideView: UIView {
         fallbackTitleLabel.isHidden = true
 
         // Metadata text (type · genre)
-        // Apple's genres row: Caption1 (25) medium at full white, 6 pt to the badge.
+        // Apple's genres row: Caption1 (25) medium at full white, 12 pt to the badge.
         metadataLabel.font = Self.metadataFont
         metadataLabel.textColor = .white
         metadataLabel.numberOfLines = 1
 
         // Metadata row container (text + rating badge inline)
         metadataRow.axis = .horizontal
-        metadataRow.spacing = 6
+        metadataRow.spacing = 12
         metadataRow.alignment = .center
         metadataRow.addArrangedSubview(metadataLabel)
         metadataRow.addArrangedSubview(ratingBadge)
@@ -101,7 +101,7 @@ final class HeroSlideView: UIView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             logoImageView.heightAnchor.constraint(lessThanOrEqualToConstant: Self.maxLogoHeight),
-            logoImageView.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
+            logoImageView.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
 
             taglineLabel.widthAnchor.constraint(lessThanOrEqualToConstant: Self.maxTaglineWidth)
         ])
@@ -283,19 +283,19 @@ final class HeroRatingBadgeView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        layer.borderWidth = 1
-        layer.borderColor = UIColor.white.withAlphaComponent(0.7).cgColor
-        layer.cornerRadius = 4
+        layer.borderWidth = 2
+        layer.borderColor = UIColor.white.cgColor
+        layer.cornerRadius = 5
         layer.cornerCurve = .continuous
 
-        label.font = .systemFont(ofSize: 15, weight: .bold)
+        label.font = .systemFont(ofSize: 17, weight: .bold)
         label.textColor = .white
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 22),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             label.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }

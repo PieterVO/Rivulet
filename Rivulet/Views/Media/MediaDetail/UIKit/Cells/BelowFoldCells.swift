@@ -263,25 +263,33 @@ final class CastCollectionCell: UICollectionViewCell {
 
 final class BelowFoldSectionHeader: UICollectionReusableView {
     static let reuseID = "BelowFoldSectionHeader"
+    /// Baseline above the first row's frame top, measured on device (tvOS 27): a card
+    /// frame carries 20 of focus reserve, so the artwork sits 34.5 below. Cast circles have none beyond 20 above.
+    static let cardBaseline: CGFloat = 14.5
+    static let castBaseline: CGFloat = 41.5
     private let titleLabel = UILabel()
+    private var baselineConstraint: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 30, weight: .semibold)
-        titleLabel.textColor = .white
+        titleLabel.font = MediaRowMetrics.headerFont
+        titleLabel.textColor = MediaRowMetrics.headerColor
         addSubview(titleLabel)
+        baselineConstraint = titleLabel.lastBaselineAnchor.constraint(equalTo: bottomAnchor, constant: -Self.cardBaseline)
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor),
-            titleLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            baselineConstraint,
         ])
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(title: String) { titleLabel.text = title }
+    func configure(title: String, baseline: CGFloat = BelowFoldSectionHeader.cardBaseline) {
+        titleLabel.text = title
+        baselineConstraint.constant = -baseline
+    }
 }
 
 // MARK: - Season divider

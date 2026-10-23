@@ -54,11 +54,11 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     private static let episodeWidth: CGFloat = EpisodeCell.cardWidth
     /// Spacing between episode cards (and season dividers).
     static let episodeGap: CGFloat = MediaRowMetrics.tileGap
-    private static let episodeHeight: CGFloat = 435
+    /// The thumb frame plus the text block below it.
+    private static let episodeHeight: CGFloat = EpisodeCell.thumbHeight + 190
     private static let trailerWidth: CGFloat = EpisodeCell.cardWidth
-    // Same episode card, minus the episode-number / summary / footer rows — so the
-    // card hugs thumbnail (245) + 8 + title block (~64).
-    private static let trailerHeight: CGFloat = 318
+    // The trailer frame: 410 x 278 artwork plus the focus reserve, title inside.
+    private static let trailerHeight: CGFloat = EpisodeCell.trailerThumbHeight
     private static let castWidth: CGFloat = CastCell.circleSize   // cell == circle; labels overflow into the gap
 
     /// contentOffset.y + adjustedContentInset.top (0 at rest, grows as scrolled).
@@ -218,7 +218,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     topInset: isPrimary ? peek : 0,
                     headerTopInset: 8,
                     headerHeight: 44,
-                    sectionBottomInset: 96
+                    // Measured on device, tvOS 27: 105 from card bottom to the next header baseline.
+                    sectionBottomInset: 91.5
                 )
             case .extras:
                 return self.shelfSection(
@@ -229,7 +230,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     topInset: isPrimary ? peek : 0,
                     headerTopInset: 8,
                     headerHeight: 44,
-                    sectionBottomInset: 96
+                    // Measured on device, tvOS 27: 105 from card bottom to the next header baseline.
+                    sectionBottomInset: 91.5
                 )
             case .related, .collection:
                 // As the primary row (also the collection row's case), lift by the header
@@ -247,7 +249,11 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     header: true,
                     // Primary on a title with no extras or related: same peek,
                     // less the header gap, so the strip is the cast row.
-                    topInset: isPrimary ? max(0, peek - 16) : 0
+                    topInset: isPrimary ? max(0, peek - 16) : 0,
+                    // The header stays put; the circles rest 41.5 below its baseline.
+                    headerTopInset: 46,
+                    headerHeight: 72,
+                    headerBaseline: BelowFoldSectionHeader.castBaseline
                 )
             case .about: return self.fullWidthSection(height: 370, topInset: isPrimary ? peek : 0)
             case .info:
@@ -342,7 +348,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         topInset: CGFloat = 0,
         headerTopInset: CGFloat = 16,
         headerHeight: CGFloat = 44,
-        sectionBottomInset: CGFloat = 56
+        sectionBottomInset: CGFloat = 56,
+        headerBaseline: CGFloat = BelowFoldSectionHeader.cardBaseline
     ) -> NSCollectionLayoutSection {
         let item = NSCollectionLayoutItem(layoutSize: .init(
             widthDimension: .absolute(itemW), heightDimension: .absolute(itemH)))
@@ -463,7 +470,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .trailers: header.configure(title: "Trailers")
             case .extras:  header.configure(title: "Extras")
             case .related: header.configure(title: "Related")
-            case .cast:    header.configure(title: "Cast & Crew")
+            case .cast:    header.configure(title: "Cast & Crew", baseline: BelowFoldSectionHeader.castBaseline)
             case .episodes, .collection, .about, .info: header.configure(title: "")
             }
             return header
@@ -931,7 +938,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// Screen-y where the first episode lands in details (under the logo + the
     /// season-pills row, per the ATV+ reference). Also the collection's
     /// contentInset.top, so the focus engine aligns the focused episode here.
-    static let detailsTopY: CGFloat = 230
+    /// Artwork rests 96 under the pill top, and a card frame carries half the focus growth above it.
+    static let detailsTopY: CGFloat = ExpandedDetailContainerView.seasonPillTop + 96 - MediaRowMetrics.focusGrowth / 2
 
     /// The `onScroll` value at the details rest, where the pills sit at their resting Y.
     var detailsRestOff: CGFloat { max(0, bounds.height - Self.episodePeek - Self.detailsTopY) }

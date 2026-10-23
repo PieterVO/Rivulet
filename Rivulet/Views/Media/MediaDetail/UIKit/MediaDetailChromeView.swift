@@ -844,7 +844,24 @@ final class MediaDetailChromeView: UIView {
                 Self.makeCaptionLabel(parts.joined(separator: " · "), alpha: Self.qualityRowAlpha))
         }
 
-        // Apple shows the Common Sense age here, never a review score, and none on episodes.
+        // Movies lead with the Rotten Tomatoes critics score; shows never carry one.
+        if item.kind == .movie, let rt = detail?.ratings.first(where: { $0.source == .rottenTomatoes }) {
+            let glyph = UIImageView(image: Self.tomatoGlyph(fresh: rt.value >= 6))
+            glyph.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                glyph.widthAnchor.constraint(equalToConstant: 20),
+                glyph.heightAnchor.constraint(equalToConstant: 20)
+            ])
+            let rtStack = UIStackView(arrangedSubviews: [
+                glyph, Self.makeCaptionLabel(rt.badgeText, alpha: Self.qualityRowAlpha)
+            ])
+            rtStack.axis = .horizontal
+            rtStack.spacing = 2
+            rtStack.alignment = .center
+            qualityRow.addArrangedSubview(rtStack)
+        }
+
+        // The Common Sense age, on movies and shows but not episodes.
         if item.kind != .episode, let age = detail?.contentAdvisory?.ageRating {
             let seal = UIImageView(image: UIImage(systemName: "checkmark.circle"))
             seal.tintColor = .systemGreen
@@ -863,10 +880,31 @@ final class MediaDetailChromeView: UIView {
             qualityRow.addArrangedSubview(ageStack)
         }
 
-        if let badges = detail?.primarySource?.qualityBadges(), !badges.isEmpty {
-            for badge in badges {
-                qualityRow.addArrangedSubview(Self.makeBadge(badge, alpha: Self.qualityRowAlpha))
-            }
+        for badge in Self.calmBadges(detail?.primarySource) {
+            qualityRow.addArrangedSubview(Self.makeBadge(badge, alpha: Self.qualityRowAlpha))
+        }
+    }
+
+    /// The row's quality badges, kept short: 4K only, every range badge (DV, HDR10+ ...), and audio only
+    /// when it is object audio.
+    static func calmBadges(_ source: MediaSource?) -> [String] {
+        guard let source else { return [] }
+        var badges = source.resolutionBadge == "4K" ? ["4K"] : []
+        badges += source.rangeBadges
+        if let audio = source.audioBadge {
+            if audio.hasSuffix("Atmos") { badges.append("Atmos") } else if audio.hasPrefix("DTS-X") { badges.append("DTS:X") }
+        }
+        return badges
+    }
+
+    /// The tomato emoji when fresh (60% and up), the nauseated face when rotten; the system's art,
+    /// so no rating-site artwork ships in the app.
+    private static func tomatoGlyph(fresh: Bool) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { _ in
+            let glyph = (fresh ? "🍅" : "🤢") as NSString
+            let font = UIFont.systemFont(ofSize: 17)
+            let size = glyph.size(withAttributes: [.font: font])
+            glyph.draw(at: CGPoint(x: (20 - size.width) / 2, y: (20 - size.height) / 2), withAttributes: [.font: font])
         }
     }
 

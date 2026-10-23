@@ -25,6 +25,7 @@ final class WatchlistPosterCell: UICollectionViewCell {
 
     private let cornerRadius: CGFloat = 20
     /// Re-read from `MediaRowMetrics` on every configure, so a reused cell follows a Display Size change.
+    private var tile = MediaRowMetrics.poster
     private var posterWidthConstraint: NSLayoutConstraint!
     private var posterHeightConstraint: NSLayoutConstraint!
 
@@ -68,10 +69,10 @@ final class WatchlistPosterCell: UICollectionViewCell {
         // Insert placeholder below the poster view so the image covers it.
         contentView.insertSubview(placeholderView, belowSubview: posterView)
 
-        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: MediaRowMetrics.posterWidth)
-        posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: MediaRowMetrics.posterHeight)
+        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: tile.hostSize.width)
+        posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: tile.hostSize.height)
         NSLayoutConstraint.activate([
-            posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            posterView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             posterWidthConstraint,
             posterHeightConstraint,
@@ -86,6 +87,17 @@ final class WatchlistPosterCell: UICollectionViewCell {
             placeholderIcon.widthAnchor.constraint(equalToConstant: 32),
             placeholderIcon.heightAnchor.constraint(equalToConstant: 32)
         ])
+    }
+
+    /// Trims TVUIKit's focus growth to the tile's.
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let nowFocused = context.nextFocusedView === self
+                      || context.nextFocusedView?.isDescendant(of: self) == true
+        coordinator.addCoordinatedAnimations({
+            self.posterView.transform = nowFocused ? self.tile.focusScale : .identity
+        }, completion: nil)
     }
 
     override func layoutSubviews() {
@@ -115,9 +127,10 @@ final class WatchlistPosterCell: UICollectionViewCell {
     }
 
     private func applyPosterSize() {
-        let width = MediaRowMetrics.posterWidth, height = MediaRowMetrics.posterHeight
-        if posterWidthConstraint.constant != width { posterWidthConstraint.constant = width }
-        if posterHeightConstraint.constant != height { posterHeightConstraint.constant = height }
+        tile = MediaRowMetrics.poster
+        let host = tile.hostSize
+        if posterWidthConstraint.constant != host.width { posterWidthConstraint.constant = host.width }
+        if posterHeightConstraint.constant != host.height { posterHeightConstraint.constant = host.height }
     }
 
     override func prepareForReuse() {

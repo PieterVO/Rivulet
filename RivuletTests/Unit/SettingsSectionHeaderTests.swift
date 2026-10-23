@@ -52,24 +52,11 @@ final class SettingsSectionHeaderTests: XCTestCase {
         }
     }
 
-    /// Nothing to reposition when the Discover tab is off, so the row dims
-    /// instead of vanishing (the same shape as Playback's resume prompt).
-    func test_discoverAboveLibraries_dimsWithDiscoverTabOff() {
-        let key = "showDiscoverTab"
-        let restore = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(restore, forKey: key) }
-
-        UserDefaults.standard.set(false, forKey: key)
-        guard let off = appearance.first(where: { $0.id == "discoverAboveLibraries" }) else {
-            return XCTFail("row should still be listed when the Discover tab is off")
-        }
-        XCTAssertFalse(off.isEnabled())
-        XCTAssertFalse(off.isFocusable)
-
-        UserDefaults.standard.set(true, forKey: key)
-        let on = appearance.first { $0.id == "discoverAboveLibraries" }
-        XCTAssertEqual(on?.isEnabled(), true)
-        XCTAssertEqual(on?.isFocusable, true)
+    /// Sidebar placement lives on Settings > Sidebar now.
+    func test_sidebarPlacementRows_leftAppearance() {
+        let gone = ["showDiscoverTab", "discoverAboveLibraries", "showWatchlistTab", "showPlaylistsTab", "liveTVAboveLibraries"]
+        let ids = appearance.map(\.id) + SettingsContent.rows(for: .liveTV).map(\.id)
+        XCTAssertTrue(gone.allSatisfy { !ids.contains($0) })
     }
 
     /// The User Profiles page is retired (the sidebar switches profiles now).
@@ -92,7 +79,7 @@ final class SettingsSectionHeaderTests: XCTestCase {
     /// Where Live TV sits and how it opens show on both pages: people look
     /// for them under Live TV as well as Appearance.
     func test_liveTVAppearanceRows_onBothPages() {
-        let shared = ["liveTVAboveLibraries", "defaultLayout"]
+        let shared = ["defaultLayout"]
         let appearanceIDs = appearance.map(\.id)
         let liveTVIDs = SettingsContent.rows(for: .liveTV).map(\.id)
         for id in shared {

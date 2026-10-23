@@ -87,6 +87,7 @@ final class HeroButtonRowView: UIView {
         watchlistButton.setImage(UIImage(systemName: "plus"), for: .normal)
         infoButton.setImage(UIImage(systemName: "info.circle"), for: .normal)
         nextButton.setImage(UIImage(systemName: "chevron.right"), for: .normal)
+        nextButton.isBareAtRest = true
 
         playButton.accessibilityLabel = "Play"
         watchlistButton.accessibilityLabel = "Toggle Watchlist"
@@ -166,14 +167,16 @@ final class HeroPillButton: UIControl {
     /// hero and carousel present identical buttons. The label, padding, gap
     /// and focus growth are Apple's; the width is a floor a longer title
     /// ("Resume S1, E3") grows past.
-    static let pillWidth: CGFloat = 250
+    static let pillWidth: CGFloat = 220
     static let buttonHeight: CGFloat = 66
     static let sidePadding: CGFloat = 39
     static let iconGap: CGFloat = 14
     static let rowGap: CGFloat = 24
     static let titleFont = UIFont.systemFont(ofSize: 29, weight: .semibold)
-    /// Apple grows a focused button by 10 pt of width; on the pill that is 1.04.
+    /// Apple grows a focused button by 10 pt of width; on the pill that is 1.045.
     static let focusScale: CGFloat = (pillWidth + 10) / pillWidth
+    /// Circles grow 66 -> 76 on focus (measured on device, tvOS 27).
+    static let circleFocusScale: CGFloat = 76.0 / 66.0
 
     var title: String = "" {
         didSet { titleLabel.text = title }
@@ -348,6 +351,11 @@ final class HeroCircleButton: UIControl {
 
     private let cornerRadius: CGFloat = 33
 
+    /// A bare glyph at rest (the Next chevron): no glass or stroke until focused.
+    var isBareAtRest = false {
+        didSet { applyFocusVisuals(focused: isFocused) }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
@@ -356,7 +364,7 @@ final class HeroCircleButton: UIControl {
         background.translatesAutoresizingMaskIntoConstraints = false
         background.layer.cornerRadius = cornerRadius
         background.layer.cornerCurve = .continuous
-        background.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        background.backgroundColor = .clear
         background.isUserInteractionEnabled = false
         addSubview(background)
 
@@ -368,8 +376,8 @@ final class HeroCircleButton: UIControl {
         addSubview(materialBackground)
 
         strokeLayer.fillColor = UIColor.clear.cgColor
-        strokeLayer.strokeColor = UIColor.white.withAlphaComponent(0.2).cgColor
-        strokeLayer.lineWidth = 0.5
+        strokeLayer.strokeColor = UIColor.white.withAlphaComponent(0.12).cgColor
+        strokeLayer.lineWidth = 1
         layer.addSublayer(strokeLayer)
 
         iconView.tintColor = .white
@@ -430,11 +438,11 @@ final class HeroCircleButton: UIControl {
     private func applyFocusVisuals(focused: Bool) {
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.8,
                        initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.transform = focused
-                ? CGAffineTransform(scaleX: HeroPillButton.focusScale, y: HeroPillButton.focusScale) : .identity
-            self.background.backgroundColor = focused ? .white : UIColor.white.withAlphaComponent(0.12)
-            self.materialBackground.alpha = focused ? 0 : 1
-            self.strokeLayer.opacity = focused ? 0 : 1
+            let grow = HeroPillButton.circleFocusScale
+            self.transform = focused ? CGAffineTransform(scaleX: grow, y: grow) : .identity
+            self.background.backgroundColor = focused ? .white : .clear
+            self.materialBackground.alpha = focused || self.isBareAtRest ? 0 : 1
+            self.strokeLayer.opacity = focused || self.isBareAtRest ? 0 : 1
             self.iconView.tintColor = focused ? .black : .white
         }
     }
@@ -444,7 +452,7 @@ final class HeroCircleButton: UIControl {
         for p in presses where p.type == .select {
             UIView.animate(withDuration: 0.15, delay: 0, usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-                let scale = 0.95 * (self.isFocused ? HeroPillButton.focusScale : 1.0)
+                let scale = 0.95 * (self.isFocused ? HeroPillButton.circleFocusScale : 1.0)
                 self.transform = CGAffineTransform(scaleX: scale, y: scale)
             }
             return
@@ -478,7 +486,7 @@ final class HeroPagingDotsView: UIView {
         override init(frame: CGRect) {
             super.init(frame: frame)
             translatesAutoresizingMaskIntoConstraints = false
-            backgroundColor = UIColor.white.withAlphaComponent(0.35)
+            backgroundColor = UIColor.white.withAlphaComponent(0.25)
             layer.cornerRadius = 4
             layer.cornerCurve = .continuous
             layer.masksToBounds = true
@@ -501,13 +509,13 @@ final class HeroPagingDotsView: UIView {
     private let stack = UIStackView()
     private var dots: [Dot] = []
     private var activeIndex = -1
-    static let activeWidth: CGFloat = 36, dotSize: CGFloat = 8
+    static let activeWidth: CGFloat = 30, dotSize: CGFloat = 8
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         stack.axis = .horizontal
-        stack.spacing = 10
+        stack.spacing = 13
         stack.alignment = .center
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)

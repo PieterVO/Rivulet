@@ -149,7 +149,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.1.0 (104)", [
+        ("1.1.0 (106)", [
             "Initial multiserver support. I've tested, but don't regularly use multiple servers, so please provide feedback and bugs on GitHub.",
             "Top Shelf now shows Continue Watching from all servers (including Jellyfin).",
             "Added new ratings card at the bottom of an item's page.",
@@ -159,6 +159,7 @@ struct WhatsNewView: View {
             "New Dolby Vision FEL setting in Playback. Turn it off to keep heights instead.",
             "Fixed the player's Details panel showing SDR for Dolby Vision FEL videos.",
             "Added Plex and Jellyfin video playlists to the sidebar, with shuffle and editing.",
+            "Hide and move items directly from the sidebar.",
         ]),
         ("1.1.0 (102)", [
             "Added Jellyfin music libraries.",

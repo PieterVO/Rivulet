@@ -138,7 +138,7 @@ final class MediaItemDetailPageViewController: UIViewController {
             scrim.bottomAnchor.constraint(equalTo: heroContent.bottomAnchor),
 
             textColumn.leadingAnchor.constraint(equalTo: heroContent.leadingAnchor, constant: PreviewCarouselGeometry.expandedChromeInset),
-            textColumn.bottomAnchor.constraint(equalTo: heroContent.safeAreaLayoutGuide.bottomAnchor, constant: -98),
+            textColumn.bottomAnchor.constraint(equalTo: heroContent.safeAreaLayoutGuide.bottomAnchor, constant: -115),   // measured on device, tvOS 27
             textColumn.widthAnchor.constraint(lessThanOrEqualToConstant: 860),
 
             belowFold.topAnchor.constraint(equalTo: heroContent.bottomAnchor),
@@ -217,7 +217,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         parent.addSubview(textColumn)
 
         // 1. Show title (small) — filled by setShowTitle (init or fetch).
-        style(showTitleLabel, size: 38, weight: .bold, alpha: 0.9)
+        style(showTitleLabel, size: 38, weight: .bold, alpha: 0.5)
         showTitleLabel.isHidden = (showTitleLabel.text ?? "").isEmpty
         textColumn.addArrangedSubview(showTitleLabel)
         textColumn.setCustomSpacing(6, after: showTitleLabel)
@@ -295,7 +295,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         belowFoldTitle.translatesAutoresizingMaskIntoConstraints = false
         belowFoldTitle.text = item.title
-        belowFoldTitle.font = .systemFont(ofSize: 52, weight: .bold)
+        belowFoldTitle.font = .systemFont(ofSize: 76, weight: .bold)
         belowFoldTitle.textColor = .white
         belowFoldTitle.textAlignment = .center
         belowFoldTitle.numberOfLines = 2
@@ -326,7 +326,9 @@ final class MediaItemDetailPageViewController: UIViewController {
             darkBG.bottomAnchor.constraint(equalTo: belowFold.bottomAnchor),
 
             // Title in the top (light) half.
-            belowFoldTitle.topAnchor.constraint(equalTo: belowFold.safeAreaLayoutGuide.topAnchor, constant: 64),
+            // Cap top 64 from the screen top, measured on device (tvOS 27).
+            belowFoldTitle.topAnchor.constraint(equalTo: belowFold.topAnchor,
+                                                constant: 64 - (belowFoldTitle.font.ascender - belowFoldTitle.font.capHeight)),
             belowFoldTitle.centerXAnchor.constraint(equalTo: belowFold.centerXAnchor),
             belowFoldTitle.leadingAnchor.constraint(greaterThanOrEqualTo: belowFold.leadingAnchor, constant: inset),
 

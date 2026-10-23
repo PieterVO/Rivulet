@@ -95,10 +95,10 @@ final class TileMenuPopupViewController: UIViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     // Layout constants, matched against a screenshot of the system menu
-    // (1920x1080): 72pt capsule rows, hairline group dividers, glass panel
-    // with 14pt content inset, panel corner 38.
-    private let rowHeight: CGFloat = 72
-    private let panelInset: CGFloat = 14
+    // (1920x1080), tvOS 27: 66pt row pitch, hairline group dividers, glass panel
+    // with 16pt content inset, panel corner 50.
+    private let rowHeight: CGFloat = 66
+    private let panelInset: CGFloat = 16
     private let dividerVerticalPad: CGFloat = 8
 
     override func viewDidLoad() {
@@ -137,7 +137,7 @@ final class TileMenuPopupViewController: UIViewController {
         if #available(tvOS 26.0, *) { effect = UIGlassEffect() }
         else { effect = UIBlurEffect(style: .regular) }
         panel = UIVisualEffectView(effect: effect)
-        panel.layer.cornerRadius = 38
+        panel.layer.cornerRadius = 50
         panel.layer.cornerCurve = .continuous
         panel.clipsToBounds = true
         panel.contentView.addSubview(stack)
@@ -341,6 +341,8 @@ private final class MenuRowButton: UIView {
         leadingPad + iconWidth + iconTitleGap + titleWidth + trailingPad
     }
 
+    private static let highlightHeight: CGFloat = 74
+    private let highlight = UIView()
     private let iconView = UIImageView()
     private let labelView = UILabel()
     private let destructive: Bool
@@ -355,8 +357,12 @@ private final class MenuRowButton: UIView {
         self.handler = action.handler
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        layer.cornerRadius = 36  // capsule at the 72pt row height
-        layer.cornerCurve = .continuous
+        // The focus capsule is 74pt tall, taller than the 66pt row pitch.
+        highlight.layer.cornerRadius = Self.highlightHeight / 2
+        highlight.layer.cornerCurve = .continuous
+        highlight.translatesAutoresizingMaskIntoConstraints = false
+        highlight.isUserInteractionEnabled = false
+        addSubview(highlight)
 
         iconView.image = UIImage(systemName: action.systemImage)
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
@@ -374,7 +380,11 @@ private final class MenuRowButton: UIView {
         applyUnfocusedAppearance()
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 72),
+            heightAnchor.constraint(equalToConstant: 66),
+            highlight.leadingAnchor.constraint(equalTo: leadingAnchor),
+            highlight.trailingAnchor.constraint(equalTo: trailingAnchor),
+            highlight.centerYAnchor.constraint(equalTo: centerYAnchor),
+            highlight.heightAnchor.constraint(equalToConstant: Self.highlightHeight),
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.leadingPad),
             iconView.widthAnchor.constraint(equalToConstant: Self.iconWidth),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -393,7 +403,7 @@ private final class MenuRowButton: UIView {
     @objc private func pressed() { onPress(handler) }
 
     private func applyUnfocusedAppearance() {
-        backgroundColor = .clear
+        highlight.backgroundColor = .clear
         let content: UIColor = destructive ? .systemRed : .white
         labelView.textColor = content
         iconView.tintColor = content
@@ -404,7 +414,7 @@ private final class MenuRowButton: UIView {
         let focused = context.nextFocusedView === self
         coordinator.animateFocusChange(gained: focused) {
             if focused {
-                self.backgroundColor = self.destructive ? .systemRed : .white
+                self.highlight.backgroundColor = self.destructive ? .systemRed : .white
                 self.labelView.textColor = self.destructive ? .white : .black
                 self.iconView.tintColor = self.destructive ? .white : .black
             } else {

@@ -197,7 +197,8 @@ enum JellyfinMediaMapper {
             bitrate: s.bitRate,
             videoRange: range,
             isDefault: s.isDefault ?? false,
-            scanType: s.isInterlaced.map { $0 ? "interlaced" : "progressive" }
+            scanType: s.isInterlaced.map { $0 ? "interlaced" : "progressive" },
+            hasHDR10Plus: s.videoRangeType?.hasSuffix("HDR10Plus") == true
         )
     }
 

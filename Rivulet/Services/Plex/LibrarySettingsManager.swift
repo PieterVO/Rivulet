@@ -144,6 +144,7 @@ class LibrarySettingsManager: ObservableObject {
         self.hiddenLibraryKeys = Set(storedKeys(hiddenLibrariesBaseKey))
         let combined = userDefaults.array(forKey: currentKey(combinedOrderBaseKey)) as? [String] ?? []
         self.libraryOrder = Self.arrange(storedKeys(libraryOrderBaseKey), key: { $0 }, savedOrder: combined)
+        seedSidebarOrderIfNeeded()
 
         pruneRetiredHomeVisibilityKeys()
 
@@ -275,23 +276,28 @@ class LibrarySettingsManager: ObservableObject {
 
         // A new library goes after this server's last one, never past another
         // server's, so it does not split the user's order into mixed servers.
+        var order = libraryOrder
         for library in libraries where !orderedKeys.contains(library.key) {
-            let last = libraryOrder.lastIndex { !Self.isProviderKey($0) }
-            libraryOrder.insert(library.key, at: last.map { $0 + 1 } ?? libraryOrder.count)
+            order = SidebarArrangement.insert(library.key, into: order)
         }
 
         // Remove any libraries from order that no longer exist
         // Jellyfin keys are not this server's to prune: a Plex refresh would
         // otherwise delete every Jellyfin library's place and visibility.
-        libraryOrder = libraryOrder.filter { currentKeys.contains($0) || Self.isProviderKey($0) }
+        // Nor are the sidebar's other rows.
+        libraryOrder = order.filter { currentKeys.contains($0) || Self.isProviderKey($0) || SidebarArrangement.isAppRow($0) }
 
         // Also clean up hidden keys for libraries that no longer exist
-        hiddenLibraryKeys = hiddenLibraryKeys.filter { currentKeys.contains($0) || Self.isProviderKey($0) }
+        hiddenLibraryKeys = hiddenLibraryKeys.filter {
+            currentKeys.contains($0) || Self.isProviderKey($0) || SidebarArrangement.isAppRow($0)
+        }
     }
 
     /// A non-Plex library's key (`MediaLibrary.settingsKey`). Plex section
     /// keys are bare numbers and never contain ":".
-    nonisolated static func isProviderKey(_ key: String) -> Bool { key.contains(":") }
+    nonisolated static func isProviderKey(_ key: String) -> Bool {
+        key.contains(":") && !SidebarArrangement.isAppRow(key)
+    }
 
     /// `filterAndSortLibraries` for a non-Plex server's libraries: hidden ones
     /// dropped, ordered ones first in their saved order, the rest in server order.
@@ -362,14 +368,50 @@ class LibrarySettingsManager: ObservableObject {
         libraryOrder = run + libraryOrder.filter { !run.contains($0) }
     }
 
-    /// Show every library in the sidebar, and so on Home too.
+    /// Show every library in the sidebar, and so on Home too. Other rows keep theirs.
     func showAllLibraries() {
-        hiddenLibraryKeys = []
+        hiddenLibraryKeys = hiddenLibraryKeys.filter(SidebarArrangement.isAppRow)
     }
 
-    /// Hide every library from the sidebar.
+    /// Hide every library from the sidebar. Other rows keep theirs.
     func hideAllLibraries(_ allLibraryKeys: [String]) {
-        hiddenLibraryKeys = Set(allLibraryKeys)
+        hiddenLibraryKeys = hiddenLibraryKeys.filter(SidebarArrangement.isAppRow).union(allLibraryKeys)
+    }
+
+    // MARK: - Sidebar rows
+
+    /// One step up or down among the sidebar's shown rows (`visible`, in order).
+    func moveSidebarRow(key: String, up: Bool, visible: [String]) {
+        libraryOrder = SidebarArrangement.move(key, up: up, visible: visible, order: libraryOrder)
+    }
+
+    /// A Playlists row's visibility. The retired Show Playlists toggle hid them all.
+    func isPlaylistsRowVisible(_ key: String) -> Bool {
+        !hiddenLibraryKeys.contains(key) && !hiddenLibraryKeys.contains(SidebarArrangement.allPlaylistsHidden)
+    }
+
+    /// `allKeys`: every server's Playlists key, so turning one on keeps the others off.
+    func setPlaylistsRow(_ key: String, visible: Bool, allKeys: [String]) {
+        var hidden = hiddenLibraryKeys
+        if hidden.remove(SidebarArrangement.allPlaylistsHidden) != nil { hidden.formUnion(allKeys) }
+        if visible { hidden.remove(key) } else { hidden.insert(key) }
+        hiddenLibraryKeys = hidden
+    }
+
+    /// Settings > Sidebar > Reset: the default order with every row shown.
+    func resetSidebar() {
+        hiddenLibraryKeys = []
+        libraryOrder = SidebarArrangement.seed(libraryOrder: [], discoverAbove: true, liveTVAbove: false)
+    }
+
+    /// The first load on a build with an arrangeable sidebar keeps today's layout.
+    private func seedSidebarOrderIfNeeded() {
+        guard !SidebarArrangement.isSeeded(libraryOrder) else { return }
+        let flag = { (key: String, fallback: Bool) in self.userDefaults.object(forKey: key) as? Bool ?? fallback }
+        libraryOrder = SidebarArrangement.seed(libraryOrder: libraryOrder,
+                                               discoverAbove: flag("discoverAboveLibraries", true),
+                                               liveTVAbove: flag("liveTVAboveLibraries", false))
+        if !flag("showPlaylistsTab", true) { hiddenLibraryKeys.insert(SidebarArrangement.allPlaylistsHidden) }
     }
 
     // MARK: - Sort Options

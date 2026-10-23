@@ -131,7 +131,7 @@ enum PlexMediaMapper {
                 return .dolbyVision(profile: stream.DOVIProfile ?? 0)
             }
             if stream.colorTrc == "smpte2084" && stream.colorPrimaries == "bt2020" {
-                return .hdr10
+                return stream.HDR10PlusPresent == true ? .hdr10Plus : .hdr10
             }
             if stream.colorTrc == "arib-std-b67" {
                 return .hlg
@@ -149,7 +149,8 @@ enum PlexMediaMapper {
             bitrate: stream.bitrate,
             videoRange: range,
             isDefault: stream.default ?? false,
-            scanType: stream.scanType
+            scanType: stream.scanType,
+            hasHDR10Plus: stream.HDR10PlusPresent == true
         )
     }
 

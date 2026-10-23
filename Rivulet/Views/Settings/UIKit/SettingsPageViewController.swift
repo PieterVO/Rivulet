@@ -194,7 +194,7 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: Self.cellID, for: indexPath) as! SettingsCell
         cell.configure(title: item.title, value: item.valueText, showsChevron: item.showsChevron,
                        destructive: item.isDestructive, showsCheckmark: item.showsCheckmark,
-                       dimmed: !item.isEnabled())
+                       dimmed: !item.isEnabled(), busy: item.isBusy())
         cell.onFocusGained = { [weak self] in self?.onFocusRow?(item.id) }
         return cell
     }

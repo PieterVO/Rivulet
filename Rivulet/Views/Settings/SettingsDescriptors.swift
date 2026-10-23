@@ -35,6 +35,9 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
         if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
+        if id.hasPrefix("lib_") { return descriptors["libraryRow"] }
+        if id.hasPrefix("sb_#livetv") { return descriptors["sidebarLiveTVRow"] }
+        if id.hasPrefix("sb_") { return descriptors["sidebarAppRow"] }
         return nil
     }
 
@@ -64,7 +67,19 @@ enum SettingsDescriptorStore {
         // MARK: Appearance
         "libraries": SettingDescriptor(
             icon: "sidebar.squares.left",
-            description: "Choose which libraries appear in the sidebar and set their order. Both apply to Home as well: a library you turn off here loses its Home rows, and the order you set here is the order Home draws them in."
+            description: "Choose what appears in the sidebar and set its order. Libraries apply to Home as well: a library you turn off here loses its Home rows, and the order you set here is the order Home draws them in."
+        ),
+        "resetSidebar": SettingDescriptor(
+            icon: "arrow.counterclockwise",
+            description: "Put every sidebar row back in its original order and show the ones you hid. Home's rows follow the library order."
+        ),
+        "sidebarAppRow": SettingDescriptor(
+            icon: "sidebar.squares.left",
+            description: "Click to show or hide this row in the sidebar. Press and hold to move it up or down."
+        ),
+        "sidebarLiveTVRow": SettingDescriptor(
+            icon: "tv",
+            description: "Press and hold to move Live TV up or down. It leaves the sidebar when its sources are removed."
         ),
         "libraryRow": SettingDescriptor(
             icon: "sidebar.squares.left",
@@ -110,22 +125,6 @@ enum SettingsDescriptorStore {
         "personalizedRecs": SettingDescriptor(
             icon: "person.3",
             description: "Uses TMDB metadata and your watch history to surface personalized recommendations of unwatched content."
-        ),
-        "showDiscoverTab": SettingDescriptor(
-            icon: "safari",
-            description: "Shows the Discover tab in the sidebar for browsing Popular, Top Rated, Upcoming, and more from TMDB."
-        ),
-        "showWatchlistTab": SettingDescriptor(
-            icon: "bookmark",
-            description: "Shows a Watchlist tab in the sidebar with everything on your Plex Watchlist."
-        ),
-        "showPlaylistsTab": SettingDescriptor(
-            icon: "list.bullet.rectangle",
-            description: "Shows a Playlists row under each server that has video playlists."
-        ),
-        "discoverAboveLibraries": SettingDescriptor(
-            icon: "arrow.up.arrow.down",
-            description: "Moves the Discover tab above your Media libraries in the sidebar for quicker access."
         ),
         // MARK: Playback
         "autoSkipIntro": SettingDescriptor(
@@ -214,10 +213,6 @@ enum SettingsDescriptorStore {
         ),
 
         // MARK: Live TV
-        "liveTVAboveLibraries": SettingDescriptor(
-            icon: "arrow.up.arrow.down",
-            description: "Moves the Live TV section above your Media libraries in the sidebar for quicker access."
-        ),
         "combineSources": SettingDescriptor(
             icon: "square.stack.3d.down.right",
             description: "Shows all Live TV sources together under one sidebar entry, or gives each source its own."
@@ -268,15 +263,19 @@ enum SettingsDescriptorStore {
         // MARK: Servers
         "plexServer": SettingDescriptor(
             icon: "server.rack",
-            description: "Manage your Plex server connection, switch to another server on your account, or sign out."
-        ),
-        "plexServerPicker": SettingDescriptor(
-            icon: "server.rack",
-            description: "The Plex server Rivulet browses and plays from. Choose another server on your account to switch to it."
+            description: "Every Plex server on your account. Select one to see its details."
         ),
         "plexServerOption": SettingDescriptor(
             icon: "server.rack",
-            description: "Switch to this server. Home and your libraries reload from it. A server shared with you shows who owns it."
+            description: "See this server's details. A server shared with you shows who owns it."
+        ),
+        "plexServerEnabled": SettingDescriptor(
+            icon: "power",
+            description: "Turn off to remove this server from Rivulet: its libraries, Home rows, Continue Watching and Live TV. Your account stays signed in."
+        ),
+        "plexServerRefresh": SettingDescriptor(
+            icon: "arrow.clockwise",
+            description: "Ask Plex for this server's latest status."
         ),
         "plexServersLoading": SettingDescriptor(
             icon: "server.rack",
@@ -288,7 +287,7 @@ enum SettingsDescriptorStore {
         ),
         "signOut": SettingDescriptor(
             icon: "rectangle.portrait.and.arrow.right",
-            description: "Sign out of your Plex server and remove all saved credentials. You'll need to sign in again to access your media."
+            description: "Sign out of your Plex account. Every Plex server on it leaves Rivulet until you sign in again."
         ),
         "jellyfinServer": SettingDescriptor(
             icon: "server.rack",
@@ -492,7 +491,7 @@ enum SettingsDescriptorStore {
         case .servers: return ("server.rack", .systemOrange)
         case .about: return ("info.circle.fill", .systemGray)
         case .plex: return ("server.rack", .systemOrange)
-        case .plexServerPicker: return ("server.rack", .systemOrange)
+        case .plexServerDetail: return ("server.rack", .systemOrange)
         case .jellyfin: return ("server.rack", .systemPurple)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)

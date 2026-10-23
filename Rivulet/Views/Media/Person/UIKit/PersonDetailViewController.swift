@@ -250,15 +250,15 @@ final class PersonDetailViewController: UIViewController {
     /// cell hugs its content. Leading/trailing match the shared content margin.
     private func makeHeaderSectionLayout() -> NSCollectionLayoutSection {
         let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
-                                          heightDimension: .estimated(280))
+                                          heightDimension: .estimated(250))
         let item = NSCollectionLayoutItem(layoutSize: size)
         let group = NSCollectionLayoutGroup.vertical(layoutSize: size, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
         section.contentInsetsReference = .none
         section.contentInsets = NSDirectionalEdgeInsets(
-            top: 80,
+            top: 120,   // portrait top, measured on device (tvOS 27)
             leading: MediaRowMetrics.rowLeading,
-            bottom: 14,
+            bottom: 48,   // puts the first shelf header's cap top 67.5 below the portrait
             trailing: MediaRowMetrics.rowTrailing)
         return section
     }
@@ -457,7 +457,7 @@ final class PersonDetailViewController: UIViewController {
     private func presentBiography() {
         guard let detail, let bio = detail.biography, !bio.isEmpty else { return }
         let content = InfoPopupContent.description(title: detail.name, subtitle: nil, body: bio)
-        let popup = InfoPopupViewController(content: content, width: 840, scrollable: true)
+        let popup = InfoPopupViewController(content: content, width: InfoPopupViewController.descriptionSize.width, height: InfoPopupViewController.descriptionSize.height, scrollable: true)
         present(popup, animated: true)
     }
 }

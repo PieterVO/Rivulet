@@ -42,6 +42,10 @@ struct InfoPopupCardLayout {
 
 final class InfoPopupViewController: UIViewController {
 
+    /// The description and person popups are 896 x 460, the info popup 820 wide (measured on device, tvOS 27).
+    static let descriptionSize = CGSize(width: 896, height: 460)
+    static let infoWidth: CGFloat = 820
+
     /// Focusable card so the modal owns the remote.
     private final class FocusableCard: UIView {
         override var canBecomeFocused: Bool { true }
@@ -246,7 +250,7 @@ enum InfoPopupContent {
     /// Title + genre line + full body (the About "description" popup).
     static func description(title: String, subtitle: String?, body: String?) -> UIView {
         let stack = verticalStack(spacing: 10)
-        stack.addArrangedSubview(label(title, size: 30, weight: .semibold, color: .white, lines: 2))
+        stack.addArrangedSubview(label(title, size: 31, weight: .bold, color: .white, lines: 2))
         if let subtitle, !subtitle.isEmpty {
             let s = label(subtitle, size: 20, weight: .medium, color: .white.withAlphaComponent(0.6), lines: 1)
             stack.addArrangedSubview(s)
@@ -316,8 +320,7 @@ enum InfoPopupContent {
     /// sections stacked vertically. Present with `scrollable: true`.
     static func fullInfo(detail: MediaItemDetail) -> UIView {
         let stack = verticalStack(spacing: 16)
-        // Title matches the section headers (InfoColumnView header = 40pt bold).
-        stack.addArrangedSubview(label(detail.item.title, size: 40, weight: .bold, color: .white, lines: 2))
+        stack.addArrangedSubview(label(detail.item.title, size: 31, weight: .bold, color: .white, lines: 2))
         if let genre = detail.genres.first, !genre.isEmpty {
             stack.addArrangedSubview(label(genre, size: 21, weight: .semibold, color: .white.withAlphaComponent(0.6), lines: 1))
         }
@@ -336,6 +339,11 @@ enum InfoPopupContent {
             stack.setCustomSpacing(22, after: placeholder)
         }
         stack.addArrangedSubview(metaRow(detail))
+        if !detail.ratings.isEmpty {
+            let meta = stack.arrangedSubviews.last!
+            stack.setCustomSpacing(30, after: meta)
+            stack.addArrangedSubview(RatingsGridView.row(detail.ratings))
+        }
 
         let source = detail.primarySource
         let isContainer = detail.item.kind == .season || detail.item.kind == .show
@@ -388,7 +396,7 @@ enum InfoPopupContent {
         guard !rows.isEmpty else { return }
         if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(30, after: last) }
         let col = InfoColumnView()
-        col.configure(title: title, rows: rows)
+        col.configure(title: title, rows: rows, style: .popup)
         stack.addArrangedSubview(col)
     }
 

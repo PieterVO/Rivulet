@@ -45,6 +45,10 @@ final class ExpandedDetailContainerView: UIView {
     /// Vertical slack inside the season-pill scroller so a focused pill's 1.05
     /// scale isn't clipped by the scroller's bounds.
     private static let seasonPillFocusPad: CGFloat = 8
+    /// Small title logo box and the pills below it (measured on device, tvOS 27): the pills sit 64 under the logo.
+    private static let smallLogoTop: CGFloat = 45
+    private static let smallLogoHeight: CGFloat = 100
+    static let seasonPillTop: CGFloat = smallLogoTop + smallLogoHeight + 64
     private static let peekLeadingCarousel = PreviewCarouselGeometry.centeredHorizontalInset
     private static let peekTrailingCarousel = PreviewCarouselGeometry.centeredHorizontalInset
     private static let peekLeadingExpanded: CGFloat = 0
@@ -242,7 +246,7 @@ final class ExpandedDetailContainerView: UIView {
         seasonsHeader.addSubview(seasonPillScroll)
         seasonPillRow.translatesAutoresizingMaskIntoConstraints = false
         seasonPillRow.axis = .horizontal
-        seasonPillRow.spacing = 34
+        seasonPillRow.spacing = 8
         seasonPillRow.alignment = .center
         seasonPillScroll.addSubview(seasonPillRow)
         let pillContent = seasonPillScroll.contentLayoutGuide
@@ -306,10 +310,10 @@ final class ExpandedDetailContainerView: UIView {
             belowFoldPage.heightAnchor.constraint(equalToConstant: Self.belowFoldHeight),
 
             // Small title logo: top-centered, slides up with content, crossfades in.
-            smallTitleLogo.topAnchor.constraint(equalTo: topAnchor, constant: 40),
+            smallTitleLogo.topAnchor.constraint(equalTo: topAnchor, constant: Self.smallLogoTop),
             smallTitleLogo.centerXAnchor.constraint(equalTo: centerXAnchor),
-            smallTitleLogo.heightAnchor.constraint(equalToConstant: 110),
-            smallTitleLogo.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
+            smallTitleLogo.heightAnchor.constraint(equalToConstant: Self.smallLogoHeight),
+            smallTitleLogo.widthAnchor.constraint(lessThanOrEqualToConstant: 546),
 
             // Episode peek: card-height clipped window, top tracks the reserve.
             episodesTopConstraint,
@@ -322,10 +326,8 @@ final class ExpandedDetailContainerView: UIView {
             episodesRow.topAnchor.constraint(equalTo: episodesClip.topAnchor),
             episodesRow.bottomAnchor.constraint(equalTo: episodesClip.bottomAnchor),
 
-            // Seasons header: in the reserve gap just above the episodes, left-
-            // aligned with them. +20pt below the logo (which ends at y150) for a
-            // gap between the title logo and the season pills.
-            seasonsHeader.topAnchor.constraint(equalTo: topAnchor, constant: 170 - Self.seasonPillFocusPad),
+            // Seasons header: pills 64 below the logo, left-aligned with the episodes.
+            seasonsHeader.topAnchor.constraint(equalTo: topAnchor, constant: Self.seasonPillTop - Self.seasonPillFocusPad),
             // Edge to edge, so the pills bleed off the screen like the episode rows.
             seasonsHeader.leadingAnchor.constraint(equalTo: leadingAnchor),
             seasonsHeader.trailingAnchor.constraint(equalTo: trailingAnchor),

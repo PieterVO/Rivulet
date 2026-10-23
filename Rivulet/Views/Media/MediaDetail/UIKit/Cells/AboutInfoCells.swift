@@ -51,6 +51,7 @@ final class AboutCollectionCell: UICollectionViewCell {
             card.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(card)
         }
+        for card in [leftCard, rightCard, ratingsCard] { card.focusScale = 1.02 }
         leftCard.onSelect = { [weak self] in
             guard let self, let d = self.currentDetail, !(d.item.overview ?? "").isEmpty else { return }
             self.onSelectSynopsis?(d)
@@ -279,7 +280,7 @@ final class InfoColumnsCollectionCell: UICollectionViewCell {
         ])
     }
 
-    /// 14 puts the 38 pt header's baseline 50 below the band top.
+    /// 14 puts the 36 pt header's baseline 48 below the band top.
     private static let topInset: CGFloat = 14
     private static let bottomInset: CGFloat = 56
 
@@ -302,11 +303,16 @@ final class InfoColumnsCollectionCell: UICollectionViewCell {
 
     /// Select on a column opens the same full-info popup as the hero Info button.
     private func presentFullInfo() {
-        guard let detail, var top = window?.rootViewController else { return }
-        while let presented = top.presentedViewController { top = presented }
-        let popup = InfoPopupViewController(content: InfoPopupContent.fullInfo(detail: detail),
-                                            width: 900, height: 900, scrollable: true)
-        top.present(popup, animated: true)
+        guard var detail else { return }
+        Task { [weak self] in
+            let extra = await RatingsClient.shared.ratings(for: detail, within: 1)
+            if !extra.isEmpty { detail.ratings = MediaRating.ordered(detail.ratings + extra) }
+            guard var top = self?.window?.rootViewController else { return }
+            while let presented = top.presentedViewController { top = presented }
+            let popup = InfoPopupViewController(content: InfoPopupContent.fullInfo(detail: detail),
+                                                width: InfoPopupViewController.infoWidth, height: 900, scrollable: true)
+            top.present(popup, animated: true)
+        }
     }
 }
 
@@ -408,24 +414,40 @@ final class InfoColumnView: UIView {
     /// Type and spacing for one use of the column. `standard` is the Info popup
     /// and the episode page; `footer` is the movie/show page's bottom band.
     nonisolated struct Style {
-        var headerFont = UIFont.systemFont(ofSize: 40, weight: .bold)
-        var headerColor = UIColor.white
+        // Measured on device (tvOS 27): 29 pt header, 23 pt label and value, 80 pt row pitch.
+        var headerFont = UIFont.systemFont(ofSize: 29, weight: .bold)
+        var headerColor = UIColor.white.withAlphaComponent(0.7)
         var headerGap: CGFloat = 20
-        var labelFont = UIFont.systemFont(ofSize: 21, weight: .semibold)
-        var labelColor = UIColor.white.withAlphaComponent(0.5)
-        var valueFont = UIFont.systemFont(ofSize: 26, weight: .semibold)
-        var valueColor = UIColor.white.withAlphaComponent(0.9)
+        var labelFont = UIFont.systemFont(ofSize: 23, weight: .medium)
+        var labelColor = UIColor.white.withAlphaComponent(0.31)
+        var valueFont = UIFont.systemFont(ofSize: 23, weight: .medium)
+        var valueColor = UIColor.white.withAlphaComponent(0.7)
         var valueLines = 0
         var valueLineSpacing: CGFloat = 0
-        var pairGap: CGFloat = 2
-        var rowGap: CGFloat = 14
+        var pairGap: CGFloat = 1
+        var rowGap: CGFloat = 24
         var columnGap: CGFloat = 48
         /// Wraps the rows (not the header) in a focusable card.
         var focusCard = false
 
-        static let standard = Style()
-        static let footer = Style(
+        /// The info popup (the defaults above).
+        static let popup = Style()
+        /// The episode page's columns: the footer's type with a 38 pt header, no card.
+        static let standard = Style(
             headerFont: .systemFont(ofSize: 38, weight: .bold),
+            headerColor: UIColor.white.withAlphaComponent(0.7),
+            headerGap: 30,
+            labelFont: .systemFont(ofSize: 23, weight: .medium),
+            labelColor: UIColor.white.withAlphaComponent(0.3),
+            valueFont: .systemFont(ofSize: 23, weight: .medium),
+            valueColor: UIColor.white.withAlphaComponent(0.7),
+            valueLines: 5,
+            valueLineSpacing: 2,
+            pairGap: 9,
+            rowGap: 30,
+            columnGap: 50)
+        static let footer = Style(
+            headerFont: .systemFont(ofSize: 36, weight: .bold),
             headerColor: UIColor.white.withAlphaComponent(0.7),
             headerGap: 30,
             labelFont: .systemFont(ofSize: 23, weight: .medium),
@@ -492,6 +514,7 @@ final class InfoColumnView: UIView {
             let card = AboutCardControl()
             card.restAlpha = 0
             card.layer.cornerRadius = 24
+            card.focusScale = 1.054
             card.onSelect = { [weak self] in self?.onSelect?() }
             rowStack.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(rowStack)
@@ -603,22 +626,41 @@ final class RatingsGridView: UIView {
         }
     }
 
-    private static func entry(_ rating: MediaRating) -> UIView {
+    /// Every score on one line, each over its source's name (the info popup's row).
+    static func row(_ ratings: [MediaRating]) -> UIView {
+        let row = UIStackView(arrangedSubviews: ratings.prefix(6).map { entry($0, score: 29, scale: 19, name: 16) })
+        row.axis = .horizontal
+        row.alignment = .top
+        // Five or six spread across the popup's width (six need about 600 of its 660); fewer sit left.
+        if row.arrangedSubviews.count >= 5 {
+            row.distribution = .equalSpacing
+            row.spacing = 16
+        } else {
+            row.spacing = 40
+            let spacer = UIView()
+            spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+            row.addArrangedSubview(spacer)
+        }
+        return row
+    }
+
+    static func entry(_ rating: MediaRating, score scoreSize: CGFloat = 38, scale scaleSize: CGFloat = 23,
+                      name nameSize: CGFloat = 19) -> UIView {
         let score = UILabel()
         let text = NSMutableAttributedString(
             string: rating.badgeText,
-            attributes: [.font: UIFont.systemFont(ofSize: 38, weight: .bold), .foregroundColor: UIColor.white])
+            attributes: [.font: UIFont.systemFont(ofSize: scoreSize, weight: .bold), .foregroundColor: UIColor.white])
         if let scale = rating.scale {
             text.append(NSAttributedString(
                 string: scale,
-                attributes: [.font: UIFont.systemFont(ofSize: 23, weight: .semibold),
+                attributes: [.font: UIFont.systemFont(ofSize: scaleSize, weight: .semibold),
                              .foregroundColor: UIColor.white.withAlphaComponent(0.6)]))
         }
         score.attributedText = text
 
         let name = UILabel()
         name.text = rating.name
-        name.font = .systemFont(ofSize: 19, weight: .semibold)
+        name.font = .systemFont(ofSize: nameSize, weight: .semibold)
         name.textColor = UIColor.white.withAlphaComponent(0.6)
 
         let stack = UIStackView(arrangedSubviews: [score, name])
@@ -640,6 +682,13 @@ final class AboutCardControl: UIControl {
         didSet { if selectable != oldValue { setNeedsFocusUpdate() } }
     }
     override var canBecomeFocused: Bool { selectable }
+    /// Focus scale; nil derives it from the card's width (1.134 at 260 down to 1.073 at 560).
+    var focusScale: CGFloat?
+    private func scale(forWidth width: CGFloat) -> CGFloat {
+        if let focusScale { return focusScale }
+        let t = min(max((width - 260) / 300, 0), 1)
+        return 1.134 - t * (1.134 - 1.073)
+    }
     /// Fill alpha when not focused. 0 = no card at rest (the footer columns).
     var restAlpha: CGFloat = 0.06 {
         didSet { backgroundColor = UIColor(white: 1, alpha: restAlpha) }
@@ -677,7 +726,8 @@ final class AboutCardControl: UIControl {
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }
             self.backgroundColor = UIColor(white: 1, alpha: focused ? 0.14 : self.restAlpha)
-            self.transform = focused ? CGAffineTransform(scaleX: 1.02, y: 1.02) : .identity
+            let s = self.scale(forWidth: self.bounds.width)
+            self.transform = focused ? CGAffineTransform(scaleX: s, y: s) : .identity
         }
     }
 }

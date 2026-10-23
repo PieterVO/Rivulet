@@ -11,8 +11,8 @@ final class ShellSidebarModelTests: XCTestCase {
         ShellSidebarModel.sections(
             libraries: servers.flatMap { server in server.libraries.map { SidebarLibrary($0, serverName: server.name) } },
             liveTVSources: [], combineLiveTV: true,
-            showDiscover: false, discoverAbove: true, showWatchlist: false,
-            liveTVAbove: false, profileName: "Bain")
+            showDiscover: false, showWatchlist: false,
+            profileName: "Bain")
     }
 
     private func tabs(hasServer: Bool, liveTV: Bool, libraries: [PlexLibrary] = [],
@@ -22,8 +22,8 @@ final class ShellSidebarModelTests: XCTestCase {
         return ShellSidebarModel.sections(
             libraries: libraries.map { SidebarLibrary(plex: $0, serverName: "Angel") },
             liveTVSources: liveTV ? [source] : [], combineLiveTV: true,
-            showDiscover: true, discoverAbove: true, showWatchlist: true,
-            liveTVAbove: false, profileName: "Account", hasMediaServer: hasServer,
+            showDiscover: true, showWatchlist: true,
+            profileName: "Account", hasMediaServer: hasServer,
             playlistServers: playlistServers)
             .flatMap(\.items).map(\.tab)
     }
@@ -38,13 +38,23 @@ final class ShellSidebarModelTests: XCTestCase {
         PlaylistServer(providerID: providerID, name: name, serverID: providerID)
     }
 
+    /// The arrangeable sections alone: no profile, Search/Home or Settings.
+    private func middle(_ libraries: [SidebarLibrary], playlistServers: [PlaylistServer] = []) -> [ShellSidebarSection] {
+        Array(ShellSidebarModel.sections(libraries: libraries, liveTVSources: [], combineLiveTV: true,
+                                         showDiscover: false, showWatchlist: false,
+                                         // The libraries' order as the profile stored it.
+                                         order: SidebarArrangement.seed(libraryOrder: libraries.map(\.key),
+                                                                        discoverAbove: true, liveTVAbove: false),
+                                         profileName: "Bain",
+                                         playlistServers: playlistServers).dropFirst(2).dropLast())
+    }
+
     /// The selected Plex server's Movies, then each other server's libraries, grouped.
     private func playlistSections(_ playlistServers: [PlaylistServer],
                                   _ servers: [(providerID: String, name: String, libraries: [MediaLibrary])]) -> [ShellSidebarSection] {
-        ShellSidebarModel.librarySections(
-            [SidebarLibrary(plex: movies, serverName: "Angel")]
+        middle([SidebarLibrary(plex: movies, serverName: "Angel")]
                 + servers.flatMap { server in server.libraries.map { SidebarLibrary($0, serverName: server.name) } },
-            playlistServers: playlistServers)
+               playlistServers: playlistServers)
     }
 
     func test_liveTVOnly_hidesServerTabs_andHome() {
@@ -89,7 +99,7 @@ final class ShellSidebarModelTests: XCTestCase {
 
         XCTAssertEqual(all.first { $0.title == "jellyfin-test" }?.items.map(\.tab),
                        [.playlists(providerID: "jellyfin:srv")])
-        let primaryOnly = ShellSidebarModel.librarySections([], playlistServers: [primary])
+        let primaryOnly = middle([], playlistServers: [primary])
         XCTAssertEqual(primaryOnly.first { $0.title == "Angel" }?.items.map(\.tab),
                        [.playlists(providerID: "plex:primary")])
     }
@@ -101,12 +111,12 @@ final class ShellSidebarModelTests: XCTestCase {
     }
 
     func test_playlistsRow_mixedServers_joinsLibrariesWithABadge() {
-        let mixed = ShellSidebarModel.librarySections(
+        let mixed = middle(
             [SidebarLibrary(plex: movies, serverName: "Angel"), SidebarLibrary(testMovies, serverName: "Test"),
              SidebarLibrary(plex: angelTV, serverName: "Angel")],
             playlistServers: [primary])
 
-        XCTAssertEqual(mixed.map(\.title), ["Libraries"])
+        XCTAssertEqual(mixed.map(\.title), [nil])
         XCTAssertEqual(mixed.first?.items.last?.tab, .playlists(providerID: "plex:primary"))
         XCTAssertEqual(mixed.first?.items.last?.badge, "Angel")
     }
@@ -141,7 +151,7 @@ final class ShellSidebarModelTests: XCTestCase {
     private let testMovies = MediaLibrary(id: "1", providerID: "plex:test", title: "Movies", kind: .movies)
 
     private func librarySections(_ libraries: [SidebarLibrary]) -> [ShellSidebarSection] {
-        ShellSidebarModel.librarySections(libraries)
+        middle(libraries)
     }
 
     func test_groupedByServer_eachServerUnderItsName_noBadges() {
@@ -158,11 +168,11 @@ final class ShellSidebarModelTests: XCTestCase {
         XCTAssertEqual(sections.map(\.title), ["Rivulet Test Plex", "Angel"])
     }
 
-    func test_mixedServers_oneLibrariesSection_eachRowBadged() {
+    func test_mixedServers_oneHeaderlessSection_eachRowBadged() {
         let sections = librarySections([SidebarLibrary(plex: angelMovies, serverName: "Angel"),
                                         SidebarLibrary(testMovies, serverName: "Rivulet Test Plex"),
                                         SidebarLibrary(plex: angelTV, serverName: "Angel")])
-        XCTAssertEqual(sections.map(\.title), ["Libraries"])
+        XCTAssertEqual(sections.map(\.title), [nil])
         XCTAssertEqual(sections.first?.items.map(\.badge), ["Angel", "Rivulet Test Plex", "Angel"])
     }
 
@@ -170,8 +180,8 @@ final class ShellSidebarModelTests: XCTestCase {
         let avatar = URL(string: "https://plex.tv/users/abc/avatar")
         let all = ShellSidebarModel.sections(
             libraries: [], liveTVSources: [], combineLiveTV: true,
-            showDiscover: false, discoverAbove: true, showWatchlist: false,
-            liveTVAbove: false, profileName: "William Gurley", profileAvatar: avatar)
+            showDiscover: false, showWatchlist: false,
+            profileName: "William Gurley", profileAvatar: avatar)
 
         XCTAssertEqual(all[0].items.map(\.tab), [.account])
         XCTAssertEqual(all[0].items.first?.title, "William")
@@ -183,8 +193,8 @@ final class ShellSidebarModelTests: XCTestCase {
         func header(_ canSwitch: Bool) -> ShellSidebarItem? {
             ShellSidebarModel.sections(
                 libraries: [], liveTVSources: [], combineLiveTV: true,
-                showDiscover: false, discoverAbove: true, showWatchlist: false,
-                liveTVAbove: false, profileName: "Bain",
+                showDiscover: false, showWatchlist: false,
+                profileName: "Bain",
                 canSwitchProfile: canSwitch)[0].items.first
         }
         XCTAssertEqual(header(true)?.canSwitchProfile, true)

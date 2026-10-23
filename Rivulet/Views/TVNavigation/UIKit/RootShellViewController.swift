@@ -365,6 +365,7 @@ extension RootShellViewController: MenuBackHandling {
         let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem
         let loadingPage = focused == nil && view.window?.rootViewController?.presentedViewController == nil
         guard isInsideShell(focused) || loadingPage else { return false }
+        if sidebar.cancelRowMove() { return true }
         if sidebar.isExpanded {
             // Menu in the open sidebar returns to Home (issue #192 policy);
             // on Home it falls through so the system can exit the app.

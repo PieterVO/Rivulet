@@ -206,6 +206,7 @@ enum ProviderPlaybackMetadata {
             DOVIProfile: doviProfile,
             DOVIRPUPresent: nil,
             DOVIVersion: nil,
+            HDR10PlusPresent: nil,
             frameRate: frameRate,
             height: height,
             width: width,

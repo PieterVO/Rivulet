@@ -264,7 +264,8 @@ final class PreviewCarouselViewController: UIViewController {
                 title: detail.item.title,
                 subtitle: detail.genres.prefix(3).joined(separator: ", "),
                 body: detail.item.overview)
-            self.present(InfoPopupViewController(content: content, width: 840, scrollable: true), animated: true)
+            let size = InfoPopupViewController.descriptionSize
+            self.present(InfoPopupViewController(content: content, width: size.width, height: size.height), animated: true)
         }
         expandedDetail.onSelectAdvisory = { [weak self] advisory in
             let content = InfoPopupContent.advisory(advisory)
@@ -926,9 +927,19 @@ final class PreviewCarouselViewController: UIViewController {
     /// Info button → structured info popup (scrollable), styled like our other
     /// popups but with Information / Languages / Accessibility sections.
     private func presentInfoPopup(_ detail: MediaItemDetail) {
+        // The popup's ratings row wants the Worker's scores too; the detail page has usually cached them.
+        Task { [weak self] in
+            var detail = detail
+            let extra = await RatingsClient.shared.ratings(for: detail, within: 1)
+            if !extra.isEmpty { detail.ratings = MediaRating.ordered(detail.ratings + extra) }
+            self?.showInfoPopup(detail)
+        }
+    }
+
+    private func showInfoPopup(_ detail: MediaItemDetail) {
         let content = InfoPopupContent.fullInfo(detail: detail)
         // Fixed size: the scroll-content measurement under-reports.
-        let popup = InfoPopupViewController(content: content, width: 900, height: 900, scrollable: true)
+        let popup = InfoPopupViewController(content: content, width: InfoPopupViewController.infoWidth, height: 900, scrollable: true)
         var top: UIViewController = self
         while let presented = top.presentedViewController { top = presented }
         top.present(popup, animated: true)

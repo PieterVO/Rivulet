@@ -43,6 +43,11 @@ class LiveTVDataStore: ObservableObject {
     private static let fillChunkHours = 12
     private var fillTask: Task<Void, Never>?
     private var keepFreshTask: Task<Void, Never>?
+    /// VOD players currently up. While any is, the half-day fill holds: the far-off guide (a 16 MB,
+    /// ~6 s `/grid` response per half day on a slow PMS) is not needed behind a film, and filling it
+    /// then cost the player network and main-actor time. A count, not a flag, so a player that
+    /// disappears after the next one started does not resume the fill under it.
+    private var playersHoldingGuideFill = 0
     /// Last full `loadEPG`. Past 6 hours a refresh reloads every day, not
     /// just the next hours, so far-off schedule changes show up too.
     private var lastFullEPGLoad: Date?
@@ -94,8 +99,8 @@ class LiveTVDataStore: ObservableObject {
     /// Bumped when the source set changes. A load started for an older set is
     /// cancelled; one for the current set is waited on (see `loadChannels`).
     private var providersGeneration = 0
-    /// Server and token the Plex source was confirmed under; nil while there is none.
-    private var plexSourceKey: String?
+    /// Servers and tokens the Plex sources were checked under.
+    private var plexSourceKeys: Set<String> = []
     private var plexSync: Task<Void, Never>?
     /// IPTV sources kept from a restricted profile; still saved, back on an unrestricted one.
     private var withheldIPTVProviders: [String: any LiveTVProvider] = [:]
@@ -281,12 +286,27 @@ class LiveTVDataStore: ObservableObject {
     /// window paints. Stops at the ceiling or on a failure; the next refresh
     /// starts it again.
     private func fillGuide() {
-        guard fillTask == nil, !epg.isEmpty else { return }
+        guard fillTask == nil, !epg.isEmpty, playersHoldingGuideFill == 0 else { return }
         fillTask = Task { [weak self] in
             while !Task.isCancelled, await self?.extendEPG() == true {}
-            // A cancelled fill was already replaced by `loadEPG`.
+            // A cancelled fill was already replaced by `loadEPG`, or paused for playback.
             if !Task.isCancelled { self?.fillTask = nil }
         }
+    }
+
+    /// Holds the half-day fill while a VOD title plays and picks it up where it stopped once the last
+    /// player is gone. The near-term refresh keeps running, so a guide behind the player still moves
+    /// forward. Each `beginPlaybackGuideHold` is matched by one `endPlaybackGuideHold`.
+    func beginPlaybackGuideHold() {
+        playersHoldingGuideFill += 1
+        fillTask?.cancel()
+        fillTask = nil
+    }
+
+    func endPlaybackGuideHold() {
+        guard playersHoldingGuideFill > 0 else { return }
+        playersHoldingGuideFill -= 1
+        if playersHoldingGuideFill == 0 { fillGuide() }
     }
 
     /// Refresh the guide when the app returns to the foreground. tvOS suspends
@@ -494,36 +514,51 @@ class LiveTVDataStore: ObservableObject {
         }
     }
 
-    /// The Plex content token changed (sign-in, sign-out, server or profile
-    /// switch): the server's DVR, when `/livetv/dvrs` lists one, is the Plex
-    /// source, found again under the new token. IPTV sources hold no Plex
-    /// token and only move for a restricted profile.
+    /// The Plex content token or the account's servers changed (sign-in,
+    /// sign-out, server or profile switch): each server whose `/livetv/dvrs`
+    /// lists a DVR is a Plex source, found again under the new tokens. IPTV
+    /// sources hold no Plex token and only move for a restricted profile.
     func plexContentTokenChanged() {
         let restrictionsChanged = applyProfileRestrictions()
         let auth = PlexAuthManager.shared
-        let key = Self.plexSourceKey(serverURL: auth.selectedServerURL, token: auth.selectedServerToken)
-        if key != nil, key == plexSourceKey {
+        var servers: [(key: String, url: String, token: String, name: String)] = []
+        if let key = Self.plexSourceKey(serverURL: auth.selectedServerURL, token: auth.selectedServerToken),
+           let url = auth.selectedServerURL, let token = auth.selectedServerToken {
+            servers.append((key, url, token, auth.savedServerName ?? "Plex"))
+        }
+        for extra in PlexExtraServers.shared.current {
+            guard let token = PlexExtraServers.shared.token(for: extra),
+                  let key = Self.plexSourceKey(serverURL: extra.url, token: token) else { continue }
+            servers.append((key, extra.url, token, extra.name))
+        }
+        let keys = Set(servers.map(\.key))
+        if !keys.isEmpty, keys == plexSourceKeys {
             if restrictionsChanged { reloadSources() }
             return
         }
         plexSync?.cancel()
-        plexSourceKey = nil
+        plexSourceKeys = []
         let stale = Set(providers.filter { $0.value.sourceType == .plex }.keys)
         dropSources(stale)
-        guard let key, let serverURL = auth.selectedServerURL, let token = auth.selectedServerToken else {
+        guard !servers.isEmpty else {
             if restrictionsChanged || !stale.isEmpty { reloadSources() }
             return
         }
-        let name = auth.savedServerName ?? "Plex"
         plexSync = Task { [weak self] in
-            let hasDVR = await PlexLiveTVProvider.checkAvailability(serverURL: serverURL, authToken: token)
+            let hasDVR = await withTaskGroup(of: (Int, Bool).self) { group in
+                for (index, server) in servers.enumerated() {
+                    group.addTask { (index, await PlexLiveTVProvider.checkAvailability(serverURL: server.url, authToken: server.token)) }
+                }
+                return await group.reduce(into: Set<Int>()) { if $1.1 { $0.insert($1.0) } }
+            }
             guard let self, !Task.isCancelled else { return }
-            if hasDVR {
-                let provider = PlexLiveTVProvider(serverURL: serverURL, authToken: token, serverName: name)
-                plexSourceKey = key
+            for index in hasDVR.sorted() {
+                let server = servers[index]
+                let provider = PlexLiveTVProvider(serverURL: server.url, authToken: server.token, serverName: server.name)
                 providers[provider.sourceId] = provider
             }
-            if hasDVR || restrictionsChanged || !stale.isEmpty { reloadSources() }
+            plexSourceKeys = keys
+            if !hasDVR.isEmpty || restrictionsChanged || !stale.isEmpty { reloadSources() }
         }
     }
 
