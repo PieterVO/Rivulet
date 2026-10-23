@@ -17,6 +17,8 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
     @Published private(set) var chosenAudioID: Int?
     @Published private(set) var chosenSubtitleID: Int?
     var onItemChange: (() -> Void)?
+    /// A playlist plays through this instead of the show's next episode.
+    private(set) var queue: PlayQueue<PlexMetadata>?
 
     private let plex: IOSPlexSession
     private var skippedMarkerIDs: Set<String> = []
@@ -37,9 +39,10 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
     private var didFallBack = false
     private var cancellables = Set<AnyCancellable>()
 
-    init(request: IOSPlexPlaybackRequest, plex: IOSPlexSession) {
+    init(request: IOSPlexPlaybackRequest, plex: IOSPlexSession, queue: PlayQueue<PlexMetadata>? = nil) {
         self.request = request
         self.plex = plex
+        self.queue = queue
         observePlayer()
     }
 
@@ -411,6 +414,10 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
 
     private func lookUpNextEpisode() {
         nextLookupTask?.cancel()
+        if let queue {
+            nextEpisode = queue.next
+            return
+        }
         let episode = request.item
         let request = request
         let plex = plex
@@ -459,6 +466,7 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
             let plex = plex
             Task { await plex.stopTranscode(previous) }
             request = nextRequest
+            queue?.advance()
             chosenAudioID = nil
             chosenSubtitleID = nil
             didFallBack = false
@@ -547,16 +555,17 @@ private struct IOSPlexPlayerScreen: View {
     }
 
     private var contextualAction: IOSPlayerContextualAction? {
+        let next = session.queue == nil ? "Next Episode" : "Next"
         if let countdown = session.upNextCountdown {
             return IOSPlayerContextualAction(
-                title: "Next Episode in \(countdown)",
+                title: "\(next) in \(countdown)",
                 systemImage: "forward.end.fill",
                 action: session.playNext,
                 cancel: session.cancelUpNext
             )
         }
         if session.nextEpisode != nil, !session.upNextDismissed, session.isNearEnd {
-            return IOSPlayerContextualAction(title: "Next Episode", systemImage: "forward.end.fill", action: session.playNext)
+            return IOSPlayerContextualAction(title: next, systemImage: "forward.end.fill", action: session.playNext)
         }
         if let marker = session.activeMarker, MarkerSkipMode.current(for: marker.type ?? "") != .off {
             return IOSPlayerContextualAction(

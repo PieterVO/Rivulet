@@ -39,7 +39,7 @@ enum PlaylistMenus {
     }
 
     /// Play from Here starts on the picked entry itself: never the list's Continue prompt.
-    static func playFromHereQueue(_ entries: [PlaylistEntry], at index: Int) -> PlayQueue? {
+    static func playFromHereQueue(_ entries: [PlaylistEntry], at index: Int) -> PlayQueue<PlaylistEntry>? {
         PlayQueue(entries: entries, startingAt: index)
     }
 

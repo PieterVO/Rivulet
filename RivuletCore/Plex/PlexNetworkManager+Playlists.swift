@@ -14,7 +14,7 @@ import Foundation
 
 /// A playlist row. Not `PlexMetadata`: playlists send `smart` as a JSON bool
 /// and collections send it as "1", so one shared field cannot decode both.
-nonisolated struct PlexPlaylist: Decodable, Sendable {
+nonisolated struct PlexPlaylist: Decodable, Hashable, Sendable {
     let ratingKey: String
     let title: String?
     let composite: String?
@@ -72,6 +72,18 @@ extension PlexNetworkManager {
         }
         let container: PlexMediaContainerWrapper = try await request(url, headers: plexHeaders(authToken: authToken))
         return (container.MediaContainer.Metadata ?? [], container.MediaContainer.totalSize)
+    }
+
+    /// Every item of a playlist, in 200-item pages.
+    func getAllPlaylistItems(serverURL: String, authToken: String, ratingKey: String) async throws -> [PlexMetadata] {
+        let size = 200
+        var items: [PlexMetadata] = []
+        while true {
+            let page = try await getPlaylistItemsWithTotal(
+                serverURL: serverURL, authToken: authToken, ratingKey: ratingKey, start: items.count, size: size)
+            items += page.items
+            if page.items.isEmpty || items.count >= (page.totalSize ?? items.count) { return items }
+        }
     }
 
     /// A new regular playlist seeded with `uri`; the server answers 400 without one.

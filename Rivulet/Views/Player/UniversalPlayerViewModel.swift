@@ -555,7 +555,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Play Queue
 
     /// The playlist being played, by position; nil plays one title with series Up Next.
-    private(set) var playQueue: PlayQueue?
+    private(set) var playQueue: PlayQueue<PlaylistEntry>?
     /// Full Plex metadata for the next item, by ratingKey. Tests stub the server here.
     var plexMetadataFetch: (_ serverURL: String, _ authToken: String, _ ratingKey: String) async throws -> PlexMetadata = {
         try await PlexNetworkManager.shared.getFullMetadata(serverURL: $0, authToken: $1, ratingKey: $2)
@@ -598,7 +598,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         serverURL: String,
         authToken: String,
         startOffset: TimeInterval? = nil,
-        playQueue: PlayQueue? = nil,
+        playQueue: PlayQueue<PlaylistEntry>? = nil,
         loadingArtImage: UIImage? = nil,
         loadingThumbImage: UIImage? = nil,
         initialAudioTrackId: Int? = nil,
@@ -650,7 +650,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     convenience init(
         providerPlayback: ProviderPlayback,
         startOffset: TimeInterval?,
-        playQueue: PlayQueue? = nil,
+        playQueue: PlayQueue<PlaylistEntry>? = nil,
         loadingArtImage: UIImage? = nil,
         loadingThumbImage: UIImage? = nil,
         preferredMediaID: String? = nil

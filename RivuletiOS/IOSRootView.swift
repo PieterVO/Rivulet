@@ -48,6 +48,14 @@ struct IOSRootView: View {
                     }
                     .defaultVisibility(.hidden, for: .tabBar)
                 }
+                ForEach(showsSidebarLibraries ? playlistServers : [], id: \.self) { key in
+                    let serverID = key.isEmpty ? nil : key
+                    Tab(plex.displayTitle("Playlists", serverID: serverID), systemImage: "list.and.film",
+                        value: "playlists:\(key)") {
+                        tabStack(sidebarZoom) { IOSPlexPlaylistsView(serverID: serverID, showsAccount: true) }
+                    }
+                    .defaultVisibility(.hidden, for: .tabBar)
+                }
             }
             Tab("Live TV", systemImage: "play.tv", value: "live-tv") {
                 NavigationStack { IOSLiveTVView() }
@@ -107,12 +115,14 @@ struct IOSRootView: View {
         .onChange(of: plex.libraries) { _, libraries in
             if !libraries.isEmpty { dropOrphanedLibraryTab() }
         }
+        .onChange(of: plex.videoPlaylists.keys.sorted()) { dropOrphanedLibraryTab() }
     }
 
     /// A sidebar library tab vanishes at compact width or on a server without that library.
     private func dropOrphanedLibraryTab() {
-        guard selectedTab.hasPrefix("library:") || selectedTab == "downloads" else { return }
-        let live = showsSidebarLibraries ? videoLibraries.map { "library:\($0.id)" } + ["downloads"] : []
+        guard selectedTab.hasPrefix("library:") || selectedTab.hasPrefix("playlists:") || selectedTab == "downloads" else { return }
+        let live = showsSidebarLibraries
+            ? videoLibraries.map { "library:\($0.id)" } + playlistServers.map { "playlists:\($0)" } + ["downloads"] : []
         if !live.contains(selectedTab) { selectedTab = "library" }
     }
 
@@ -120,6 +130,11 @@ struct IOSRootView: View {
     /// there crashed UIKit's tab bar rebuild on rotation.
     private var showsSidebarLibraries: Bool {
         UIDevice.current.userInterfaceIdiom == .pad && sizeClass == .regular
+    }
+
+    /// Servers with video playlists, by `serverID ?? ""`: the selected one first.
+    private var playlistServers: [String] {
+        plex.videoPlaylists.keys.sorted { lhs, rhs in lhs.isEmpty || (!rhs.isEmpty && lhs < rhs) }
     }
 
     /// Movie and TV libraries only: iOS has no music player.

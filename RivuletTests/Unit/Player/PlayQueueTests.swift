@@ -63,8 +63,8 @@ final class PlayQueueTests: XCTestCase {
     }
 
     func test_emptyEntries_hasNoQueue() {
-        XCTAssertNil(PlayQueue(entries: [], startingAt: 0))
-        XCTAssertNil(PlayQueue.shuffled([]))
+        XCTAssertNil(PlayQueue<PlaylistEntry>(entries: [], startingAt: 0))
+        XCTAssertNil(PlayQueue<PlaylistEntry>.shuffled([]))
     }
 
     func test_continuePoint_inProgressOnly_isFirstEntry() {

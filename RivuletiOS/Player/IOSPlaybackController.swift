@@ -43,10 +43,10 @@ final class IOSPlaybackController: NSObject, ObservableObject {
 
     // MARK: - Caller API
 
-    /// Plays a Plex item full screen.
-    func play(_ request: IOSPlexPlaybackRequest) {
+    /// Plays a Plex item full screen; a playlist's `queue` replaces Up Next.
+    func play(_ request: IOSPlexPlaybackRequest, queue: PlayQueue<PlexMetadata>? = nil) {
         guard let plex else { return }
-        start(IOSPlexPlayback(request: request, plex: plex))
+        start(IOSPlexPlayback(request: request, plex: plex, queue: queue))
     }
 
     func start(_ newSession: any IOSPlaybackSession) {

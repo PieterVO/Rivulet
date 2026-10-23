@@ -125,7 +125,7 @@ enum ProviderPlayer {
     /// is the playlist `item` starts.
     @MainActor
     static func play(_ item: MediaItem, fromBeginning: Bool, sourceID: String? = nil,
-                     playQueue: PlayQueue? = nil,
+                     playQueue: PlayQueue<PlaylistEntry>? = nil,
                      from presenter: UIViewController, onDismiss: (() -> Void)?) {
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
             presentError(MediaProviderError.notFound, from: presenter)

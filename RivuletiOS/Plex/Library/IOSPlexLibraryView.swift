@@ -33,6 +33,11 @@ struct IOSPlexLibrariesView: View {
                                         Label(library.title, systemImage: library.icon)
                                     }
                                 }
+                                if !plex.playlists(serverID: group.serverID).isEmpty {
+                                    NavigationLink(value: IOSPlexPlaylistsRoute(serverID: group.serverID)) {
+                                        Label("Playlists", systemImage: "list.and.film")
+                                    }
+                                }
                             }
                         }
                     }
@@ -48,11 +53,11 @@ struct IOSPlexLibrariesView: View {
         }
     }
 
-    private var serverGroups: [(id: String, name: String?, libraries: [PlexLibrary])] {
+    private var serverGroups: [(id: String, serverID: String?, name: String?, libraries: [PlexLibrary])] {
         let names = plex.otherServerNames
         let ids = plex.libraries.reduce(into: [String?]()) { if !$0.contains($1.serverID) { $0.append($1.serverID) } }
         return ids.map { id in
-            (id ?? "", ids.count > 1 ? id.flatMap { names[$0] } ?? plex.auth.savedServerName : nil,
+            (id ?? "", id, ids.count > 1 ? id.flatMap { names[$0] } ?? plex.auth.savedServerName : nil,
              plex.libraries.filter { $0.serverID == id })
         }
     }

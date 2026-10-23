@@ -1734,7 +1734,7 @@ class PlayerContainerViewController: UIViewController {
     }
 
     /// The Playlist pane: a window of queue entries around the current one, indexed by queue position.
-    private func playlistRow(_ queue: PlayQueue, vm: UniversalPlayerViewModel) -> PlayerCardRowView {
+    private func playlistRow(_ queue: PlayQueue<PlaylistEntry>, vm: UniversalPlayerViewModel) -> PlayerCardRowView {
         let window = UpNextRowState.queueWindow(count: queue.entries.count, currentIndex: queue.index)
         let cards = window.map { index -> PlayerCardRowView.Card in
             let item = queue.entries[index].item

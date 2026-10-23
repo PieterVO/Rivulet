@@ -5393,7 +5393,7 @@ final class PlexHomeViewController: UIViewController {
     }
 
     /// Starts a playlist on its current entry, behind that entry's own resume prompt.
-    private func playQueue(_ queue: PlayQueue) {
+    private func playQueue(_ queue: PlayQueue<PlaylistEntry>) {
         let item = queue.current.item
         let play: (Bool) -> Void = { [weak self] fromBeginning in
             guard let self else { return }

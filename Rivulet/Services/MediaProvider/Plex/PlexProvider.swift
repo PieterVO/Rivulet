@@ -558,23 +558,13 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
 
     func playlistEntries(_ playlist: MediaItemRef) async throws -> [PlaylistEntry] {
         try await plexCall {
-            let size = 200
-            var entries: [PlaylistEntry] = []
-            var start = 0
-            while true {
-                let page = try await networkManager.getPlaylistItemsWithTotal(
-                    serverURL: serverURL, authToken: authToken,
-                    ratingKey: playlist.itemID, start: start, size: size
-                )
-                entries += page.items.compactMap { meta in
+            try await networkManager.getAllPlaylistItems(serverURL: serverURL, authToken: authToken, ratingKey: playlist.itemID)
+                .compactMap { meta in
                     meta.playlistItemID.map {
                         PlaylistEntry(entryID: String($0),
                                       item: PlexMediaMapper.item(meta, providerID: id, serverURL: serverURL, authToken: authToken))
                     }
                 }
-                start += page.items.count
-                if page.items.isEmpty || start >= (page.totalSize ?? start) { return entries }
-            }
         }
     }
 

@@ -7,6 +7,8 @@ import SwiftUI
 /// `IOSPlexActionHost`; the default does nothing.
 struct IOSPlexActions {
     var play: (PlexMetadata) -> Void = { _ in }
+    /// Plays a playlist from its current entry, then on through the rest.
+    var playQueue: (PlayQueue<PlexMetadata>) -> Void = { _ in }
     var open: (PlexMetadata) -> Void = { _ in }
     var setWatched: (PlexMetadata, Bool) -> Void = { _, _ in }
     var setWatchlisted: (PlexMetadata, Bool) -> Void = { _, _ in }
@@ -40,6 +42,7 @@ private struct IOSPlexActionHost: ViewModifier {
         content
             .environment(\.plexActions, IOSPlexActions(
                 play: play,
+                playQueue: playQueue,
                 open: { pushed = $0 },
                 setWatched: { item, watched in
                     run("Couldn't Update") { try await plex.setWatched(watched, for: item) }
@@ -73,6 +76,20 @@ private struct IOSPlexActionHost: ViewModifier {
             do {
                 let target = try await plex.playableTarget(for: item)
                 playback.play(try await plex.playback(for: target))
+            } catch let error where isCancellationError(error) {
+            } catch {
+                failure = ("Couldn't Play", error.localizedDescription)
+            }
+        }
+    }
+
+    private func playQueue(_ queue: PlayQueue<PlexMetadata>) {
+        guard preparingID == nil else { return }
+        preparingID = queue.current.id
+        Task {
+            defer { preparingID = nil }
+            do {
+                playback.play(try await plex.playback(for: queue.current), queue: queue)
             } catch let error where isCancellationError(error) {
             } catch {
                 failure = ("Couldn't Play", error.localizedDescription)

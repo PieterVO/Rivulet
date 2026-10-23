@@ -12,9 +12,15 @@ import Foundation
 
 /// One row of a playlist. `entryID` names the row, not the title, so the same
 /// title twice is two entries (Plex `playlistItemID`, Jellyfin `PlaylistItemId`).
-struct PlaylistEntry: Hashable, Sendable {
+nonisolated struct PlaylistEntry: Hashable, Sendable {
     let entryID: String
     let item: MediaItem
+}
+
+extension PlayQueue where Entry == PlaylistEntry {
+    static func continuePoint(in entries: [PlaylistEntry]) -> Int? {
+        continuePoint(in: entries, isPlayed: \.item.userState.isPlayed, isStarted: \.item.userState.isInProgress)
+    }
 }
 
 struct MediaPlaylist: Hashable, Sendable {

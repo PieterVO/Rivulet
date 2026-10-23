@@ -9,22 +9,22 @@
 
 import Foundation
 
-struct PlayQueue: Sendable, Equatable {
-    let entries: [PlaylistEntry]
+struct PlayQueue<Entry: Sendable & Equatable>: Sendable, Equatable {
+    let entries: [Entry]
     private(set) var index: Int
 
-    init?(entries: [PlaylistEntry], startingAt index: Int) {
+    init?(entries: [Entry], startingAt index: Int) {
         guard !entries.isEmpty else { return nil }
         self.entries = entries
         self.index = min(max(index, 0), entries.count - 1)
     }
 
-    static func shuffled(_ entries: [PlaylistEntry]) -> PlayQueue? {
+    static func shuffled(_ entries: [Entry]) -> PlayQueue? {
         PlayQueue(entries: entries.shuffled(), startingAt: 0)
     }
 
-    var current: PlaylistEntry { entries[index] }
-    var next: PlaylistEntry? { index + 1 < entries.count ? entries[index + 1] : nil }
+    var current: Entry { entries[index] }
+    var next: Entry? { index + 1 < entries.count ? entries[index + 1] : nil }
 
     mutating func advance() { jump(to: index + 1) }
 
@@ -33,9 +33,8 @@ struct PlayQueue: Sendable, Equatable {
     }
 
     /// First unwatched entry once anything is watched or started; nil means Play starts at 0.
-    static func continuePoint(in entries: [PlaylistEntry]) -> Int? {
-        let started = entries.contains { $0.item.userState.isPlayed || $0.item.userState.isInProgress }
-        guard started else { return nil }
-        return entries.firstIndex { !$0.item.userState.isPlayed }
+    static func continuePoint(in entries: [Entry], isPlayed: (Entry) -> Bool, isStarted: (Entry) -> Bool) -> Int? {
+        guard entries.contains(where: { isPlayed($0) || isStarted($0) }) else { return nil }
+        return entries.firstIndex { !isPlayed($0) }
     }
 }

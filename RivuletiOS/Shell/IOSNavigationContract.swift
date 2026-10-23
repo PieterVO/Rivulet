@@ -73,6 +73,8 @@ private struct IOSPlexDestinations: ViewModifier {
             .navigationDestination(for: PlexLibrary.self) { IOSPlexLibraryView(library: $0).iosPlexActionHost() }
             .navigationDestination(for: IOSPlexHubRoute.self) { IOSPlexHubGridView(route: $0).iosPlexActionHost() }
             .navigationDestination(for: IOSDownloadsRoute.self) { _ in IOSDownloadsView().iosPlexActionHost() }
+            .navigationDestination(for: IOSPlexPlaylistsRoute.self) { IOSPlexPlaylistsView(serverID: $0.serverID).iosPlexActionHost() }
+            .navigationDestination(for: IOSPlexPlaylistRoute.self) { IOSPlexPlaylistView(route: $0).iosPlexActionHost() }
     }
 
     @ViewBuilder

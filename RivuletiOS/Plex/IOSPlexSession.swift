@@ -31,6 +31,8 @@ final class IOSPlexSession: ObservableObject {
     @Published private(set) var authenticationURL: URL?
     @Published private(set) var availableServers: [PlexDevice] = []
     @Published private(set) var libraries: [PlexLibrary] = []
+    /// Each server's video playlists, keyed by `serverID ?? ""`; only servers that have any.
+    @Published private(set) var videoPlaylists: [String: [PlexPlaylist]] = [:]
     /// Home rows after Continue Watching: promoted hubs of the pinned libraries.
     @Published private(set) var shelves: [PlexHub] = []
     /// One row across every server (#87): the same title on two servers is one card.
@@ -186,8 +188,10 @@ final class IOSPlexSession: ObservableObject {
         do {
             // The selected server's failure is the page's; another server's only drops its rows.
             async let otherHomes = fetchOtherServersHomes()
+            async let playlists = fetchVideoPlaylists()
             let home = try await fetchHome()
             let others = await otherHomes
+            let lists = await playlists
             guard isCurrent() else { return }
             if libraryHubsSession.map({ $0 != session }) ?? true {
                 libraryHubs = [:]
@@ -195,6 +199,8 @@ final class IOSPlexSession: ObservableObject {
                 continueWatchingRows = []
                 libraryHubsSession = session
             }
+            // Before the libraries, which re-check the sidebar tabs these back.
+            videoPlaylists = lists
             libraries = home.libraries + others.flatMap(\.libraries)
             if let cw = home.continueWatching { primaryContinueWatching = cw }
             let pinned = libraries.filter(\.isPinnedToHome)
@@ -595,6 +601,7 @@ final class IOSPlexSession: ObservableObject {
 
     func clearContent() {
         libraries = []
+        videoPlaylists = [:]
         shelves = []
         continueWatching = nil
         contentError = nil
