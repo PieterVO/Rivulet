@@ -722,6 +722,8 @@ final class AetherPlayer: PlayerProtocol {
                             presentsHDR: engine.videoFormat != .sdr)
     }
     var sourceVideoCodecName: String? { engine.sourceVideoCodecName }
+    /// FEL or MEL for the current Profile 7 load; nil when the engine didn't classify it (FEL setting off, no DV panel).
+    private(set) var dolbyVisionEnhancementLayer: DolbyVisionEnhancementLayer?
 
     /// The start of a fullscreen live join, measured for issue #319. See
     /// LiveAVTelemetry.
@@ -1044,6 +1046,7 @@ final class AetherPlayer: PlayerProtocol {
         // against the old episode's picture rect until `presentationSize`
         // arrives.
         videoSize = .zero
+        dolbyVisionEnhancementLayer = nil
         // New file: the previous track's script and fonts describe nothing,
         // even when the next episode repeats the same header and track id.
         assFonts = []
@@ -1064,6 +1067,7 @@ final class AetherPlayer: PlayerProtocol {
             throw pe
         }
         if let routeLine = p7RouteLine.withLock({ $0 }) {
+            dolbyVisionEnhancementLayer = DolbyVisionEnhancementLayer(routeLine: routeLine)
             SentryBridge.log(.info, "DV P7 route", attributes: [
                 "engine_route": routeLine,
                 "panel_dv": panelDV,

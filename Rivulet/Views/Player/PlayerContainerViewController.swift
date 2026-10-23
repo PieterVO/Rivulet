@@ -1726,7 +1726,8 @@ class PlayerContainerViewController: UIViewController {
                 vm.aetherPlayer != nil ? { [weak vm] in vm?.aetherPlayer?.advancedStats() } : nil
             let details = PlayerDetailsPaneView(
                 media: PlayerDetailsPaneView.mediaSections(metadata: vm.metadata, modes: vm.streamingModeInfo,
-                                                           dolbyVision: vm.aetherPlayer?.dolbyVisionPlayback),
+                                                           dolbyVision: vm.aetherPlayer?.dolbyVisionPlayback,
+                                                           enhancementLayer: vm.aetherPlayer?.dolbyVisionEnhancementLayer),
                 statsProvider: statsProvider)
             return (details, nil)
         }

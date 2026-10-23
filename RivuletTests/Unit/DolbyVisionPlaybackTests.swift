@@ -34,3 +34,14 @@ final class DolbyVisionPlaybackTests: XCTestCase {
         XCTAssertEqual(playback(8), .sdr)
     }
 }
+
+final class DolbyVisionEnhancementLayerTests: XCTestCase {
+
+    func test_readsTheEngineRouteLine() {
+        let prefix = "[AetherEngine] DV P7 dual-layer route: "
+        XCTAssertEqual(DolbyVisionEnhancementLayer(routeLine: prefix + "taken (el_type=FEL, 3840x2160@23.976, budget 80%)"), .full)
+        XCTAssertEqual(DolbyVisionEnhancementLayer(routeLine: prefix + "not taken (el_type=MEL, nothing to compose), keeps the native route"), .minimal)
+        XCTAssertEqual(DolbyVisionEnhancementLayer(routeLine: prefix + "not taken (over the real-time budget, 3840x2160@60 needs 160% of it), keeps the native route"), .full)
+        XCTAssertNil(DolbyVisionEnhancementLayer(routeLine: prefix + "not taken (preferDualLayerDolbyVision is off), keeps the native route"))
+    }
+}

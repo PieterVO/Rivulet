@@ -642,6 +642,23 @@ enum DolbyVisionPlayback: String, Equatable {
     }
 }
 
+/// A Profile 7 source's enhancement layer, read from the engine's route line (it exposes no property).
+/// Only FEL reaches the budget check, so an over-budget line is FEL too.
+enum DolbyVisionEnhancementLayer: String, Equatable {
+    case full = "Full (FEL)"
+    case minimal = "Minimal (MEL)"
+
+    init?(routeLine: String) {
+        if routeLine.contains("el_type=FEL") || routeLine.contains("over the real-time budget") {
+            self = .full
+        } else if routeLine.contains("el_type=MEL") {
+            self = .minimal
+        } else {
+            return nil
+        }
+    }
+}
+
 struct StreamingModeInfo {
     enum Mode: String {
         case directPlay = "Direct Play"
@@ -867,7 +884,8 @@ final class PlayerDetailsPaneView: UIView {
     // MARK: Section builders
 
     static func mediaSections(metadata: PlexMetadata, modes: StreamingModeInfo,
-                              dolbyVision: DolbyVisionPlayback? = nil) -> [Section] {
+                              dolbyVision: DolbyVisionPlayback? = nil,
+                              enhancementLayer: DolbyVisionEnhancementLayer? = nil) -> [Section] {
         let media = metadata.Media?.first
         let streams = media?.Part?.first?.Stream ?? []
         var sections: [Section] = []
@@ -881,6 +899,7 @@ final class PlayerDetailsPaneView: UIView {
                 var profile = "Profile \(stream.DOVIProfile ?? 0)"
                 if let compat = stream.DOVIBLCompatID { profile += " (CompatID \(compat))" }
                 video.append(Row(label: "Dolby Vision", value: profile))
+                if let enhancementLayer { video.append(Row(label: "Enhancement Layer", value: enhancementLayer.rawValue)) }
                 if let dolbyVision { video.append(Row(label: "Playing As", value: dolbyVision.rawValue)) }
             } else if stream.isHDR {
                 video.append(Row(label: "HDR", value: "HDR10"))
