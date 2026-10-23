@@ -149,8 +149,16 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        // confirm build number at release
         ("1.1.0 (108)", [
+            "New onboarding screen and flow.",
+            "You can now quickly page through the preview carousel.",
+            "Skip buttons can each be turned off completely so they do not show.",
+            "Added an option for audio language to follow what's set in your Plex account.",
+            "The Home hero no longer shows an item with low-resolution artwork.",
+            "The sidebar profile row no longer takes focus if an account has only one profile.",
+            "New Rating setting in Appearance picks which score shows on a title's details.",
+            "Combined Live TV sources now each get a Guide tab and a What's On row.",
+            "New Send Diagnostics in About gives you a code to share when reporting a problem.",
             "Updated AetherEngine to 7.47.0",
         ]),
         ("1.1.0 (107)", [
