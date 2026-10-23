@@ -2128,6 +2128,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             languages.append(contentsOf: languageCandidates(for: track))
         }
 
+        if let id = plexChosenAudioStreamId,
+           let track = plexAudioTracksFromMetadata().first(where: { $0.id == id }) {
+            languages.append(contentsOf: languageCandidates(for: track))
+        }
+
         let audioIntent = TrackIntentStore.effectiveAudioIntent
         if audioIntent.language != TrackLanguage.original {
             languages.append(audioIntent.language)
@@ -3319,11 +3324,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         let audio = plexAudioTracksFromMetadata()
         let subs = plexSubtitleTracksFromMetadata()
         var ids = PlexTrackIDs()
-        let selectedAudio = streams.first { $0.isAudio && $0.selected == true }?.id
-        let defaultAudio = streams.first { $0.isAudio && $0.default == true }?.id
         if let id = initialAudioTrackId, audio.contains(where: { $0.id == id }) {
             ids.audio = id
-        } else if let selectedAudio, let defaultAudio, selectedAudio != defaultAudio,
+        } else if let selectedAudio = plexChosenAudioStreamId,
                   audio.contains(where: { $0.id == selectedAudio }) {
             ids.audio = selectedAudio
         } else {
@@ -4451,6 +4454,17 @@ final class UniversalPlayerViewModel: ObservableObject {
         updateCaptionsOnMute()
     }
 
+    /// Plex's `selected` audio stream when it outranks the global intent: a
+    /// per-item pick (selected but not the file default), or, with no audio
+    /// language set in Rivulet, the server's pick from the account's language (#382).
+    private var plexChosenAudioStreamId: Int? {
+        let streams = (metadata.Media?.first?.Part?.first?.Stream ?? []).filter { $0.isAudio }
+        guard let selectedId = streams.first(where: { $0.selected == true })?.id else { return nil }
+        if TrackIntentStore.audioIntent == nil { return selectedId }
+        guard let defaultId = streams.first(where: { $0.default == true })?.id else { return nil }
+        return selectedId != defaultId ? selectedId : nil
+    }
+
     /// Apply saved audio preference, in the numbered priority below. Every tier
     /// selects explicitly, even when the id already matches: neither direct play
     /// nor Plex's HLS session reliably starts on the persisted selection.
@@ -4464,13 +4478,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // 2. Plex per-item explicit selection: a `selected: true` stream that
-        //    isn't also the file's default means the user deliberately picked it
-        //    (here, or in Plex Web / mobile), and that persists server-side.
-        let plexAudioStreams = (metadata.Media?.first?.Part?.first?.Stream ?? []).filter { $0.isAudio }
-        if let selectedId = plexAudioStreams.first(where: { $0.selected == true })?.id,
-           let defaultId = plexAudioStreams.first(where: { $0.default == true })?.id,
-           selectedId != defaultId,
+        // 2. Plex's choice (see `plexChosenAudioStreamId`).
+        if let selectedId = plexChosenAudioStreamId,
            let track = audioTrackMatchingPlexStreamId(selectedId) {
             selectAudioTrackWithoutSaving(id: track.id)
             return
@@ -4899,7 +4908,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// not during the 5-second preview window before the marker starts.
     /// When auto-skip is enabled, shows a countdown to give user a chance to cancel.
     private func handleMarkerActive(_ marker: PlexMarker, isIntro: Bool, currentTime: TimeInterval) {
-        let autoSkipIntro = UserDefaults.standard.bool(forKey: "autoSkipIntro")
+        // Off in Settings: no pill and no auto-skip (#381).
+        let mode = MarkerSkipMode.current(for: "intro")
+        guard mode != .off else { return }
+        let autoSkipIntro = mode == .automatic
 
         // Only auto-skip when actually inside the marker (not during preview window)
         // This ensures we use Plex's exact marker timing and don't cut off content
@@ -4972,7 +4984,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func handleCreditsMarkerActive(_ marker: PlexMarker, currentTime: TimeInterval) {
         guard let creditsId = marker.id else { return }
 
-        let autoSkipCredits = UserDefaults.standard.bool(forKey: "autoSkipCredits")
+        let mode = MarkerSkipMode.current(for: "credits")
+        guard mode != .off else { return }
+        let autoSkipCredits = mode == .automatic
 
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
@@ -5002,7 +5016,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func handleRecapMarkerActive(_ marker: PlexMarker, currentTime: TimeInterval) {
         guard let recapId = marker.id else { return }
 
-        let autoSkipRecap = UserDefaults.standard.bool(forKey: "autoSkipRecap")
+        let mode = MarkerSkipMode.current(for: "recap")
+        guard mode != .off else { return }
+        let autoSkipRecap = mode == .automatic
 
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds
@@ -5031,7 +5047,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func handleCommercialMarkerActive(_ marker: PlexMarker, currentTime: TimeInterval) {
         guard let commercialId = marker.id else { return }
 
-        let autoSkipAds = UserDefaults.standard.bool(forKey: "autoSkipAds")
+        let mode = MarkerSkipMode.current(for: "commercial")
+        guard mode != .off else { return }
+        let autoSkipAds = mode == .automatic
 
         // Only auto-skip when actually inside the marker (not during preview window)
         let insideMarker = currentTime >= marker.startTimeSeconds

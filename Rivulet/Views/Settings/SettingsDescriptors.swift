@@ -130,19 +130,19 @@ enum SettingsDescriptorStore {
         // MARK: Playback
         "autoSkipIntro": SettingDescriptor(
             icon: "play.circle",
-            description: "Automatically skips TV show intros when markers are available. No button press needed."
+            description: "What happens when an intro starts. Button shows Skip Intro, Automatic skips it after a short countdown, and Off never shows the button."
         ),
         "autoSkipCredits": SettingDescriptor(
             icon: "stop.circle",
-            description: "Automatically skips end credits when markers are available, going straight to the post-play screen."
+            description: "What happens when the credits start. Button shows Skip Credits, Automatic skips straight to the post-play screen, and Off never shows the button."
         ),
         "autoSkipAds": SettingDescriptor(
             icon: "forward.frame",
-            description: "Automatically skips advertisement segments when markers are available."
+            description: "What happens when an ad break starts. Button shows Skip Ad, Automatic skips it after a short countdown, and Off never shows the button."
         ),
         "autoSkipRecap": SettingDescriptor(
             icon: "backward.end.circle",
-            description: "Automatically skips 'previously on' recaps. Recap markers come from the community database below; turn that on for this to have anything to skip."
+            description: "What happens when a 'previously on' recap starts. Button shows Skip Recap, Automatic skips it, and Off never shows the button. Recap markers come from the community database below."
         ),
         "useIntroDB": SettingDescriptor(
             icon: "magnifyingglass",
@@ -170,7 +170,7 @@ enum SettingsDescriptorStore {
         ),
         "audioLanguage": SettingDescriptor(
             icon: "waveform",
-            description: "The audio track to play when a title has several. Original plays the file's main track, so foreign films and anime keep their own language. Picking a track in the player also changes this."
+            description: "The audio track to play when a title has several. Plex Account follows the audio language set in your Plex account (English on other servers). Original plays the file's main track, so foreign films and anime keep their own language. Picking a track in the player also changes this."
         ),
         "subtitleMode": SettingDescriptor(
             icon: "captions.bubble",

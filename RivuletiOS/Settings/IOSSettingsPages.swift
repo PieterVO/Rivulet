@@ -24,10 +24,15 @@ struct IOSHomeSettingsView: View {
 struct IOSPlaybackSettingsView: View {
     @AppStorage("playerSkipBackwardSeconds") private var skipBackwardSeconds = 10
     @AppStorage("playerSkipForwardSeconds") private var skipForwardSeconds = 30
+    /// Observed so the skip pickers redraw; read and written through `MarkerSkipMode`.
     @AppStorage("autoSkipIntro") private var autoSkipIntro = false
     @AppStorage("autoSkipRecap") private var autoSkipRecap = false
     @AppStorage("autoSkipCredits") private var autoSkipCredits = false
     @AppStorage("autoSkipAds") private var autoSkipAds = false
+    @AppStorage("showSkipIntro") private var showSkipIntro = true
+    @AppStorage("showSkipRecap") private var showSkipRecap = true
+    @AppStorage("showSkipCredits") private var showSkipCredits = true
+    @AppStorage("showSkipAds") private var showSkipAds = true
     @AppStorage("useIntroDB") private var useIntroDB = false
     /// Same keys as the tvOS Home and Away Streaming Quality settings.
     @AppStorage(StreamingQuality.homeKey) private var homeQuality = StreamingQuality.homeDefault
@@ -58,14 +63,14 @@ struct IOSPlaybackSettingsView: View {
             }
 
             Section {
-                Toggle("Intros", isOn: $autoSkipIntro)
-                Toggle("Recaps", isOn: $autoSkipRecap)
-                Toggle("Credits", isOn: $autoSkipCredits)
-                Toggle("Commercials", isOn: $autoSkipAds)
+                skipPicker("Intros", marker: "intro")
+                skipPicker("Recaps", marker: "recap")
+                skipPicker("Credits", marker: "credits")
+                skipPicker("Commercials", marker: "commercial")
             } header: {
-                Text("Skip Automatically")
+                Text("Skip Markers")
             } footer: {
-                Text("A skip button still appears for every marker during playback.")
+                Text("Button shows a skip button, Automatic skips on its own, and Off shows nothing.")
             }
 
             Section {
@@ -79,6 +84,15 @@ struct IOSPlaybackSettingsView: View {
 
     private var qualityOptions: some View {
         ForEach(StreamingQuality.allChoices, id: \.self) { Text($0.label).tag($0) }
+    }
+
+    private func skipPicker(_ title: String, marker: String) -> some View {
+        Picker(title, selection: Binding(
+            get: { MarkerSkipMode.current(for: marker) },
+            set: { MarkerSkipMode.set($0, for: marker) }
+        )) {
+            ForEach(MarkerSkipMode.allCases, id: \.self) { Text($0.label).tag($0) }
+        }
     }
 }
 

@@ -318,9 +318,13 @@ enum SettingsContent {
 
     private static var audioLanguagePicker: [SettingsRowItem] {
         let languages = TrackLanguage.choices.sorted { TrackLanguage.displayName($0) < TrackLanguage.displayName($1) }
-        return ([TrackLanguage.original] + languages).map { code in
+        // No stored intent follows the Plex account's audio language (#382).
+        let account = SettingsRowItem(id: "al_account", title: audioLanguageName(nil), kind: .option(
+            isSelected: { TrackIntentStore.audioIntent == nil },
+            select: { TrackIntentStore.audioIntent = nil }))
+        return [account] + ([TrackLanguage.original] + languages).map { code in
             SettingsRowItem(id: "al_\(code)", title: audioLanguageName(code), kind: .option(
-                isSelected: { TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language) == code },
+                isSelected: { TrackIntentStore.audioIntent.map { TrackLanguage.normalize($0.language) } == code },
                 select: { TrackIntentStore.audioIntent = AudioIntent(language: code) }))
         }
     }
@@ -335,7 +339,8 @@ enum SettingsContent {
 
     // MARK: Audio and subtitles (read and written through TrackIntentStore)
 
-    private static func audioLanguageName(_ code: String) -> String {
+    private static func audioLanguageName(_ code: String?) -> String {
+        guard let code else { return "Plex Account" }
         if code == TrackLanguage.original { return "Original" }
         // An untagged or unknown pick resolves to English (see resolveAudio).
         return TrackLanguage.isKnown(code) ? TrackLanguage.displayName(code) : TrackLanguage.displayName(TrackLanguage.english)
@@ -455,7 +460,7 @@ enum SettingsContent {
             .header("Audio & Subtitles"),
             SettingsRowItem(id: "audioLanguage", title: "Audio Language",
                             kind: .navigationValue(.audioLanguagePicker, value: {
-                                audioLanguageName(TrackLanguage.normalize(TrackIntentStore.effectiveAudioIntent.language))
+                                audioLanguageName(TrackIntentStore.audioIntent.map { TrackLanguage.normalize($0.language) })
                             })),
             SettingsRowItem(id: "subtitleMode", title: "Subtitles",
                             kind: .navigationValue(.subtitleModePicker, value: { SubtitleMode(TrackIntentStore.effectiveSubtitleIntent).rawValue })),
@@ -491,11 +496,11 @@ enum SettingsContent {
                             kind: .navigationValue(.skipBackIntervalPicker, value: {
                                 SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
                             })),
-            .header("Auto-Skip"),
-            toggle("autoSkipIntro", "Intro", key: "autoSkipIntro", default: false),
-            toggle("autoSkipCredits", "Credits", key: "autoSkipCredits", default: false),
-            toggle("autoSkipAds", "Ads", key: "autoSkipAds", default: false),
-            toggle("autoSkipRecap", "Recap", key: "autoSkipRecap", default: false),
+            .header("Skip Buttons"),
+            skipModeRow("autoSkipIntro", "Intro", marker: "intro"),
+            skipModeRow("autoSkipCredits", "Credits", marker: "credits"),
+            skipModeRow("autoSkipAds", "Ads", marker: "commercial"),
+            skipModeRow("autoSkipRecap", "Recap", marker: "recap"),
             toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
             .header("Autoplay"),
             SettingsRowItem(id: "autoplayCountdown", title: "Countdown",
@@ -1250,6 +1255,17 @@ enum SettingsContent {
 
     /// `enabledWhen` marks the row as depending on another setting: while it
     /// returns false the row renders dimmed and cannot be focused or toggled.
+    /// Cycles one marker kind through Button, Automatic and Off (#381).
+    private static func skipModeRow(_ id: String, _ title: String, marker: String) -> SettingsRowItem {
+        SettingsRowItem(id: id, title: title, kind: .cycle(
+            value: { MarkerSkipMode.current(for: marker).label },
+            next: {
+                let all = MarkerSkipMode.allCases
+                let i = all.firstIndex(of: MarkerSkipMode.current(for: marker)) ?? 0
+                MarkerSkipMode.set(all[(i + 1) % all.count], for: marker)
+            }))
+    }
+
     private static func toggle(_ id: String, _ title: String, key: String, default def: Bool,
                                enabledWhen: (() -> Bool)? = nil) -> SettingsRowItem {
         SettingsRowItem(id: id, title: title, kind: .toggle(

@@ -85,7 +85,8 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
         stallTracker.noteSeekOrLoad(at: .now)
         // A transcode's text subtitle arrives as a WebVTT rendition nothing selects; the file
         // opens on its default tracks, so picks made on a transcode carry back.
-        pendingEngineAudio = isTranscoding ? nil : chosenAudioID
+        // Direct play otherwise opens on the file default; Plex's pick follows the account language (#382).
+        pendingEngineAudio = isTranscoding ? nil : chosenAudioID ?? request.selectedPlexStreamID(streamType: 2)
         pendingEngineSubtitle = isTranscoding ? selectedSubtitleID : chosenSubtitleID
         await plex.openTranscode(request)
         try? await player.load(
@@ -388,15 +389,9 @@ final class IOSPlexPlayback: ObservableObject, IOSPlaybackSession {
     }
 
     private func evaluateAutoSkip(at time: TimeInterval) {
-        guard let marker = activeMarker else { return }
-        let key: String? = switch marker.type {
-        case "intro": "autoSkipIntro"
-        case "recap": "autoSkipRecap"
-        case "commercial": "autoSkipAds"
-        case "credits": "autoSkipCredits"
-        default: nil
-        }
-        if let key, UserDefaults.standard.bool(forKey: key) { skip(marker) }
+        guard let marker = activeMarker,
+              MarkerSkipMode.current(for: marker.type ?? "") == .automatic else { return }
+        skip(marker)
     }
 
     func skip(_ marker: PlexMarker) {
@@ -563,7 +558,7 @@ private struct IOSPlexPlayerScreen: View {
         if session.nextEpisode != nil, !session.upNextDismissed, session.isNearEnd {
             return IOSPlayerContextualAction(title: "Next Episode", systemImage: "forward.end.fill", action: session.playNext)
         }
-        if let marker = session.activeMarker {
+        if let marker = session.activeMarker, MarkerSkipMode.current(for: marker.type ?? "") != .off {
             return IOSPlayerContextualAction(
                 title: "Skip \(marker.displayName)",
                 systemImage: marker.isCommunity ? "person.3.fill" : nil,
