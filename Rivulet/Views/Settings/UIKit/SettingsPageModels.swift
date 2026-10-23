@@ -207,6 +207,7 @@ enum SettingsContent {
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
         case .appIconPicker:          return appIconPicker
+        case .detailRatingPicker:     return detailRatingPicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
         case .skipBackIntervalPicker: return skipBackIntervalPicker
@@ -229,6 +230,14 @@ enum SettingsContent {
             SettingsRowItem(id: "ai_\(icon.rawValue)", title: icon.title, kind: .option(
                 isSelected: { AppIcon.current == icon },
                 select: { icon.apply() }))
+        }
+    }
+
+    private static var detailRatingPicker: [SettingsRowItem] {
+        MediaRating.Source.allCases.filter { $0 != .unknown }.map { source in
+            SettingsRowItem(id: "dr_\(source.rawValue)", title: source.name, kind: .option(
+                isSelected: { MediaRating.detailSource == source },
+                select: { UserDefaults.standard.set(source.rawValue, forKey: MediaRating.detailSourceKey) }))
         }
     }
 
@@ -433,6 +442,10 @@ enum SettingsContent {
             toggle("libraryHero", "Hero", key: "showLibraryHero", default: true),
             toggle("discoveryRows", "Discovery Rows", key: "showLibraryRecommendations", default: true),
             toggle("recentRows", "Recent Rows", key: "showLibraryRecentRows", default: true),
+
+            .header("Details"),
+            SettingsRowItem(id: "detailRating", title: "Rating",
+                            kind: .navigationValue(.detailRatingPicker, value: { MediaRating.detailSource.name })),
 
             .header("Live TV"),
         ] + liveTVLookRows

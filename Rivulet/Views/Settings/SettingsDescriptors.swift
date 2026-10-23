@@ -34,6 +34,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("hs_") { return descriptors["heightSpeakers"] }
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
         if id.hasPrefix("ai_") { return descriptors["appIcon"] }
+        if id.hasPrefix("dr_") { return descriptors["detailRating"] }
         if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
         if id.hasPrefix("lib_") { return descriptors["libraryRow"] }
@@ -110,6 +111,10 @@ enum SettingsDescriptorStore {
         "homeHero": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
             description: "Shows a large featured content banner at the top of the Home screen with artwork and quick actions."
+        ),
+        "detailRating": SettingDescriptor(
+            icon: "star.leadinghalf.filled",
+            description: "Choose the one rating shown at the top of a movie or show's details. If a title doesn't have the rating you choose, Rotten Tomatoes is shown instead."
         ),
         "libraryHero": SettingDescriptor(
             icon: "rectangle.stack",
@@ -504,6 +509,7 @@ enum SettingsDescriptorStore {
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)
         case .cache: return ("internaldrive", .systemGray)
         case .appIconPicker: return ("app.badge", .systemPurple)
+        case .detailRatingPicker: return ("star.leadinghalf.filled", .systemYellow)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)
         case .skipBackIntervalPicker: return ("backward.fill", .systemBlue)

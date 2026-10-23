@@ -14,7 +14,7 @@ import Foundation
 
 nonisolated struct MediaRating: Sendable, Hashable {
     /// Declared in About-card display order.
-    enum Source: Int, Sendable, Hashable, Comparable {
+    enum Source: Int, Sendable, Hashable, Comparable, CaseIterable {
         case rottenTomatoes, rottenTomatoesAudience, imdb, metacritic, letterboxd, tmdb, unknown
 
         static func < (a: Source, b: Source) -> Bool { a.rawValue < b.rawValue }
@@ -43,17 +43,17 @@ nonisolated struct MediaRating: Sendable, Hashable {
         return unique.filter { !(named && $0.source == .unknown) }.sorted { $0.source < $1.source }
     }
 
-    var name: String {
-        switch source {
-        case .rottenTomatoes: "Rotten Tomatoes"
-        case .rottenTomatoesAudience: "RT Audience"
-        case .imdb: "IMDb"
-        case .metacritic: "Metacritic"
-        case .letterboxd: "Letterboxd"
-        case .tmdb: "TMDB"
-        case .unknown: "Rating"
-        }
+    /// The detail row's one score (Settings > Appearance > Rating); Rotten Tomatoes when the
+    /// title lacks the chosen source. The raw value is stored, so 0 (unset) is Rotten Tomatoes.
+    static let detailSourceKey = "detailRatingSource"
+    static var detailSource: Source {
+        Source(rawValue: UserDefaults.standard.integer(forKey: detailSourceKey)) ?? .rottenTomatoes
     }
+    static func detailRating(in ratings: [MediaRating]) -> MediaRating? {
+        ratings.first { $0.source == detailSource } ?? ratings.first { $0.source == .rottenTomatoes }
+    }
+
+    var name: String { source.name }
 
     /// Each source in its own format: "89%", "73", "4.2", "7.6".
     var badgeText: String {
@@ -85,6 +85,20 @@ nonisolated struct MediaRating: Sendable, Hashable {
         case .metacritic: "/100"
         case .letterboxd: "/5"
         case .imdb, .tmdb, .unknown: "/10"
+        }
+    }
+}
+
+nonisolated extension MediaRating.Source {
+    var name: String {
+        switch self {
+        case .rottenTomatoes: "Rotten Tomatoes"
+        case .rottenTomatoesAudience: "RT Audience"
+        case .imdb: "IMDb"
+        case .metacritic: "Metacritic"
+        case .letterboxd: "Letterboxd"
+        case .tmdb: "TMDB"
+        case .unknown: "Rating"
         }
     }
 }
