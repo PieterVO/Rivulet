@@ -90,10 +90,6 @@ enum SettingsDescriptorStore {
             icon: "app.badge",
             description: "Choose the Rivulet icon on the Apple TV Home Screen."
         ),
-        "displaySize": SettingDescriptor(
-            icon: "textformat.size",
-            description: "Scale all interface elements up or down. Useful for different TV sizes and viewing distances."
-        ),
 
         "homeRows": SettingDescriptor(
             icon: "rectangle.grid.1x2",
@@ -502,7 +498,6 @@ enum SettingsDescriptorStore {
         case .libraries: return ("sidebar.squares.left", .systemPurple)
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)
         case .cache: return ("internaldrive", .systemGray)
-        case .displaySizePicker: return ("textformat.size", .systemOrange)
         case .appIconPicker: return ("app.badge", .systemPurple)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)

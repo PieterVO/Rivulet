@@ -74,7 +74,7 @@ final class HubHeaderView: UICollectionReusableView {
             titleLabel.font = MediaRowMetrics.headerFont
             titleLabel.textColor = MediaRowMetrics.headerColor
         case .swiftUIWatchlist:
-            titleLabel.font = .systemFont(ofSize: ScaledDimensions.sectionTitleSize, weight: .bold)
+            titleLabel.font = .systemFont(ofSize: MediaRowMetrics.sectionTitleSize, weight: .bold)
             titleLabel.textColor = .white
         }
         titleLabel.text = title

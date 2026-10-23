@@ -21,7 +21,7 @@ final class PlaylistHeaderCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        titleLabel.font = .systemFont(ofSize: ScaledDimensions.sectionTitleSize, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: MediaRowMetrics.sectionTitleSize, weight: .bold)
         titleLabel.textColor = .white
         playButton.configure(sortName: "Play", symbol: "play.fill")
         shuffleButton.configure(sortName: "Shuffle", symbol: "shuffle")

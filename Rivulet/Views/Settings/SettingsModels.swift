@@ -51,7 +51,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case homeRows
     case liveTVSourceDetail, liveTVFavorites
     case addLiveTVSource, addXtream, addOwnServer, addPlaylistURL
-    case displaySizePicker, appIconPicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
+    case appIconPicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
     case heightSpeakersPicker, subtitleModePicker, autoplayLimitPicker
     case homeQualityPicker, awayQualityPicker
     case audioLanguagePicker, subtitleLanguagePicker
@@ -79,7 +79,6 @@ enum SettingsPage: Hashable, CaseIterable {
         case .libraries: return "Sidebar"
         case .homeRows: return "Home Rows"
         case .cache: return "Cache & Storage"
-        case .displaySizePicker: return "Display Size"
         case .appIconPicker: return "App Icon"
         case .autoplayCountdownPicker: return "Autoplay Countdown"
         case .skipIntervalPicker: return "Skip Forward Length"
@@ -156,5 +155,3 @@ enum SkipInterval: Int, CaseIterable, CustomStringConvertible {
 
     var description: String { "\(rawValue) seconds" }
 }
-
-// Note: DisplaySize enum is in Services/UIScale.swift for global access.

@@ -34,7 +34,6 @@ struct TVSidebarView: View {
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
     @AppStorage("showDiscoverTab") private var showDiscoverTab = true
     @AppStorage("showWatchlistTab") private var showWatchlistTab = true
-    @AppStorage("displaySize") private var displaySizeRaw = DisplaySize.normal.rawValue
     @State private var selectedTab: SidebarTab = .home
     @State private var showProfilePicker = false
     /// A profile was entered through the picker; any other close re-presents it.
@@ -54,10 +53,6 @@ struct TVSidebarView: View {
     @State private var didApplyDebugLaunch = false
 
     @Namespace private var contentNamespace
-
-    private var uiScale: CGFloat {
-        (DisplaySize(rawValue: displaySizeRaw) ?? .normal).scale
-    }
 
     /// Home's welcome overlay stands down for any signed-in server.
     private var isSignedInToAnyServer: Bool {
@@ -624,7 +619,6 @@ struct TVSidebarView: View {
         }
         .focusScope(contentNamespace)
         .environment(\.nestedNavigationState, nestedNavState)
-        .environment(\.uiScale, uiScale)
     }
 
     // MARK: - Welcome View

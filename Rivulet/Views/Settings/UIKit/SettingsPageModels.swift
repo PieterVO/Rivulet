@@ -207,7 +207,6 @@ enum SettingsContent {
         case .addOwnServer:     return addOwnServer
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
-        case .displaySizePicker:      return displaySizePicker
         case .appIconPicker:          return appIconPicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
@@ -225,14 +224,6 @@ enum SettingsContent {
     }
 
     // MARK: Picker pages (checkmark option rows; select-and-pop)
-
-    private static var displaySizePicker: [SettingsRowItem] {
-        DisplaySize.allCases.map { opt in
-            SettingsRowItem(id: "ds_\(opt.rawValue)", title: opt.description, kind: .option(
-                isSelected: { SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue) == opt.rawValue },
-                select: { SettingsStore.setString("displaySize", opt.rawValue) }))
-        }
-    }
 
     private static var appIconPicker: [SettingsRowItem] {
         AppIcon.allCases.map { icon in
@@ -416,10 +407,6 @@ enum SettingsContent {
             // Leading block is unheaded, like an Apple TV Settings page's first
             // group: it sits directly under the page title.
             SettingsRowItem(id: "libraries", title: "Sidebar", kind: .navigation(.libraries)),
-            SettingsRowItem(id: "displaySize", title: "Display Size",
-                            kind: .navigationValue(.displaySizePicker, value: {
-                                DisplaySize(rawValue: SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue))?.description ?? ""
-                            })),
             SettingsRowItem(id: "appIcon", title: "App Icon",
                             kind: .navigationValue(.appIconPicker, value: { AppIcon.current.title })),
             // Profiles themselves are switched from the sidebar now, so this is
