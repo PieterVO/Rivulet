@@ -50,6 +50,8 @@ final class PreviewCarouselViewController: UIViewController {
         let startTime: CFTimeInterval
         let duration: CFTimeInterval
         let targetIndex: Int
+        /// Ease-in control point; raised on a retarget so the glide keeps its speed.
+        var p1y: CGFloat = 0.02
     }
     private var pagingAnimation: PagingAnimation?
     private var displayLink: CADisplayLink?
@@ -1126,28 +1128,30 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
+    /// A press mid-glide pages on from where the glide is headed.
+    private var pagingTargetIndex: Int { pagingAnimation?.targetIndex ?? selectedIndex }
+
     private func pageForward() {
         guard state.isCarouselInputEnabled else { return }
-        guard pagingAnimation == nil else { return }
-        guard selectedIndex < items.count - 1 else { return }
-        animatePage(toIndex: selectedIndex + 1)
+        guard pagingTargetIndex < items.count - 1 else { return }
+        animatePage(toIndex: pagingTargetIndex + 1)
     }
 
     private func pageBackward() {
         guard state.isCarouselInputEnabled else { return }
-        guard pagingAnimation == nil else { return }
-        guard selectedIndex > 0 else { return }
-        animatePage(toIndex: selectedIndex - 1)
+        guard pagingTargetIndex > 0 else { return }
+        animatePage(toIndex: pagingTargetIndex - 1)
     }
 
     /// Pages over 0.78 s on a display link, so layout invalidates every frame (see `PagingAnimation`).
+    /// Called mid-glide, it retargets from the current offset and speed.
     private func animatePage(toIndex newIndex: Int) {
         state.beginPaging()
         // Release the expand offset-pin so paging can move the carousel.
         collectionView.pinnedOffsetX = nil
 
         // Prefetch the far-edge card's artwork, or the glide stalls halfway waiting on it.
-        let direction = newIndex > selectedIndex ? 1 : -1
+        let direction = newIndex > pagingTargetIndex ? 1 : -1
         let prefetchIndex = newIndex + direction * 2
         if items.indices.contains(prefetchIndex) {
             let item = items[prefetchIndex]
@@ -1156,19 +1160,35 @@ final class PreviewCarouselViewController: UIViewController {
             }
         }
 
+        let now = CACurrentMediaTime()
         let start = collectionView.contentOffset.x
         let end = layout.contentOffsetCentered(index: newIndex).x
-        pagingAnimation = PagingAnimation(
+        var next = PagingAnimation(
             startOffset: start,
             endOffset: end,
-            startTime: CACurrentMediaTime(),
+            startTime: now,
             duration: 0.78,
             targetIndex: newIndex
         )
+        // Match the curve's starting slope (p1y / p1x) to the current speed; a reversal starts from rest.
+        if let current = pagingAnimation, end != start {
+            let frame: CFTimeInterval = 1.0 / 60
+            let velocity = (pagingOffset(current, at: now) - pagingOffset(current, at: now - frame)) / frame
+            let slope = velocity * next.duration / (end - start)
+            next.p1y = min(1, max(next.p1y, slope * 0.40))
+        }
+        pagingAnimation = next
 
+        guard displayLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(tickPagingAnimation))
         link.add(to: .main, forMode: .common)
         displayLink = link
+    }
+
+    private func pagingOffset(_ anim: PagingAnimation, at time: CFTimeInterval) -> CGFloat {
+        let t = min(1.0, max(0.0, (time - anim.startTime) / anim.duration))
+        let eased = cubicBezier(t: CGFloat(t), p1x: 0.40, p1y: anim.p1y, p2x: 0.18, p2y: 1.0)
+        return anim.startOffset + (anim.endOffset - anim.startOffset) * eased
     }
 
     @objc private func tickPagingAnimation(_ link: CADisplayLink) {
@@ -1178,12 +1198,10 @@ final class PreviewCarouselViewController: UIViewController {
             return
         }
 
-        let elapsed = CACurrentMediaTime() - anim.startTime
-        let t = min(1.0, max(0.0, elapsed / anim.duration))
-        let eased = cubicBezier(t: CGFloat(t), p1x: 0.40, p1y: 0.02, p2x: 0.18, p2y: 1.0)
-        let x = anim.startOffset + (anim.endOffset - anim.startOffset) * eased
+        let now = CACurrentMediaTime()
+        let t = min(1.0, max(0.0, (now - anim.startTime) / anim.duration))
         // The layout invalidates on bounds change, recomputing parallax per frame.
-        collectionView.setContentOffset(CGPoint(x: x, y: 0), animated: false)
+        collectionView.setContentOffset(CGPoint(x: pagingOffset(anim, at: now), y: 0), animated: false)
         syncCards()
 
         // The outgoing card's chrome and the below-fold peek fade against its
@@ -1196,6 +1214,14 @@ final class PreviewCarouselViewController: UIViewController {
         if t >= 1.0 {
             link.invalidate()
             displayLink = nil
+            // Paged away and back: the card kept its chrome, so just restore the fade.
+            if anim.targetIndex == selectedIndex {
+                outgoingCell?.setPagingFade(1)
+                expandedDetail.alpha = 1
+                pagingAnimation = nil
+                state.finishPaging()
+                return
+            }
             // Hand the fade back: both are at 0 by now, and the new centre
             // fades in from updateCurrentCellChrome.
             outgoingCell?.setIsCurrent(false, animated: false)
