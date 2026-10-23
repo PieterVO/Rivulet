@@ -149,7 +149,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.1.0 (108)", [
+        ("1.1.0 (109)", [
             "New onboarding screen and flow.",
             "You can now quickly page through the preview carousel.",
             "Skip buttons can each be turned off completely so they do not show.",
@@ -159,14 +159,12 @@ struct WhatsNewView: View {
             "New Rating setting in Appearance picks which score shows on a title's details.",
             "Combined Live TV sources now each get a Guide tab and a What's On row.",
             "New Send Diagnostics in About gives you a code to share when reporting a problem.",
-            "Updated AetherEngine to 7.47.0",
-        ]),
-        ("1.1.0 (107)", [
             "New in Live TV: switch between a Dispatcharr channel's streams from the player.",
             "New App Icon setting in Appearance, with three new icons by @tresby.",
             "The player's Details panel now shows a Dolby Vision video's FEL or MEL layer.",
             "The Live TV guide no longer downloads while a video plays (@PieterVO).",
             "Fixed light corners on Continue Watching cards on tvOS 26 (@PieterVO).",
+            "Updated AetherEngine to 7.47.0",
         ]),
         ("1.1.0 (106)", [
             "Initial multiserver support. I've tested, but don't regularly use multiple servers, so please provide feedback and bugs on GitHub.",
