@@ -1113,7 +1113,7 @@ private struct PlayerErrorOverlay: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 60)
 
-            HStack(spacing: 20) {
+            HStack(spacing: 32) {
                 if error.isRetryable {
                     actionButton(label: "Try Again", field: .retry, action: onRetry)
                 }
@@ -1156,12 +1156,12 @@ private struct PlayerErrorOverlay: View {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .fill(isFocused ? Color.white : Color.white.opacity(0.15))
                 )
-                .scaleEffect(isFocused ? 1.1 : 1.0)
+                .scaleEffect(isFocused ? 1.06 : 1.0)
                 .animation(.spring(response: 0.25, dampingFraction: 0.8), value: isFocused)
         }
-        .buttonStyle(.plain)
+        // `.plain` adds the system focus lift on top of the scale above, so the pills overlapped (#385).
+        .buttonStyle(NoFocusEffectButtonStyle())
         .focused($focused, equals: field)
-        .focusEffectDisabled()
     }
 }
 

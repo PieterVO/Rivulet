@@ -14,7 +14,6 @@
 import Combine
 import Foundation
 import UIKit
-import SwiftUI
 
 /// Small UserDefaults helpers that honor the SwiftUI `@AppStorage` default
 /// for a key (which is NOT written to UserDefaults until first change).
@@ -685,9 +684,12 @@ enum SettingsContent {
             return [
                 SettingsRowItem(id: "connectPlex", title: "Connect to Plex",
                                 kind: .action(destructive: false, handler: { presenter in
-                    let auth = UIHostingController(rootView: PlexAuthView())
-                    auth.modalPresentationStyle = .fullScreen
-                    presenter.present(auth, animated: true)
+                    presenter.present(PlexSignInViewController { [weak presenter] in
+                        // Connect becomes the server list, which loads on its own.
+                        guard let page = presenter as? SettingsPageViewController else { return }
+                        page.reloadRows()
+                        loadPlexServers { [weak page] in page?.reloadRows() }
+                    }, animated: true)
                 }))
             ]
         }

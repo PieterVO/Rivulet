@@ -264,6 +264,15 @@ actor ImageCacheManager: NSObject {
         return await fetchOriginalData(url: url, key: key)
     }
 
+    /// The image's width in pixels, read from its header without decoding. Fetches and caches the original.
+    func pixelWidth(for url: URL) async -> Int? {
+        guard let data = await imageData(for: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        else { return nil }
+        return properties[kCGImagePropertyPixelWidth] as? Int
+    }
+
     // MARK: - Private Implementation
 
     private func scheduleStaleRefresh(url: URL, key: String) {

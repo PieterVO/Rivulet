@@ -24,6 +24,9 @@ final class GrabReorderController: NSObject {
     private var original = 0
     private var headings: [ObjectIdentifier: UIFocusHeading] = [:]
     private var gestures: [UIGestureRecognizer] = []
+    /// Repeats a held arrow's step; IR and CEC remotes send a hold as one long press (#385).
+    private var repeatTimer: Timer?
+    private static let repeatInterval: TimeInterval = 0.18
 
     init(view: UIView, axis: Axis, count: @escaping () -> Int,
          canMove: @escaping (_ from: Int, _ to: Int) -> Bool,
@@ -45,13 +48,17 @@ final class GrabReorderController: NSObject {
         for (heading, press, direction) in moves {
             let tap = UITapGestureRecognizer(target: self, action: #selector(handleStep(_:)))
             tap.allowedPressTypes = [NSNumber(value: press.rawValue)]
+            let hold = UILongPressGestureRecognizer(target: self, action: #selector(handleHold(_:)))
+            hold.allowedPressTypes = [NSNumber(value: press.rawValue)]
+            hold.minimumPressDuration = InputConfig.holdThreshold
+            tap.require(toFail: hold)
             // A touch-surface swipe never arrives as an arrow press (#239).
             let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleStep(_:)))
             swipe.direction = direction
             swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
             // Otherwise a tvOS swipe also waits on a Select press, racing the drop.
             swipe.allowedPressTypes = []
-            for gesture in [tap, swipe] as [UIGestureRecognizer] {
+            for gesture in [tap, hold, swipe] as [UIGestureRecognizer] {
                 headings[ObjectIdentifier(gesture)] = heading
                 gestures.append(gesture)
             }
@@ -130,12 +137,34 @@ final class GrabReorderController: NSObject {
     private func end() -> Bool {
         guard isMoving else { return false }
         isMoving = false
+        stopRepeat()
         gestures.forEach { $0.isEnabled = false }
         return true
     }
 
     @objc private func handleStep(_ gesture: UIGestureRecognizer) {
         if let heading = headings[ObjectIdentifier(gesture)] { step(heading) }
+    }
+
+    @objc private func handleHold(_ gesture: UILongPressGestureRecognizer) {
+        guard let heading = headings[ObjectIdentifier(gesture)] else { return }
+        switch gesture.state {
+        case .began:
+            step(heading)
+            stopRepeat()
+            let timer = Timer(timeInterval: Self.repeatInterval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.step(heading) }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            repeatTimer = timer
+        case .ended, .cancelled, .failed: stopRepeat()
+        default: break
+        }
+    }
+
+    private func stopRepeat() {
+        repeatTimer?.invalidate()
+        repeatTimer = nil
     }
 
     @objc private func handleDrop() { drop() }

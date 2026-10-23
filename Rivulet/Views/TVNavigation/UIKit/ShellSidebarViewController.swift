@@ -253,6 +253,10 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
     private let clockLabel = UILabel()
     private var nameCenterY: NSLayoutConstraint!
     private var nameLeading: NSLayoutConstraint!
+    /// The name stops at the clock at rest, and runs to the edge while focused,
+    /// where the clock is hidden (#385).
+    private var nameBeforeClock: NSLayoutConstraint!
+    private var nameToEdge: NSLayoutConstraint!
     private var canSwitch = false
     private var clockTimer: Timer?
 
@@ -274,6 +278,9 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
                                                          constant: Metrics.headerCenterY)
         nameLeading = nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
                                                          constant: Metrics.titleLeading)
+        nameBeforeClock = nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: clockLabel.leadingAnchor, constant: -8)
+        nameToEdge = nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
+                                                         constant: -Metrics.headerTrailing)
         NSLayoutConstraint.activate([
             iconView.centerXAnchor.constraint(equalTo: contentView.leadingAnchor,
                                               constant: Metrics.iconCenterX),
@@ -281,7 +288,7 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
             avatarView.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
             avatarView.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
             nameLeading,
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: clockLabel.leadingAnchor, constant: -8),
+            nameBeforeClock,
             nameCenterY,
             captionLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
             captionLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
@@ -350,6 +357,8 @@ final class ShellSidebarProfileCell: UICollectionViewCell {
         let captioned = focused && canSwitch
         captionLabel.alpha = captioned ? 1 : 0
         clockLabel.alpha = focused ? 0 : 1
+        nameBeforeClock.isActive = !focused
+        nameToEdge.isActive = focused
         // The name rises by half the caption so the pair stays centred on the avatar.
         nameCenterY.constant = Metrics.headerCenterY - (captioned ? captionLabel.font.lineHeight / 2 : 0)
         nameLeading.constant = Metrics.titleLeading + (focused ? Metrics.focusedNameShift : 0)
@@ -818,6 +827,12 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
             for: indexPath) as! ShellSidebarHeaderView
         header.label.text = sections[indexPath.section].title
         return header
+    }
+
+    /// With one profile the profile row does nothing on Select, so it takes no focus (#385).
+    func collectionView(_ collectionView: UICollectionView, canFocusItemAt indexPath: IndexPath) -> Bool {
+        let item = sections[indexPath.section].items[indexPath.item]
+        return item.tab != .account || item.canSwitchProfile
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

@@ -4627,6 +4627,8 @@ final class PlexHomeViewController: UIViewController {
 
     private static let heroItemCap = 9
     private static let heroTMDBMinMatches = 3
+    /// Narrowest backdrop, in pixels, that still reads sharp full screen on a 4K panel (#385).
+    private static let heroMinimumArtWidth = 1280
 
     /// Hero slot state. `.loading` holds a fixed-height placeholder so rows never shift. `.unavailable`
     /// gives the slot up once TMDB and the hub fallback both come back empty on settled hubs.
@@ -4814,16 +4816,46 @@ final class PlexHomeViewController: UIViewController {
             ordered = s
         }
 
+        // Twice the cap, so dropping low-resolution art still fills the hero.
         var matches: [PlexMetadata] = []
         for item in ordered {
             if let plex = await LibraryGUIDIndex.shared.lookup(tmdbId: item.id, type: item.mediaType) {
                 matches.append(plex)
-                if matches.count >= cap { break }
+                if matches.count >= cap * 2 { break }
             }
         }
+        matches = Array(await sharpHeroItems(matches).prefix(cap))
         let matchTitles = matches.map { "\($0.title ?? "?") [\($0.type ?? "?")]" }.joined(separator: ", ")
         homeUIKitLog.debug("[Hero] computeTMDBHero: \(ordered.count, privacy: .public) trending items -> \(matches.count, privacy: .public) matches (cap=\(cap, privacy: .public)): \(matchTitles, privacy: .public)")
         return matches
+    }
+
+    /// Drops items whose backdrop is missing or too small to show full screen. An image that
+    /// can't be read keeps its item. Reads each original once; the hero shows the same bytes.
+    static func sharpHeroItems(_ items: [PlexMetadata]) async -> [PlexMetadata] {
+        let auth = PlexAuthManager.shared
+        guard let serverURL = auth.selectedServerURL, let token = auth.selectedServerToken else { return items }
+        let urls = items.map { item -> URL? in
+            let request = item.heroBackdropRequest(serverURL: serverURL, authToken: token)
+            return request.backdropURL ?? request.thumbnailURL
+        }
+        let widths = await withTaskGroup(of: (Int, Int?).self) { group in
+            for (index, url) in urls.enumerated() {
+                guard let url else { continue }
+                group.addTask { (index, await ImageCacheManager.shared.pixelWidth(for: url)) }
+            }
+            var widths: [Int: Int?] = [:]
+            for await (index, width) in group { widths[index] = width }
+            return widths
+        }
+        let kept = items.indices.filter { index in
+            guard let width = widths[index] else { return false }  // no artwork at all
+            return width.map { $0 >= heroMinimumArtWidth } ?? true
+        }
+        if kept.count < items.count {
+            homeUIKitLog.debug("[Hero] dropped \(items.count - kept.count, privacy: .public) items with low-resolution art")
+        }
+        return kept.map { items[$0] }
     }
 
     @MainActor

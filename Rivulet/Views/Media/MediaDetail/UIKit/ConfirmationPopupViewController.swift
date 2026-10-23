@@ -19,8 +19,8 @@ final class ConfirmationPopupViewController: UIViewController {
     private let onCancel: (() -> Void)?
 
     private let card = UIView()
-    private var confirmButton: PillButton!
-    private var cancelButton: PillButton?
+    private var confirmButton: PopupPillButton!
+    private var cancelButton: PopupPillButton?
 
     init(title: String,
          message: String,
@@ -70,11 +70,11 @@ final class ConfirmationPopupViewController: UIViewController {
                                  color: .white.withAlphaComponent(0.85), lines: 0)
         messageLabel.textAlignment = .center
 
-        confirmButton = PillButton(title: confirmTitle, destructive: destructive) { [weak self] in
+        confirmButton = PopupPillButton(title: confirmTitle, destructive: destructive) { [weak self] in
             self?.dismiss(animated: true) { self?.onConfirm() }
         }
         cancelButton = cancelTitle.map { title in
-            PillButton(title: title, destructive: false) { [weak self] in self?.cancel() }
+            PopupPillButton(title: title, destructive: false) { [weak self] in self?.cancel() }
         }
 
         let buttonRow = UIStackView(arrangedSubviews: [cancelButton, confirmButton].compactMap { $0 })
@@ -148,7 +148,7 @@ final class ConfirmationPopupViewController: UIViewController {
 /// A focusable pill: bright white + dark text on focus, translucent glass
 /// otherwise (destructive turns red on focus). Owns Select via a press-typed
 /// tap recognizer, since a bare control's primaryAction doesn't fire on tvOS.
-private final class PillButton: UIView {
+final class PopupPillButton: UIView {
 
     private let labelView = UILabel()
     private let onPress: () -> Void
