@@ -318,7 +318,9 @@ struct TVSidebarView: View {
         // `xcrun simctl launch --setenv RIVULET_OPEN_LIBRARY="TV Shows" ...`
         .onChange(of: dataStore.libraries.count) { _, _ in applyDebugLaunchTab() }
         // Profile picker overlay (launch-time "Who's Watching")
-        .fullScreenCover(isPresented: $showProfilePicker) {
+        // What's New waits for the dismissal to finish: presented any sooner it
+        // lands on the closing picker and leaves with it.
+        .fullScreenCover(isPresented: $showProfilePicker, onDismiss: checkAndShowWhatsNew) {
             ProfilePickerOverlay(isPresented: $showProfilePicker, onSelected: { profileChosen = true })
         }
         .onChange(of: showProfilePicker) { _, isShowing in
@@ -339,9 +341,6 @@ struct TVSidebarView: View {
                 if dataStore.hubs.isEmpty {
                     Task { await loadLaunchContent() }
                 }
-
-                // Now show What's New if applicable (was deferred for profile picker)
-                checkAndShowWhatsNew()
             }
         }
         // Content is withheld until a profile is entered: ask who is watching.
