@@ -17,6 +17,8 @@ final class SettingsLeftPanelView: UIView {
 
     private let iconContainer = UIView()
     private let iconView = UIImageView()
+    /// The focused App Icon option's artwork, shown in place of the page tile.
+    private let artworkView = UIImageView()
     private let descriptionLabel = UILabel()
     private let subtextLabel = UILabel()
     /// Page-level instruction shown under the icon (e.g. the reorder hint on the
@@ -40,6 +42,14 @@ final class SettingsLeftPanelView: UIView {
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 200, weight: .medium)
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconContainer.addSubview(iconView)
+
+        artworkView.contentMode = .scaleAspectFill
+        artworkView.layer.cornerRadius = 40
+        artworkView.layer.cornerCurve = .continuous
+        artworkView.clipsToBounds = true
+        artworkView.isHidden = true
+        artworkView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(artworkView)
 
         descriptionLabel.font = .preferredFont(forTextStyle: .body)
         descriptionLabel.textColor = .secondaryLabel
@@ -72,6 +82,12 @@ final class SettingsLeftPanelView: UIView {
             iconContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconContainer.widthAnchor.constraint(equalToConstant: 540),
             iconContainer.heightAnchor.constraint(equalToConstant: 540),
+
+            // The Home Screen icon's 5:3, as wide as the tile.
+            artworkView.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
+            artworkView.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor),
+            artworkView.widthAnchor.constraint(equalTo: iconContainer.widthAnchor),
+            artworkView.heightAnchor.constraint(equalTo: artworkView.widthAnchor, multiplier: 3.0 / 5.0),
 
             iconView.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor),
@@ -151,11 +167,21 @@ final class SettingsLeftPanelView: UIView {
     /// Update the per-row description (crossfade), keyed by `focusedSettingId`.
     func show(id: String?, subtext: String? = nil) {
         let descriptor = id.flatMap { SettingsDescriptorStore.descriptor(for: $0) }
+        let artwork = id.flatMap(Self.appIconArtwork)
         UIView.transition(with: self, duration: 0.25, options: .transitionCrossDissolve) {
+            self.artworkView.image = artwork
+            self.artworkView.isHidden = artwork == nil
+            self.iconContainer.isHidden = artwork != nil
             self.descriptionLabel.text = descriptor?.description ?? " "
             self.descriptionLabel.alpha = descriptor != nil ? 1 : 0
             self.subtextLabel.text = subtext
             self.subtextLabel.isHidden = (subtext == nil)
         }
+    }
+
+    /// Artwork for an App Icon option row (`ai_<rawValue>`); nil for every other row.
+    private static func appIconArtwork(for id: String) -> UIImage? {
+        guard id.hasPrefix("ai_"), let icon = AppIcon(rawValue: String(id.dropFirst(3))) else { return nil }
+        return UIImage(named: "AppIconArt-\(icon.rawValue)")
     }
 }
