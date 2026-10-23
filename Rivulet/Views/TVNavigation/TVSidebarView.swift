@@ -32,11 +32,8 @@ struct TVSidebarView: View {
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
-    @AppStorage("liveTVAboveLibraries") private var liveTVAboveLibraries = false
     @AppStorage("showDiscoverTab") private var showDiscoverTab = true
-    @AppStorage("discoverAboveLibraries") private var discoverAboveLibraries = true
     @AppStorage("showWatchlistTab") private var showWatchlistTab = true
-    @AppStorage("showPlaylistsTab") private var showPlaylistsTab = true
     @AppStorage("displaySize") private var displaySizeRaw = DisplaySize.normal.rawValue
     @State private var selectedTab: SidebarTab = .home
     @State private var showProfilePicker = false
@@ -104,9 +101,9 @@ struct TVSidebarView: View {
             liveTVSources: liveTVDataStore.sources,
             combineLiveTV: combineLiveTVSources,
             showDiscover: showDiscoverTab,
-            discoverAbove: discoverAboveLibraries,
             showWatchlist: showWatchlistTab,
-            liveTVAbove: liveTVAboveLibraries,
+            order: librarySettings.libraryOrder,
+            hiddenKeys: librarySettings.hiddenLibraryKeys,
             profileName: profileName,
             profileAvatar: profileManager.selectedUser?.thumb.flatMap { URL(string: $0) },
             canSwitchProfile: profileManager.hasMultipleProfiles,
@@ -114,9 +111,11 @@ struct TVSidebarView: View {
             playlistServers: PlaylistServer.current(visiblePlaylistProviders))
     }
 
-    /// Servers that get a Playlists row: none while Settings hides the rows.
+    /// Servers that get a Playlists row: those with playlists, less the rows Settings hides.
     private var visiblePlaylistProviders: Set<String> {
-        showPlaylistsTab ? PlaylistAvailability.shared.providerIDs : []
+        Set(PlaylistServer.current(PlaylistAvailability.shared.providerIDs)
+            .filter { librarySettings.isPlaylistsRowVisible(SidebarArrangement.playlists(server: $0.serverID)) }
+            .map(\.providerID))
     }
 
     private var opensToLiveTV: Bool {

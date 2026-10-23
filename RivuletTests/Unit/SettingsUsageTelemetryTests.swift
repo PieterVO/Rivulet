@@ -11,7 +11,7 @@ final class SettingsUsageTelemetryTests: XCTestCase {
         let snapshot = SettingsUsageTelemetry.snapshot()
         XCTAssertNotNil(snapshot["playback.dolbyVisionFEL"])
         XCTAssertNotNil(snapshot["playback.heightSpeakers"])
-        XCTAssertNotNil(snapshot["appearance.showDiscoverTab"])
+        XCTAssertNotNil(snapshot["sidebar.showDiscoverTab"])
         XCTAssertNotNil(snapshot["liveTV.defaultLayout"])
     }
 

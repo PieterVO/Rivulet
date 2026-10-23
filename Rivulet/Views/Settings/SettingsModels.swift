@@ -76,7 +76,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .addXtream: return "Xtream Codes"
         case .addOwnServer: return "My Own Server"
         case .addPlaylistURL: return "Playlist URL"
-        case .libraries: return "Sidebar Libraries"
+        case .libraries: return "Sidebar"
         case .homeRows: return "Home Rows"
         case .cache: return "Cache & Storage"
         case .displaySizePicker: return "Display Size"

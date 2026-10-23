@@ -32,6 +32,10 @@ enum SettingsUsageTelemetry {
                 }
             }
         }
+        // Settings > Sidebar names libraries and servers; only these two are preferences.
+        for key in ["showDiscoverTab", "showWatchlistTab"] {
+            values["sidebar.\(key)"] = SettingsStore.bool(key, default: true) ? "On" : "Off"
+        }
         return values
     }
 }

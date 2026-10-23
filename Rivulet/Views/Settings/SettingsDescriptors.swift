@@ -35,6 +35,9 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
         if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
+        if id.hasPrefix("lib_") { return descriptors["libraryRow"] }
+        if id.hasPrefix("sb_#livetv") { return descriptors["sidebarLiveTVRow"] }
+        if id.hasPrefix("sb_") { return descriptors["sidebarAppRow"] }
         return nil
     }
 
@@ -64,7 +67,19 @@ enum SettingsDescriptorStore {
         // MARK: Appearance
         "libraries": SettingDescriptor(
             icon: "sidebar.squares.left",
-            description: "Choose which libraries appear in the sidebar and set their order. Both apply to Home as well: a library you turn off here loses its Home rows, and the order you set here is the order Home draws them in."
+            description: "Choose what appears in the sidebar and set its order. Libraries apply to Home as well: a library you turn off here loses its Home rows, and the order you set here is the order Home draws them in."
+        ),
+        "resetSidebar": SettingDescriptor(
+            icon: "arrow.counterclockwise",
+            description: "Put every sidebar row back in its original order and show the ones you hid. Home's rows follow the library order."
+        ),
+        "sidebarAppRow": SettingDescriptor(
+            icon: "sidebar.squares.left",
+            description: "Click to show or hide this row in the sidebar. Press and hold to move it up or down."
+        ),
+        "sidebarLiveTVRow": SettingDescriptor(
+            icon: "tv",
+            description: "Press and hold to move Live TV up or down. It leaves the sidebar when its sources are removed."
         ),
         "libraryRow": SettingDescriptor(
             icon: "sidebar.squares.left",
@@ -110,22 +125,6 @@ enum SettingsDescriptorStore {
         "personalizedRecs": SettingDescriptor(
             icon: "person.3",
             description: "Uses TMDB metadata and your watch history to surface personalized recommendations of unwatched content."
-        ),
-        "showDiscoverTab": SettingDescriptor(
-            icon: "safari",
-            description: "Shows the Discover tab in the sidebar for browsing Popular, Top Rated, Upcoming, and more from TMDB."
-        ),
-        "showWatchlistTab": SettingDescriptor(
-            icon: "bookmark",
-            description: "Shows a Watchlist tab in the sidebar with everything on your Plex Watchlist."
-        ),
-        "showPlaylistsTab": SettingDescriptor(
-            icon: "list.bullet.rectangle",
-            description: "Shows a Playlists row under each server that has video playlists."
-        ),
-        "discoverAboveLibraries": SettingDescriptor(
-            icon: "arrow.up.arrow.down",
-            description: "Moves the Discover tab above your Media libraries in the sidebar for quicker access."
         ),
         // MARK: Playback
         "autoSkipIntro": SettingDescriptor(
@@ -214,10 +213,6 @@ enum SettingsDescriptorStore {
         ),
 
         // MARK: Live TV
-        "liveTVAboveLibraries": SettingDescriptor(
-            icon: "arrow.up.arrow.down",
-            description: "Moves the Live TV section above your Media libraries in the sidebar for quicker access."
-        ),
         "combineSources": SettingDescriptor(
             icon: "square.stack.3d.down.right",
             description: "Shows all Live TV sources together under one sidebar entry, or gives each source its own."

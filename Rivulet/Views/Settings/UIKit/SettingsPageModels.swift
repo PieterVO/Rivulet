@@ -406,21 +406,11 @@ enum SettingsContent {
         var rows: [SettingsRowItem] = [
             // Leading block is unheaded, like an Apple TV Settings page's first
             // group: it sits directly under the page title.
-            SettingsRowItem(id: "libraries", title: "Sidebar Libraries", kind: .navigation(.libraries)),
+            SettingsRowItem(id: "libraries", title: "Sidebar", kind: .navigation(.libraries)),
             SettingsRowItem(id: "displaySize", title: "Display Size",
                             kind: .navigationValue(.displaySizePicker, value: {
                                 DisplaySize(rawValue: SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue))?.description ?? ""
                             })),
-            // Discover is a sidebar tab, not a Home row, so it sits in the
-            // unheaded block with the other whole-app placement rows.
-            toggle("showDiscoverTab", "Show Discover Tab", key: "showDiscoverTab", default: true),
-            // Nothing to place when there is no Discover tab, so this dims with
-            // it rather than vanishing (a toggle only re-dims the visible rows,
-            // it does not rebuild the list).
-            toggle("discoverAboveLibraries", "Discover Above Libraries", key: "discoverAboveLibraries", default: true,
-                   enabledWhen: { SettingsStore.bool("showDiscoverTab", default: true) }),
-            toggle("showWatchlistTab", "Show Watchlist Tab", key: "showWatchlistTab", default: true),
-            toggle("showPlaylistsTab", "Show Playlists", key: "showPlaylistsTab", default: true),
             // Profiles themselves are switched from the sidebar now, so this is
             // all that is left of the retired User Profiles page.
             SettingsRowItem(id: "profilePickerOnLaunch", title: "Profile Picker on Launch",
@@ -452,7 +442,6 @@ enum SettingsContent {
     /// keys in both places, and each page reads them when it opens.
     private static var liveTVLookRows: [SettingsRowItem] {
         [
-            toggle("liveTVAboveLibraries", "Above Libraries", key: "liveTVAboveLibraries", default: false),
             SettingsRowItem(id: "defaultLayout", title: "Default Layout",
                             kind: .cycle(value: { (LiveTVLayout(rawValue: SettingsStore.string("liveTVLayout", default: LiveTVLayout.fallback.rawValue)) ?? .fallback).description },
                                          next: { cycleLiveTVLayout() }))
@@ -964,23 +953,40 @@ enum SettingsContent {
         return rows
     }
 
-    // MARK: Libraries (sidebar visibility)
+    // MARK: Sidebar (order and visibility)
+
+    /// Every arrangeable sidebar row, hidden ones included, in the sidebar's order.
+    private static func sidebarSettingsRows() -> [ShellSidebarModel.Row] {
+        let rows = ShellSidebarModel.arrangeableRows(
+            libraries: SidebarLibrary.current(includeHidden: true),
+            liveTVSources: LiveTVDataStore.shared.sources,
+            combineLiveTV: SettingsStore.bool("combineLiveTVSources", default: true),
+            showDiscover: true, showWatchlist: true,
+            playlistServers: PlaylistServer.current(PlaylistAvailability.shared.providerIDs))
+        let byKey = Dictionary(rows.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        return SidebarArrangement.arrange(rows.map(\.key), order: LibrarySettingsManager.shared.libraryOrder)
+            .compactMap { byKey[$0] }
+    }
 
     private static var libraries: [SettingsRowItem] {
         let mgr = LibrarySettingsManager.shared
-        let libs = mgr.sortLibraries(PlexDataStore.shared.libraries.filter(\.hasBrowseSurface))
-        // Other servers' in the user's order, hidden ones included so they can come back.
-        let runs = serverRuns
-        let otherLibs = mgr.sort(ServerDataStore.shared.libraries)
-        guard !libs.isEmpty || !otherLibs.isEmpty else {
-            return [SettingsRowItem(id: "noLibraries",
-                                    title: "Connect a server to manage libraries",
-                                    kind: .info(value: { "" }))]
-        }
-        let keys = libs.map { $0.key } + otherLibs.map(\.settingsKey)
-        // Add All / Remove All live at the TOP of the list, above the per-library
-        // toggles, so the bulk actions are the first thing the user lands on.
-        var rows: [SettingsRowItem] = [
+        let entries = sidebarSettingsRows()
+        let libraryKeys = entries.map(\.key).filter { !SidebarArrangement.isAppRow($0) }
+        let playlistKeys = entries.map(\.key).filter { SidebarArrangement.server(ofKey: $0) != nil && SidebarArrangement.isAppRow($0) }
+        // Reset, then Add All / Remove All (libraries only), at the top.
+        var rows: [SettingsRowItem] = entries.isEmpty ? [] : [
+            SettingsRowItem(id: "resetSidebar", title: "Reset", kind: .action(destructive: true, handler: { vc in
+                presentConfirm(on: vc, title: "Reset the Sidebar?",
+                               message: "Every row comes back in the original order. Home follows the library order.",
+                               confirmTitle: "Reset", destructive: true) {
+                    LibrarySettingsManager.shared.resetSidebar()
+                    SettingsStore.setBool("showDiscoverTab", true)
+                    SettingsStore.setBool("showWatchlistTab", true)
+                    (vc as? SettingsPageViewController)?.reloadRows()
+                }
+            }))
+        ]
+        rows += libraryKeys.isEmpty ? [] : [
             SettingsRowItem(id: "addAllLibraries", title: "Add All",
                             kind: .action(destructive: false, handler: { vc in
                 LibrarySettingsManager.shared.showAllLibraries()
@@ -988,40 +994,49 @@ enum SettingsContent {
             })),
             SettingsRowItem(id: "removeAllLibraries", title: "Remove All",
                             kind: .action(destructive: true, handler: { vc in
-                LibrarySettingsManager.shared.hideAllLibraries(keys)
+                LibrarySettingsManager.shared.hideAllLibraries(libraryKeys)
                 (vc as? SettingsPageViewController)?.reloadRows()
             }))
         ]
-        // One list across servers in the sidebar's order, so hold-Select can move
-        // a library past another server's (#87). With several servers each title
-        // names its server, since no header could stay true once they mix.
-        let counts = runs.map { run in run.providerID.map { id in otherLibs.filter { $0.providerID == id }.count } ?? libs.count }
-        let namesServer = counts.filter { $0 > 0 }.count > 1
-        let headers = serverRunHeaders(runs.map { ($0.name, $0.kind) })
-        let serverName = Dictionary(zip(runs.map { $0.providerID ?? "" }, headers), uniquingKeysWith: { first, _ in first })
-        let entries = libs.map { (key: $0.key, title: $0.title) } + otherLibs.map { (key: $0.settingsKey, title: $0.title) }
-        let ordered = mgr.arrange(entries, key: \.key)
-        rows += ordered.map { lib in
-            let server = serverName[LibrarySettingsManager.serverID(ofKey: lib.key)] ?? ""
+        // With several servers each title names its server, since no header
+        // could stay true once they mix.
+        let namesServer = Set(entries.compactMap(\.serverName)).count > 1
+        rows += entries.map { entry in
+            let key = entry.key
+            var title = entry.item.title
+            if namesServer, let server = entry.serverName { title += " (\(server))" }
+            if let badge = entry.item.badge, entry.serverName == nil { title += " (\(badge))" }
+            let kind: SettingsRowItem.Kind
+            switch key {
+            case SidebarArrangement.discover:
+                kind = .toggle(get: { SettingsStore.bool("showDiscoverTab", default: true) },
+                               set: { SettingsStore.setBool("showDiscoverTab", $0) })
+            case SidebarArrangement.watchlist:
+                kind = .toggle(get: { SettingsStore.bool("showWatchlistTab", default: true) },
+                               set: { SettingsStore.setBool("showWatchlistTab", $0) })
+            case _ where SidebarArrangement.isLiveTV(key):
+                // Live TV leaves the sidebar only with its sources: no toggle, nothing
+                // to open, but focusable so it can be held and moved.
+                kind = .action(destructive: false, handler: { _ in })
+            case _ where SidebarArrangement.isAppRow(key):
+                kind = .toggle(get: { LibrarySettingsManager.shared.isPlaylistsRowVisible(key) },
+                               set: { LibrarySettingsManager.shared.setPlaylistsRow(key, visible: $0, allKeys: playlistKeys) })
+            default:
+                kind = .toggle(get: { LibrarySettingsManager.shared.isLibraryVisible(key) },
+                               set: { _ in LibrarySettingsManager.shared.toggleVisibility(for: key) })
+            }
             // Hold Select to grab + reorder (Apple-Home style). The page VC
-            // animates the slot change; this just persists the new order.
-            return SettingsRowItem(id: "lib_\(lib.key)", title: namesServer ? "\(lib.title) (\(server))" : lib.title,
-                                   kind: .toggle(
-                                    get: { LibrarySettingsManager.shared.isLibraryVisible(lib.key) },
-                                    set: { _ in LibrarySettingsManager.shared.toggleVisibility(for: lib.key) }),
-                                   onReorder: { up in moveSidebarLibrary(key: lib.key, up: up) }, reorderGroup: "libraries")
+            // animates the slot change; this persists it, over the list as it is now.
+            return SettingsRowItem(id: SidebarArrangement.isAppRow(key) ? "sb_\(key)" : "lib_\(key)", title: title, kind: kind,
+                                   onReorder: { up in
+                                       mgr.moveSidebarRow(key: key, up: up, visible: sidebarSettingsRows().map(\.key))
+                                   }, reorderGroup: "sidebar")
+        }
+        guard !rows.isEmpty else {
+            return [SettingsRowItem(id: "noLibraries", title: "Connect a server to manage the sidebar",
+                                    kind: .info(value: { "" }))]
         }
         return rows + pinnedCollectionRows(store: PlexDataStore.shared, in: .library)
-    }
-
-    /// Move a library one slot up or down in the sidebar order, across servers.
-    /// Reorders by KEY over the displayed list (re-read per move: the page is
-    /// not rebuilt between moves), every server's libraries hidden ones included.
-    private static func moveSidebarLibrary(key: String, up: Bool) {
-        let mgr = LibrarySettingsManager.shared
-        let keys = mgr.sortLibraries(PlexDataStore.shared.libraries.filter(\.hasBrowseSurface)).map(\.key)
-            + mgr.sort(ServerDataStore.shared.libraries).map(\.settingsKey)
-        mgr.moveLibrary(key: key, up: up, among: mgr.arrange(keys) { $0 })
     }
 
     // MARK: Cache & Storage

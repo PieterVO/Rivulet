@@ -37,6 +37,8 @@ private enum Metrics {
     static var capsuleRadius: CGFloat { capsuleHeight / 2 }
     static var capsuleVerticalInset: CGFloat { (rowPitch - capsuleHeight) / 2 }
     static let sectionGap: CGFloat = 70
+    /// A break with no header and no Settings below it: the arranged rows after Home.
+    static let quietSectionGap: CGFloat = 30
     static let pillOrigin = CGPoint(x: 50, y: 50)
     static let pillHeight: CGFloat = 60
     /// The TV app's 50pt icon disc, centred in the 60pt pill.
@@ -46,8 +48,8 @@ private enum Metrics {
     /// The TV app's sidebar avatar, and how much it grows under focus.
     static let avatarSize: CGFloat = 50
     static let avatarFocusGrowth: CGFloat = 4
-    /// The TV app's profile header band: the first tab sits 125pt below the list top.
-    static let profileBandHeight: CGFloat = 125
+    /// The profile header band: the first tab sits this far below the list top.
+    static let profileBandHeight: CGFloat = 90
     /// One spring crossfade, checked by eye against the system morph. A
     /// three-phase timing from 120fps frame analysis looked worse on screen.
     static let morphDuration: TimeInterval = 0.45
@@ -424,6 +426,12 @@ final class ShellSidebarViewController: UIViewController {
     private var lastFocusMoveGesture = -1
     /// While the profile panel is up the pill names the user, not the tab.
     private var pillShowsProfile = false
+    /// Move from a row's long-press menu: the held row's key, and the order to put back on Menu.
+    private var rowMove: GrabReorderController?
+    private var heldKey: String?
+    private var orderBeforeMove: [String] = []
+    /// The row focus follows to once the next sections arrive (a step or a cancel).
+    private var pendingFocusKey: String?
 
     var isExpanded: Bool { state == .expanded }
     var focusTarget: UIView { collectionView }
@@ -485,6 +493,7 @@ final class ShellSidebarViewController: UIViewController {
         guard isViewLoaded else { return }
         collectionView.reloadData()
         configurePill()
+        if let key = pendingFocusKey ?? heldKey { focusRow(key) }
     }
 
     /// Collapsed-state pill visibility, driven by the below-top focus signal.
@@ -522,6 +531,9 @@ final class ShellSidebarViewController: UIViewController {
     // MARK: Input
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // A row on the move keeps the sidebar open.
+        if rowMove?.handleKeyPresses(presses) == true { return }
+        guard rowMove?.isMoving != true else { return }
         for press in presses {
             switch (press.type, state) {
             case (.rightArrow, .expanded):
@@ -638,6 +650,7 @@ final class ShellSidebarViewController: UIViewController {
                                 forSupplementaryViewOfKind: ShellSidebarHeaderView.elementKind,
                                 withReuseIdentifier: ShellSidebarHeaderView.reuseIdentifier)
         cardView.addSubview(collectionView)
+        installRowMenu()
 
         // Back-chevron, as the system pill shows: OUTSIDE the capsule, to its
         // left, white. Lives on the main view (not the glass card) so it sits
@@ -731,7 +744,8 @@ final class ShellSidebarViewController: UIViewController {
                         alignment: .top)
                 ]
             } else if sectionIndex > 0, !followsProfile {
-                section.contentInsets = NSDirectionalEdgeInsets(top: Metrics.sectionGap,
+                let isSettings = self?.sections[sectionIndex].items.first?.tab == .settings
+                section.contentInsets = NSDirectionalEdgeInsets(top: isSettings ? Metrics.sectionGap : Metrics.quietSectionGap,
                                                                 leading: 0, bottom: 0, trailing: 0)
             }
             return section
@@ -753,9 +767,9 @@ final class ShellSidebarViewController: UIViewController {
             liveTVSources: LiveTVDataStore.shared.sources,
             combineLiveTV: flag("combineLiveTVSources", default: true),
             showDiscover: flag("showDiscoverTab", default: true),
-            discoverAbove: flag("discoverAboveLibraries", default: true),
             showWatchlist: flag("showWatchlistTab", default: true),
-            liveTVAbove: flag("liveTVAboveLibraries", default: false),
+            order: LibrarySettingsManager.shared.libraryOrder,
+            hiddenKeys: LibrarySettingsManager.shared.hiddenLibraryKeys,
             profileName: profileName)
     }
 
@@ -791,6 +805,7 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
             withReuseIdentifier: ShellSidebarRowCell.reuseIdentifier,
             for: indexPath) as! ShellSidebarRowCell
         cell.configure(item: item, isSelectedTab: item.tab == selectedTab)
+        cell.contentView.setReorderWiggle(heldKey != nil && item.arrangeKey == heldKey)
         return cell
     }
 
@@ -806,6 +821,8 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        if let rowMove, rowMove.swallowsNextSelect { rowMove.swallowsNextSelect = false; return }
+        guard rowMove?.isMoving != true else { return }
         let tab = sections[indexPath.section].items[indexPath.item].tab
         if tab != .account { select(tab: tab) }
         if embedded { onTabSelected?(tab) }
@@ -813,6 +830,11 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
 
     func collectionView(_ collectionView: UICollectionView,
                         shouldUpdateFocusIn context: UICollectionViewFocusUpdateContext) -> Bool {
+        // Move: focus stays on the held row; only the follow-the-step request passes.
+        if let heldKey, rowMove?.isMoving == true {
+            return context.focusHeading.isEmpty
+                && context.nextFocusedIndexPath.flatMap(item(at:))?.arrangeKey == heldKey
+        }
         if ShellSidebarModel.stopsUpwardRun(
             from: context.previouslyFocusedIndexPath.flatMap(tab(at:)),
             to: context.nextFocusedIndexPath.flatMap(tab(at:)),
@@ -839,13 +861,133 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
     }
 
     private func tab(at indexPath: IndexPath) -> SidebarTab? {
-        sections.indices.contains(indexPath.section)
-            ? sections[indexPath.section].items[safe: indexPath.item]?.tab : nil
+        item(at: indexPath)?.tab
+    }
+
+    private func item(at indexPath: IndexPath) -> ShellSidebarItem? {
+        sections.indices.contains(indexPath.section) ? sections[indexPath.section].items[safe: indexPath.item] : nil
     }
 
     private func select(tab: SidebarTab) {
         selectedTab = tab
         configurePill()
         collectionView.reloadData()
+    }
+}
+
+// MARK: - Row menu and Move
+
+extension ShellSidebarViewController {
+    /// The arrangeable rows shown, in order.
+    private var arrangeKeys: [String] { sections.flatMap(\.items).compactMap(\.arrangeKey) }
+
+    fileprivate func installRowMenu() {
+        collectionView.addGestureRecognizer(TileLongPress.makeRecognizer(target: self, action: #selector(handleRowLongPress(_:))))
+        rowMove = GrabReorderController(
+            view: collectionView, axis: .vertical,
+            count: { [weak self] in self?.arrangeKeys.count ?? 0 },
+            canMove: { _, _ in true },
+            onStep: { [weak self] from, to in
+                guard let self, let key = heldKey else { return }
+                // Saved at each step; the sidebar redraws from it and focus follows in setSections.
+                LibrarySettingsManager.shared.moveSidebarRow(key: key, up: to < from, visible: arrangeKeys)
+            },
+            onDrop: { [weak self] _, _ in self?.endRowMove(restoring: false) },
+            onCancel: { [weak self] _ in self?.endRowMove(restoring: true) })
+    }
+
+    /// Menu while a row is on the move: put the order back. True when it did.
+    func cancelRowMove() -> Bool {
+        guard let rowMove, rowMove.isMoving else { return false }
+        rowMove.cancel()
+        return true
+    }
+
+    @objc private func handleRowLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began, state == .expanded, rowMove?.isMoving != true,
+              let indexPath = TileLongPress.focusedCell(in: collectionView),
+              let item = item(at: indexPath), let key = item.arrangeKey else { return }
+        var top: UIViewController = view.window?.rootViewController ?? self
+        while let presented = top.presentedViewController { top = presented }
+        guard top.presentedViewController == nil, !(top is TileMenuPopupViewController) else { return }
+        let frame = collectionView.cellForItem(at: indexPath).map { $0.convert($0.bounds, to: nil) }
+        top.present(TileMenuPopupViewController(sections: rowMenu(for: key), sourceFrame: frame), animated: false)
+    }
+
+    private func rowMenu(for key: String) -> [[TileMenuAction]] {
+        let move = TileMenuAction(title: "Move", systemImage: "arrow.up.arrow.down") { [weak self] in
+            self?.beginRowMove(key)
+        }
+        if SidebarArrangement.isLiveTV(key) {
+            let current = LiveTVLayout(rawValue: UserDefaults.standard.string(forKey: "liveTVLayout") ?? "") ?? .fallback
+            let layouts = [LiveTVLayout.browse, .guide].map { layout in
+                TileMenuAction(title: layout.description,
+                               systemImage: layout == current ? "checkmark" : (layout == .guide ? "list.bullet.rectangle" : "square.grid.2x2")) {
+                    UserDefaults.standard.set(layout.rawValue, forKey: "liveTVLayout")
+                }
+            }
+            return [layouts, [move]]
+        }
+        guard SidebarArrangement.server(ofKey: key) != nil else { return [[move]] }
+        let hide = TileMenuAction(title: "Hide from Sidebar", systemImage: "eye.slash") { [weak self] in
+            self?.hideRow(key)
+        }
+        return [[move], [hide]]
+    }
+
+    private func hideRow(_ key: String) {
+        let settings = LibrarySettingsManager.shared
+        if SidebarArrangement.isAppRow(key) {
+            let playlists = arrangeKeys.filter { SidebarArrangement.isAppRow($0) && SidebarArrangement.server(ofKey: $0) != nil }
+            settings.setPlaylistsRow(key, visible: false, allKeys: playlists)
+        } else {
+            settings.hideLibrary(key)
+        }
+    }
+
+    private func beginRowMove(_ key: String) {
+        guard let rowMove, !rowMove.isMoving, let index = arrangeKeys.firstIndex(of: key) else { return }
+        orderBeforeMove = LibrarySettingsManager.shared.libraryOrder
+        heldKey = key
+        rowMove.begin(at: index)
+        updateRowWiggle()
+        focusRow(key)
+    }
+
+    private func endRowMove(restoring: Bool) {
+        let key = heldKey
+        heldKey = nil
+        updateRowWiggle()
+        guard restoring else { return }
+        pendingFocusKey = key
+        LibrarySettingsManager.shared.libraryOrder = orderBeforeMove
+    }
+
+    private func updateRowWiggle() {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            let held = heldKey != nil && item(at: indexPath)?.arrangeKey == heldKey
+            collectionView.cellForItem(at: indexPath)?.contentView.setReorderWiggle(held)
+        }
+    }
+
+    /// Focus onto `key`'s row; the sidebar already holds focus, so the request is honoured.
+    private func focusRow(_ key: String) {
+        pendingFocusKey = nil
+        guard let indexPath = sections.indices.lazy.compactMap({ s in
+            self.sections[s].items.firstIndex { $0.arrangeKey == key }.map { IndexPath(item: $0, section: s) }
+        }).first else { return }
+        collectionView.preferredFocusIndexPath = indexPath
+        collectionView.layoutIfNeeded()
+        collectionView.scrollToItem(at: indexPath, at: .centeredVertically, animated: false)
+        collectionView.layoutIfNeeded()
+        // Only an environment holding focus may move it. After the menu closes
+        // nothing holds it, so the request goes from the top, through the shell's
+        // preferred environments down to this row.
+        let holdsFocus = (UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView)?
+            .isDescendant(of: collectionView) == true
+        let requester: UIFocusEnvironment = holdsFocus ? collectionView : (view.window?.rootViewController ?? self)
+        requester.setNeedsFocusUpdate()
+        requester.updateFocusIfNeeded()
+        updateRowWiggle()
     }
 }

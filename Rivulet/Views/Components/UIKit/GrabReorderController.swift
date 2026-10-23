@@ -84,6 +84,23 @@ final class GrabReorderController: NSObject {
         onCancel?(original)
     }
 
+    /// A hardware keyboard (and the simulator) sends key presses, never the remote's
+    /// arrow or Select types, so the recognizers miss them. The host forwards its
+    /// `pressesBegan` here; true when the press was the move's.
+    func handleKeyPresses(_ presses: Set<UIPress>) -> Bool {
+        guard isMoving, let key = presses.first?.key else { return false }
+        switch key.keyCode {
+        case .keyboardUpArrow: step(.up)
+        case .keyboardDownArrow: step(.down)
+        case .keyboardLeftArrow where axis != .vertical: step(.left)
+        case .keyboardRightArrow where axis != .vertical: step(.right)
+        case .keyboardReturnOrEnter: drop()
+        case .keyboardEscape: cancel()
+        default: return false
+        }
+        return true
+    }
+
     private func step(_ heading: UIFocusHeading) {
         guard isMoving,
               let to = Self.target(from: index, direction: heading, axis: axis, count: count()),
