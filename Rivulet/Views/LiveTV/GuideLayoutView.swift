@@ -44,23 +44,36 @@ struct GuideLayoutView: View {
     /// under F is the kind of correctness that reads as a bug.
     private static let pinnedGroups = [favouritesTab]
 
-    /// Distinct group titles used as category tabs: pinned ones first, then
-    /// everything else alphabetically. Fed by an M3U's `group-title` and, for
-    /// Plex sources, by the DVR's user-set tuner name.
+    /// Source tabs, by name, for a combined guide of two or more sources.
+    /// Sources that share a name share a tab.
+    private var sourceTabs: [String: Set<String>] {
+        guard sourceIdFilter == nil else { return [:] }
+        let present = Set(dataStore.channels.map(\.sourceId))
+        let tabs = dataStore.sources
+            .filter { present.contains($0.id) }
+            .reduce(into: [String: Set<String>]()) { $0[$1.displayName, default: []].insert($1.id) }
+        return tabs.count > 1 ? tabs : [:]
+    }
+
+    /// Category tabs: Favorites, then each source by name (#377),
+    /// then group titles, both alphabetical. Groups come from an M3U's
+    /// `group-title` and, for Plex, the DVR's tuner name. A source wins a name
+    /// it shares with a group.
     private var groupTitles: [String] {
-        let groups = Set(
-            sourceChannels
-                .compactMap { $0.groupTitle?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        )
-        var available = groups
-        // Offered only when there are favourites, so no empty tab.
-        if !dataStore.favorites(in: sourceChannels).isEmpty {
-            available.insert(Self.favouritesTab)
-        }
-        let pinned = Self.pinnedGroups.filter(available.contains)
-        let rest = available.subtracting(pinned).sorted()
-        return pinned + rest
+        Self.tabTitles(
+            groups: sourceChannels.compactMap { $0.groupTitle?.trimmingCharacters(in: .whitespacesAndNewlines) },
+            sourceNames: dataStore.sources.map(\.displayName).filter { sourceTabs[$0] != nil },
+            // Offered only when there are favourites, so no empty tab.
+            hasFavorites: !dataStore.favorites(in: sourceChannels).isEmpty)
+    }
+
+    nonisolated static func tabTitles(groups: [String], sourceNames: [String], hasFavorites: Bool) -> [String] {
+        var seen: Set<String> = []
+        let sources = sourceNames.filter { seen.insert($0).inserted }
+        let named = Set(groups.filter { !$0.isEmpty })
+        let pinned = pinnedGroups.filter { hasFavorites || named.contains($0) }
+        let rest = named.subtracting(sources).subtracting(pinned).sorted()
+        return pinned + sources.filter { !pinned.contains($0) } + rest
     }
 
     /// Channels shown in the grid: source-filtered, then category-filtered.
@@ -76,6 +89,9 @@ struct GuideLayoutView: View {
         // every other tab inherits.
         if group == Self.favouritesTab {
             return dataStore.favorites(in: sourceChannels)
+        }
+        if let ids = sourceTabs[group] {
+            return sourceChannels.filter { ids.contains($0.sourceId) }
         }
 
         return sourceChannels.filter {
