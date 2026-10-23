@@ -89,7 +89,9 @@ extension LiveTVDataStore {
             channels: channels, epg: epg, recentChannelIds: recentChannelIds, favoriteIds: favoriteIds,
             unfavoritedIds: unfavoritedIds, eventSlotIds: eventSlotIds, viewings: viewings,
             suggestionsEnabled: suggestionsEnabled,
-            scheduledRecordings: scheduledRecordings), sourceIdFilter: sourceIdFilter, now: now)
+            scheduledRecordings: scheduledRecordings,
+            sourceNames: Dictionary(sources.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })),
+            sourceIdFilter: sourceIdFilter, now: now)
     }
 }
 
@@ -105,6 +107,8 @@ enum LiveShelves {
         var viewings: [LiveViewing] = []
         var suggestionsEnabled = true
         var scheduledRecordings: [LiveTVScheduledRecording] = []
+        /// Source display names by source id, for the per-source rows.
+        var sourceNames: [String: String] = [:]
     }
 
     static func build(_ input: Input, sourceIdFilter: String?, now: Date) -> [LiveShelf] {
@@ -234,17 +238,29 @@ enum LiveShelves {
             }
         }
 
-        // A shelf per channel group, when the source groups at all.
+        // A shelf per source when several are combined, as the Guide's tabs (#377).
+        // Sources that share a name share a row.
+        let bySource = Dictionary(grouping: channels) { input.sourceNames[$0.sourceId] ?? "" }
+        let titles = sourceIdFilter == nil ? bySource.keys.filter { !$0.isEmpty }.sorted() : []
+        let sourceTitles = titles.count > 1 ? titles : []
+        for title in sourceTitles {
+            let id = "source|\(title)"
+            let list = Array((bySource[title] ?? []).prefix(60))
+            shelves.append(LiveShelf(id: id, title: title, items: onNow(list, section: id)))
+        }
+
+        // A shelf per channel group, as the Guide's tabs, except a group that
+        // holds every channel. A source row wins a name it shares with a group.
         let groups = Dictionary(grouping: channels) {
             $0.groupTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
-        let groupTitles = groups.keys.filter { !$0.isEmpty }.sorted()
-        if groupTitles.count > 1 {
-            for title in groupTitles.prefix(16) {
-                let id = "group|\(title)"
-                let list = Array((groups[title] ?? []).prefix(60))
-                shelves.append(LiveShelf(id: id, title: title, items: onNow(list, section: id)))
-            }
+        let groupTitles = groups.keys.filter {
+            !$0.isEmpty && !sourceTitles.contains($0) && groups[$0]?.count != channels.count
+        }.sorted()
+        for title in groupTitles.prefix(16) {
+            let id = "group|\(title)"
+            let list = Array((groups[title] ?? []).prefix(60))
+            shelves.append(LiveShelf(id: id, title: title, items: onNow(list, section: id)))
         }
 
         return shelves.map {
