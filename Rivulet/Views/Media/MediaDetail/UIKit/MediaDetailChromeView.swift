@@ -403,9 +403,33 @@ final class MediaDetailChromeView: UIView {
     /// `item` `didSet` skips the full rebuild.
     private var isRefreshingWatchState = false
 
+    /// Loads still out for the current item (logo, detail, Play target). At zero
+    /// the chrome is final, and nothing swaps in after a fade-in.
+    private var pendingLoads = 0
+    private var readyWaiters: [() -> Void] = []
+
+    var isContentReady: Bool { pendingLoads == 0 }
+
+    /// Runs `body` once the current item's loads finish (at once if they have).
+    /// A new item drops the waiters, whose owner holds its own deadline.
+    func whenContentReady(_ body: @escaping () -> Void) {
+        if isContentReady { body() } else { readyWaiters.append(body) }
+    }
+
+    private func finishLoad(_ token: UInt64) {
+        guard token == loadToken, pendingLoads > 0 else { return }
+        pendingLoads -= 1
+        guard pendingLoads == 0 else { return }
+        let waiters = readyWaiters
+        readyWaiters = []
+        waiters.forEach { $0() }
+    }
+
     private func applyItem() {
         loadToken &+= 1
         let token = loadToken
+        pendingLoads = 0
+        readyWaiters = []
 
         titleLogoImageView.image = nil
         titleFallbackLabel.text = nil
@@ -422,7 +446,7 @@ final class MediaDetailChromeView: UIView {
         rebuildGenreRow(item: item, detail: nil)
         rebuildQualityRow(item: item, detail: nil)
         rebuildActionButtons(item: item)
-        resolvePlayTarget(for: item, token: token)
+        resolvePlayTarget(for: item, token: token, countsTowardReady: true)
 
         // Clear any aspect constraint from the previous item — a stale
         // ratio would size the new image wrong while it's loading.
@@ -445,10 +469,12 @@ final class MediaDetailChromeView: UIView {
             titleLogoImageView.isHidden = true
             titleLogoImageView.image = nil
             if let logoURL = item.artwork.logo {
+                pendingLoads += 1
                 Task { [weak self] in
                     let image = await ImageCacheManager.shared.image(for: logoURL)
                     await MainActor.run {
                         guard let self else { return }
+                        defer { self.finishLoad(token) }
                         guard self.loadToken == token else { return }
                         guard let image else { return }
                         self.titleLogoImageView.image = image
@@ -461,11 +487,16 @@ final class MediaDetailChromeView: UIView {
                 // TMDB-mapped items carry no logo in artwork — resolve one
                 // from the TMDB images API via the shared cache.
                 let type: TMDBMediaType = item.kind == .movie ? .movie : .tv
+                pendingLoads += 1
                 Task { [weak self] in
-                    guard let logoURL = await TMDBLogoCache.shared.logoURL(tmdbId: tmdbID, type: type) else { return }
+                    guard let logoURL = await TMDBLogoCache.shared.logoURL(tmdbId: tmdbID, type: type) else {
+                        await MainActor.run { self?.finishLoad(token) }
+                        return
+                    }
                     let image = await ImageCacheManager.shared.image(for: logoURL)
                     await MainActor.run {
                         guard let self else { return }
+                        defer { self.finishLoad(token) }
                         guard self.loadToken == token else { return }
                         guard let image else { return }
                         self.titleLogoImageView.image = image
@@ -485,8 +516,13 @@ final class MediaDetailChromeView: UIView {
     /// registry. Tries `MediaProvider` first (Plex), falls back to
     /// `MetadataSource` (TMDB) for catalog-only items.
     private func loadDetail(for item: MediaItem, token: UInt64) {
+        pendingLoads += 1
         Task { [weak self] in
-            guard let self, let fetched = await Self.fetchDetail(item.ref) else { return }
+            guard let self else { return }
+            guard let fetched = await Self.fetchDetail(item.ref) else {
+                await MainActor.run { self.finishLoad(token) }
+                return
+            }
             // An episode's own detail has no genres — fall back to the parent
             // show's genres (same as the episode detail page).
             var genres = fetched.genres
@@ -495,6 +531,7 @@ final class MediaDetailChromeView: UIView {
                 genres = showDetail.genres
             }
             await MainActor.run {
+                defer { self.finishLoad(token) }
                 guard self.loadToken == token else { return }
                 self.detail = fetched
                 self.resolvedGenres = genres
@@ -507,11 +544,13 @@ final class MediaDetailChromeView: UIView {
 
     /// Titles the pill ("Play S1, E3") through the same `EpisodePicker.resolvePlayTarget`
     /// Play uses, so it names the episode that plays.
-    private func resolvePlayTarget(for item: MediaItem, token: UInt64) {
+    private func resolvePlayTarget(for item: MediaItem, token: UInt64, countsTowardReady: Bool = false) {
         guard item.kind == .show || item.kind == .season else { return }
+        if countsTowardReady { pendingLoads += 1 }
         Task { @MainActor [weak self] in
-            guard let self,
-                  let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
+            guard let self else { return }
+            defer { if countsTowardReady { self.finishLoad(token) } }
+            guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
                   let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider),
                   self.loadToken == token
             else { return }

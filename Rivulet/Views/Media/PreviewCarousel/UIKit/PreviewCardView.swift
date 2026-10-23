@@ -234,6 +234,10 @@ final class PreviewCardView: UICollectionViewCell {
         }
     }
 
+    /// Whether the chrome's logo and details are in (`MediaDetailChromeView.whenContentReady`).
+    var isChromeReady: Bool { chromeView.isContentReady }
+    func whenChromeReady(_ body: @escaping () -> Void) { chromeView.whenContentReady(body) }
+
     /// Fade the whole card content against paging travel (1 centred, 0 gone).
     /// On `contentView` so it multiplies an in-flight fade-in instead of fighting it.
     func setPagingFade(_ alpha: CGFloat) { contentView.alpha = alpha }

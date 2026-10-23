@@ -520,8 +520,33 @@ final class PreviewCarouselViewController: UIViewController {
         morpher.startAnimation()
     }
 
+    /// Bumped per reveal, so a held reveal from an earlier page never fires.
+    private var chromeRevealToken = 0
+
     /// Gives the centred cell its chrome (faded in over 0.5 s when animated) and leaves the peeks bare.
+    /// An animated reveal waits for the chrome's logo and details, so nothing swaps in after
+    /// the fade; a slow server holds it at most 1 s.
     private func updateCurrentCellChrome(animated: Bool) {
+        chromeRevealToken &+= 1
+        guard animated,
+              let card = collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0)) as? PreviewCardView,
+              !card.isChromeReady
+        else {
+            revealCurrentCellChrome(animated: animated)
+            return
+        }
+        let token = chromeRevealToken
+        let reveal = { [weak self] in
+            guard let self, self.chromeRevealToken == token,
+                  self.pagingAnimation == nil, !self.isExpanded else { return }
+            self.chromeRevealToken &+= 1
+            self.revealCurrentCellChrome(animated: true)
+        }
+        card.whenChromeReady(reveal)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: reveal)
+    }
+
+    private func revealCurrentCellChrome(animated: Bool) {
         for cell in collectionView.visibleCells {
             guard let card = cell as? PreviewCardView else { continue }
             guard let indexPath = collectionView.indexPath(for: cell) else { continue }
@@ -1147,15 +1172,17 @@ final class PreviewCarouselViewController: UIViewController {
     /// Called mid-glide, it retargets from the current offset and speed.
     private func animatePage(toIndex newIndex: Int) {
         state.beginPaging()
+        chromeRevealToken &+= 1
         // Release the expand offset-pin so paging can move the carousel.
         collectionView.pinnedOffsetX = nil
 
-        // Prefetch the far-edge card's artwork, or the glide stalls halfway waiting on it.
+        // Prefetch the far-edge card's artwork, or the glide stalls halfway waiting on it,
+        // and its logo, or the chrome shows the title as text until the logo lands.
         let direction = newIndex > pagingTargetIndex ? 1 : -1
         let prefetchIndex = newIndex + direction * 2
         if items.indices.contains(prefetchIndex) {
             let item = items[prefetchIndex]
-            if let url = item.artwork.backdrop ?? item.artwork.poster {
+            for url in [item.artwork.backdrop ?? item.artwork.poster, item.artwork.logo].compactMap({ $0 }) {
                 Task { _ = await ImageCacheManager.shared.image(for: url) }
             }
         }
@@ -1220,6 +1247,8 @@ final class PreviewCarouselViewController: UIViewController {
                 expandedDetail.alpha = 1
                 pagingAnimation = nil
                 state.finishPaging()
+                // Left before its held reveal fired: reveal it now.
+                if outgoingCell?.isCurrent == false { updateCurrentCellChrome(animated: true) }
                 return
             }
             // Hand the fade back: both are at 0 by now, and the new centre

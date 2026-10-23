@@ -135,11 +135,19 @@ final class BackdropPlaneView: UIView {
             panel.imageView.image = nil
             return
         }
+        // In memory: draw now. Otherwise fade it in when it lands, never pop.
+        if let cached = ImageCacheManager.shared.cachedImage(for: url, quality: .full) {
+            panel.imageView.image = cached
+            return
+        }
+        panel.imageView.image = nil
         Task { [weak panel] in
             let image = await ImageCacheManager.shared.image(for: url, quality: .full)
             await MainActor.run {
                 guard let panel, panel.loadToken == token else { return }
-                panel.imageView.image = image
+                UIView.transition(with: panel.imageView, duration: 0.5, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+                    panel.imageView.image = image
+                }
             }
         }
     }
