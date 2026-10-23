@@ -213,6 +213,65 @@ actor DispatcharrService {
         return key
     }
 
+    // MARK: - Stream switching (#369)
+
+    /// The channel's streams in failover order, with the one playing now.
+    /// Needs an admin user's key: Dispatcharr answers 403 to anyone else.
+    func channelStreams(channelUUID: String) async throws -> DispatcharrChannelStreams {
+        struct Channel: Decodable { let id: Int }
+        struct Account: Decodable { let id: Int; let name: String }
+        struct Status: Decodable { let streamId: Int? }
+
+        var lookup = authenticatedRequest(
+            for: baseURL.appendingPathComponent("api/channels/channels/by-uuids", isDirectory: true), method: "POST")
+        lookup.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        lookup.httpBody = try JSONEncoder().encode(["uuids": [channelUUID]])
+        guard let channelID = try await decode([Channel].self, lookup).first?.id else {
+            throw DispatcharrError.notFound
+        }
+
+        let streams = try await decode([DispatcharrStream].self, authenticatedRequest(
+            for: baseURL.appendingPathComponent("api/channels/channels/\(channelID)/streams", isDirectory: true)))
+        // Names only label the rows, and a stopped channel has no status.
+        let accounts = (try? await decode([Account].self, authenticatedRequest(
+            for: baseURL.appendingPathComponent("api/m3u/accounts", isDirectory: true)))) ?? []
+        let status = try? await decode(Status.self, authenticatedRequest(
+            for: baseURL.appendingPathComponent("proxy/ts/status/\(channelUUID)")))
+
+        return DispatcharrChannelStreams(
+            streams: streams,
+            accountNames: Dictionary(accounts.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a }),
+            currentStreamID: status?.streamId)
+    }
+
+    /// Moves a running channel onto another of its streams, for every viewer of it.
+    func switchStream(channelUUID: String, to streamID: Int) async throws {
+        var request = authenticatedRequest(
+            for: baseURL.appendingPathComponent("proxy/ts/change_stream/\(channelUUID)"), method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["stream_id": streamID])
+        // The reply echoes the provider URL, which carries credentials: never log it.
+        let (_, response) = try await session.data(for: request)
+        try validateResponse(response)
+    }
+
+    /// The channel uuid in a `/proxy/ts/stream/<uuid>` URL. Xtream-form URLs have none.
+    static func channelUUID(fromStreamURL url: URL) -> String? {
+        let parts = url.pathComponents
+        guard parts.count >= 2, parts[parts.count - 2] == "stream",
+              parts.dropLast(2).last == "ts", UUID(uuidString: parts[parts.count - 1]) != nil
+        else { return nil }
+        return parts[parts.count - 1]
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ request: URLRequest) async throws -> T {
+        let (data, response) = try await session.data(for: request)
+        try validateResponse(response)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(type, from: data)
+    }
+
     // MARK: - Private Methods
 
     func authenticatedRequest(for url: URL, method: String = "GET") -> URLRequest {
@@ -271,6 +330,36 @@ struct DispatcharrStatus: Sendable {
         } else {
             return "Error (\(statusCode))"
         }
+    }
+}
+
+// MARK: - Channel streams
+
+struct DispatcharrStream: Decodable, Sendable {
+    struct Stats: Decodable, Sendable {
+        let height: Int?
+        let sourceFps: Double?
+    }
+    let id: Int
+    let name: String
+    let m3uAccount: Int?
+    let streamStats: Stats?
+}
+
+struct DispatcharrChannelStreams: Sendable {
+    let streams: [DispatcharrStream]
+    let accountNames: [Int: String]
+    let currentStreamID: Int?
+
+    /// "TREX • 1080p60": the provider, then the picture Dispatcharr last measured.
+    func detail(for stream: DispatcharrStream) -> String? {
+        var picture: String?
+        if let height = stream.streamStats?.height {
+            let fps = stream.streamStats?.sourceFps.map { Int($0.rounded()) }
+            picture = "\(height)p" + (fps.map(String.init) ?? "")
+        }
+        let parts = [stream.m3uAccount.flatMap { accountNames[$0] }, picture].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " • ")
     }
 }
 

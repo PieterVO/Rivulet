@@ -1541,6 +1541,16 @@ class LiveTVDataStore: ObservableObject {
 
     // MARK: - Stream URL
 
+    /// The Dispatcharr server behind a channel and its proxy channel uuid, for
+    /// stream switching. nil for any other source and for Xtream-form URLs.
+    func dispatcharrChannel(for channel: UnifiedChannel) -> (service: DispatcharrService, uuid: String)? {
+        guard let service = (providers[channel.sourceId] as? IPTVProvider)?.dispatcharrService,
+              service.apiToken != nil,
+              let uuid = channel.streamURL.flatMap(DispatcharrService.channelUUID(fromStreamURL:))
+        else { return nil }
+        return (service, uuid)
+    }
+
     /// Resolve a PLAYABLE stream URL, performing any provider-side session
     /// setup first (Plex cloud-EPG/DVB channels need a tune before the
     /// transcoder will serve them).

@@ -79,6 +79,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// The join's one early check for a direct source out of connections.
     private var busyCheckTask: Task<Void, Never>?
     private var watchCreditTask: Task<Void, Never>?
+    /// Asks Dispatcharr whether this channel has other streams to switch to.
+    private var streamChoicesTask: Task<Void, Never>?
 
     /// Measures time-to-first-frame for the in-flight join, split into handshake
     /// / engine load / holdback fill. One per load attempt; a fallback retry
@@ -359,6 +361,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         }
         aetherPlayer = aether
         aether.bind(view: engineSurfaceView)
+        checkStreamChoices()
         bindAetherSubtitles(aether)
         captionsOnMute = CaptionsOnMuteLogic()
         aether.$subtitleTracks
@@ -652,6 +655,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         busyCheckTask = nil
         watchCreditTask?.cancel()
         watchCreditTask = nil
+        streamChoicesTask?.cancel()
+        streamChoicesTask = nil
+        railView.setQualityAvailable(false)
         // Backing out before first frame still ends the transaction. An
         // unfinished one would otherwise hang until the SDK times it out and
         // land as a bogus outlier.
@@ -778,6 +784,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         railView.onSubtitles = { [weak self] in self?.presentSubtitlePanel() }
         railView.onAudio = { [weak self] in self?.presentAudioPanel() }
+        railView.onQuality = { [weak self] in self?.presentStreamPanel() }
         railView.onInfo = { [weak self] in self?.presentInfoPanel() }
         railView.onUpNext = { [weak self] in self?.presentChannelListPanel() }
         railView.onScores = { [weak self] in self?.presentScoresPanel() }
@@ -1239,6 +1246,53 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 }
                 self?.activePanel?.dismissPanel()
                 self?.updateRailContent()
+            }
+            self.presentPanel(content: list, width: 520)
+        }
+    }
+
+    // MARK: - Dispatcharr streams (#369)
+
+    /// Shows the stream button when Dispatcharr lists more than one stream for
+    /// the channel and the key may switch them (admin only, else 403).
+    private func checkStreamChoices() {
+        streamChoicesTask?.cancel()
+        railView.setQualityAvailable(false)
+        guard let target = LiveTVDataStore.shared.dispatcharrChannel(for: channel) else { return }
+        streamChoicesTask = Task { @MainActor [weak self] in
+            guard let choices = try? await target.service.channelStreams(channelUUID: target.uuid),
+                  !Task.isCancelled else { return }
+            self?.railView.setQualityAvailable(choices.streams.count > 1)
+        }
+    }
+
+    /// Lists the channel's streams, fetched fresh so a failover since the join
+    /// shows. A switch moves everyone watching this channel on the server.
+    private func presentStreamPanel() {
+        guard let target = LiveTVDataStore.shared.dispatcharrChannel(for: channel) else { return }
+        Task { @MainActor [weak self] in
+            guard let choices = try? await target.service.channelStreams(channelUUID: target.uuid),
+                  let self, self.activePanel == nil else { return }
+            let rows = choices.streams.map { stream in
+                CardTrackListView.Row(title: stream.name, subtitle: choices.detail(for: stream),
+                                      trackId: stream.id, isSelected: stream.id == choices.currentStreamID)
+            }
+            let list = CardTrackListView(header: "Stream", rows: rows) { [weak self] streamID in
+                self?.activePanel?.dismissPanel()
+                guard let streamID, streamID != choices.currentStreamID,
+                      let stream = choices.streams.first(where: { $0.id == streamID }) else { return }
+                // Dispatcharr swaps the source under the open connection: no reload
+                // shows it, and the new picture arrives after a few seconds.
+                let label = choices.detail(for: stream) ?? stream.name
+                self?.noticeView.show("Switching to \(label)…", for: 30)
+                Task { @MainActor [weak self] in
+                    do {
+                        try await target.service.switchStream(channelUUID: target.uuid, to: streamID)
+                        self?.noticeView.show("Switched to \(label).")
+                    } catch {
+                        self?.noticeView.show("Couldn't switch streams.")
+                    }
+                }
             }
             self.presentPanel(content: list, width: 520)
         }

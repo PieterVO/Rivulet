@@ -149,6 +149,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (107)", [
+            "New in Live TV: switch between a Dispatcharr channel's streams from the player.",
+        ]),
         ("1.1.0 (106)", [
             "Initial multiserver support. I've tested, but don't regularly use multiple servers, so please provide feedback and bugs on GitHub.",
             "Top Shelf now shows Continue Watching from all servers (including Jellyfin).",
