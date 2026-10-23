@@ -193,12 +193,12 @@ struct HomeSectionData {
         )
     }
 
-    /// Watchlist mode: every entry as a poster grid.
+    /// Watchlist mode: every entry as a poster grid. Untitled: the sidebar pill already names it.
     static func watchlistGrid(items: [PlexWatchlistItem]) -> HomeSectionData {
         HomeSectionData(
             id: .watchlist,
             kind: .watchlistGrid,
-            title: "Watchlist",
+            title: nil,
             headerStyle: .swiftUIWatchlist,
             totalSize: nil,
             items: [],
