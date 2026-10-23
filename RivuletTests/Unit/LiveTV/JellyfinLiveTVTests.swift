@@ -146,6 +146,20 @@ final class JellyfinLiveTVTests: XCTestCase {
         XCTAssertTrue(url.absoluteString.contains("LiveStreamId=ls1"))
     }
 
+    /// Measured on 12.1: an M3U tuner's HLS channel opens with direct stream
+    /// refused and only a transcode offered (#372).
+    func test_streamURL_playsARemoteHLSSourceFromItsOrigin() throws {
+        let info = try JellyfinJSON.decoder().decode(JFLivePlaybackInfo.self, from: Data(#"""
+            {"MediaSources":[{"Id":"src","Protocol":"Http","Container":"hls","SupportsDirectStream":false,
+              "Path":"https://fast.example/live/master.m3u8","LiveStreamId":"ls1",
+              "TranscodingUrl":"/videos/abc/master.m3u8?MediaSourceId=src&PlaySessionId=ps&ApiKey=tok"}],
+             "PlaySessionId":"ps"}
+            """#.utf8))
+        let url = try XCTUnwrap(info.streamURL(channelItemID: "abc", baseURL: base, token: "tok"))
+        XCTAssertEqual(url.absoluteString, "https://fast.example/live/master.m3u8")
+        XCTAssertNil(JellyfinLiveTVProvider.closeRequest(for: url), "closed at resolve, not by the keepalive")
+    }
+
     func test_streamURL_nilWithoutAnOpenedLiveStream() throws {
         let info = try JellyfinJSON.decoder().decode(JFLivePlaybackInfo.self, from: Data(#"""
             {"MediaSources":[{"Id":"src","SupportsDirectStream":false}],"PlaySessionId":"ps"}

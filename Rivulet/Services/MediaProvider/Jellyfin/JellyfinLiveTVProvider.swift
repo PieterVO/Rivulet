@@ -115,6 +115,11 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
                                        token: client.token ?? "") else {
             throw LiveTVProviderError.channelNotFound(channel.name)
         }
+        // A remote HLS source plays straight from its origin, so the stream
+        // Jellyfin opened has no consumer: close it now.
+        if Self.closeRequest(for: url) == nil, let liveStreamId = info.mediaSources?.first?.liveStreamId {
+            try? await client.post("LiveStreams/Close", query: [URLQueryItem(name: "liveStreamId", value: liveStreamId)])
+        }
         if Task.isCancelled {
             await PlexLiveTimelineKeepalive.release(url)
             return nil
@@ -238,9 +243,10 @@ nonisolated extension JFLiveProgram {
 }
 
 nonisolated extension JFLivePlaybackInfo {
-    /// The static stream when the server allows direct streaming (measured on
-    /// an M3U tuner: always), else its HLS transcode. Both carry the live
-    /// stream id the close needs.
+    /// The static stream when the server allows direct streaming (an M3U
+    /// tuner's TS sources), else a remote HLS source's own URL (FAST channels:
+    /// the server refuses to direct stream HLS and would remux it, #372), else
+    /// its HLS transcode. Jellyfin URLs carry the live stream id the close needs.
     func streamURL(channelItemID: String, baseURL: URL, token: String) -> URL? {
         guard let source = mediaSources?.first, let liveStreamId = source.liveStreamId else { return nil }
         let base = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -254,6 +260,9 @@ nonisolated extension JFLivePlaybackInfo {
                 URLQueryItem(name: "playSessionId", value: playSessionId),
                 URLQueryItem(name: "ApiKey", value: token)
             ]
+        } else if source.container == "hls", let path = source.path, let url = URL(string: path),
+                  url.scheme == "http" || url.scheme == "https" {
+            return url
         } else if let path = source.transcodingUrl {
             components = URLComponents(string: base + path)
             if !(components?.queryItems ?? []).contains(where: { $0.name.lowercased() == "livestreamid" }) {
@@ -309,6 +318,8 @@ nonisolated struct JFLivePlaybackInfo: Decodable, Sendable {
     nonisolated struct Source: Decodable, Sendable {
         let id: String?
         let liveStreamId: String?
+        let path: String?
+        let container: String?
         let supportsDirectStream: Bool?
         let transcodingUrl: String?
     }
