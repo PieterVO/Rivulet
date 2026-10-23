@@ -2,10 +2,9 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 import MetalKit
-import SwiftUI
 import UIKit
 
-/// The signed-out welcome's backdrop: `WelcomeGlowShader` draws the icon's R,
+/// The setup landing's backdrop: `WelcomeGlowShader` draws the icon's R,
 /// blurred, with its colors spilling across the screen and a soft stream
 /// running down it; stars twinkle above in Core Animation.
 final class WelcomeGlowView: UIView {
@@ -171,10 +170,4 @@ final class WelcomeGlowView: UIView {
             buffer.commit()
         }
     }
-}
-
-/// SwiftUI host for the welcome overlay in `TVSidebarView`.
-struct WelcomeGlowBackground: UIViewRepresentable {
-    func makeUIView(context: Context) -> WelcomeGlowView { WelcomeGlowView() }
-    func updateUIView(_ uiView: WelcomeGlowView, context: Context) {}
 }

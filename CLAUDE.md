@@ -300,9 +300,13 @@ sidebar.
   with the sidebar closed (`collapseRequest`), as the Apple TV app does.
 - **Live TV with no media server opens on Live TV.** With no Plex or Jellyfin
   signed in, `ShellSidebarModel` hides Search, Home, Discover and Watchlist
-  (`opensToLiveTV`) and `TVSidebarView` switches to the Live TV tab. Home stays
-  only as the signed-out welcome, whose backdrop is `WelcomeGlowView` (maps from
-  `tools/welcome/flow_map.py`).
+  (`opensToLiveTV`) and `TVSidebarView` switches to the Live TV tab.
+- **A new install sees the setup landing instead of the shell.**
+  `SetupLandingViewController` (cards for Plex, Jellyfin and Live TV on
+  `WelcomeGlowView`, maps from `tools/welcome/flow_map.py`) stands in until Start
+  Watching sets `setupComplete`; signing out of everything clears it. Its flows
+  are the Settings pages themselves, run standalone
+  (`SettingsContainerViewController(rootPage:)` + `onExit`): never a second form.
 - **"Profile Picker on Launch" is a hard gate.** `ProfilePickerOverlay` reports a
   chosen profile through `onSelected`; `TVSidebarView` re-presents the picker on
   any other close, so Menu cannot dismiss it into the last profile's content.

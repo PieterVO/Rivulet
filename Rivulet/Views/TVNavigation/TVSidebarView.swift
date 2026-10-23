@@ -49,6 +49,8 @@ struct TVSidebarView: View {
     @State private var hasCheckedProfilePicker = false
     @State private var isAwaitingProfileSelection = false
     @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
+    /// The setup landing was finished. Unset, an install that already has a source counts as set up.
+    @AppStorage("setupComplete") private var setupComplete = SetupLandingViewController.hasAnySource
     @State private var showWhatsNew = false
     @State private var didApplyDebugLaunch = false
 
@@ -57,6 +59,11 @@ struct TVSidebarView: View {
     /// Home's welcome overlay stands down for any signed-in server.
     private var isSignedInToAnyServer: Bool {
         authManager.hasCredentials || serverStore.isSignedIn
+    }
+
+    /// Signing out of everything brings the setup landing back.
+    private var hasAnySource: Bool {
+        isSignedInToAnyServer || liveTVDataStore.sources.contains { !$0.sourceType.followsServer }
     }
 
     private var profileName: String {
@@ -219,7 +226,22 @@ struct TVSidebarView: View {
     var body: some View {
         // Split from `shell`: the whole chain as one expression outran the
         // type checker on CI ("unable to type-check this expression").
-        shell
+        ZStack {
+            if setupComplete {
+                shell
+            } else {
+                // Start Watching fades the landing away over the home, which mounts under it at once.
+                SetupLandingHost { withAnimation(.easeInOut(duration: 0.8)) { setupComplete = true } }
+                    .ignoresSafeArea()
+                    .zIndex(1)
+                    .transition(.asymmetric(insertion: .identity, removal: .opacity))
+                    // Store the key, so connecting a source here can't flip the unset default.
+                    .onAppear { setupComplete = false }
+            }
+        }
+        .onChange(of: hasAnySource) { _, has in
+            if !has { setupComplete = false }
+        }
         .task(id: authManager.hasCredentials) {
             StartupTimer.mark("TVSidebar .task entry")
             guard authManager.hasCredentials else { return }
@@ -574,17 +596,7 @@ struct TVSidebarView: View {
                 // stays exhaustive over SidebarTab.
                 Color.clear
             case .home:
-                // Always rendered so the home VC survives sign-in. The home is
-                // `.disabled` under the welcome overlay so focus lands on it.
                 PlexHomeRoot()
-                    .disabled(!isSignedInToAnyServer)
-                    .overlay {
-                        if !isSignedInToAnyServer {
-                            welcomeView
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .background { WelcomeGlowBackground().ignoresSafeArea() }
-                        }
-                    }
             case .providerLibrary:
                 // Unreachable: mounted directly as a UIKit VC above. Kept so
                 // this switch stays exhaustive over SidebarTab.
@@ -618,42 +630,6 @@ struct TVSidebarView: View {
         }
         .focusScope(contentNamespace)
         .environment(\.nestedNavigationState, nestedNavState)
-    }
-
-    // MARK: - Welcome View
-
-    private var welcomeView: some View {
-        VStack(spacing: 28) {
-            VStack(spacing: 12) {
-                Text("Welcome to Rivulet")
-                    .font(.system(size: 46, weight: .semibold))
-
-                Text("Your Media and Live TV, together in one place.")
-                    .font(.system(size: 28))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 1100)
-
-                Text("To get started, connect Plex, Jellyfin, or a Live TV source in Settings.")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 1100)
-            }
-
-            Button {
-                selectedTab = .settings
-            } label: {
-                Text("Open Settings")
-                    .font(.system(size: 24, weight: .semibold))
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 16)
-            }
-            .buttonStyle(.card)
-            .padding(.top, 12)
-        }
-        // Lower than centre, where the backdrop darkens behind the text.
-        .padding(.top, 260)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// DEBUG: jump straight to a library named by the RIVULET_OPEN_LIBRARY env
@@ -829,7 +805,8 @@ struct TVSidebarView: View {
         let current = "\(version) (\(build))"
 
         if current != lastSeenBuild {
-            if WhatsNewView.features(for: current) != nil {
+            // A new install sets up instead; What's New is for updates.
+            if setupComplete, WhatsNewView.features(for: current) != nil {
                 showWhatsNew = true
             }
             lastSeenBuild = current
@@ -837,3 +814,14 @@ struct TVSidebarView: View {
     }
 }
 
+/// The setup landing, standing in for the shell until the user finishes it.
+private struct SetupLandingHost: UIViewControllerRepresentable {
+    let onDone: () -> Void
+
+    func makeUIViewController(context: Context) -> SetupLandingViewController {
+        let vc = SetupLandingViewController()
+        vc.onDone = onDone
+        return vc
+    }
+    func updateUIViewController(_ vc: SetupLandingViewController, context: Context) {}
+}

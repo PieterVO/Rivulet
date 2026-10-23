@@ -34,17 +34,36 @@ final class SettingsContainerViewController: UIViewController {
 
     var depth: Int { pages.count }
 
+    /// The first page. A standalone flow (the setup landing's) starts below `.root`.
+    private let rootPage: SettingsPage
+
+    /// Set for a standalone flow: Menu or a pop from its first page calls it.
+    var onExit: (() -> Void)?
+
+    init(rootPage: SettingsPage = .root) {
+        self.rootPage = rootPage
+        super.init(nibName: nil, bundle: nil)
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
         setupLayout()
-        // Root page.
-        let root = makePage(.root)
+        let root = makePage(rootPage)
         pages = [root]
         installPageView(root, into: rightPane)
-        updateChrome(for: .root, animated: false)
+        updateChrome(for: rootPage, animated: false)
         updateFocusGuide()
+        if onExit != nil {
+            let menu = UITapGestureRecognizer(target: self, action: #selector(menuPressed))
+            menu.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+            view.addGestureRecognizer(menu)
+        }
     }
+
+    @objc private func menuPressed() { pop() }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -152,6 +171,7 @@ final class SettingsContainerViewController: UIViewController {
     /// Pops `levels` pages in one transition: the pages between are dropped
     /// unseen (they hold no view while covered).
     func pop(levels: Int = 1) {
+        if pages.count <= levels, let onExit { onExit(); return }
         guard !isAnimating, pages.count > levels else { return }
         for _ in 1..<max(levels, 1) {
             let skipped = pages.remove(at: pages.count - 2)
@@ -170,7 +190,7 @@ final class SettingsContainerViewController: UIViewController {
             rightPane.layoutIfNeeded()
         }
         animateTransition(incoming: newVC, outgoing: oldVC, forward: false, removeOutgoing: true)
-        updateChrome(for: topPage?.page ?? .root, animated: true)
+        updateChrome(for: topPage?.page ?? rootPage, animated: true)
         updateFocusGuide()
         onDepthChange?(pages.count > 1)
     }
@@ -247,8 +267,8 @@ final class SettingsContainerViewController: UIViewController {
     }
 
     private func updateFocusGuide() {
-        // Trap Left only in sub-pages; point it back at the current page.
-        leftFocusGuide.isEnabled = pages.count > 1
+        // Trap Left only in sub-pages (and always standalone, with no sidebar to reach).
+        leftFocusGuide.isEnabled = pages.count > 1 || onExit != nil
         if let collection = topPage?.collectionView {
             leftFocusGuide.preferredFocusEnvironments = [collection]
         }

@@ -188,6 +188,9 @@ final class PopupPillButton: UIView {
 
     @objc private func pressed() { onPress() }
 
+    /// Replaces the label, e.g. with a symbol attachment; it keeps the focus colour.
+    func setTitle(_ title: NSAttributedString) { labelView.attributedText = title }
+
     private func applyUnfocusedStyle() {
         backgroundColor = UIColor.white.withAlphaComponent(0.12)
         layer.borderColor = UIColor.white.withAlphaComponent(0.20).cgColor

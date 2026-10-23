@@ -136,11 +136,30 @@ final class PlexSignInViewController: UIViewController {
         stack.setCustomSpacing(36, after: waitingRow)
     }
 
+    /// Every server starts checked unless turned off before; Continue connects the first
+    /// checked one and turns the unchecked ones off (`PlexExtraServers`).
     private func showServers(_ servers: [PlexDevice]) {
-        let rows = servers.map { server in
-            button(server.owned == false ? "\(server.name) · \(server.sourceTitle ?? "Shared")" : server.name) { [weak self] in
-                self?.connect(to: server)
+        let extra = PlexExtraServers.shared
+        var chosen = Set(servers.compactMap(\.machineIdentifier).filter { extra.isEnabled(machineID: $0) })
+        if chosen.isEmpty, let first = servers.first?.machineIdentifier { chosen.insert(first) }
+
+        var rows: [PopupPillButton] = []
+        func title(_ server: PlexDevice) -> NSAttributedString {
+            let on = server.machineIdentifier.map(chosen.contains) ?? false
+            let text = NSMutableAttributedString(attachment: NSTextAttachment(
+                image: UIImage(systemName: on ? "checkmark.circle.fill" : "circle")!))
+            let name = server.owned == false ? "\(server.name) · \(server.sourceTitle ?? "Shared")" : server.name
+            text.append(NSAttributedString(string: "  \(name)"))
+            return text
+        }
+        for (index, server) in servers.enumerated() {
+            let row = button("") {
+                guard let id = server.machineIdentifier else { return }
+                if chosen.contains(id) { chosen.remove(id) } else { chosen.insert(id) }
+                rows[index].setTitle(title(server))
             }
+            row.setTitle(title(server))
+            rows.append(row)
         }
         let list = UIStackView(arrangedSubviews: rows)
         list.axis = .vertical
@@ -164,7 +183,18 @@ final class PlexSignInViewController: UIViewController {
         ] + rows.map { $0.heightAnchor.constraint(equalToConstant: rowHeight) })
 
         let cancel = button("Cancel") { [weak self] in self?.cancel() }
-        setContent([label("Select Your Server", size: 34, weight: .bold), scroll, cancel], focus: rows.first)
+        let next = button("Continue") { [weak self] in
+            guard let primary = servers.first(where: { $0.machineIdentifier.map(chosen.contains) ?? false }) else { return }
+            self?.connect(to: primary) {
+                for id in servers.compactMap(\.machineIdentifier) where extra.isEnabled(machineID: id) != chosen.contains(id) {
+                    extra.setEnabled(chosen.contains(id), machineID: id)
+                }
+            }
+        }
+        let buttons = UIStackView(arrangedSubviews: [cancel, next])
+        buttons.distribution = .fillEqually
+        buttons.spacing = 24
+        setContent([label("Select Your Servers", size: 34, weight: .bold), scroll, buttons], focus: rows.first)
         stack.setCustomSpacing(24, after: scroll)
     }
 
@@ -200,13 +230,13 @@ final class PlexSignInViewController: UIViewController {
 
     // MARK: - Actions
 
-    private func connect(to server: PlexDevice) {
+    private func connect(to server: PlexDevice, onConnected: @escaping () -> Void = {}) {
         shownState = nil
         showLoading("Connecting to \(server.name)…")
         Task {
             let connected = await auth.selectServer(server)
             // A failed switch away from a working server leaves the state on the list.
-            if !connected { render(auth.state, force: true) }
+            if connected { onConnected() } else { render(auth.state, force: true) }
         }
     }
 
