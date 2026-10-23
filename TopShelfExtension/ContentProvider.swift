@@ -18,6 +18,8 @@ class ContentProvider: TVTopShelfContentProvider {
     override func loadTopShelfContent() async -> TVTopShelfContent? {
         let items = TopShelfCache.shared.readItems()
         logger.info("TopShelf: Read \(items.count) items from cache")
+        var returned = 0
+        defer { TopShelfCache.shared.noteRead(cached: items.count, returned: returned) }
 
         guard !items.isEmpty else {
             logger.warning("TopShelf: No items to display, returning nil")
@@ -69,6 +71,7 @@ class ContentProvider: TVTopShelfContentProvider {
         }
 
         logger.info("TopShelf: Returning \(carouselItems.count) carousel items")
+        returned = carouselItems.count
         return TVTopShelfCarouselContent(style: .details, items: carouselItems)
     }
 }

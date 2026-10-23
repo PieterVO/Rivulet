@@ -74,6 +74,17 @@ nonisolated enum SentryBridge {
         #endif
     }
 
+    /// Captures `event` with files attached. Returns the event id, or nil when Sentry is not running.
+    @discardableResult
+    static func capture(event: Event, attachments: [Attachment]) -> String? {
+        #if !DEBUG
+        guard isActive else { return nil }
+        return SentrySDK.capture(event: event) { scope in attachments.forEach(scope.addAttachment) }.sentryIdString
+        #else
+        return nil
+        #endif
+    }
+
     static func configureScope(_ configure: @escaping (Scope) -> Void) {
         #if !DEBUG
         guard isActive else { return }

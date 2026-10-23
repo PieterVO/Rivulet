@@ -425,6 +425,11 @@ enum SettingsDescriptorStore {
             description: "Asks you to press a short list of buttons, then records what your remote actually sent for each one. The result goes to Rivulet's diagnostics so a reported problem can be traced. Nothing about what you watch is included."
         ),
 
+        "sendDiagnostics": SettingDescriptor(
+            icon: "stethoscope",
+            description: "Sends a snapshot of how Rivulet is set up and running, with recent log lines, and gives you a short code to include when you report a problem. It holds counts and settings only: no titles, server names, addresses or passwords."
+        ),
+
         // MARK: Content Filtering
         "cat_contentFilter": SettingDescriptor(
             icon: "hand.raised.fill",

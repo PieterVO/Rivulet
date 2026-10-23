@@ -1215,7 +1215,25 @@ enum SettingsContent {
             // second switch flipped first.
             SettingsRowItem(id: "inputTest", title: "Run Input Test", kind: .action(destructive: false, handler: { vc in
                 vc.present(InputTestViewController(), animated: true)
-            }))
+            })),
+            SettingsRowItem(id: "sendDiagnostics", title: "Send Diagnostics", kind: .action(destructive: false, handler: { vc in
+                guard !DiagnosticsReport.isSending else { return }
+                let page = vc as? SettingsPageViewController
+                Task { @MainActor in
+                    let code = await DiagnosticsReport.send(window: vc.view.window, onStart: { page?.reloadRows() })
+                    page?.reloadRows()
+                    let popup = code.map {
+                        ConfirmationPopupViewController(
+                            title: "Diagnostics Sent",
+                            message: "Your code is \($0). Include it in your GitHub issue or message so the report can be found.",
+                            confirmTitle: "OK", cancelTitle: nil, onConfirm: {})
+                    } ?? ConfirmationPopupViewController(
+                        title: "Couldn't Send Diagnostics",
+                        message: "Diagnostics are not available in this build.",
+                        confirmTitle: "OK", cancelTitle: nil, onConfirm: {})
+                    vc.present(popup, animated: true)
+                }
+            }), isBusy: { DiagnosticsReport.isSending })
         ]
     }
 

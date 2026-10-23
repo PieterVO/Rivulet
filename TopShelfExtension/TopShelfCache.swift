@@ -89,6 +89,13 @@ final class TopShelfCache: Sendable {
         }
     }
 
+    /// Records each time tvOS asks for content, so app diagnostics can tell whether the extension runs at all.
+    func noteRead(cached: Int, returned: Int) {
+        sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "topShelfExtensionReadAt")
+        sharedDefaults?.set(cached, forKey: "topShelfExtensionReadCached")
+        sharedDefaults?.set(returned, forKey: "topShelfExtensionReadReturned")
+    }
+
     // MARK: - Clear
 
     /// Remove all cached Top Shelf items

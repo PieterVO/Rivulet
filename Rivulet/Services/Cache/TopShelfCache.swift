@@ -56,6 +56,7 @@ final class TopShelfCache: Sendable {
             let data = try encoder.encode(items)
             guard defaults.data(forKey: userDefaultsKey) != data else { return }
             defaults.set(data, forKey: userDefaultsKey)
+            defaults.set(Date().timeIntervalSince1970, forKey: "topShelfWrittenAt")
             defaults.synchronize()
             // Without this tvOS keeps whatever the extension last returned, nil before first sign-in (#364).
             TVTopShelfContentProvider.topShelfContentDidChange()
@@ -94,7 +95,34 @@ final class TopShelfCache: Sendable {
     func clear() {
         guard sharedDefaults?.data(forKey: userDefaultsKey) != nil else { return }
         sharedDefaults?.removeObject(forKey: userDefaultsKey)
+        sharedDefaults?.set(Date().timeIntervalSince1970, forKey: "topShelfClearedAt")
         TVTopShelfContentProvider.topShelfContentDidChange()
+    }
+
+    /// Diagnostics: the last write and clear, and the extension's last read (see its `noteRead`).
+    func diagnostics() -> [String: Any] {
+        guard let defaults = sharedDefaults else { return ["app_group": false] }
+        let items = readItems()
+        let composites = items.compactMap(\.compositeFileName)
+        func age(_ key: String) -> Any {
+            let t = defaults.double(forKey: key)
+            return t > 0 ? Int(Date().timeIntervalSince1970 - t) : "never"
+        }
+        return [
+            "app_group": containerURL != nil,
+            "cached_items": items.count,
+            "item_types": items.map(\.type),
+            "items_from_selected_plex": items.filter { $0.serverIdentifier.hasPrefix("http") }.count,
+            "composites_named": composites.count,
+            "composites_on_disk": composites.filter { name in
+                compositeFileURL(fileName: name).map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+            }.count,
+            "written_seconds_ago": age("topShelfWrittenAt"),
+            "cleared_seconds_ago": age("topShelfClearedAt"),
+            "extension_read_seconds_ago": age("topShelfExtensionReadAt"),
+            "extension_read_cached": defaults.object(forKey: "topShelfExtensionReadCached") ?? "never",
+            "extension_read_returned": defaults.object(forKey: "topShelfExtensionReadReturned") ?? "never",
+        ]
     }
 
     // MARK: - Composite image files (AppGroup/Library/Caches/TopShelf/*.jpg)

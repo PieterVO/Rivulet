@@ -109,7 +109,7 @@ nonisolated enum SentryEventRedaction {
     /// Extras and breadcrumb data are `[String: Any]`, so recurse through the
     /// container types the SDK will actually serialize and redact any string or
     /// URL found at the leaves.
-    private static func redactAny(_ value: Any) -> Any {
+    static func redactAny(_ value: Any) -> Any {
         switch value {
         case let string as String:
             return SensitiveDataRedactor.redact(string)
