@@ -39,11 +39,13 @@ A native Apple TV app for Plex, Jellyfin, and Live TV.
 
 **Rivulet is built for Apple TV first. I care a lot about its speed, performance, and simplicity in tvOS.**
 
+This project is *opinionated*. All suggestions and ideas are always welcome, but please don’t be offended if I decline an enhancement or feature suggestion. 
+
+A camel is a horse designed by a committee. I don’t want Rivulet to be a camel.
+
 <br></br>
 
 ## Why this exists
-
-This project is *opinionated*. All suggestions and ideas are always welcome, but please don’t be offended if I decline an enhancement or feature suggestion. A camel is a horse designed by a committee. I don’t want Rivulet to be a camel.
 
 - **Simplicity**: what is the best design to get me to the media I want to watch.
 - **Live TV**: Plex's live TV is, to put it nicely, sub-par. I've spent too long trying to get it to work well for me (kudos if you don't have this problem). I don't want live TV in a separate app, so this solves my problems.
