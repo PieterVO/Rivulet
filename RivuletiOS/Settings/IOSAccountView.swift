@@ -10,6 +10,7 @@ struct IOSAccountView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showingSignIn = false
     @State private var confirmingSignOut = false
+    @State private var appIcon = AppIcon.current
 
     var body: some View {
         NavigationStack {
@@ -36,6 +37,12 @@ struct IOSAccountView: View {
                     } label: {
                         Label("Downloads", systemImage: "arrow.down.circle")
                     }
+                    Picker(selection: Binding(get: { appIcon }, set: { appIcon = $0; $0.apply() })) {
+                        ForEach(AppIcon.allCases) { Text($0.title).tag($0) }
+                    } label: {
+                        Label("App Icon", systemImage: "app.badge")
+                    }
+                    .pickerStyle(.navigationLink)
                     // Sources and server choice are the owner's, not a restricted profile's.
                     if !profiles.isRestrictedProfile {
                         NavigationLink {

@@ -208,6 +208,7 @@ enum SettingsContent {
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
         case .displaySizePicker:      return displaySizePicker
+        case .appIconPicker:          return appIconPicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
         case .skipBackIntervalPicker: return skipBackIntervalPicker
@@ -230,6 +231,14 @@ enum SettingsContent {
             SettingsRowItem(id: "ds_\(opt.rawValue)", title: opt.description, kind: .option(
                 isSelected: { SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue) == opt.rawValue },
                 select: { SettingsStore.setString("displaySize", opt.rawValue) }))
+        }
+    }
+
+    private static var appIconPicker: [SettingsRowItem] {
+        AppIcon.allCases.map { icon in
+            SettingsRowItem(id: "ai_\(icon.rawValue)", title: icon.title, kind: .option(
+                isSelected: { AppIcon.current == icon },
+                select: { icon.apply() }))
         }
     }
 
@@ -411,6 +420,8 @@ enum SettingsContent {
                             kind: .navigationValue(.displaySizePicker, value: {
                                 DisplaySize(rawValue: SettingsStore.string("displaySize", default: DisplaySize.normal.rawValue))?.description ?? ""
                             })),
+            SettingsRowItem(id: "appIcon", title: "App Icon",
+                            kind: .navigationValue(.appIconPicker, value: { AppIcon.current.title })),
             // Profiles themselves are switched from the sidebar now, so this is
             // all that is left of the retired User Profiles page.
             SettingsRowItem(id: "profilePickerOnLaunch", title: "Profile Picker on Launch",

@@ -33,6 +33,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("sl_") { return descriptors["subtitleLanguage"] }
         if id.hasPrefix("hs_") { return descriptors["heightSpeakers"] }
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
+        if id.hasPrefix("ai_") { return descriptors["appIcon"] }
         if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
         if id.hasPrefix("lib_") { return descriptors["libraryRow"] }
@@ -84,6 +85,10 @@ enum SettingsDescriptorStore {
         "libraryRow": SettingDescriptor(
             icon: "sidebar.squares.left",
             description: "Click to show or hide this library in the sidebar and on Home. Press and hold to move it up or down."
+        ),
+        "appIcon": SettingDescriptor(
+            icon: "app.badge",
+            description: "Choose the Rivulet icon on the Apple TV Home Screen."
         ),
         "displaySize": SettingDescriptor(
             icon: "textformat.size",
@@ -498,6 +503,7 @@ enum SettingsDescriptorStore {
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)
         case .cache: return ("internaldrive", .systemGray)
         case .displaySizePicker: return ("textformat.size", .systemOrange)
+        case .appIconPicker: return ("app.badge", .systemPurple)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)
         case .skipBackIntervalPicker: return ("backward.fill", .systemBlue)
