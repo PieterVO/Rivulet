@@ -151,6 +151,10 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (107)", [
             "New in Live TV: switch between a Dispatcharr channel's streams from the player.",
+            "New App Icon setting in Appearance, with three new icons by @tresby.",
+            "The player's Details panel now shows a Dolby Vision video's FEL or MEL layer.",
+            "The Live TV guide no longer downloads while a video plays (@PieterVO).",
+            "Fixed light corners on Continue Watching cards on tvOS 26 (@PieterVO).",
         ]),
         ("1.1.0 (106)", [
             "Initial multiserver support. I've tested, but don't regularly use multiple servers, so please provide feedback and bugs on GitHub.",
