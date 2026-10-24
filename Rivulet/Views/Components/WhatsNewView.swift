@@ -149,6 +149,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (111)", [
+            "Jellyfin titles now show their trailers and extras on the details page.",
+            "Top Shelf shows Recently Added when there is nothing in Continue Watching.",
+        ]),
         ("1.1.0 (110)", [
             "New onboarding screen and flow.",
             "You can now quickly page through the preview carousel.",
