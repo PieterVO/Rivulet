@@ -41,6 +41,7 @@ struct BelowFoldTrailer: Hashable, Sendable {
     /// What plays this extra: a library ratingKey, or for a Plex IVA extra its
     /// `/services/iva/assets/...` path, which 404s under /library/metadata.
     var playbackKey: String?
+    var providerID: String
 }
 
 @MainActor
@@ -75,7 +76,8 @@ final class BelowFoldContentLoader {
                 artworkURL: extra.thumbnailURL ?? fallbackArt,
                 durationFormatted: extra.duration.map(Self.formatTrailerDuration),
                 subtype: extra.subtype,
-                playbackKey: extra.playbackKey
+                playbackKey: extra.playbackKey,
+                providerID: extra.providerID
             )
         }
         let allExtras = resolvedDetail?.extras ?? []

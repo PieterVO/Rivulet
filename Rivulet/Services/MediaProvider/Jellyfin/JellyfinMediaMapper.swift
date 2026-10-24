@@ -383,14 +383,14 @@ enum JellyfinMediaMapper {
             ]),
             nextEpisode: nextEpisode.map { self.item($0, providerID: providerID, baseURL: baseURL) },
             collections: [],
-            extras: trailers.compactMap { extra($0, baseURL: baseURL, isTrailer: true) }
-                + specialFeatures.compactMap { extra($0, baseURL: baseURL, isTrailer: false) },
+            extras: trailers.compactMap { extra($0, providerID: providerID, baseURL: baseURL, isTrailer: true) }
+                + specialFeatures.compactMap { extra($0, providerID: providerID, baseURL: baseURL, isTrailer: false) },
             externalIDs: externalIDs(dto.providerIds)
         )
     }
 
     /// A local trailer or special feature. It is a library item, so its id plays it.
-    static func extra(_ dto: JFItem, baseURL: URL, isTrailer: Bool) -> MediaItemDetail.Extra? {
+    static func extra(_ dto: JFItem, providerID: String, baseURL: URL, isTrailer: Bool) -> MediaItemDetail.Extra? {
         guard let id = dto.id else { return nil }
         // "BehindTheScenes" -> Plex's "behindTheScenes"
         let type = dto.extraType.map { $0.prefix(1).lowercased() + $0.dropFirst() }
@@ -400,6 +400,7 @@ enum JellyfinMediaMapper {
             thumbnailURL: imageURL(baseURL, itemID: id, type: "Primary", tag: dto.imageTags?["Primary"]),
             duration: JellyfinTicks.seconds(dto.runTimeTicks),
             playbackKey: id,
+            providerID: providerID,
             subtype: isTrailer ? .trailer : ExtraSubtype.from(subtype: type, extraType: nil)
         )
     }

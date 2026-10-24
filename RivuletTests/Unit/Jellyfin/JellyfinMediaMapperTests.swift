@@ -249,6 +249,7 @@ final class JellyfinMediaMapperTests: XCTestCase {
         ).extras
         XCTAssertEqual(extras.map(\.subtype), [.trailer, .behindTheScenes])
         XCTAssertEqual(extras.map(\.playbackKey), ["t1", "f1"])
+        XCTAssertEqual(extras.map(\.providerID), [pid, pid])
         XCTAssertEqual(extras[0].duration, 120)
         XCTAssertEqual(extras[1].thumbnailURL?.absoluteString, "http://jf.local:8096/Items/f1/Images/Primary?tag=ft")
     }

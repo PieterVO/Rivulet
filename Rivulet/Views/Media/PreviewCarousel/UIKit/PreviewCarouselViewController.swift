@@ -1041,9 +1041,9 @@ final class PreviewCarouselViewController: UIViewController {
     /// 404s under `/library/metadata` (#255); it plays directly through a synthetic PlexMetadata.
     private func presentExtraPlayer(_ trailer: BelowFoldTrailer) {
         let key = trailer.playbackKey ?? trailer.id
-        // Off Plex an extra is a library item of the shown item's own provider.
-        if shownItemServer == nil, let providerID = expandedDetail.item?.ref.providerID {
-            playProviderExtra(MediaItemRef(providerID: providerID, itemID: key))
+        // Off Plex an extra is a library item of its own provider.
+        if let provider = MediaProviderRegistry.shared.provider(for: trailer.providerID), provider.kind != .plex {
+            playProviderExtra(MediaItemRef(providerID: trailer.providerID, itemID: key), provider: provider)
             return
         }
         let route = ExtraPlaybackKey.route(for: key)
@@ -1081,8 +1081,7 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    private func playProviderExtra(_ ref: MediaItemRef) {
-        guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID) else { return }
+    private func playProviderExtra(_ ref: MediaItemRef, provider: any MediaProvider) {
         Task { [weak self] in
             do {
                 let detail = try await provider.fullDetail(for: ref)
