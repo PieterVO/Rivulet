@@ -13,7 +13,7 @@ nonisolated enum DiagLog {
     static let subsystem = "com.rivulet.app"
 
     enum Category: String, CaseIterable, Sendable {
-        case launch, auth, connection, profile, home, network, playback, servers, crumb, http
+        case launch, auth, connection, profile, home, network, playback, servers, crumb, http, attest
         case topShelf = "top_shelf"
         case deepLink = "deep_link"
         case liveTV = "live_tv"
