@@ -71,7 +71,8 @@ enum DiagnosticsReport {
             "locale": Locale.current.identifier,
             "languages": Array(Locale.preferredLanguages.prefix(4)),
             "time_zone": TimeZone.current.identifier,
-            "setup_complete": UserDefaults.standard.bool(forKey: "setupComplete"),
+            // Unset means the shell's default: complete when any source exists.
+            "setup_complete": UserDefaults.standard.object(forKey: "setupComplete") as? Bool ?? "unset",
         ]
     }
 
@@ -172,7 +173,8 @@ enum DiagnosticsReport {
         return [
             "hubs": store.hubs.count,
             "continue_watching": store.continueWatchingHub?.Metadata?.count ?? -1,
-            "libraries": store.libraries.map(\.type),
+            // Visibility 1/2 (excluded from home) also drops the library from Continue Watching.
+            "libraries": store.libraries.map { "\($0.type) visibility=\($0.hidden ?? 0)" },
             "rows": store.homeItems.count,
             "row_items": store.homeItems.map(\.items.count),
             "hubs_error": store.hubsError ?? "none",
