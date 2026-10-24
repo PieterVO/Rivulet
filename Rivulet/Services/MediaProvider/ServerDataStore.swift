@@ -156,7 +156,11 @@ final class ServerDataStore: ObservableObject {
         }
         let previous = slices[provider.id] ?? Slice()
         async let fetchedContinuing = provider.continueWatching(limit: 20)
-        guard let fetched = try? await provider.libraries() else {
+        let fetched: [MediaLibrary]
+        do {
+            fetched = try await provider.libraries()
+        } catch {
+            DiagLog.error(.servers, "\(provider.kind) libraries failed: \(DiagLog.describe(error))")
             _ = try? await fetchedContinuing
             return
         }
@@ -173,12 +177,19 @@ final class ServerDataStore: ObservableObject {
                     recent.append(row)
                 }
             } catch {
+                DiagLog.error(.servers, "\(provider.kind) recently added failed: \(DiagLog.describe(error))")
                 // This library's fetch failed: keep its row.
                 if let previous = previous.rows.first(where: { $0.id == id }) { recent.append(previous) }
             }
         }
         var continuingRow: [CachedHomeHub] = []
-        if let continuing = try? await fetchedContinuing {
+        var fetchedContinue: [MediaItem]?
+        do {
+            fetchedContinue = try await fetchedContinuing
+        } catch {
+            DiagLog.error(.servers, "\(provider.kind) continue watching failed: \(DiagLog.describe(error))")
+        }
+        if let continuing = fetchedContinue {
             if !continuing.isEmpty {
                 let id = Self.rowID(provider.id, "continueWatching")
                 continuingRow = [CachedHomeHub(
@@ -189,6 +200,7 @@ final class ServerDataStore: ObservableObject {
             continuingRow = previous.rows.filter(\.isContinueWatching)
         }
         guard !Task.isCancelled else { return }
+        DiagLog.notice(.servers, "\(provider.kind) loaded: \(browsable.count) libraries, continue watching \(continuingRow.first?.items.count ?? 0), recent rows \(recent.count)")
         slices[provider.id] = Slice(libraries: browsable, rows: continuingRow + recent)
         publish()
     }

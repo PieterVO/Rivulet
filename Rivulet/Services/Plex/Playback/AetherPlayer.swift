@@ -571,7 +571,7 @@ final class AetherPlayer: PlayerProtocol {
             let drain = max(0, 4.0 - Date().timeIntervalSince(since))
             if drain > 0 { try? await Task.sleep(for: .seconds(drain)) }
             guard let self, !Task.isCancelled else { return }
-            print("[AetherPlayer] foreground reload: pos=\(self.engine.currentTime)")
+            DiagLog.notice(.playback, "Foreground reload at \(Int(self.engine.currentTime))s")
             do {
                 // No-ops if nothing is loaded or the session was stopped while
                 // we waited (public stop() clears the engine's loadedURL). The
@@ -579,13 +579,13 @@ final class AetherPlayer: PlayerProtocol {
                 // the user intends playback.
                 try await self.reloadWithDeadline()
                 self.pendingReloadSince = nil
-                print("[AetherPlayer] foreground reload done: state=\(self.engine.state) pos=\(self.engine.currentTime)")
+                DiagLog.notice(.playback, "Foreground reload done: \(self.engine.state) at \(Int(self.engine.currentTime))s")
             } catch {
                 // Arm the deferred reload so the next Play press retries the
                 // rebuild. Covers the playing-user entry too: that one reloads
                 // eagerly with nothing armed, so without this a failure there
                 // wedges the session just as badly.
-                print("[AetherPlayer] foreground reload failed: \(error)")
+                DiagLog.error(.playback, "Foreground reload failed: \(DiagLog.describe(error))")
                 self.pendingReloadSince = since
             }
         }

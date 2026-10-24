@@ -134,6 +134,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // almost always the user's server being down or unreachable, so it
             // is a log, not an error: it was ~60% of the error quota.
             if nsError.code != NSURLErrorCancelled {
+                DiagLog.error(.network, "\(method) \(endpoint) \(DiagLog.describe(url: url.absoluteString)) failed after \(elapsedMs) ms: \(DiagLog.describe(error))")
                 SentryBridge.log(.warn, "Plex request failed", attributes: [
                     "component": "plex_network",
                     "error_type": "transport",
@@ -160,7 +161,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
-            print("🌐 PlexNetwork: ❌ HTTP Error \(httpResponse.statusCode)")
+            DiagLog.error(.network, "\(method) \(endpoint) -> HTTP \(httpResponse.statusCode) (\(netMs) ms)")
             let error = PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: data)
 
             // 404 is an item the server deleted or rematched, 421 a connection
@@ -201,10 +202,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         do {
             return try await Self.decodeDetached(data)
         } catch {
-            print("🌐 PlexNetwork: ❌ Decode error: \(error)")
-            if let responseStr = String(data: data, encoding: .utf8) {
-                print("🌐 PlexNetwork: Full response: \(responseStr)")
-            }
+            DiagLog.error(.network, "\(method) \(endpoint) decode failed (\(data.count) B): \(String(String(describing: error).prefix(300)))")
 
             // Capture JSON decode errors to Sentry
             SentryBridge.capture(error: error) { scope in
@@ -2948,7 +2946,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
             print("🌐 PlexNetwork: ❌ Could not decode home users JSON response")
         } catch {
-            print("🌐 PlexNetwork: v2 endpoint failed: \(error)")
+            DiagLog.error(.profile, "Home users v2 failed, trying XML: \(DiagLog.describe(error))")
         }
 
         // Fallback: try the XML endpoint and parse it
@@ -3102,10 +3100,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
             // No per-server token. The plex.tv token makes PMS treat the user as a
             // guest (401 on sections), so return nil and keep the existing token.
-            print("🌐 PlexNetwork: ⚠️ No per-server token found for serverURL=\(serverURL); returning nil to preserve existing selectedServerToken")
+            DiagLog.error(.profile, "No per-server token for the selected server, keeping the current token")
             return nil
         } catch {
-            print("🌐 PlexNetwork: ❌ Failed to get server access token: \(error) — returning nil")
+            DiagLog.error(.profile, "Server access token fetch failed: \(DiagLog.describe(error))")
             return nil
         }
     }

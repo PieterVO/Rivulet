@@ -154,7 +154,7 @@ actor AppAttestClient {
             // registered is worse than no key (every request would 401).
             Keychain.save(Self.keychainAccount, value: newKeyId)
             keyId = newKeyId
-            log.info("device attested")
+            log.notice("device attested")
             return newKeyId
         } catch {
             log.error("attestation failed: \(error.localizedDescription, privacy: .public)")

@@ -637,8 +637,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             .first { $0.isVideo && (($0.DOVIProfile != nil) || ($0.DOVIPresent == true)) }?
             .DOVIProfile
 
-        print("[PlayerSelect] content: DV=\(hasDolbyVision) profile=\(dvProfile ?? -1) " +
-              "container=\(container) airPlay=\(isAirPlayRoute) → Aether")
+        DiagLog.notice(.playback, "Selected: DV=\(hasDolbyVision) profile=\(dvProfile ?? -1) container=\(container) airPlay=\(isAirPlayRoute)")
 
         setupPlayer()
 
@@ -1369,13 +1368,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                         self.startTranscodeSubtitles()
                     case .failed:
                         let message = item.error?.localizedDescription ?? "Playback failed"
-                        print("[Player] AVPlayerItem status: FAILED — \(message)")
-                        if let error = item.error as? NSError {
-                            print("[Player] Error domain=\(error.domain) code=\(error.code)")
-                            if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
-                                print("[Player] Underlying: \(underlying.domain) code=\(underlying.code) — \(underlying.localizedDescription)")
-                            }
-                        }
+                        DiagLog.error(.playback, "HLS item failed: \(item.error.map(DiagLog.describe) ?? message)")
                         // Teardown races (session ending, transcode stopped
                         // server-side) land here as NSURLError -999 on
                         // `item.error`. That is not a playback failure — don't
@@ -2050,7 +2043,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
                 // Reached only when the load is still in flight.
-                print("[Player] Aether load exceeded \(Int(deadline))s deadline; falling back to HLS")
+                DiagLog.error(.playback, "Aether load exceeded \(Int(deadline))s deadline, falling back to HLS")
                 throw AetherLoadTimeoutPolicy.TimedOut(seconds: deadline)
             }
 
@@ -2844,7 +2837,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         hasAttemptedRivuletHLSFallback = true
         defer { isAttemptingRivuletHLSFallback = false }
 
-        print("[Fallback] Failed (\(failureKind.rawValue), reason=\(reason)) → HLS")
+        DiagLog.error(.playback, "Fallback to HLS: \(failureKind.rawValue), \(reason.prefix(200))")
 
         let fallback: (url: URL, headers: [String: String], sessionId: String?)?
         if case .provider = source {
@@ -3555,7 +3548,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        print("🎬 [HLSPreflight] Transcode failed to start after 8 attempts")
+        DiagLog.error(.playback, "HLS transcode failed to start after 8 attempts")
         return false
     }
 

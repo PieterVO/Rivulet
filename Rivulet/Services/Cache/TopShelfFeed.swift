@@ -6,7 +6,7 @@
 //  Rivulet
 //
 //  The Top Shelf row: every server's Continue Watching in one list,
-//  most recently watched first. Both stores call `refresh` when their row changes.
+//  most recently watched first; Recently Added when there is none. Both stores call `refresh` when their row changes.
 //
 
 import Foundation
@@ -20,11 +20,15 @@ enum TopShelfFeed {
         let profiles = PlexUserProfileManager.shared
         // The Home screen row sits outside the PIN gate (a remembered PIN reopens it unasked).
         guard !auth.relocksOnLaunch || profiles.selectedUser.map(profiles.hasRememberedPin(for:)) ?? false else {
+            DiagLog.notice(.topShelf, "Cleared: profile relocks and its PIN is not remembered")
             TopShelfCache.shared.clear()
             return
         }
         // Until a Home profile is entered there is no Plex row to show; keep the last one.
-        guard !auth.isContentWithheld else { return }
+        guard !auth.isContentWithheld else {
+            DiagLog.notice(.topShelf, "Skipped: content withheld until a profile is entered")
+            return
+        }
         let serverURL = auth.selectedServerURL
         let token = auth.selectedServerToken
         var plex: [TopShelfItem] = []
@@ -47,10 +51,37 @@ enum TopShelfFeed {
             others.removeAll { !shown.contains(MediaItemRef(providerID: $0.serverIdentifier, itemID: $0.ratingKey)) }
         }
 
-        let items = await TopShelfComposer.composite(
-            items: TopShelfMapper.merge(plex, others, limit: limit), serverURL: serverURL, token: token)
+        var row = TopShelfMapper.merge(plex, others, limit: limit)
+        let source = row.isEmpty ? "recently added" : "continue watching"
+        // No Continue Watching anywhere: show Recently Added instead.
+        if row.isEmpty {
+            row = recentlyAdded(serverURL: serverURL, token: token)
+        }
+        let items = await TopShelfComposer.composite(items: row, serverURL: serverURL, token: token)
         // A profile changed, locked or signed out during the composite.
-        guard auth.selectedServerToken == token, serverStore.sources == sources else { return }
+        guard auth.selectedServerToken == token, serverStore.sources == sources else {
+            DiagLog.notice(.topShelf, "Dropped: profile or sources changed while composing")
+            return
+        }
+        DiagLog.notice(.topShelf, "Refresh: \(items.count) items from \(source) (plex cw \(plex.count), other cw \(others.count)), \(items.filter { $0.compositeFileName != nil }.count) composites")
         TopShelfCache.shared.writeItems(items)
+    }
+
+    /// Newest unwatched titles from the selected Plex server's loaded library hubs and the
+    /// other servers' Recently Added rows.
+    private static func recentlyAdded(serverURL: String?, token: String?) -> [TopShelfItem] {
+        var plex: [TopShelfItem] = []
+        if let serverURL, let token {
+            let store = PlexDataStore.shared
+            let metadata = store.librariesPinnedToHome
+                .flatMap { store.libraryHubs[$0.key] ?? [] }
+                .filter { ($0.hubIdentifier ?? "").lowercased().contains("recentlyadded") }
+                .flatMap { $0.Metadata ?? [] }
+            plex = TopShelfMapper.recentlyAddedItems(from: metadata, serverURL: serverURL, token: token, limit: limit * 2)
+        }
+        let others = ServerDataStore.shared.homeRows
+            .filter { $0.id.hasSuffix(".recentlyAdded") }
+            .flatMap { TopShelfMapper.items(from: $0.items.filter { !$0.userState.isPlayed }, limit: limit * 2) }
+        return TopShelfMapper.merge(plex, others, limit: limit)
     }
 }

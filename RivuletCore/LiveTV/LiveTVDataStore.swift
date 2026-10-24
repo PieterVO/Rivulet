@@ -834,11 +834,12 @@ class LiveTVDataStore: ObservableObject {
                     allChannels.append(contentsOf: channels)
                 case .failure(let error):
                     errors.append("\(sourceId): \(error.localizedDescription)")
-                    print("📺 LiveTVDataStore: ❌ Failed to load from \(sourceId): \(error)")
+                    DiagLog.error(.liveTV, "Channels failed for source \(sourceId.prefix(12)): \(DiagLog.describe(error))")
                 }
             }
         }
 
+        DiagLog.notice(.liveTV, "Channels loaded: \(allChannels.count), failed sources: \(errors.count)")
         // Sort channels by number, then name
         allChannels.sort { c1, c2 in
             if let n1 = c1.channelNumber, let n2 = c2.channelNumber {
@@ -989,7 +990,7 @@ class LiveTVDataStore: ObservableObject {
             await withTaskGroup(of: (String, Result<[String: [UnifiedProgram]], Error>).self) { group in
                 for (sourceId, sourceChannels) in channelsBySource {
                     guard let provider = providersById[sourceId] else {
-                        print("📺 LiveTVDataStore: ⚠️ No provider found for sourceId: \(sourceId)")
+                        DiagLog.error(.liveTV, "Guide: no provider for source \(sourceId.prefix(12))")
                         continue
                     }
 
@@ -1021,7 +1022,7 @@ class LiveTVDataStore: ObservableObject {
                         if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
                             continue
                         }
-                        print("📺 LiveTVDataStore: ⚠️ EPG load failed for \(sourceId): \(error)")
+                        DiagLog.error(.liveTV, "Guide failed for source \(sourceId.prefix(12)): \(DiagLog.describe(error))")
                         let sourceName = sourceNames[sourceId] ?? sourceId
                         issues.append(EPGFetchIssue(
                             sourceId: sourceId,
@@ -1044,6 +1045,7 @@ class LiveTVDataStore: ObservableObject {
             // results would clobber whatever the newer loadEPG task wrote.
             guard !Task.isCancelled else { return }
 
+            DiagLog.notice(.liveTV, "Guide loaded: \(allEPG.count) channels, \(allEPG.values.reduce(0) { $0 + $1.count }) programs, issues: \(issues.count)")
             let finalEPG = allEPG
             let finalIssues = issues
             let finalLogos = xmltvLogos

@@ -536,7 +536,7 @@ class PlexDataStore: ObservableObject {
         if authManager.isConnected {
             return true
         } else {
-            print("📦 PlexDataStore: ❌ Connection recovery failed")
+            DiagLog.error(.connection, "Recovery failed, still disconnected")
             return false
         }
     }
@@ -773,7 +773,7 @@ class PlexDataStore: ObservableObject {
                 fetchedContinueWatching = try await continueWatchingTask
                 continueWatchingFetchCompleted = true
             } catch {
-                print("📦 PlexDataStore: Continue Watching fetch error (keeping current hub): \(error)")
+                DiagLog.error(.home, "Continue Watching fetch failed, keeping current hub: \(DiagLog.describe(error))")
             }
             guard authManager.selectedServerToken == token else {
                 if updateLoading { isLoadingHubs = false }
@@ -799,6 +799,7 @@ class PlexDataStore: ObservableObject {
                 }
             }
 
+            DiagLog.notice(.home, "Hubs fetched: \(fetchedHubs.count) hubs, Continue Watching " + (continueWatchingFetchCompleted ? fetchedContinueWatching.map { "\($0.Metadata?.count ?? 0) items" } ?? "no hub" : "failed"))
             // Always update Top Shelf cache after fetching (composites logo art)
             await TopShelfFeed.refresh()
             self.hubsError = nil
@@ -814,8 +815,7 @@ class PlexDataStore: ObservableObject {
             lastHubsFetchAt = Date()
         } catch {
             let nsError = error as NSError
-            print("📦 PlexDataStore: ❌ Hubs fetch error: \(error)")
-            print("📦 PlexDataStore: Error domain: \(nsError.domain), code: \(nsError.code)")
+            DiagLog.error(.home, "Hubs fetch failed: \(DiagLog.describe(error))")
 
             // Ignore cancellation errors
             if nsError.code == NSURLErrorCancelled {
@@ -854,13 +854,14 @@ class PlexDataStore: ObservableObject {
             fetched = try await fetchContinueWatchingOffMain(serverURL: serverURL, token: token, userId: userId)
         } catch {
             // Transient error: keep the current hub, same as the full path.
-            print("📦 PlexDataStore: Continue Watching fast-poll error (keeping current hub): \(error)")
+            DiagLog.error(.home, "Continue Watching poll failed, keeping current hub: \(DiagLog.describe(error))")
             return
         }
         guard authManager.selectedServerToken == token else { return }
 
         hasFetchedContinueWatching = true
         guard !continueWatchingHubsAreEqual(self.continueWatchingHub, fetched) else { return }
+        DiagLog.notice(.home, "Continue Watching changed: \(fetched.map { "\($0.Metadata?.count ?? 0) items" } ?? "no hub")")
         self.continueWatchingHub = fetched
         self.hubsVersion = UUID()
         await TopShelfFeed.refresh()
@@ -998,7 +999,7 @@ class PlexDataStore: ObservableObject {
                                 )
                                 return (library.key, library.title, hubs)
                             } catch {
-                                print("📦 PlexDataStore: ❌ Failed to load hubs for \(library.title): \(error)")
+                                DiagLog.error(.home, "Library \(library.key) (\(library.type)) hubs failed: \(DiagLog.describe(error))")
                                 Self.reportLibraryHubFetchFailure(library: library, error: error)
                                 return (library.key, library.title, nil)
                             }
@@ -1029,7 +1030,7 @@ class PlexDataStore: ObservableObject {
                                 )
                                 return (library.key, library.title, hubs)
                             } catch {
-                                print("📦 PlexDataStore: ❌ Failed to refresh hubs for \(library.title): \(error)")
+                                DiagLog.error(.home, "Library \(library.key) (\(library.type)) hubs refresh failed: \(DiagLog.describe(error))")
                                 Self.reportLibraryHubFetchFailure(library: library, error: error)
                                 return (library.key, library.title, nil)
                             }
@@ -1046,6 +1047,8 @@ class PlexDataStore: ObservableObject {
             isLoadingLibraryHubs = false
             // Final projection once every library's hubs have landed.
             projectAllLoadedItems()
+            // Top Shelf falls back to Recently Added when Continue Watching is empty.
+            await TopShelfFeed.refresh()
 
             // Pinned collections load in their own task. The projection above
             // has already painted every promoted row and library page, and
@@ -1325,7 +1328,7 @@ class PlexDataStore: ObservableObject {
         homeItems = rail
         homeItemsVersion = UUID()
         let totalItems = rail.reduce(0) { $0 + $1.items.count }
-        print("📦 [MediaItemProjection] homeItems rows=\(rail.count) items=\(totalItems)")
+        DiagLog.notice(.home, "Home rows=\(rail.count) items=\(totalItems) per row=\(rail.map(\.items.count)) cw_row=\(rail.contains(where: \.isContinueWatching))")
         Task { await cacheManager.cacheHomeItems(rail) }
     }
 
@@ -1496,13 +1499,13 @@ class PlexDataStore: ObservableObject {
             if updateLoading {
                 self.isLoadingLibraries = false
             }
+            DiagLog.notice(.home, "Libraries fetched: \(fetched.map(\.type))")
             // Sync library order settings with current libraries
             self.librarySettings.syncOrderWithLibraries(fetched)
             await cacheManager.cacheLibraries(fetched)
         } catch {
             let nsError = error as NSError
-            print("📦 PlexDataStore: ❌ Libraries fetch error: \(error)")
-            print("📦 PlexDataStore: Error domain: \(nsError.domain), code: \(nsError.code)")
+            DiagLog.error(.home, "Libraries fetch failed: \(DiagLog.describe(error))")
 
             // Ignore cancellation errors
             if nsError.code == NSURLErrorCancelled {
