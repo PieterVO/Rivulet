@@ -149,7 +149,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.1.0 (109)", [
+        ("1.1.0 (110)", [
             "New onboarding screen and flow.",
             "You can now quickly page through the preview carousel.",
             "Skip buttons can each be turned off completely so they do not show.",
@@ -160,7 +160,6 @@ struct WhatsNewView: View {
             "Combined Live TV sources now each get a Guide tab and a What's On row.",
             "New Send Diagnostics in About gives you a code to share when reporting a problem.",
             "New in Live TV: switch between a Dispatcharr channel's streams from the player.",
-            "New App Icon setting in Appearance, with three new icons by @tresby.",
             "The player's Details panel now shows a Dolby Vision video's FEL or MEL layer.",
             "The Live TV guide no longer downloads while a video plays (@PieterVO).",
             "Fixed light corners on Continue Watching cards on tvOS 26 (@PieterVO).",

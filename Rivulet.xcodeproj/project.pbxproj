@@ -471,7 +471,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPATTEST_ENVIRONMENT = development;
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIconSimpleColor AppIconSimpleWhite AppIconPixel";
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Rivulet/Rivulet.entitlements;
@@ -531,7 +530,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPATTEST_ENVIRONMENT = production;
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIconSimpleColor AppIconSimpleWhite AppIconPixel";
 				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Rivulet/Rivulet.entitlements;
