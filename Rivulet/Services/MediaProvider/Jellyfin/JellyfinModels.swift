@@ -115,6 +115,9 @@ nonisolated struct JFItem: Decodable, Sendable {
     let productionLocations: [String]?
     let providerIds: [String: String]?
     let mediaSources: [JFMediaSource]?
+    let localTrailerCount: Int?
+    let specialFeatureCount: Int?
+    let extraType: String?          // on a trailer or special feature: Trailer, Featurette, BehindTheScenes, ...
 }
 
 nonisolated struct JFUserData: Decodable, Sendable {

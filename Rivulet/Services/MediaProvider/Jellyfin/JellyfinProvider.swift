@@ -159,6 +159,8 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
 
     func fullDetail(for itemRef: MediaItemRef) async throws -> MediaItemDetail {
         let dto: JFItem = try await client.get("Items/\(itemRef.itemID)")
+        async let trailers = extras(itemRef.itemID, "LocalTrailers", count: dto.localTrailerCount)
+        async let features = extras(itemRef.itemID, "SpecialFeatures", count: dto.specialFeatureCount)
         var next: JFItem?
         if dto.type == "Series" {
             let up: JFQueryResult? = try? await client.get("Shows/NextUp", [
@@ -168,7 +170,15 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
             ])
             next = up?.items?.first
         }
-        return JellyfinMediaMapper.detail(dto, nextEpisode: next, providerID: id, baseURL: baseURL, token: token)
+        return JellyfinMediaMapper.detail(dto, nextEpisode: next, trailers: await trailers,
+                                          specialFeatures: await features,
+                                          providerID: id, baseURL: baseURL, token: token)
+    }
+
+    /// Local trailers or special features; asked only when the item counts some.
+    private func extras(_ itemID: String, _ endpoint: String, count: Int?) async -> [JFItem] {
+        guard (count ?? 0) > 0 else { return [] }
+        return (try? await client.get("Items/\(itemID)/\(endpoint)")) ?? []
     }
 
     // MARK: - Home rails

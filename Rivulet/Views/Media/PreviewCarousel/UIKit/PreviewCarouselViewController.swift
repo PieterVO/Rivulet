@@ -1041,6 +1041,11 @@ final class PreviewCarouselViewController: UIViewController {
     /// 404s under `/library/metadata` (#255); it plays directly through a synthetic PlexMetadata.
     private func presentExtraPlayer(_ trailer: BelowFoldTrailer) {
         let key = trailer.playbackKey ?? trailer.id
+        // Off Plex an extra is a library item of the shown item's own provider.
+        if shownItemServer == nil, let providerID = expandedDetail.item?.ref.providerID {
+            playProviderExtra(MediaItemRef(providerID: providerID, itemID: key))
+            return
+        }
         let route = ExtraPlaybackKey.route(for: key)
 
         // Context for the request's own Sentry capture, whose endpoint tag cannot group IVA paths.
@@ -1073,6 +1078,19 @@ final class PreviewCarouselViewController: UIViewController {
                 token: token,
                 resumeOffset: nil
             )
+        }
+    }
+
+    private func playProviderExtra(_ ref: MediaItemRef) {
+        guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID) else { return }
+        Task { [weak self] in
+            do {
+                let detail = try await provider.fullDetail(for: ref)
+                guard let self else { return }
+                ProviderPlayer.play(detail.item, fromBeginning: false, from: self, onDismiss: nil)
+            } catch {
+                previewCarouselLog.error("[PCV] extra play: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
