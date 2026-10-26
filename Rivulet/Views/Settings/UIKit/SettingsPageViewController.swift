@@ -12,6 +12,7 @@
 //  taps (`onPush`) + row focus (`onFocusRow`).
 //
 
+import Combine
 import UIKit
 
 @MainActor
@@ -35,6 +36,7 @@ final class SettingsPageViewController: UIViewController {
     private var focusedIndexPath: IndexPath?
     /// Move mode for a grabbed row: Up/Down slide it, Select drops it.
     private var reorder: GrabReorderController!
+    private var speechModelState: AnyCancellable?
 
     init(page: SettingsPage) {
         self.page = page
@@ -106,6 +108,14 @@ final class SettingsPageViewController: UIViewController {
         // Kick off any background load this page needs (e.g. fetch Plex Home
         // users) and refresh the list when it arrives.
         SettingsContent.prepareAsync(for: page) { [weak self] in self?.reloadRows() }
+
+        // The speech model's download progress updates in place on Content Filtering.
+        if page == .contentFilter {
+            speechModelState = SpeechModelStore.shared.$state
+                .dropFirst()
+                .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
+                .sink { [weak self] _ in self?.refreshVisibleValues() }
+        }
     }
 
     @objc private func handleGrab(_ gr: UILongPressGestureRecognizer) {
@@ -161,6 +171,20 @@ final class SettingsPageViewController: UIViewController {
                   let path = collectionView.indexPath(for: cell),
                   path.item < rows.count else { continue }
             cell.setDimmed(!rows[path.item].isEnabled())
+        }
+    }
+
+    /// Re-read every visible row's value in place, keeping focus where it is.
+    private func refreshVisibleValues() {
+        guard let collectionView else { return }
+        for cell in collectionView.visibleCells {
+            guard let cell = cell as? SettingsCell,
+                  let path = collectionView.indexPath(for: cell),
+                  path.item < rows.count else { continue }
+            let item = rows[path.item]
+            cell.configure(title: item.title, value: item.valueText, showsChevron: item.showsChevron,
+                           destructive: item.isDestructive, showsCheckmark: item.showsCheckmark,
+                           dimmed: !item.isEnabled(), busy: item.isBusy())
         }
     }
 

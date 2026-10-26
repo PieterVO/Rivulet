@@ -323,6 +323,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// MCF/EDL lists. VOD only. Fed time + active cue text from the observers
     /// below; its `isFilterMuting` output is mirrored onto the active player.
     let contentFilter = ContentFilterManager()
+    /// The speech model's run over the player's audio, and the player it reads.
+    private var speechTask: Task<Void, Never>?
+    private weak var speechPlayer: AetherPlayer?
+    private var muteEdgeWork: DispatchWorkItem?
     /// Why the filter can't mute language on this title right now; nil when it can.
     @Published private(set) var contentFilterNotice: String?
     /// The subtitle track the filter is reading without showing it; the user's subtitles are off.
@@ -725,8 +729,17 @@ final class UniversalPlayerViewModel: ObservableObject {
         // An image cue's words arrive after the tick that asked for them.
         subtitleImageReader.onRead = { [weak self] in
             guard let self else { return }
-            self.contentFilter.activeSubtitlesDidChange(texts: self.activeSubtitleTextForFilter())
+            self.contentFilter.subtitleLinesDidChange(self.subtitleLinesForFilter(at: self.currentTime))
         }
+
+        // On-device speech places muted words on the audio (aether route only).
+        $aetherPlayer
+            .combineLatest(contentFilter.$isEnabled, contentFilter.$isPaused, SpeechModelStore.shared.$state)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] player, enabled, paused, model in
+                self?.syncSpeechRecognition(player: player, wanted: enabled && !paused && model == .ready)
+            }
+            .store(in: &cancellables)
 
         // Pausing, Settings, or a list or file arriving all change whether a track is read unseen.
         contentFilter.$isEnabled
@@ -766,7 +779,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // muting comes from the subtitle file the filter reads itself (see
         // `contentFilterItem()`).
         readSubtitleImages(at: time)
-        contentFilter.activeSubtitlesDidChange(texts: activeSubtitleTextForFilter())
+        contentFilter.subtitleLinesDidChange(subtitleLinesForFilter(at: time))
         // The delay stepper only moves what's on screen on the aether route.
         contentFilter.displayedSubtitleDidChange(
             streamKey: aetherPlayer == nil
@@ -776,13 +789,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         syncSilentSubtitleRead()
         // Only the aether route gives the filter cues to read.
         let tracks = aetherPlayer == nil ? [] : subtitleTracks
-        let notice = !contentFilter.isEnabled ? nil : ContentFilterSources.languageNotice(
+        // With nothing to read, the words the speech model hears are filtered directly.
+        let speechOnly = speechTask != nil && !contentFilter.hasLanguageSource
+            && !tracks.contains(where: ContentFilterSources.isReadable)
+        contentFilter.setSpeechOnly(speechOnly)
+        let notice = !contentFilter.isEnabled || speechOnly ? nil : ContentFilterSources.languageNotice(
             hasLanguageSource: contentFilter.hasLanguageSource,
             shown: tracks.first(where: { $0.id == currentSubtitleTrackId }),
             tracks: tracks)
         if notice != contentFilterNotice { contentFilterNotice = notice }
 
-        guard let skipTarget = contentFilter.timeDidUpdate(time, allowSkip: !isScrubbing) else { return }
+        let skipTarget = contentFilter.timeDidUpdate(time, allowSkip: !isScrubbing)
+        scheduleMuteEdge(after: time)
+        guard let skipTarget else { return }
         // A window that runs to (or past) the end of the item would otherwise
         // seek beyond EOF; land just short so playback ends normally instead.
         let target = duration > 0 ? min(skipTarget, max(0, duration - 0.25)) : skipTarget
@@ -947,22 +966,65 @@ final class UniversalPlayerViewModel: ObservableObject {
         assTrack = nil
     }
 
-    private func activeSubtitleTextForFilter() -> [String] {
-        aetherSubtitleModel.activeCues.compactMap { cue in
-            switch cue.body {
-            case .text(let string): return string
-            case .styledText(let runs): return runs.map(\.text).joined()
-            case .image(let image, _): return subtitleImageReader.text(for: image)
-            case .assEvents(let lines):
-                // Words only: the Style, Name and Effect fields and the tag
-                // names would otherwise reach the profanity matcher as words.
-                let text = ASSEventLine.lines(in: lines)
-                    .filter { !$0.isDrawing }
-                    .map(\.plainText)
-                    .joined(separator: "\n")
-                return text.isEmpty ? nil : text
+    /// Cues near the playhead from the track the engine reads, on the audio's
+    /// axis, so the filter knows a muted line before it is spoken.
+    private func subtitleLinesForFilter(at time: TimeInterval) -> [SubtitleLine] {
+        let delay = aetherSubtitleModel.delaySeconds
+        return aetherSubtitleModel.cues.compactMap { cue in
+            let start = cue.startTime + delay, end = cue.endTime + delay
+            guard end > time - 1, start < time + 6, let text = filterText(for: cue) else { return nil }
+            return SubtitleLine(id: cue.id, start: start, end: end, text: text)
+        }
+    }
+
+    private func filterText(for cue: AetherSubtitleCue) -> String? {
+        switch cue.body {
+        case .text(let string): return string
+        case .styledText(let runs): return runs.map(\.text).joined()
+        case .image(let image, _): return subtitleImageReader.text(for: image)
+        case .assEvents(let lines):
+            // Words only: the Style, Name and Effect fields and the tag
+            // names would otherwise reach the profanity matcher as words.
+            let text = ASSEventLine.lines(in: lines)
+                .filter { !$0.isDrawing }
+                .map(\.plainText)
+                .joined(separator: "\n")
+            return text.isEmpty ? nil : text
+        }
+    }
+
+    /// Run the speech model on this player's audio while filtering wants it.
+    private func syncSpeechRecognition(player: AetherPlayer?, wanted: Bool) {
+        guard let player, wanted else {
+            speechTask?.cancel()
+            speechTask = nil
+            speechPlayer = nil
+            return
+        }
+        guard speechPlayer !== player || speechTask == nil else { return }
+        speechTask?.cancel()
+        speechPlayer = player
+        let audio = player.playbackAudio()
+        let filter = contentFilter
+        speechTask = Task.detached(priority: .utility) {
+            guard let models = await SpeechModelStore.load() else { return }
+            await SpeechWordRecognizer.run(models: models, audio: audio) { words, range in
+                await filter.wordsHeard(words, covering: range)
             }
         }
+    }
+
+    /// Act on a mute edge due before the next tick at the moment it is due,
+    /// read from the player's own clock, so a word is cut on time.
+    private func scheduleMuteEdge(after time: TimeInterval) {
+        muteEdgeWork?.cancel()
+        muteEdgeWork = nil
+        guard playbackState == .playing,
+              let edge = contentFilter.nextMuteEdge(after: time), edge - time < 0.25 else { return }
+        let now = aetherPlayer?.sourceTime(atHostTime: CACurrentMediaTime()) ?? time
+        let work = DispatchWorkItem { [weak self] in self?.contentFilter.clockDidReach(edge + 0.001) }
+        muteEdgeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, edge - now), execute: work)
     }
 
     /// Clear any prepared stream state so the next startup recomputes route + URLs.
@@ -1614,6 +1676,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // After the fetch above, because both key off the file, the external
         // ids and the subtitle streams that hub items arrive without.
         contentFilter.beginItem(contentFilterItem())
+        // A purged or never-finished speech model downloads again.
+        if contentFilter.isEnabled { SpeechModelStore.shared.prepare() }
 
         // IntroDB backup markers (opt-in). Runs AFTER the Plex fetch above so
         // Plex stays authoritative — the backfill only adds kinds Plex didn't
@@ -3620,6 +3684,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         titleLogoResolveTask = nil
         clearReplayWindow()
         contentFilter.reset()
+        muteEdgeWork?.cancel()
+        muteEdgeWork = nil
         subtitleImageReader.read([])
         releaseThumbnailCache()
         cancelEngineThumbnail()

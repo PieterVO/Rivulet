@@ -28,6 +28,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("homeRow_") { return descriptors["homeRowItem"] }
         if id.hasPrefix("pinnedCollection_") { return descriptors["pinnedCollection"] }
         if id.hasPrefix("fav_") { return descriptors["liveTVFavoriteRow"] }
+        if id.hasPrefix("cfw_"), id != "cfw_add" { return descriptors["customWordRow"] }
         if id.hasPrefix("sq_") { return descriptors["streamingQualityOption"] }
         if id.hasPrefix("al_") { return descriptors["audioLanguage"] }
         if id.hasPrefix("sl_") { return descriptors["subtitleLanguage"] }
@@ -464,6 +465,22 @@ enum SettingsDescriptorStore {
             icon: "heart.slash.fill",
             description: "Mutes crude and sexual language in the dialogue."
         ),
+        "cf_customWords": SettingDescriptor(
+            icon: "text.badge.plus",
+            description: "Words of your own to mute, such as \"stupid\" or \"shut up\". They are muted whenever the filter is on, whatever the categories above are set to. A word matches only on its own, never inside a longer word."
+        ),
+        "cfw_add": SettingDescriptor(
+            icon: "plus.circle.fill",
+            description: "Type a word or a short phrase to mute. Capitals and punctuation don't matter."
+        ),
+        "customWordRow": SettingDescriptor(
+            icon: "text.badge.minus",
+            description: "Select to stop muting this word."
+        ),
+        "cf_speechModel": SettingDescriptor(
+            icon: "waveform",
+            description: "Mutes the filtered word itself instead of the whole subtitle line. An on-device speech model listens a few seconds ahead of playback and finds where each word is spoken; nothing leaves your Apple TV. It downloads once (about 230 MB) when the filter is turned on, and titles with no subtitles at all can be filtered from speech alone. Select to retry a download that failed."
+        ),
         "cf_violence": SettingDescriptor(
             icon: "burst.fill",
             description: "Skips violent and gory scenes. Requires an imported filter list — set the Filter List URL below. Dialogue text alone can't detect these scenes."
@@ -522,6 +539,7 @@ enum SettingsDescriptorStore {
         case .subtitleLanguagePicker: return ("captions.bubble", .systemYellow)
         case .contentFilter: return ("hand.raised.fill", .systemOrange)
         case .contentFilterStrength: return ("dial.medium.fill", .systemOrange)
+        case .contentFilterWords: return ("text.badge.plus", .systemOrange)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .systemBlue)
         case .liveTVFavorites: return ("star.fill", .systemYellow)
         case .addLiveTVSource: return ("plus.circle.fill", .systemBlue)

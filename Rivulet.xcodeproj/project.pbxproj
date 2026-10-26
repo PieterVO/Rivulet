@@ -13,6 +13,7 @@
 		A7F159552F04124A001B2177 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
 		B2000001AAAA000000000001 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000001 /* AetherEngine */; };
 		B2000001AAAA000000000002 /* Libass in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000002 /* Libass */; };
+		B2000001AAAA000000000003 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000003 /* FluidAudio */; };
 		B30000190000000000000019 /* AetherEngine in Frameworks */ = {isa = PBXBuildFile; productRef = B2000010AAAA000000000001 /* AetherEngine */; };
 		B30000210000000000000021 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = A7F159542F04124A001B2177 /* Sentry */; };
 /* End PBXBuildFile section */
@@ -137,6 +138,7 @@
 				A740D1192F59C56300B9820B /* AVKit.framework in Frameworks */,
 				B2000001AAAA000000000001 /* AetherEngine in Frameworks */,
 				B2000001AAAA000000000002 /* Libass in Frameworks */,
+				B2000001AAAA000000000003 /* FluidAudio in Frameworks */,
 				A7F159552F04124A001B2177 /* Sentry in Frameworks */,
 			);
 		};
@@ -233,6 +235,7 @@
 				A7F159542F04124A001B2177 /* Sentry */,
 				B2000010AAAA000000000001 /* AetherEngine */,
 				B2000010AAAA000000000002 /* Libass */,
+				B2000010AAAA000000000003 /* FluidAudio */,
 			);
 			productName = Rivulet;
 			productReference = A72E03DA2EDA297D003A73DA /* Rivulet.app */;
@@ -320,6 +323,7 @@
 				A700F81A2EFBA1610042C07D /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				B2000020AAAA000000000001 /* XCRemoteSwiftPackageReference "AetherEngine" */,
 				B2000020AAAA000000000002 /* XCRemoteSwiftPackageReference "LibassBuild" */,
+				B2000020AAAA000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A72E03DB2EDA297D003A73DA /* Products */;
@@ -903,6 +907,16 @@
 				version = "0.17.5-2";
 			};
 		};
+		B2000020AAAA000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = revision;
+				revision = 1b0ed50d686873128a4129b3510ce3914c849bab;
+			};
+			traits = (
+			);
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -920,6 +934,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B2000020AAAA000000000002 /* XCRemoteSwiftPackageReference "LibassBuild" */;
 			productName = Libass;
+		};
+		B2000010AAAA000000000003 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B2000020AAAA000000000003 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

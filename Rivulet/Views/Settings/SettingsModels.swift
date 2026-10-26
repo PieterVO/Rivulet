@@ -55,7 +55,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case heightSpeakersPicker, subtitleModePicker, autoplayLimitPicker
     case homeQualityPicker, awayQualityPicker
     case audioLanguagePicker, subtitleLanguagePicker
-    case contentFilter, contentFilterStrength
+    case contentFilter, contentFilterStrength, contentFilterWords
 
     var title: String {
         switch self {
@@ -93,6 +93,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .subtitleLanguagePicker: return "Subtitle Language"
         case .contentFilter: return "Content Filtering"
         case .contentFilterStrength: return "Profanity Strength"
+        case .contentFilterWords: return "Custom Words"
         }
     }
 }

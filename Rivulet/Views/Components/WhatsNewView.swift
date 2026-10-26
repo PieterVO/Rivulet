@@ -149,6 +149,11 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (113)", [
+            "Content Filtering can now mute words of your own, such as \"stupid\".",
+            "The content filter now mutes just the offending word, not the whole line.",
+            "Titles with no subtitles can now be filtered from their dialogue.",
+        ]),
         ("1.1.0 (112)", [
             "Jellyfin Live TV can now record an airing, a series, or new episodes.",
             "Live TV shows the programme's artwork and summary while a channel tunes.",

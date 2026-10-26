@@ -1226,6 +1226,38 @@ final class AetherPlayer: PlayerProtocol {
         engine.volume = muted ? 0 : 1
         currentAVPlayer?.isMuted = muted
     }
+
+    /// Decoded playback audio for on-device speech (the engine's audio tap):
+    /// mono 48 kHz on the source axis, up to ~10 s ahead of the playhead on the
+    /// loopback route. The tap ends on every load or reload, so it is
+    /// re-installed until the stream is cancelled.
+    func playbackAudio() -> AsyncStream<PlaybackAudioChunk> {
+        let (stream, continuation) = AsyncStream<PlaybackAudioChunk>.makeStream(bufferingPolicy: .bufferingNewest(256))
+        let task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let engine = self?.engine else { break }
+                let tap = engine.installAudioTap()
+                if engine.audioTapHasDeliverySource {
+                    var first = true
+                    for await buffer in tap {
+                        continuation.yield(PlaybackAudioChunk(
+                            buffer: buffer.buffer, sourceTime: buffer.sourceTime,
+                            discontinuity: buffer.discontinuity || first))
+                        first = false
+                    }
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            continuation.finish()
+        }
+        let engine = engine
+        continuation.onTermination = { _ in
+            task.cancel()
+            Task { @MainActor in engine.removeAudioTap() }
+        }
+        return stream
+    }
+
     func seek(to time: TimeInterval) async { await engine.seek(to: time) }
 
     // MARK: - Live timeshift

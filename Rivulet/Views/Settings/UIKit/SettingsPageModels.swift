@@ -220,6 +220,7 @@ enum SettingsContent {
         case .subtitleLanguagePicker: return subtitleLanguagePicker
         case .contentFilter:          return contentFilter
         case .contentFilterStrength:  return contentFilterStrength
+        case .contentFilterWords:     return contentFilterWords
         }
     }
 
@@ -540,8 +541,11 @@ enum SettingsContent {
     /// (see the source URL row).
     private static var contentFilter: [SettingsRowItem] {
         var rows: [SettingsRowItem] = [
-            toggle("cf_master", "Content Filter",
-                   key: ContentFilterManager.Keys.enabled, default: false)
+            // Turning the filter on fetches the speech model behind word-level muting.
+            SettingsRowItem(id: "cf_master", title: "Content Filter", kind: .toggle(
+                get: { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) },
+                set: { SettingsStore.setBool(ContentFilterManager.Keys.enabled, $0) },
+                didChange: { on, _ in if on { SpeechModelStore.shared.prepare() } }))
         ]
 
         // Language categories (auto-detected from subtitles)
@@ -553,6 +557,20 @@ enum SettingsContent {
         rows.append(categoryToggle(.blasphemy, id: "cf_blasphemy"))
         rows.append(categoryToggle(.slur, id: "cf_slur"))
         rows.append(categoryToggle(.sexualLanguage, id: "cf_sexualLanguage"))
+        rows.append(SettingsRowItem(id: "cf_customWords", title: "Custom Words",
+                                    kind: .navigationValue(.contentFilterWords, value: {
+                                        let count = ContentFilterManager.customWords.count
+                                        return count == 0 ? "None" : "\(count)"
+                                    })))
+        // Selecting it retries a failed or purged download.
+        rows.append(SettingsRowItem(id: "cf_speechModel", title: "Word-Level Muting",
+                                    kind: .selectable(isSelected: { false },
+                                                      value: { SpeechModelStore.shared.statusText },
+                                                      handler: { vc in
+                                        SpeechModelStore.shared.prepare()
+                                        (vc as? SettingsPageViewController)?.reloadRows()
+                                    }),
+                                    isEnabled: { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) }))
 
         // Scene categories (require an imported filter list)
         rows.append(categoryToggle(.violence, id: "cf_violence"))
@@ -569,6 +587,28 @@ enum SettingsContent {
                                         suggestions: [],
                                         keyboardType: .URL,
                                         set: { SettingsStore.setString(ContentFilterManager.Keys.listSourceURL, $0) })))
+        return rows
+    }
+
+    /// The user's own words (#404): an Add row, then one row per word; selecting a word removes it.
+    private static var contentFilterWords: [SettingsRowItem] {
+        var rows = [SettingsRowItem(id: "cfw_add", title: "Add Word", kind: .textEntry(
+            value: { "" },
+            placeholder: "Word or Phrase",
+            hint: nil,
+            suggestions: [],
+            keyboardType: .default,
+            set: { ContentFilterManager.addCustomWord($0) }))]
+        rows += ContentFilterManager.customWords.map { word in
+            SettingsRowItem(id: "cfw_\(word)", title: word, kind: .action(destructive: false, handler: { vc in
+                presentConfirm(on: vc, title: "Remove \"\(word)\"?",
+                               message: "The filter will stop muting this word.",
+                               confirmTitle: "Remove", destructive: true) {
+                    ContentFilterManager.customWords.removeAll { $0 == word }
+                    (vc as? SettingsPageViewController)?.reloadRows()
+                }
+            }))
+        }
         return rows
     }
 
