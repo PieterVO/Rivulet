@@ -149,6 +149,13 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (112)", [
+            "Jellyfin Live TV can now record an airing, a series, or new episodes.",
+            "Live TV shows the programme's artwork and summary while a channel tunes.",
+            "Live TV now closes the player when the app goes to the background.",
+            "Posters with no artwork now show the title.",
+            "Content ratings no longer show a country prefix.",
+        ]),
         ("1.1.0 (111)", [
             "Jellyfin titles now show their trailers and extras on the details page.",
             "Top Shelf shows Recently Added when there is nothing in Continue Watching.",

@@ -17,10 +17,11 @@ final class JellyfinLiveTVTests: XCTestCase {
     private let server = FakeJellyfinServer()
     private let base = JellyfinFixtures.baseURL
 
-    private func provider() -> JellyfinLiveTVProvider {
+    private func provider(canRecord: Bool = true) -> JellyfinLiveTVProvider {
         JellyfinLiveTVProvider(provider: JellyfinProvider(
             serverID: "srv", displayName: "NAS", userID: "user-1",
-            client: JellyfinClient(baseURL: base, token: "tok", transport: server.transport)))
+            client: JellyfinClient(baseURL: base, token: "tok", transport: server.transport)),
+            canRecord: canRecord)
     }
 
     // Trimmed from GET /LiveTv/Channels (addCurrentProgram=false, enableUserData=true).
@@ -203,6 +204,72 @@ final class JellyfinLiveTVTests: XCTestCase {
 
         PlexLiveTimelineKeepalive.release(url)
         XCTAssertEqual(released, [url, url], "an abandoned resolve is released too")
+    }
+
+    // MARK: - DVR
+
+    // Trimmed from GET /LiveTv/Timers/Defaults?programId=… (12.1).
+    private let timerDefaults = #"""
+        {"RecordAnyTime":true,"SkipEpisodesInLibrary":true,"RecordAnyChannel":false,"KeepUpTo":0,
+         "RecordNewOnly":true,"Days":["Sunday","Monday"],"DayPattern":"Daily","Id":"eb075d6a",
+         "Type":"SeriesTimer","ChannelId":"746bd1ff6d4432d20768254840f0acbc","ChannelName":"FOX 6 WBRC",
+         "ProgramId":"96e30a15b21d64a91ef7b69e6d5090f1","Name":"Big Money","StartDate":"2026-10-26T03:50:00.0000000Z",
+         "EndDate":"2026-10-26T05:50:00.0000000Z","ServiceName":"Emby","Priority":0,"PrePaddingSeconds":0,
+         "PostPaddingSeconds":0,"IsPrePaddingRequired":false,"IsPostPaddingRequired":false,"KeepUntil":"UntilDeleted"}
+        """#
+
+    func test_record_postsTheServerDefaultsWithTheServiceName() async throws {
+        server.respond("/LiveTv/Timers/Defaults", body: timerDefaults)
+        server.respond("/LiveTv/Timers", status: 204)
+        server.respond("/LiveTv/SeriesTimers", status: 204)
+        let live = provider()
+        let program = UnifiedProgram(id: "96e30a15b21d64a91ef7b69e6d5090f1", channelId: "c", title: "Big Money",
+                                     startTime: Date(), endTime: Date().addingTimeInterval(3600))
+        let channel = UnifiedChannel(id: "c", sourceType: .jellyfin, sourceId: "jellyfin:srv", name: "FOX")
+        let options = try await live.recordOptions(for: program, on: channel)
+        XCTAssertEqual(options.map(\.title), ["Record", "Record Series", "Record New Episodes"])
+
+        try await live.record(options[0], program: program, on: channel)
+        XCTAssertEqual(server.requests[0].url?.path, "/LiveTv/Timers/Defaults")
+        XCTAssertEqual(server.query(0).first?.value, "96e30a15b21d64a91ef7b69e6d5090f1")
+        XCTAssertEqual(server.requests[1].url?.path, "/LiveTv/Timers")
+        let timer = server.jsonBody(1)
+        XCTAssertEqual(timer["ServiceName"] as? String, "Emby", "the server answers 500 without it")
+        XCTAssertEqual(timer["ProgramId"] as? String, "96e30a15b21d64a91ef7b69e6d5090f1")
+
+        try await live.record(options[1], program: program, on: channel)
+        XCTAssertEqual(server.requests[3].url?.path, "/LiveTv/SeriesTimers")
+        XCTAssertEqual(server.jsonBody(3)["RecordNewOnly"] as? Bool, false, "every episode, not the server's default")
+        try await live.record(options[2], program: program, on: channel)
+        XCTAssertEqual(server.jsonBody(5)["RecordNewOnly"] as? Bool, true)
+    }
+
+    func test_scheduledRecordings_mapTimers() async throws {
+        server.respond("/LiveTv/Timers", body: #"""
+            {"Items":[
+              {"Status":"InProgress","Id":"t2","ChannelId":"746bd1ff6d4432d20768254840f0acbc","ChannelName":"FOX 6",
+               "ProgramId":"p2","Name":"Big Money","StartDate":"2026-10-26T03:00:00.0000000Z",
+               "EndDate":"2026-10-26T04:00:00.0000000Z","SeriesTimerId":"s1",
+               "ProgramInfo":{"EpisodeTitle":"Fed Day","ImageTags":{"Primary":"tag2"}}},
+              {"Status":"New","Id":"t1","ChannelId":"746bd1ff6d4432d20768254840f0acbc","ProgramId":"p1",
+               "Name":"News","StartDate":"2026-10-26T01:00:00.0000000Z","EndDate":"2026-10-26T02:00:00.0000000Z"}],
+             "TotalRecordCount":2}
+            """#)
+        let recordings = try await provider().scheduledRecordings()
+        XCTAssertEqual(recordings.map(\.id), ["t1", "t2"])
+        XCTAssertEqual(recordings[0].status, .scheduled)
+        XCTAssertFalse(recordings[0].ruleIsSeries)
+        XCTAssertEqual(recordings[1].status, .recording)
+        XCTAssertEqual(recordings[1].subtitle, "Fed Day")
+        XCTAssertEqual(recordings[1].ruleId, "s1")
+        XCTAssertTrue(recordings[1].ruleIsSeries)
+        XCTAssertEqual(recordings[1].channelId, "jellyfin:jellyfin:srv:746bd1ff6d4432d20768254840f0acbc",
+                       "the guide's channel id, so the airing is marked")
+        XCTAssertEqual(recordings[1].posterURL?.absoluteString, "http://jf.local:8096/Items/p2/Images/Primary?tag=tag2")
+    }
+
+    func test_recording_needsTheUsersRight() {
+        XCTAssertFalse(provider(canRecord: false).supportsRecording)
     }
 
     // MARK: - Automatic sources

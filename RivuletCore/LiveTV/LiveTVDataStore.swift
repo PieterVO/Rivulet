@@ -1298,10 +1298,10 @@ class LiveTVDataStore: ObservableObject {
 
     /// `provider` as a recorder, when it records. Every IPTV source has the
     /// recording methods (Dispatcharr and plain M3U share a type), but only
-    /// Dispatcharr with an API key can use them.
+    /// Dispatcharr with an API key can use them; Jellyfin needs the user's right.
     private static func recorder(_ provider: any LiveTVProvider) -> (any LiveTVRecordingProvider)? {
-        if let iptv = provider as? IPTVProvider, !iptv.supportsRecording { return nil }
-        return provider as? any LiveTVRecordingProvider
+        guard let recorder = provider as? any LiveTVRecordingProvider, recorder.supportsRecording else { return nil }
+        return recorder
     }
 
     private var recordingProviders: [any LiveTVRecordingProvider] {
