@@ -142,6 +142,25 @@ final class AetherPlayer: PlayerProtocol {
     /// background timestamp so the teardown-drain wait still applies.
     private var pendingReloadSince: Date?
 
+    /// One file of a stacked title.
+    struct PartFile {
+        let url: URL
+        let externalSubtitles: [SidecarSubtitle]
+    }
+
+    /// A stacked title (#399) plays one file at a time while the player reports
+    /// the title's timeline: time and duration span every file, a seek into
+    /// another file loads it, and only the last file's end is `.ended`.
+    private var stack: StackedParts<PartFile>?
+    private var partIndex = 0
+    private var partStart: TimeInterval { stack?.starts[partIndex] ?? 0 }
+    /// Arguments of the title's load, repeated for each file.
+    private var partLoad: (headers: [String: String]?, audio: [String], subtitles: [String])?
+    /// True while the next file loads: the engine's idle/loading states and
+    /// zeroed clock belong to the swap, not to the title.
+    private var isSwitchingPart = false
+    private var prewarmedPart: Int?
+
     /// Warms a source's opening bytes so a later `load()` skips the cold open's round trips.
     /// URL and headers must be byte-identical to the load's, or the bytes are never adopted.
     /// Best-effort: declines when the origin has no free request slot.
@@ -181,7 +200,18 @@ final class AetherPlayer: PlayerProtocol {
                 // ".playing while still buffering" reconciliation sees the
                 // combined flag the moment a seek lands.
                 self.recomputeIsBuffering()
-                self.stateSubject.send(Self.translate(aetherState, errorInfo: errorInfo))
+                let state = Self.translate(aetherState, errorInfo: errorInfo)
+                if state == .ended, !self.isSwitchingPart, let stack = self.stack, self.partIndex + 1 < stack.files.count {
+                    self.isSwitchingPart = true
+                    self.stateSubject.send(.buffering)
+                    Task { await self.switchPart(to: self.partIndex + 1, at: 0) }
+                    return
+                }
+                if self.isSwitchingPart, [.idle, .loading, .ended].contains(state) {
+                    self.stateSubject.send(.buffering)
+                    return
+                }
+                self.stateSubject.send(state)
             }
             .store(in: &cancellables)
 
@@ -191,7 +221,9 @@ final class AetherPlayer: PlayerProtocol {
         engine.clock.$currentTime
             .receive(on: DispatchQueue.main)
             .sink { [weak self] t in
-                self?.timeSubject.send(t)
+                guard let self, !self.isSwitchingPart else { return }
+                self.timeSubject.send(t + self.partStart)
+                self.prewarmNextPartIfNear(t)
             }
             .store(in: &cancellables)
 
@@ -617,16 +649,19 @@ final class AetherPlayer: PlayerProtocol {
     // MARK: - PlayerProtocol state
 
     var isPlaying: Bool { engine.state == .playing }
-    var currentTime: TimeInterval { engine.currentTime }
-    var duration: TimeInterval { engine.duration }
+    var currentTime: TimeInterval { engine.currentTime + partStart }
+    var duration: TimeInterval { stack?.duration ?? engine.duration }
 
     /// Duration updates. The engine publishes `duration` once the source is
     /// probed; the VM needs this (not just `timePublisher`) so Plex progress
     /// reports carry a real duration (viewOffset + watched threshold).
     var durationPublisher: AnyPublisher<TimeInterval, Never> {
-        engine.$duration.eraseToAnyPublisher()
+        engine.$duration
+            .receive(on: DispatchQueue.main)
+            .map { [weak self] seconds in MainActor.assumeIsolated { self?.stack?.duration ?? seconds } }
+            .eraseToAnyPublisher()
     }
-    var bufferedTime: TimeInterval { engine.bufferedPosition }
+    var bufferedTime: TimeInterval { engine.bufferedPosition + partStart }
     var playbackRate: Float {
         get { _playbackRate }
         set {
@@ -656,15 +691,17 @@ final class AetherPlayer: PlayerProtocol {
     /// `.began`, so there is never a hold for it to release.
     var seekEvents: AnyPublisher<SeekHoldEvent, Never> {
         engine.seekEvents
-            .compactMap { event -> SeekHoldEvent? in
+            .receive(on: DispatchQueue.main)
+            .compactMap { [weak self] event -> SeekHoldEvent? in
+                let start = MainActor.assumeIsolated { self?.partStart ?? 0 }
                 let outcome: SeekHoldEvent.Outcome
                 switch event.outcome {
                 case .began: outcome = .began
-                case .landed(let rendered): outcome = .landed(renderedTime: rendered)
+                case .landed(let rendered): outcome = .landed(renderedTime: rendered + start)
                 case .stalled, .superseded: outcome = .settledElsewhere
                 case .rejected: return nil
                 }
-                return SeekHoldEvent(id: event.id, outcome: outcome, target: event.target)
+                return SeekHoldEvent(id: event.id, outcome: outcome, target: event.target + start)
             }
             .eraseToAnyPublisher()
     }
@@ -981,7 +1018,78 @@ final class AetherPlayer: PlayerProtocol {
         preferredAudioLanguages: [String] = [],
         preferredSubtitleLanguages: [String] = [],
         externalSubtitles: [SidecarSubtitle] = [],
-        isLive: Bool = false
+        isLive: Bool = false,
+        stackedParts: StackedParts<PartFile>? = nil
+    ) async throws {
+        stack = stackedParts
+        prewarmedPart = nil
+        guard let stackedParts else {
+            partIndex = 0
+            partLoad = nil
+            try await loadFile(url: url, headers: headers, startTime: startTime,
+                               preferredAudioLanguages: preferredAudioLanguages,
+                               preferredSubtitleLanguages: preferredSubtitleLanguages,
+                               externalSubtitles: externalSubtitles, isLive: isLive)
+            return
+        }
+        partLoad = (headers, preferredAudioLanguages, preferredSubtitleLanguages)
+        let (index, offset) = stackedParts.locate(startTime ?? 0)
+        partIndex = index
+        try await loadFile(url: stackedParts.files[index].url, headers: headers, startTime: offset,
+                           preferredAudioLanguages: preferredAudioLanguages,
+                           preferredSubtitleLanguages: preferredSubtitleLanguages,
+                           externalSubtitles: stackedParts.files[index].externalSubtitles, isLive: false)
+    }
+
+    /// Opens another file of the stacked title at `offset` within it, keeping
+    /// the track picks and the paused state. The last frame holds through the gap.
+    private func switchPart(to index: Int, at offset: TimeInterval) async {
+        isSwitchingPart = true
+        defer { isSwitchingPart = false }
+        guard let stack, let partLoad, stack.files.indices.contains(index) else { return }
+        let audio = activeAudioTrackId
+        let subtitle = activeSubtitleTrackId
+        let wasPlaying = userIntendsToPlay
+        DiagLog.notice(.playback, "Stacked title: part \(index + 1) of \(stack.files.count) at \(Int(offset))s")
+        partIndex = index
+        engine.prepareForItemReplacement()
+        do {
+            try await loadFile(url: stack.files[index].url, headers: partLoad.headers, startTime: offset,
+                               preferredAudioLanguages: partLoad.audio,
+                               preferredSubtitleLanguages: partLoad.subtitles,
+                               externalSubtitles: stack.files[index].externalSubtitles, isLive: false)
+        } catch {
+            // The load already published the failure.
+            return
+        }
+        // Stream indexes match across the files of one release.
+        if let audio, audio != activeAudioTrackId, audioTracks.contains(where: { $0.id == audio }) {
+            selectAudioTrack(id: audio)
+        }
+        if subtitle != activeSubtitleTrackId, subtitle.map({ id in subtitleTracks.contains { $0.id == id } }) ?? true {
+            selectSubtitleTrack(id: subtitle)
+        }
+        if !wasPlaying { pause() }
+    }
+
+    /// Warms the next file's opening bytes in the last 30s of this one.
+    private func prewarmNextPartIfNear(_ time: TimeInterval) {
+        guard let stack, let headers = partLoad?.headers, partIndex + 1 < stack.files.count,
+              prewarmedPart != partIndex + 1,
+              stack.starts[partIndex + 1] - (time + partStart) < 30 else { return }
+        prewarmedPart = partIndex + 1
+        let url = stack.files[partIndex + 1].url
+        Task.detached { await Self.prewarm(url: url, headers: headers) }
+    }
+
+    private func loadFile(
+        url: URL,
+        headers: [String: String]?,
+        startTime: TimeInterval?,
+        preferredAudioLanguages: [String],
+        preferredSubtitleLanguages: [String],
+        externalSubtitles: [SidecarSubtitle],
+        isLive: Bool
     ) async throws {
         // .lossless: FLAC for non-stream-copy audio, ~3x realtime on A15 against EAC3's
         // ~0.5x, so 4K segments keep up. Needs a multichannel LPCM sink; others downmix.
@@ -1159,6 +1267,8 @@ final class AetherPlayer: PlayerProtocol {
         foregroundReloadTask?.cancel()
         pendingReloadSince = nil
         userIntendsToPlay = false
+        stack = nil
+        partIndex = 0
         finishAVCapture()
         dropFrameExtractor()
         engine.stop()
@@ -1173,9 +1283,12 @@ final class AetherPlayer: PlayerProtocol {
     /// is starved. nil with no engine session (the hls route) or when the
     /// source cannot open a second reader.
     func scrubFrame(atSeconds seconds: TimeInterval, maxWidth: Int = 320) async -> CGImage? {
+        // A stacked title's stills come from the open file only.
+        let local = stack.map { $0.locate(seconds) }
+        if let local, local.index != partIndex { return nil }
         if frameExtractor == nil { frameExtractor = engine.makeFrameExtractor() }
         guard let extractor = frameExtractor else { return nil }
-        return await extractor.thumbnail(at: seconds, maxWidth: maxWidth)
+        return await extractor.thumbnail(at: local?.offset ?? seconds, maxWidth: maxWidth)
     }
 
     private func dropFrameExtractor() {
@@ -1258,7 +1371,16 @@ final class AetherPlayer: PlayerProtocol {
         return stream
     }
 
-    func seek(to time: TimeInterval) async { await engine.seek(to: time) }
+    func seek(to time: TimeInterval) async {
+        guard let stack else { return await engine.seek(to: time) }
+        let (index, offset) = stack.locate(time)
+        // ponytail: a seek during a part swap starts a second load; queue it if that ever misbehaves.
+        if index == partIndex {
+            await engine.seek(to: offset)
+        } else {
+            await switchPart(to: index, at: offset)
+        }
+    }
 
     // MARK: - Live timeshift
 

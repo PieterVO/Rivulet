@@ -2060,7 +2060,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                     error: error,
                     kind: kind
                 )
-                guard planHasHLSFallback(plan) else { throw error }
+                guard planHasHLSFallback(plan), !isStacked else { throw error }
                 // Separate reasons so a hang (#245) and a thrown error stay separate issues.
                 let reason = error is AetherLoadTimeoutPolicy.TimedOut
                     ? AetherLoadTimeoutPolicy.fallbackReason
@@ -2091,6 +2091,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         let audioLanguages = aetherPreferredAudioLanguages()
         let subtitleLanguages = aetherPreferredSubtitleLanguages()
         let externalSubtitles = aetherExternalSubtitles()
+        let stackedParts = stackedParts()
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
@@ -2101,7 +2102,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     subtitleLanguageHintsByStreamIndex: hints,
                     preferredAudioLanguages: audioLanguages,
                     preferredSubtitleLanguages: subtitleLanguages,
-                    externalSubtitles: externalSubtitles
+                    externalSubtitles: externalSubtitles,
+                    stackedParts: stackedParts
                 )
             }
             group.addTask {
@@ -2122,9 +2124,29 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// True when Plex stacks the playing version from several files (#399).
+    /// Only the Aether route plays those through; a transcode would play the first file.
+    private var isStacked: Bool {
+        guard case .plex = source else { return false }
+        return (metadata.Media?.first?.Part?.count ?? 0) > 1
+    }
+
+    /// Every file of a stacked version with its sidecars, nil for one file.
+    private func stackedParts() -> StackedParts<AetherPlayer.PartFile>? {
+        guard isStacked, let parts = metadata.Media?.first?.Part, let base = URL(string: serverURL) else { return nil }
+        var files: [(file: AetherPlayer.PartFile, duration: TimeInterval?)] = []
+        for part in parts {
+            guard let key = part.key,
+                  let url = ContentRouter.directPlayURL(partKey: key, serverURL: base, authToken: authToken) else { return nil }
+            files.append((AetherPlayer.PartFile(url: url, externalSubtitles: aetherExternalSubtitles(in: part)),
+                          part.duration.map { TimeInterval($0) / 1000 }))
+        }
+        return StackedParts(files)
+    }
+
     /// External (sidecar) subtitle streams, registered with the engine at load.
     /// Order matches metadata stream order, which `TrackMerge` pairs on.
-    func aetherExternalSubtitles() -> [AetherPlayer.SidecarSubtitle] {
+    func aetherExternalSubtitles(in part: PlexPart? = nil) -> [AetherPlayer.SidecarSubtitle] {
         // A provider's sidecars are its external tracks, in source order (the
         // order the shim's subtitle streams carry, which TrackMerge pairs on).
         // Their URLs are absolute and carry the provider's own auth.
@@ -2142,7 +2164,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 )
             }
         }
-        guard let streams = metadata.Media?.first?.Part?.first?.Stream else { return [] }
+        guard let streams = (part ?? metadata.Media?.first?.Part?.first)?.Stream else { return [] }
         return streams.filter { $0.isSubtitle && $0.key != nil }.compactMap { stream in
             guard let key = stream.key,
                   var components = URLComponents(string: "\(serverURL)\(key)") else { return nil }
@@ -3090,6 +3112,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         applyVersion(baseVersionChoice, to: serverOrderedMedia, capKbps: cap)
         activeStreamPlan = QualityDecision.decide(setting: setting, sourceKbps: metadata.Media?.first?.sourceKbps,
                                                   measuredKbps: measured, isRelay: isRelay)
+        if isStacked { activeStreamPlan = .original }
         diagnostics.step("quality_decided", detail: "setting=\(setting.rawValue) plan=\(activeStreamPlan.step?.kbps ?? 0)")
     }
 
@@ -3179,6 +3202,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// One ladder step below what plays, reloaded at the playhead. Never steps up.
     private func stepDownQuality(reason: String) {
+        guard !isStacked else { return }
         longStallTask?.cancel()
         longStallTask = nil
         stallTracker.noteStepDown()
@@ -4184,7 +4208,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// then the engine takes over for the rest of the item. A provider item
     /// never asks PlexThumbnailService (its Part is a placeholder).
     var currentScrubThumbnailSource: ScrubThumbnailSource {
-        guard case .plex = source, let partId = metadata.Media?.first?.Part?.first?.id else { return .engine }
+        guard case .plex = source, !isStacked, let partId = metadata.Media?.first?.Part?.first?.id else { return .engine }
         return Self.scrubThumbnailSource(
             hasServerThumbnails: !PlexThumbnailService.shared.isUnavailable(partId: partId))
     }
