@@ -17,6 +17,13 @@ final class LiveJoinBackdropContentTests: XCTestCase {
         XCTAssertEqual(c, LiveJoinBackdropContent(artworkURL: url, title: "Show", summary: "Hello"))
     }
 
+    func test_withoutLandscape_usesTheGuideBackdropChain() {
+        let icon = URL(string: "https://example.com/icon.jpg")
+        let p = UnifiedProgram(id: "p", channelId: "c", title: "Show", startTime: Date(),
+                               endTime: Date().addingTimeInterval(3600), iconURL: icon)
+        XCTAssertEqual(LiveJoinBackdropContent.make(program: p)?.artworkURL, icon)
+    }
+
     func test_blankSummary_becomesNil() {
         XCTAssertNil(LiveJoinBackdropContent.make(program: program(description: " ", art: nil))?.summary)
     }

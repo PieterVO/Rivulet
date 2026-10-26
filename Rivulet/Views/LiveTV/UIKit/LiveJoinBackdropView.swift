@@ -12,7 +12,7 @@ struct LiveJoinBackdropContent: Equatable {
         guard let program else { return nil }
         let summary = program.description?.trimmingCharacters(in: .whitespacesAndNewlines)
         return LiveJoinBackdropContent(
-            artworkURL: program.landscapeURL,
+            artworkURL: GuideLayoutView.backdropURL(for: program),
             title: program.title,
             summary: (summary?.isEmpty ?? true) ? nil : summary)
     }
