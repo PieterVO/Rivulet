@@ -153,6 +153,7 @@ struct WhatsNewView: View {
             "Content Filtering can now mute words of your own, such as \"stupid\".",
             "The content filter now mutes just the offending word, not the whole line.",
             "Titles with no subtitles can now be filtered from their dialogue.",
+            "Multi-part movies now play through every part.",
             "Updated AetherEngine to 7.48.0.",
             "Top Shelf now shows posters for Continue Watching and Recently Added.",
             "New Top Shelf setting in Appearance brings back the full screen artwork.",
