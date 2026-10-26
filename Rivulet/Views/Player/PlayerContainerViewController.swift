@@ -1634,7 +1634,7 @@ class PlayerContainerViewController: UIViewController {
         case .info:
             let meta = vm.metadata
             var badges: [String] = []
-            if let rating = meta.contentRating { badges.append(rating) }
+            if let rating = meta.displayContentRating { badges.append(rating) }
             if let resolution = meta.Media?.first?.videoResolution?.lowercased() {
                 badges.append(resolution == "4k" ? "4K" : (["1080", "720"].contains(resolution) ? "HD" : "SD"))
             }

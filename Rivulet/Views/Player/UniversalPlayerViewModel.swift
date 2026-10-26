@@ -2538,7 +2538,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // Content rating
-        if let rating = metadata.contentRating {
+        if let rating = metadata.displayContentRating {
             items.append(makeMetadataItem(
                 .iTunesMetadataContentRating,
                 value: rating
