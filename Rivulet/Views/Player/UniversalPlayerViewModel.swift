@@ -326,7 +326,31 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// The speech model's run over the player's audio, and the player it reads.
     private var speechTask: Task<Void, Never>?
     private weak var speechPlayer: AetherPlayer?
+    /// Words the speech model heard this item, for generated subtitles.
+    private var heardWords = SpokenWordStore()
+    /// The engine's cues, kept while generated subtitles hold the overlay.
+    private var engineCues: [AetherSubtitleCue] = []
     private var muteEdgeWork: DispatchWorkItem?
+    /// Subtitles the speech model writes from the dialogue (aether route only). Never in `subtitleTracks`.
+    static let generatedSubtitleId = -2
+    var showsGeneratedSubtitles: Bool { currentSubtitleTrackId == Self.generatedSubtitleId }
+    /// The item generated subtitles were picked on; later items keep them unless they have real ones.
+    private var generatedSubtitlesPickedOn: String?
+    /// The subtitle menu: the title's tracks, plus generated ones on the aether route.
+    var subtitleMenuTracks: [MediaTrack] {
+        let generated = MediaTrack(id: Self.generatedSubtitleId, name: "English", language: Self.generatedSubtitleStatus)
+        return subtitleTracks + (offersGeneratedSubtitles ? [generated] : [])
+    }
+    var offersGeneratedSubtitles: Bool { aetherPlayer != nil }
+    /// The generated row's second line: the model's download until it is on disk.
+    static var generatedSubtitleStatus: String {
+        switch SpeechModelStore.shared.state {
+        case .ready: return "Generated"
+        case .absent: return "Generated, downloads 230 MB"
+        case .downloading(let fraction): return "Downloading \(Int(fraction * 100))%"
+        case .failed: return "Download failed, select to retry"
+        }
+    }
     /// Why the filter can't mute language on this title right now; nil when it can.
     @Published private(set) var contentFilterNotice: String?
     /// The subtitle track the filter is reading without showing it; the user's subtitles are off.
@@ -732,12 +756,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             self.contentFilter.subtitleLinesDidChange(self.subtitleLinesForFilter(at: self.currentTime))
         }
 
-        // On-device speech places muted words on the audio (aether route only).
+        // On-device speech places muted words on the audio and writes generated subtitles (aether route only).
         $aetherPlayer
-            .combineLatest(contentFilter.$isEnabled, contentFilter.$isPaused, SpeechModelStore.shared.$state)
+            .combineLatest(contentFilter.$isEnabled.combineLatest(contentFilter.$isPaused).map { $0 && !$1 },
+                           $currentSubtitleTrackId, SpeechModelStore.shared.$state)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] player, enabled, paused, model in
-                self?.syncSpeechRecognition(player: player, wanted: enabled && !paused && model == .ready)
+            .sink { [weak self] player, filtering, subtitle, model in
+                let captions = subtitle == Self.generatedSubtitleId
+                self?.syncSpeechRecognition(player: player, wanted: (filtering || captions) && model == .ready)
             }
             .store(in: &cancellables)
 
@@ -817,25 +843,25 @@ final class UniversalPlayerViewModel: ObservableObject {
         let wanted = !contentFilter.isEnabled || contentFilter.isPaused || !contentFilter.readsSubtitleText
             ? nil : ContentFilterSources.silentTrack(
                 in: aetherPlayer == nil ? [] : subtitleTracks,
-                shownTrackId: currentSubtitleTrackId,
+                shownTrackId: showsGeneratedSubtitles ? nil : currentSubtitleTrackId,
                 hasLanguageSource: contentFilter.hasLanguageSource)?.id
         guard wanted != silentSubtitleTrackId else { return }
         silentSubtitleTrackId = wanted
         // A track the user has on already holds the engine's one selection.
-        if currentSubtitleTrackId == nil { aetherPlayer?.selectSubtitleTrack(id: wanted) }
+        if currentSubtitleTrackId == nil || showsGeneratedSubtitles { aetherPlayer?.selectSubtitleTrack(id: wanted) }
     }
 
     /// Have the image cues around the playhead read (PGS, VobSub), ahead of
     /// time so a line's words are known before it is spoken.
     private func readSubtitleImages(at time: TimeInterval) {
-        let trackId = currentSubtitleTrackId ?? silentSubtitleTrackId
+        let trackId = showsGeneratedSubtitles ? silentSubtitleTrackId : currentSubtitleTrackId ?? silentSubtitleTrackId
         guard contentFilter.isEnabled, !contentFilter.isPaused, !contentFilter.hasLanguageSource,
               contentFilter.readsSubtitleText,
               let track = subtitleTracks.first(where: { $0.id == trackId }),
               ContentFilterSources.isReadable(track), !ContentFilterSources.isTextSubtitle(codec: track.codec)
         else { return subtitleImageReader.read([]) }
         let now = time - aetherSubtitleModel.delaySeconds
-        subtitleImageReader.read(aetherSubtitleModel.cues.compactMap { cue in
+        subtitleImageReader.read(filterCues.compactMap { cue in
             guard cue.endTime >= now, cue.startTime <= now + 30, case .image(let image, _) = cue.body else { return nil }
             return image
         })
@@ -966,11 +992,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         assTrack = nil
     }
 
+    /// The cues of the track the engine reads (the overlay may be showing generated ones).
+    private var filterCues: [AetherSubtitleCue] { showsGeneratedSubtitles ? engineCues : aetherSubtitleModel.cues }
+
     /// Cues near the playhead from the track the engine reads, on the audio's
     /// axis, so the filter knows a muted line before it is spoken.
     private func subtitleLinesForFilter(at time: TimeInterval) -> [SubtitleLine] {
         let delay = aetherSubtitleModel.delaySeconds
-        return aetherSubtitleModel.cues.compactMap { cue in
+        return filterCues.compactMap { cue in
             let start = cue.startTime + delay, end = cue.endTime + delay
             guard end > time - 1, start < time + 6, let text = filterText(for: cue) else { return nil }
             return SubtitleLine(id: cue.id, start: start, end: end, text: text)
@@ -1006,11 +1035,32 @@ final class UniversalPlayerViewModel: ObservableObject {
         speechPlayer = player
         let audio = player.playbackAudio()
         let filter = contentFilter
-        speechTask = Task.detached(priority: .utility) {
+        speechTask = Task.detached(priority: .utility) { [weak self] in
             guard let models = await SpeechModelStore.load() else { return }
-            await SpeechWordRecognizer.run(models: models, audio: audio) { words, range in
+            await SpeechWordRecognizer.run(models: models, audio: audio) { [weak self] words, range in
                 await filter.wordsHeard(words, covering: range)
+                await self?.captionWordsHeard(words, covering: range)
             }
+        }
+    }
+
+    /// On an item after the one they were picked on, generated subtitles give way to real English ones.
+    private func preferRealSubtitlesOverGenerated() {
+        guard showsGeneratedSubtitles, metadata.ratingKey != generatedSubtitlesPickedOn,
+              let real = subtitleTracks.first(where: {
+                  !$0.isForced && TrackLanguage.normalize($0.languageCode ?? $0.language) == "eng"
+              }) else { return }
+        selectSubtitleTrackWithoutSaving(id: real.id)
+    }
+
+    private func captionWordsHeard(_ words: [SpokenWord], covering range: ClosedRange<Double>) {
+        heardWords.add(words, covering: range)
+        if showsGeneratedSubtitles { aetherSubtitleModel.update(cues: generatedCues()) }
+    }
+
+    private func generatedCues() -> [AetherSubtitleCue] {
+        SpeechCaptions.lines(from: heardWords.words).map { line in
+            AetherSubtitleCue(id: Int(line.start * 1000), startTime: line.start, endTime: line.end, body: .text(line.text))
         }
     }
 
@@ -1676,6 +1726,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // After the fetch above, because both key off the file, the external
         // ids and the subtitle streams that hub items arrive without.
         contentFilter.beginItem(contentFilterItem())
+        heardWords = SpokenWordStore()
         // A purged or never-finished speech model downloads again.
         if contentFilter.isEnabled { SpeechModelStore.shared.prepare() }
 
@@ -2038,6 +2089,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 if ap.subtitleTracks.isEmpty { subtitleTracks = [] }
                 // Adopts the engine's own selection, then starts the unseen read if there is none.
                 updateTrackLists()
+                preferRealSubtitlesOverGenerated()
             } catch {
                 // Cancellation is not a failure: return, since a rethrow fires a
                 // second failure event. The deadline error is not a cancellation
@@ -2373,7 +2425,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] cues in
-                self?.aetherSubtitleModel.update(cues: cues)
+                guard let self else { return }
+                self.engineCues = cues
+                if !self.showsGeneratedSubtitles { self.aetherSubtitleModel.update(cues: cues) }
             }
             .store(in: &aetherCancellables)
 
@@ -3382,7 +3436,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         let audio = currentAudioTrackId
             .flatMap { id in audioTracks.first { $0.id == id }?.streamIndex }
             .flatMap { index in plexAudioTracksFromMetadata().first { $0.streamIndex == index }?.id }
-        guard let subtitleId = currentSubtitleTrackId else { return PlexTrackIDs(audio: audio, subtitle: 0) }
+        guard let subtitleId = currentSubtitleTrackId, subtitleId != Self.generatedSubtitleId else {
+            return PlexTrackIDs(audio: audio, subtitle: 0)
+        }
         guard let track = subtitleTracks.first(where: { $0.id == subtitleId }) else {
             return PlexTrackIDs(audio: audio, subtitle: nil)
         }
@@ -4367,6 +4423,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         // future playback sessions restore it.
         selectSubtitleTrackWithoutSaving(id: id)
 
+        // Generated subtitles save no preference; they carry on through this session's next items.
+        guard id != Self.generatedSubtitleId else {
+            generatedSubtitlesPickedOn = metadata.ratingKey
+            return
+        }
         TrackIntentStore.subtitleIntent = .afterPick(
             id.flatMap { id in subtitleTracks.first { $0.id == id } },
             replacing: TrackIntentStore.effectiveSubtitleIntent, audioLanguage: playingAudioLanguage)
@@ -4647,9 +4708,22 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// stream indices (see `TrackMerge`), so the id dispatches straight through.
     /// `reloadsTranscode` false keeps a transient change (the replay window) from restarting a transcode.
     private func selectSubtitleTrackWithoutSaving(id: Int?, reloadsTranscode: Bool = true) {
-        aetherPlayer?.selectSubtitleTrack(id: id)
+        let generated = id == Self.generatedSubtitleId
+        let wasGenerated = showsGeneratedSubtitles
+        if generated || wasGenerated && id == nil {
+            // The engine's one selection stays with the filter's unseen read; only a shown track leaves it.
+            if !wasGenerated, currentSubtitleTrackId != nil { aetherPlayer?.selectSubtitleTrack(id: nil) }
+        } else {
+            aetherPlayer?.selectSubtitleTrack(id: id)
+        }
         let changed = id != currentSubtitleTrackId
         currentSubtitleTrackId = id
+        if generated {
+            SpeechModelStore.shared.prepare()
+            aetherSubtitleModel.update(cues: generatedCues())
+        } else if wasGenerated {
+            aetherSubtitleModel.update(cues: engineCues)
+        }
         syncSilentSubtitleRead()
         if changed, reloadsTranscode, aetherPlayer == nil {
             // The old track's captions go now, not when the reloaded transcode is ready.

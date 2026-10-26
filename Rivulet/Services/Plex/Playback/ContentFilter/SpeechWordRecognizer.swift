@@ -2,10 +2,10 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  On-device speech for the content filter: the model download, and the
-//  recognizer that turns playback audio into timed words (Parakeet TDT-CTC
-//  110M through FluidAudio). The filter uses the words to mute one word
-//  instead of a whole subtitle cue.
+//  On-device speech: the model download, and the recognizer that turns
+//  playback audio into timed words (Parakeet TDT-CTC 110M through
+//  FluidAudio). The content filter uses the words to mute one word instead
+//  of a whole subtitle cue; generated subtitles are written from them.
 //
 
 import AVFoundation
@@ -24,7 +24,7 @@ nonisolated struct PlaybackAudioChunk: @unchecked Sendable {
 
 // MARK: - Model
 
-/// The speech model on disk. Downloaded when content filtering is turned on.
+/// The speech model on disk. Downloaded when content filtering is turned on or generated subtitles are first picked.
 @MainActor
 final class SpeechModelStore: ObservableObject {
     static let shared = SpeechModelStore()
@@ -120,8 +120,8 @@ nonisolated enum SpeechWordRecognizer {
         }
         let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
         var buffer = WindowBuffer(sampleRate: 48_000)
-        /// The last word reported, so a word cut by a window seam isn't reported twice.
-        var lastWord: SpokenWord?
+        /// The last words reported, so words at a window seam aren't reported twice.
+        var recent: [SpokenWord] = []
 
         func transcribe(_ cut: WindowBuffer.Cut) async {
             guard let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(cut.samples.count)),
@@ -141,22 +141,21 @@ nonisolated enum SpeechWordRecognizer {
                 let spoken = letters.map(\.endTime).max() ?? word.endTime
                 let end = cut.start + min(spoken, word.startTime + 0.2 + 0.09 * Double(word.word.filter(\.isLetter).count))
                 guard cut.keeps.contains((start + end) / 2) else { return nil }
-                if let lastWord, start < lastWord.end + 0.3,
-                   SpokenWordAlignment.key(lastWord.text) == SpokenWordAlignment.key(word.word) { return nil }
                 let confidence = timings
                     .filter { $0.startTime >= word.startTime && $0.endTime <= word.endTime }
                     .map(\.confidence).min() ?? 0
                 return SpokenWord(text: word.word, start: start, end: end, confidence: confidence)
             }
-            if let last = words.last { lastWord = last }
-            await onWords(words, cut.keeps)
+            let fresh = SpokenWordAlignment.droppingSeamRepeat(words, after: recent)
+            recent = Array((recent + fresh).suffix(4))
+            await onWords(fresh, cut.keeps)
         }
 
         for await chunk in audio {
             guard !Task.isCancelled else { break }
             if chunk.discontinuity {
                 if let rest = buffer.flush() { await transcribe(rest) }
-                lastWord = nil
+                recent = []
             }
             guard let data = chunk.buffer.floatChannelData?[0] else { continue }
             buffer.append(UnsafeBufferPointer(start: data, count: Int(chunk.buffer.frameLength)),

@@ -523,6 +523,14 @@ Key components:
     transcode at the playhead instead (one extra rebuffer).
   RPlayer's old sidecar pipeline (`SubtitleManager`, `SubtitleOverlayView`) is
   deleted; do not revive it. Jellyfin's transcode still uses server subtitles.
+- **Generated subtitles** (the player's subtitle menu, aether route only; the first
+  pick downloads the model and the open menu shows its progress) are written from the content filter's speech model (`SpeechCaptions` groups
+  the heard words into lines). The track is id `generatedSubtitleId` (-2), added only
+  to the menu (`subtitleMenuTracks`), never to `subtitleTracks`, so intent, Plex
+  timeline ids and the filter's track logic never see it. While it shows, the
+  overlay's model holds generated cues and the engine's cues (the filter's unseen
+  read) wait in `engineCues`. The pick saves no preference; it carries on to the
+  session's next items unless one has a real English track (`preferRealSubtitlesOverGenerated`).
 - `SubtitleParser.swift` survived that cull and is NOT dead, but nothing in it
   renders: it serves the content filter. `VTTParser` reads `text/mcf+vtt` lists
   (`ContentFilterParsers`), and all three parsers (VTT, SRT, ASS) read a title's

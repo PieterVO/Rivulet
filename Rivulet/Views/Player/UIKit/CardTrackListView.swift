@@ -150,6 +150,15 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
         buildRows()
     }
 
+    /// Change a track row in place (a download's progress, a pick that keeps the menu open).
+    func updateTrack(_ trackId: Int, subtitle: String) {
+        rowButtons.prefix(rows.count).first { $0.row.trackId == trackId }?.setSubtitle(subtitle)
+    }
+
+    func checkTrack(_ trackId: Int?) {
+        rowButtons.prefix(rows.count).forEach { $0.isChecked = $0.row.trackId == trackId }
+    }
+
     private func buildRows() {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         rowButtons = []
@@ -581,6 +590,7 @@ final class CardTrackRowButton: UIControl {
     }
 
     func setTitle(_ title: String) { titleLabel.text = title }
+    func setSubtitle(_ subtitle: String) { subtitleLabel.text = subtitle }
 
     override func layoutSubviews() {
         super.layoutSubviews()

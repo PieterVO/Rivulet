@@ -33,6 +33,9 @@ class PlayerContainerViewController: UIViewController {
     private var cancellables = Set<AnyCancellable>()
     /// The one floating panel shared by CC, audio, info and Up Next.
     private var activeRailPanel: PlayerRailPanelView?
+    /// The open subtitle menu, and the speech model's download shown on its generated row.
+    private weak var subtitleList: CardTrackListView?
+    private var generatedSubtitleProgress: AnyCancellable?
     private var subtitleSearchTask: Task<Void, Never>?
 
     /// Previous `railVisible`, so `applyChromeVisibility()` can spot the rail
@@ -1181,10 +1184,13 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self] track in self?.captionOverlay?.assTrack = track }
             .store(in: &cancellables)
 
-        // A track the content filter reads unseen draws nothing: subtitles are Off.
+        // A track the content filter reads unseen draws nothing: subtitles are Off or generated.
         vm.$silentSubtitleTrackId
+            .combineLatest(vm.$currentSubtitleTrackId)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] id in self?.captionOverlay?.isHidden = id != nil }
+            .sink { [weak self] silent, shown in
+                self?.captionOverlay?.isHidden = silent != nil && shown != UniversalPlayerViewModel.generatedSubtitleId
+            }
             .store(in: &cancellables)
 
         NotificationCenter.default
@@ -1265,10 +1271,10 @@ class PlayerContainerViewController: UIViewController {
 
         vm.$subtitleTracks
             .receive(on: DispatchQueue.main)
-            .sink { [weak rail] tracks in
+            .sink { [weak rail, weak vm] tracks in
                 // Port of the old card binding: same enabled-look, applied
                 // to the rail's subtitles button now.
-                rail?.subtitlesButton.alpha = tracks.isEmpty ? 0.4 : 1
+                rail?.subtitlesButton.alpha = tracks.isEmpty && !(vm?.offersGeneratedSubtitles ?? false) ? 0.4 : 1
             }
             .store(in: &cancellables)
 
@@ -1350,9 +1356,8 @@ class PlayerContainerViewController: UIViewController {
         // Rail actions. (No play/pause control, no skip-back — the remote owns seeking.)
         rail.onSubtitles = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
-            self.presentRailPanel(
-                content: CardTrackListView(
-                    header: "Subtitles", tracks: vm.subtitleTracks,
+            let list = CardTrackListView(
+                    header: "Subtitles", tracks: vm.subtitleMenuTracks,
                     selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
                     actions: vm.canSearchSubtitles ? [
                         CardActionConfig(title: "Search for Subtitles") { [weak self] row in
@@ -1375,9 +1380,22 @@ class PlayerContainerViewController: UIViewController {
                     ],
                     onSelect: { [weak vm, weak self] id in
                         vm?.selectSubtitleTrack(id: id)
-                        self?.activeRailPanel?.dismissPanel()
-                    }),
-                width: CardTrackListView.menuWidth, from: rail.subtitlesButton)
+                        // Generated subtitles picked before the model is on disk: stay to show the download.
+                        if id == UniversalPlayerViewModel.generatedSubtitleId, SpeechModelStore.shared.state != .ready {
+                            self?.subtitleList?.checkTrack(id)
+                        } else {
+                            self?.activeRailPanel?.dismissPanel()
+                        }
+                    })
+            self.subtitleList = list
+            self.generatedSubtitleProgress = SpeechModelStore.shared.$state
+                .dropFirst()
+                .receive(on: DispatchQueue.main)
+                .sink { [weak list] _ in
+                    list?.updateTrack(UniversalPlayerViewModel.generatedSubtitleId,
+                                      subtitle: UniversalPlayerViewModel.generatedSubtitleStatus)
+                }
+            self.presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail.subtitlesButton)
         }
         rail.onAudio = { [weak self] in
             guard let self, let vm = self.viewModel else { return }

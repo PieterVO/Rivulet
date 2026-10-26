@@ -149,6 +149,9 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.0 (114)", [
+            "New generated English subtitles, written from the dialogue on your Apple TV.",
+        ]),
         ("1.1.0 (113)", [
             "Content Filtering can now mute words of your own, such as \"stupid\".",
             "The content filter now mutes just the offending word, not the whole line.",

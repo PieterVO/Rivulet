@@ -151,6 +151,16 @@ nonisolated enum SpokenWordAlignment {
         String(word.lowercased().filter { $0.isLetter || $0.isNumber })
     }
 
+    /// `words` without a run at its start that repeats the end of `previous`:
+    /// neighbouring windows can both hear the words at their seam.
+    static func droppingSeamRepeat(_ words: [SpokenWord], after previous: [SpokenWord]) -> [SpokenWord] {
+        guard let first = words.first, let last = previous.last, first.start < last.end + 0.5 else { return words }
+        let repeated = (1...min(4, words.count, previous.count)).last { count in
+            zip(previous.suffix(count), words.prefix(count)).allSatisfy { key($0.text) == key($1.text) }
+        } ?? 0
+        return Array(words.dropFirst(repeated))
+    }
+
     /// Token index to heard-word index, by longest common subsequence with a
     /// one-letter tolerance for longer words (subtitles and speech disagree on
     /// spelling, contractions and fillers).
