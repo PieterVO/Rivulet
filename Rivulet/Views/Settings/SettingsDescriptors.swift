@@ -113,6 +113,10 @@ enum SettingsDescriptorStore {
             icon: "sparkles.rectangle.stack",
             description: "Shows a large featured content banner at the top of the Home screen with artwork and quick actions."
         ),
+        "topShelfStyle": SettingDescriptor(
+            icon: "tv",
+            description: "How Rivulet looks in the top row of the Apple TV Home Screen. Posters shows a row of posters. Full Screen fills the screen with artwork from what you are watching."
+        ),
         "detailRating": SettingDescriptor(
             icon: "star.leadinghalf.filled",
             description: "Choose the one rating shown at the top of a movie or show's details. If a title doesn't have the rating you choose, Rotten Tomatoes is shown instead."

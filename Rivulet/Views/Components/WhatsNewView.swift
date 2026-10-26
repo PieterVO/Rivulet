@@ -154,6 +154,8 @@ struct WhatsNewView: View {
             "The content filter now mutes just the offending word, not the whole line.",
             "Titles with no subtitles can now be filtered from their dialogue.",
             "Updated AetherEngine to 7.48.0.",
+            "Top Shelf now shows posters for Continue Watching and Recently Added.",
+            "New Top Shelf setting in Appearance brings back the full screen artwork.",
         ]),
         ("1.1.0 (112)", [
             "Jellyfin Live TV can now record an airing, a series, or new episodes.",

@@ -6,14 +6,15 @@
 //  Rivulet
 //
 //  The Top Shelf row: every server's Continue Watching in one list,
-//  most recently watched first; Recently Added when there is none. Both stores call `refresh` when their row changes.
+//  most recently watched first, then Recently Added (alone when there is none). Both stores call `refresh` when their row changes.
 //
 
 import Foundation
 
 @MainActor
 enum TopShelfFeed {
-    static let limit = 5
+    // The poster row shows all of them; the full screen carousel the first 5.
+    static let limit = 10
 
     static func refresh() async {
         let auth = PlexAuthManager.shared
@@ -52,19 +53,23 @@ enum TopShelfFeed {
         }
 
         var row = TopShelfMapper.merge(plex, others, limit: limit)
-        let source = row.isEmpty ? "recently added" : "continue watching"
-        // No Continue Watching anywhere: show Recently Added instead.
+        let source = row.isEmpty ? "Recently Added" : "Continue Watching"
+        var recent = recentlyAdded(serverURL: serverURL, token: token)
+        // No Continue Watching anywhere: Recently Added leads, and the carousel shows it.
         if row.isEmpty {
-            row = recentlyAdded(serverURL: serverURL, token: token)
+            row = recent
+            recent = []
         }
+        let cwKeys = Set(row.map(\.ratingKey))
+        recent.removeAll { cwKeys.contains($0.ratingKey) }
         let items = await TopShelfComposer.composite(items: row, serverURL: serverURL, token: token)
         // A profile changed, locked or signed out during the composite.
         guard auth.selectedServerToken == token, serverStore.sources == sources else {
             DiagLog.notice(.topShelf, "Dropped: profile or sources changed while composing")
             return
         }
-        DiagLog.notice(.topShelf, "Refresh: \(items.count) items from \(source) (plex cw \(plex.count), other cw \(others.count)), \(items.filter { $0.compositeFileName != nil }.count) composites")
-        TopShelfCache.shared.writeItems(items)
+        DiagLog.notice(.topShelf, "Refresh: \(items.count) items from \(source), \(recent.count) recently added (plex cw \(plex.count), other cw \(others.count)), \(items.filter { $0.compositeFileName != nil }.count) composites")
+        TopShelfCache.shared.writeItems(items, sectionTitle: source, recent: recent)
     }
 
     /// Newest unwatched titles from the selected Plex server's loaded library hubs and the

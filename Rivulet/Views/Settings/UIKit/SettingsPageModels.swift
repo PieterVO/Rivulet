@@ -435,6 +435,9 @@ enum SettingsContent {
             .header("Home"),
             SettingsRowItem(id: "homeRows", title: "Rows", kind: .navigation(.homeRows)),
             toggle("homeHero", "Hero", key: "showHomeHero", default: true),
+            SettingsRowItem(id: "topShelfStyle", title: "Top Shelf",
+                            kind: .cycle(value: { TopShelfCache.shared.fullScreen ? "Full Screen" : "Posters" },
+                                         next: { TopShelfCache.shared.fullScreen.toggle() })),
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [

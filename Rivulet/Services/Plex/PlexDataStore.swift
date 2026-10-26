@@ -1047,7 +1047,7 @@ class PlexDataStore: ObservableObject {
             isLoadingLibraryHubs = false
             // Final projection once every library's hubs have landed.
             projectAllLoadedItems()
-            // Top Shelf falls back to Recently Added when Continue Watching is empty.
+            // Top Shelf shows Recently Added after Continue Watching, or alone when it is empty.
             await TopShelfFeed.refresh()
 
             // Pinned collections load in their own task. The projection above
