@@ -153,6 +153,7 @@ struct WhatsNewView: View {
             "Content Filtering can now mute words of your own, such as \"stupid\".",
             "The content filter now mutes just the offending word, not the whole line.",
             "Titles with no subtitles can now be filtered from their dialogue.",
+            "Updated AetherEngine to 7.48.0.",
         ]),
         ("1.1.0 (112)", [
             "Jellyfin Live TV can now record an airing, a series, or new episodes.",
