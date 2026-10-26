@@ -284,6 +284,18 @@ enum SettingsDescriptorStore {
             icon: "power",
             description: "Turn off to remove this server from Rivulet: its libraries, Home rows, Continue Watching and Live TV. Your account stays signed in."
         ),
+        "plexServerLiveTV": SettingDescriptor(
+            icon: "tv.and.mediabox",
+            description: "Off hides this server's channels from Live TV, for when the same channels come from another source. Its libraries stay."
+        ),
+        "jellyfinLiveTV": SettingDescriptor(
+            icon: "tv.and.mediabox",
+            description: "Off hides this server's channels from Live TV, for when the same channels come from another source. Its libraries stay."
+        ),
+        "src_showInLiveTV": SettingDescriptor(
+            icon: "tv.and.mediabox",
+            description: "Off hides this server's channels from Live TV, for when the same channels come from another source. Its libraries stay."
+        ),
         "plexServerRefresh": SettingDescriptor(
             icon: "arrow.clockwise",
             description: "Ask Plex for this server's latest status."

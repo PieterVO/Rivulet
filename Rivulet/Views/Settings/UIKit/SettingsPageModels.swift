@@ -818,7 +818,13 @@ enum SettingsContent {
             let kind = connection.relay ? "Relay" : connection.local ? "Local" : "Remote"
             rows.append(info("plexServerConnection", "Connection", connection.protocolType == "https" ? "\(kind), Secure" : kind))
         }
-        rows.append(info("plexServerLiveTV", "Live TV", liveTV.map { "\($0.channelCount) Channels" } ?? "No DVR"))
+        let ds = LiveTVDataStore.shared
+        if let id = server.machineIdentifier, ds.plexMachineIDs.values.contains(id) {
+            rows.insert(plexLiveTVToggle(id: "plexServerLiveTV", machineID: id), at: 1)
+            if let liveTV { rows.append(info("plexServerChannels", "Channels", "\(liveTV.channelCount)")) }
+        } else {
+            rows.append(info("plexServerLiveTV", "Live TV", "No DVR"))
+        }
         if let created = ISO8601DateFormatter().date(from: server.createdAt) {
             rows.append(info("plexServerCreated", "On Plex Since", created.formatted(date: .abbreviated, time: .omitted)))
         }
@@ -832,6 +838,33 @@ enum SettingsContent {
             }
         })))
         return rows
+    }
+
+    /// Shows or hides a Plex server's DVR in Live TV (#406), from either settings page.
+    private static func plexLiveTVToggle(id: String, machineID: String) -> SettingsRowItem {
+        SettingsRowItem(id: id, title: "Show in Live TV", kind: .toggle(
+            get: { !LiveTVDataStore.shared.isPlexLiveTVHidden(machineID: machineID) },
+            set: { LiveTVDataStore.shared.setPlexLiveTVHidden(!$0, machineID: machineID) },
+            didChange: { _, vc in
+                Task {
+                    await LiveTVDataStore.shared.plexSourcesSynced()
+                    (vc as? SettingsPageViewController)?.reloadRows()
+                }
+            }))
+    }
+
+    /// The Jellyfin server's counterpart of `plexLiveTVToggle`.
+    static func jellyfinLiveTVToggle(id: String) -> SettingsRowItem {
+        var sync: Task<Void, Never>?
+        return SettingsRowItem(id: id, title: "Show in Live TV", kind: .toggle(
+            get: { !UserDefaults.standard.bool(forKey: JellyfinLiveTVProvider.hiddenKey) },
+            set: { sync = JellyfinLiveTVProvider.setHidden(!$0) },
+            didChange: { _, vc in
+                Task {
+                    await sync?.value
+                    (vc as? SettingsPageViewController)?.reloadRows()
+                }
+            }))
     }
 
     /// The server whose Use This Server change is still loading.
@@ -1157,10 +1190,12 @@ enum SettingsContent {
 
     private static var iptv: [SettingsRowItem] {
         let ds = LiveTVDataStore.shared
-        var rows: [SettingsRowItem] = ds.sources.map { source in
+        let hiddenSources = ds.hiddenPlexSources + [JellyfinLiveTVProvider.hiddenSource].compactMap { $0 }
+        let hidden = Set(hiddenSources.map(\.id))
+        var rows: [SettingsRowItem] = (ds.sources + hiddenSources).sorted { $0.displayName < $1.displayName }.map { source in
             SettingsRowItem(id: "src_\(source.id)", title: source.displayName,
                             kind: .navigationAction(.liveTVSourceDetail,
-                                                    value: { source.isConnected ? "\(source.channelCount) ch" : "Offline" },
+                                                    value: { hidden.contains(source.id) ? "Off" : source.isConnected ? "\(source.channelCount) ch" : "Offline" },
                                                     prepare: { pendingSourceDetail = source }))
         }
         rows.append(SettingsRowItem(id: "addLiveTVSource", title: "Add Live TV Source",
@@ -1175,7 +1210,18 @@ enum SettingsContent {
         guard let pending = pendingSourceDetail else { return [] }
         // Read live: the snapshot taken when the page opened goes stale on a refresh.
         let source = LiveTVDataStore.shared.sources.first { $0.id == pending.id } ?? pending
-        var rows: [SettingsRowItem] = [
+        let machineID = LiveTVDataStore.shared.plexMachineIDs[source.id]
+        let plexToggle = machineID.map { plexLiveTVToggle(id: "src_showInLiveTV", machineID: $0) }
+        // A hidden server has nothing to show but the way back.
+        if let plexToggle, let machineID, LiveTVDataStore.shared.isPlexLiveTVHidden(machineID: machineID) {
+            return [plexToggle]
+        }
+        if source.sourceType == .jellyfin {
+            guard JellyfinLiveTVProvider.hiddenSource == nil else { return [jellyfinLiveTVToggle(id: "src_showInLiveTV")] }
+        }
+        var rows: [SettingsRowItem] = plexToggle.map { [$0] }
+            ?? (source.sourceType == .jellyfin ? [jellyfinLiveTVToggle(id: "src_showInLiveTV")] : [])
+        rows += [
             SettingsRowItem(id: "src_status", title: "Status",
                             kind: .info(value: { source.isConnected ? "Connected" : "Disconnected" })),
             SettingsRowItem(id: "src_channels", title: "Channels",

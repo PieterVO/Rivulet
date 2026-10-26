@@ -91,6 +91,11 @@ class LiveTVDataStore: ObservableObject {
     /// Active provider configurations
     @Published private(set) var sources: [LiveTVSourceInfo] = []
 
+    /// Plex servers whose DVR the user hid from Live TV (#406); not in `sources`.
+    @Published private(set) var hiddenPlexSources: [LiveTVSourceInfo] = []
+    /// The machineIdentifier behind each Plex source id, shown or hidden.
+    private(set) var plexMachineIDs: [String: String] = [:]
+
     // MARK: - Private Properties
 
     private var providers: [String: any LiveTVProvider] = [:] {
@@ -521,15 +526,21 @@ class LiveTVDataStore: ObservableObject {
     func plexContentTokenChanged() {
         let restrictionsChanged = applyProfileRestrictions()
         let auth = PlexAuthManager.shared
-        var servers: [(key: String, url: String, token: String, name: String)] = []
+        var servers: [(key: String, url: String, token: String, name: String, machineID: String?)] = []
         if let key = Self.plexSourceKey(serverURL: auth.selectedServerURL, token: auth.selectedServerToken),
            let url = auth.selectedServerURL, let token = auth.selectedServerToken {
-            servers.append((key, url, token, auth.savedServerName ?? "Plex"))
+            servers.append((key, url, token, auth.savedServerName ?? "Plex", auth.selectedServerMachineID))
         }
         for extra in PlexExtraServers.shared.current {
             guard let token = PlexExtraServers.shared.token(for: extra),
                   let key = Self.plexSourceKey(serverURL: extra.url, token: token) else { continue }
-            servers.append((key, extra.url, token, extra.name))
+            servers.append((key, extra.url, token, extra.name, extra.machineID))
+        }
+        // Hiding a server changes its key, so a toggle resyncs like a sign-in.
+        let hidden = hiddenPlexServerIDs
+        servers = servers.map { server in
+            guard let id = server.machineID, hidden.contains(id) else { return server }
+            return (server.key + "\nhidden", server.url, server.token, server.name, id)
         }
         let keys = Set(servers.map(\.key))
         if !keys.isEmpty, keys == plexSourceKeys {
@@ -538,6 +549,8 @@ class LiveTVDataStore: ObservableObject {
         }
         plexSync?.cancel()
         plexSourceKeys = []
+        plexMachineIDs = [:]
+        hiddenPlexSources = []
         let stale = Set(providers.filter { $0.value.sourceType == .plex }.keys)
         dropSources(stale)
         guard !servers.isEmpty else {
@@ -555,11 +568,42 @@ class LiveTVDataStore: ObservableObject {
             for index in hasDVR.sorted() {
                 let server = servers[index]
                 let provider = PlexLiveTVProvider(serverURL: server.url, authToken: server.token, serverName: server.name)
+                if let id = server.machineID {
+                    plexMachineIDs[provider.sourceId] = id
+                    if hidden.contains(id) {
+                        hiddenPlexSources.append(LiveTVSourceInfo(
+                            id: provider.sourceId, sourceType: .plex, displayName: provider.displayName,
+                            channelCount: 0, isConnected: false, lastSync: nil))
+                        continue
+                    }
+                }
                 providers[provider.sourceId] = provider
             }
             plexSourceKeys = keys
             if !hasDVR.isEmpty || restrictionsChanged || !stale.isEmpty { reloadSources() }
         }
+    }
+
+    static let hiddenPlexServersKey = "liveTVHiddenPlexServers"
+
+    private var hiddenPlexServerIDs: Set<String> {
+        Set(userDefaults.stringArray(forKey: Self.hiddenPlexServersKey) ?? [])
+    }
+
+    func isPlexLiveTVHidden(machineID: String) -> Bool {
+        hiddenPlexServerIDs.contains(machineID)
+    }
+
+    /// Shows or hides a Plex server's DVR in Live TV; `plexSourcesSynced` waits for the result.
+    func setPlexLiveTVHidden(_ hide: Bool, machineID: String) {
+        var ids = hiddenPlexServerIDs
+        if hide { ids.insert(machineID) } else { ids.remove(machineID) }
+        userDefaults.set(ids.sorted(), forKey: Self.hiddenPlexServersKey)
+        plexContentTokenChanged()
+    }
+
+    func plexSourcesSynced() async {
+        await plexSync?.value
     }
 
     /// What the Plex source is confirmed under; nil without a content token.

@@ -35,16 +35,30 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
 
     // MARK: - Automatic source
 
+    /// Set when the user hid the server's Live TV (#406).
+    static let hiddenKey = "liveTVHideJellyfin"
+    /// The server's Live TV while hidden, so Settings can list it as Off.
+    @MainActor static var hiddenSource: LiveTVDataStore.LiveTVSourceInfo?
+
+    /// Shows or hides the signed-in server's Live TV; the task ends once the source is found again.
+    @MainActor
+    static func setHidden(_ hide: Bool) -> Task<Void, Never>? {
+        UserDefaults.standard.set(hide, forKey: hiddenKey)
+        let id = JellyfinSession.account?.providerID
+        return sync(MediaProviderRegistry.shared.secondaryProviders.first { $0.id == id } as? JellyfinProvider)
+    }
+
     /// Adds the server's Live TV when it has channels for this user, removes
     /// it when signed out or when it has none. A failed check changes nothing.
-    @MainActor
-    static func sync(_ provider: JellyfinProvider?) {
+    @MainActor @discardableResult
+    static func sync(_ provider: JellyfinProvider?) -> Task<Void, Never>? {
         let store = LiveTVDataStore.shared
         guard let provider else {
+            hiddenSource = nil
             store.setServerSource(nil, of: .jellyfin)
-            return
+            return nil
         }
-        Task { @MainActor in
+        return Task { @MainActor in
             let probe: JFLiveQuery<JFLiveChannel>
             do {
                 probe = try await provider.client.get("LiveTv/Channels", [URLQueryItem(name: "limit", value: "0")])
@@ -52,9 +66,18 @@ actor JellyfinLiveTVProvider: LiveTVProvider {
                 return
             }
             guard (probe.totalRecordCount ?? 0) > 0 else {
+                hiddenSource = nil
                 store.setServerSource(nil, of: .jellyfin)
                 return
             }
+            guard !UserDefaults.standard.bool(forKey: hiddenKey) else {
+                hiddenSource = LiveTVDataStore.LiveTVSourceInfo(
+                    id: provider.id, sourceType: .jellyfin, displayName: "\(provider.displayName) Live TV",
+                    channelCount: 0, isConnected: false, lastSync: nil)
+                store.setServerSource(nil, of: .jellyfin)
+                return
+            }
+            hiddenSource = nil
             if !store.hasSource(id: provider.id) {
                 // Admins pass without the Live TV management right; the server
                 // answers 403 to timer requests from anyone else.
