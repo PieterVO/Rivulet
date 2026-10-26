@@ -57,9 +57,9 @@ final class SpeechModelStore: ObservableObject {
 
     var statusText: String {
         switch state {
-        case .absent: return "Not Downloaded"
-        case .downloading(let fraction): return "Downloading \(Int(fraction * 100))%"
-        case .ready: return "Ready"
+        case .absent: return "Off"
+        case .downloading(let fraction): return "\(Int(fraction * 100))%"
+        case .ready: return "On"
         case .failed: return "Failed"
         }
     }
@@ -85,9 +85,19 @@ final class SpeechModelStore: ObservableObject {
             } catch {
                 state = .failed
                 SentryBridge.log(.warn, "Content filter: speech model download failed")
+                // Keeps trying while the filter or generated subtitles want it.
+                try? await Task.sleep(for: .seconds(30))
+                download = nil
+                if Self.isWanted { prepare() }
+                return
             }
             download = nil
         }
+    }
+
+    private static var isWanted: Bool {
+        SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false)
+            || SettingsStore.bool(UniversalPlayerViewModel.generatedSubtitlesFallbackKey, default: false)
     }
 
     /// Load the model from disk; nil when it isn't there or won't load.

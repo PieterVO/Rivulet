@@ -109,8 +109,8 @@ final class SettingsPageViewController: UIViewController {
         // users) and refresh the list when it arrives.
         SettingsContent.prepareAsync(for: page) { [weak self] in self?.reloadRows() }
 
-        // The speech model's download progress updates in place on Content Filtering.
-        if page == .contentFilter {
+        // The speech model's download progress updates in place (Content Filtering, Generated Subtitles).
+        if page == .contentFilter || page == .playback {
             speechModelState = SpeechModelStore.shared.$state
                 .dropFirst()
                 .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)

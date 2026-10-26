@@ -92,7 +92,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .audioLanguagePicker: return "Audio Language"
         case .subtitleLanguagePicker: return "Subtitle Language"
         case .contentFilter: return "Content Filtering"
-        case .contentFilterStrength: return "Profanity Strength"
+        case .contentFilterStrength: return "Profanity"
         case .contentFilterWords: return "Custom Words"
         }
     }

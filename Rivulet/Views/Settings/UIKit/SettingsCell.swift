@@ -51,12 +51,15 @@ final class SettingsHeaderCell: UICollectionViewCell {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// Fixed, not tertiaryLabel: the page is always black, and the dynamic gray vanishes on it.
+    static let captionColor = UIColor.white.withAlphaComponent(0.5)
+
     func configure(title: String) {
         // 31 = tvOS Callout. Measured off tvOS Settings' own captions: 21.0-21.5pt
         // cap height (31 x 0.70 = 21.7), against 27.0pt for a row title.
         label.attributedText = NSAttributedString(string: title.uppercased(), attributes: [
             .font: UIFont.systemFont(ofSize: 31, weight: .semibold),
-            .foregroundColor: UIColor.tertiaryLabel
+            .foregroundColor: Self.captionColor
         ])
     }
 }

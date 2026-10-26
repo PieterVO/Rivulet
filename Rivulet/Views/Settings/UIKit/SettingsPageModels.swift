@@ -428,6 +428,9 @@ enum SettingsContent {
                             kind: .toggle(
                                 get: { PlexUserProfileManager.shared.showProfilePickerOnLaunch },
                                 set: { PlexUserProfileManager.shared.showProfilePickerOnLaunch = $0 })),
+            SettingsRowItem(id: "topShelfStyle", title: "Top Shelf",
+                            kind: .cycle(value: { TopShelfCache.shared.fullScreen ? "Full Screen" : "Posters" },
+                                         next: { TopShelfCache.shared.fullScreen.toggle() })),
 
             // Titles drop whatever their caption already says ("Home Hero" under
             // HOME reads as "Home Home Hero"), the way Apple TV Settings puts a
@@ -435,9 +438,6 @@ enum SettingsContent {
             .header("Home"),
             SettingsRowItem(id: "homeRows", title: "Rows", kind: .navigation(.homeRows)),
             toggle("homeHero", "Hero", key: "showHomeHero", default: true),
-            SettingsRowItem(id: "topShelfStyle", title: "Top Shelf",
-                            kind: .cycle(value: { TopShelfCache.shared.fullScreen ? "Full Screen" : "Posters" },
-                                         next: { TopShelfCache.shared.fullScreen.toggle() })),
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [
@@ -487,6 +487,17 @@ enum SettingsContent {
                             kind: .toggle(get: { subtitleSDH },
                                           set: { setSubtitles(mode: SubtitleMode(TrackIntentStore.effectiveSubtitleIntent), sdh: $0) }),
                             isEnabled: subtitlesOn),
+            // Turning it on fetches the speech model that writes them; the value shows its download.
+            SettingsRowItem(id: "generatedSubtitles", title: "Generated Subtitles (English)", kind: .selectable(
+                isSelected: { false },
+                value: { generatedSubtitlesValue },
+                handler: { vc in
+                    let key = UniversalPlayerViewModel.generatedSubtitlesFallbackKey
+                    let on = !SettingsStore.bool(key, default: false)
+                    SettingsStore.setBool(key, on)
+                    if on { SpeechModelStore.shared.prepare() }
+                    (vc as? SettingsPageViewController)?.reloadRows()
+                })),
             .header("Resume"),
             toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
             // The prompt only has anything to interrupt while a Continue
@@ -537,6 +548,11 @@ enum SettingsContent {
         ]
     }
 
+    private static var generatedSubtitlesValue: String {
+        guard SettingsStore.bool(UniversalPlayerViewModel.generatedSubtitlesFallbackKey, default: false) else { return "Off" }
+        return SpeechModelStore.shared.statusText
+    }
+
     // MARK: Content Filtering
 
     /// VidAngel/ClearPlay-style local filter. Language categories are found in
@@ -544,7 +560,7 @@ enum SettingsContent {
     /// (see the source URL row).
     private static var contentFilter: [SettingsRowItem] {
         var rows: [SettingsRowItem] = [
-            // Turning the filter on fetches the speech model behind word-level muting.
+            // Turning the filter on fetches the speech model that times each muted word.
             SettingsRowItem(id: "cf_master", title: "Content Filter", kind: .toggle(
                 get: { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) },
                 set: { SettingsStore.setBool(ContentFilterManager.Keys.enabled, $0) },
@@ -552,10 +568,10 @@ enum SettingsContent {
         ]
 
         // Language categories (auto-detected from subtitles)
-        rows.append(categoryToggle(.profanity, id: "cf_profanity"))
-        rows.append(SettingsRowItem(id: "cf_strength", title: "Profanity Strength",
+        rows.append(.header("Audio"))
+        rows.append(SettingsRowItem(id: "cf_profanity", title: "Profanity",
                                     kind: .navigationValue(.contentFilterStrength, value: {
-                                        strengthLabel(currentProfanityStrength())
+                                        profanityOn ? strengthLabel(currentProfanityStrength()) : "Off"
                                     })))
         rows.append(categoryToggle(.blasphemy, id: "cf_blasphemy"))
         rows.append(categoryToggle(.slur, id: "cf_slur"))
@@ -565,17 +581,9 @@ enum SettingsContent {
                                         let count = ContentFilterManager.customWords.count
                                         return count == 0 ? "None" : "\(count)"
                                     })))
-        // Selecting it retries a failed or purged download.
-        rows.append(SettingsRowItem(id: "cf_speechModel", title: "Word-Level Muting",
-                                    kind: .selectable(isSelected: { false },
-                                                      value: { SpeechModelStore.shared.statusText },
-                                                      handler: { vc in
-                                        SpeechModelStore.shared.prepare()
-                                        (vc as? SettingsPageViewController)?.reloadRows()
-                                    }),
-                                    isEnabled: { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) }))
 
         // Scene categories (require an imported filter list)
+        rows.append(.header("Visual"))
         rows.append(categoryToggle(.violence, id: "cf_violence"))
         rows.append(categoryToggle(.sexNudity, id: "cf_sexNudity"))
         rows.append(categoryToggle(.frightening, id: "cf_frightening"))
@@ -590,6 +598,10 @@ enum SettingsContent {
                                         suggestions: [],
                                         keyboardType: .URL,
                                         set: { SettingsStore.setString(ContentFilterManager.Keys.listSourceURL, $0) })))
+        // Everything below the master toggle dims until the filter is on.
+        for i in rows.indices.dropFirst() {
+            rows[i].isEnabled = { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) }
+        }
         return rows
     }
 
@@ -615,13 +627,25 @@ enum SettingsContent {
         return rows
     }
 
+    /// Off, then the strengths: picking one turns the profanity category on.
     private static var contentFilterStrength: [SettingsRowItem] {
-        FilterSeverity.allCases.map { severity in
+        let key = FilterCategory.profanity.enabledDefaultsKey
+        let off = SettingsRowItem(id: "cfs_off", title: "Off", kind: .option(
+            isSelected: { !profanityOn },
+            select: { SettingsStore.setBool(key, false) }))
+        return [off] + FilterSeverity.allCases.map { severity in
             SettingsRowItem(id: "cfs_\(severity.rawValue)", title: strengthLabel(severity),
                             kind: .option(
-                                isSelected: { currentProfanityStrength() == severity },
-                                select: { SettingsStore.setInt(ContentFilterManager.Keys.profanityStrength, severity.rawValue) }))
+                                isSelected: { profanityOn && currentProfanityStrength() == severity },
+                                select: {
+                                    SettingsStore.setBool(key, true)
+                                    SettingsStore.setInt(ContentFilterManager.Keys.profanityStrength, severity.rawValue)
+                                }))
         }
+    }
+
+    private static var profanityOn: Bool {
+        SettingsStore.bool(FilterCategory.profanity.enabledDefaultsKey, default: FilterCategory.profanity.defaultEnabled)
     }
 
     private static func currentProfanityStrength() -> FilterSeverity {

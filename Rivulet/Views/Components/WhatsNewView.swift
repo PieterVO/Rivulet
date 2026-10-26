@@ -151,6 +151,11 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.0 (114)", [
             "New generated English subtitles, written from the dialogue on your Apple TV.",
+            "New setting turns on generated English subtitles when a title has none.",
+            "Content Filtering is simpler: one Profanity page, split into Audio and Visual.",
+            "Skip settings now read Off, Manual or Automatic.",
+            "Settings headings are readable again in dark mode.",
+            "The Home hero's Next button is a glass circle again.",
         ]),
         ("1.1.0 (113)", [
             "Content Filtering can now mute words of your own, such as \"stupid\".",

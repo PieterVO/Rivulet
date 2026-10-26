@@ -73,7 +73,7 @@ final class SettingsContainerViewController: UIViewController {
 
     private func setupLayout() {
         titleLabel.font = .systemFont(ofSize: 57, weight: .bold)
-        titleLabel.textColor = .tertiaryLabel
+        titleLabel.textColor = SettingsHeaderCell.captionColor
         titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(titleLabel)
@@ -98,7 +98,7 @@ final class SettingsContainerViewController: UIViewController {
 
             leftPanel.topAnchor.constraint(equalTo: view.topAnchor, constant: 180),
             leftPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 90),
-            leftPanel.widthAnchor.constraint(equalToConstant: 870),
+            leftPanel.widthAnchor.constraint(equalToConstant: SettingsLeftPanelView.width),
             leftPanel.heightAnchor.constraint(equalToConstant: 654),
 
             rightPane.topAnchor.constraint(equalTo: view.topAnchor, constant: 174),

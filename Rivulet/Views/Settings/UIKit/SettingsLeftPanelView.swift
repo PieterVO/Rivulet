@@ -15,6 +15,11 @@ import UIKit
 
 final class SettingsLeftPanelView: UIView {
 
+    static let width: CGFloat = 870
+    /// Every explainer fits in this many lines at full size (`SettingsDescriptorLengthTests`).
+    static let descriptionLines = 3
+    static let descriptionFont = UIFont.preferredFont(forTextStyle: .body)
+
     private let iconContainer = UIView()
     private let iconView = UIImageView()
     /// The focused App Icon option's artwork, shown in place of the page tile.
@@ -51,11 +56,9 @@ final class SettingsLeftPanelView: UIView {
         artworkView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(artworkView)
 
-        descriptionLabel.font = .preferredFont(forTextStyle: .body)
+        descriptionLabel.font = Self.descriptionFont
         descriptionLabel.textColor = .secondaryLabel
-        descriptionLabel.numberOfLines = 5
-        descriptionLabel.adjustsFontSizeToFitWidth = true
-        descriptionLabel.minimumScaleFactor = 12.0 / 29.0
+        descriptionLabel.numberOfLines = Self.descriptionLines
         descriptionLabel.textAlignment = .center
         descriptionLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(descriptionLabel)

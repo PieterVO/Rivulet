@@ -1053,6 +1053,18 @@ final class UniversalPlayerViewModel: ObservableObject {
         selectSubtitleTrackWithoutSaving(id: real.id)
     }
 
+    static let generatedSubtitlesFallbackKey = "generatedSubtitlesFallback"
+
+    /// Settings → Generated Subtitles: subtitles set to Always, no track in that language, English or unlabeled audio.
+    private func fallBackToGeneratedSubtitles() {
+        guard SettingsStore.bool(Self.generatedSubtitlesFallbackKey, default: false),
+              offersGeneratedSubtitles, currentSubtitleTrackId == nil, !subtitlesPickedOff,
+              case .track(_, false, _, _) = TrackIntentStore.effectiveSubtitleIntent,
+              playingAudioLanguage.map({ TrackLanguage.normalize($0) == "eng" }) ?? true else { return }
+        if case .off = initialSubtitleSelection { return }
+        selectSubtitleTrackWithoutSaving(id: Self.generatedSubtitleId)
+    }
+
     private func captionWordsHeard(_ words: [SpokenWord], covering range: ClosedRange<Double>) {
         heardWords.add(words, covering: range)
         if showsGeneratedSubtitles { aetherSubtitleModel.update(cues: generatedCues()) }
@@ -2090,6 +2102,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // Adopts the engine's own selection, then starts the unseen read if there is none.
                 updateTrackLists()
                 preferRealSubtitlesOverGenerated()
+                fallBackToGeneratedSubtitles()
             } catch {
                 // Cancellation is not a failure: return, since a rethrow fires a
                 // second failure event. The deadline error is not a cancellation
@@ -3416,6 +3429,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         initialSubtitleSelection = tracks.subtitle.map { $0 == 0 ? .off : .track(id: $0) } ?? .auto
         hasAppliedAudioPreference = false
         hasAppliedSubtitlePreference = false
+        subtitlesPickedOff = false
         audioTracks = []
         subtitleTracks = []
         aetherPlayer?.prepareForItemReplacement()
@@ -4519,6 +4533,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Whether we've already applied track preferences for this playback session
     private var hasAppliedSubtitlePreference = false
+    /// Off was picked before play, so the generated fallback stays away.
+    private var subtitlesPickedOff = false
     private var hasAppliedAudioPreference = false
 
     /// Pre-play track selections passed in from the item-detail picker.
@@ -4653,6 +4669,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         switch initialSubtitleSelection {
         case .off:
             initialSubtitleSelection = .auto
+            subtitlesPickedOff = true
             selectSubtitleTrackWithoutSaving(id: nil)
             return
         case .track(let id):
