@@ -18,6 +18,29 @@ final class PlayerInfoPopupLayoutTests: XCTestCase {
 
     // MARK: - Details pane
 
+    func testAudioRowShowsParsedFieldsOnly() throws {
+        func stream(_ title: String) throws -> PlexStream {
+            try JSONDecoder().decode(PlexStream.self, from: Data("""
+            {"id": 7, "streamType": 2, "codec": "truehd", "profile": "dolby truehd + dolby atmos",
+             "channels": 8, "audioChannelLayout": "7.1", "language": "English", "title": "\(title)"}
+            """.utf8))
+        }
+        let release = PlayerDetailsPaneView.audioRow(
+            try stream("Baywatch.2017.UNRATED.2160p.BluRay.REMUX.HEVC.TrueHD.7.1.Atmos-FGT"), index: 0)
+        XCTAssertEqual(release, .init(label: "English", value: "TrueHD 7.1 Atmos"))
+        let commentary = PlayerDetailsPaneView.audioRow(try stream("Director's Commentary"), index: 1)
+        XCTAssertEqual(commentary, .init(label: "English", value: "TrueHD 7.1 Atmos · Commentary"))
+    }
+
+    func testAudioMenuNamesTrackByLanguageAndFormat() {
+        let plexStyle = MediaTrack(id: 1, name: "English (TRUEHD 7.1)", language: "English", codec: "truehd",
+                                   channels: 8, profile: "dolby truehd + dolby atmos")
+        XCTAssertEqual(plexStyle.audioMenuTitle, "English")
+        XCTAssertEqual(plexStyle.audioMenuSubtitle, "TrueHD 7.1 Atmos")
+        let described = MediaTrack(id: 2, name: "Audio Description", language: "English", codec: "ac3", channels: 2)
+        XCTAssertEqual(described.audioMenuSubtitle, "AC3 2.0 • Audio Description")
+    }
+
     func testDetailsMediaSectionsCarryEveryVideoFact() {
         var movie = PlexMetadata()
         movie.type = "movie"

@@ -18,10 +18,14 @@ final class TransportControlButton: UIControl {
     static let diameter: CGFloat = 64
     /// AVKit's tool glyph, fitted by rendered size and stroke.
     private static let glyphConfiguration = UIImage.SymbolConfiguration(pointSize: 28, weight: .semibold)
-    /// AVKit's control glass (tool buttons, info pills, info pane boxes): clear
-    /// glass under this wash reads as 0.77 x backdrop + 25 levels, as AVKit's
-    /// does over a black-to-white stripe pattern (within 3 levels).
-    static let restingWash = UIColor(white: 0.16, alpha: 0.26)
+    /// AVKit's control glass (tool buttons, pills, panes, popups). AVKit blurs
+    /// between `.clear` and `.regular` (`glassblur` probe); tinted `.regular` is the
+    /// nearest public match.
+    static func glassEffect() -> UIGlassEffect {
+        let effect = UIGlassEffect(style: .regular)
+        effect.tintColor = UIColor(white: 1, alpha: 0.15)
+        return effect
+    }
 
     private let diameter: CGFloat
     private let iconView = UIImageView()
@@ -36,8 +40,7 @@ final class TransportControlButton: UIControl {
 
     init(icon: UIImage?, accessibilityLabel: String, diameter: CGFloat = TransportControlButton.diameter) {
         self.diameter = diameter
-        // Same fitted material as the popups: clear glass plus a gray wash.
-        backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: .clear))
+        backgroundEffectView = UIVisualEffectView(effect: Self.glassEffect())
         super.init(frame: .zero)
 
         self.accessibilityLabel = accessibilityLabel
@@ -49,7 +52,6 @@ final class TransportControlButton: UIControl {
 
         backgroundEffectView.layer.cornerRadius = self.diameter / 2
         backgroundEffectView.clipsToBounds = true
-        backgroundEffectView.backgroundColor = Self.restingWash
         backgroundEffectView.isUserInteractionEnabled = false
 
         addSubview(backgroundEffectView)
@@ -106,7 +108,7 @@ final class TransportControlButton: UIControl {
         let isFocused = context.nextFocusedView === self
         coordinator.addCoordinatedAnimations({
             self.transform = isFocused ? CGAffineTransform(scaleX: 1.15, y: 1.15) : .identity
-            self.backgroundEffectView.backgroundColor = isFocused ? .white : Self.restingWash
+            self.backgroundEffectView.backgroundColor = isFocused ? .white : .clear
             self.iconView.tintColor = self.glyphColor ?? (isFocused ? .black : .white)
         }, completion: nil)
     }

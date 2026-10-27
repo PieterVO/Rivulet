@@ -114,6 +114,9 @@ final class AVKitScrubProbe: NSObject {
         case "infocard-bright":
             await ScrubStatesProbe.runAVKitInfoCardOverPattern()
             return
+        case "glassblur":
+            await ScrubStatesProbe.runGlassBlur()
+            return
         default:
             break
         }
@@ -1060,6 +1063,113 @@ enum ScrubStatesProbe {
         card?.isHidden = true
         try? await Task.sleep(for: .milliseconds(500))
         setState("infocard-off")
+        try? await Task.sleep(for: .seconds(2))
+        setState("done")
+    }
+
+    /// Stripes of falling period (4, 12, 40pt) then a step edge, across x 300...1500,
+    /// mid grey elsewhere: blur shows as lost stripe contrast and a wider edge.
+    private static func blurPattern() -> UIView {
+        let pattern = UIView(frame: UIScreen.main.bounds)
+        pattern.backgroundColor = UIColor(white: 0.5, alpha: 1)
+        for (start, period) in [(300.0, 4.0), (600, 12), (900, 40)] {
+            var x = start
+            while x < start + 300 {
+                let bar = UIView(frame: CGRect(x: x, y: 0, width: period / 2, height: 1080))
+                bar.backgroundColor = .black
+                pattern.addSubview(bar)
+                let gap = UIView(frame: CGRect(x: x + period / 2, y: 0, width: period / 2, height: 1080))
+                gap.backgroundColor = .white
+                pattern.addSubview(gap)
+                x += period
+            }
+        }
+        for (x, white) in [(1200.0, 0.0), (1350, 1.0)] {
+            let half = UIView(frame: CGRect(x: x, y: 0, width: 150, height: 1080))
+            half.backgroundColor = UIColor(white: white, alpha: 1)
+            pattern.addSubview(half)
+        }
+        return pattern
+    }
+
+    /// AVKit's Info card glass (content hidden) over `blurPattern`, then each public
+    /// candidate at the same frame. Every state has a matching "-off" frame without the glass.
+    static func runGlassBlur() async {
+        let playerVC = makeChromePlayer()
+        keep = [playerVC]
+        await present(playerVC)
+        playerVC.contentOverlayView?.addSubview(blurPattern())
+        playerVC.player?.play()
+        try? await Task.sleep(for: .seconds(12))
+        playerVC.player?.pause()
+        guard let window = playerVC.view.window else { return }
+        let controls = playerVC.descendantsOfClass("AVNowPlayingPlaybackControlsViewController").first
+        playerVC.call("_showPlaybackControlsViewIfNeededForUserInteraction")
+        try? await Task.sleep(for: .milliseconds(600))
+        _ = openInfoPane(0, controls: controls, in: window)
+        try? await Task.sleep(for: .seconds(2))
+        var card: UIView?
+        func find(_ v: UIView) {
+            let f = v.convert(v.bounds, to: window)
+            if card == nil, abs(f.minX - 80) < 1, abs(f.minY - 744) < 1, abs(f.width - 1760) < 1, abs(f.height - 250) < 1 { card = v }
+            v.subviews.forEach(find)
+        }
+        find(window)
+        func hideContent(_ v: UIView) {
+            if v is UILabel || v is UIImageView || v is UIButton { v.isHidden = true; return }
+            v.subviews.forEach(hideContent)
+        }
+        if let card { hideContent(card) } else { print("[ScrubProbe] no AVKit card") }
+        try? await Task.sleep(for: .seconds(1))
+        setState("blur-avkit")
+        try? await Task.sleep(for: .seconds(2))
+        card?.isHidden = true
+        try? await Task.sleep(for: .milliseconds(500))
+        setState("blur-avkit-off")
+        try? await Task.sleep(for: .seconds(2))
+        await withCheckedContinuation { done in playerVC.dismiss(animated: false) { done.resume() } }
+
+        let vc = UIViewController()
+        vc.modalPresentationStyle = .fullScreen
+        vc.view.addSubview(blurPattern())
+        keep = [vc]
+        await present(vc)
+        let wash = UIColor(white: 0.16, alpha: 0.26)
+        func glass(_ effect: UIVisualEffect?, wash: UIColor?) -> UIVisualEffectView {
+            let view = UIVisualEffectView(effect: effect)
+            if let wash {
+                let fill = UIView(frame: view.bounds)
+                fill.backgroundColor = wash
+                fill.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                view.contentView.addSubview(fill)
+            }
+            return view
+        }
+        let candidates: [(String, () -> UIView)] = [
+            ("ours", { makePaneGlass(cornerRadius: 48) }),
+            ("clear", { glass(UIGlassEffect(style: .clear), wash: nil) }),
+            ("regular", { glass(UIGlassEffect(style: .regular), wash: nil) }),
+            ("regular-wash", { glass(UIGlassEffect(style: .regular), wash: wash) }),
+            ("regular-light", { let v = glass(UIGlassEffect(style: .regular), wash: nil); v.overrideUserInterfaceStyle = .light; return v }),
+            ("regular-w15", { let g = UIGlassEffect(style: .regular); g.tintColor = UIColor(white: 1, alpha: 0.15); return glass(g, wash: nil) }),
+            ("regular-w30", { let g = UIGlassEffect(style: .regular); g.tintColor = UIColor(white: 1, alpha: 0.3); return glass(g, wash: nil) }),
+            ("regular-light-w15", { let g = UIGlassEffect(style: .regular); g.tintColor = UIColor(white: 1, alpha: 0.15)
+                let v = glass(g, wash: nil); v.overrideUserInterfaceStyle = .light; return v }),
+        ]
+        for (name, make) in candidates {
+            let platter = make()
+            platter.frame = CGRect(x: 80, y: 744, width: 1760, height: 250)
+            platter.layer.cornerRadius = 48
+            platter.layer.cornerCurve = .continuous
+            platter.clipsToBounds = true
+            vc.view.addSubview(platter)
+            try? await Task.sleep(for: .seconds(1.5))
+            setState("blur-" + name)
+            try? await Task.sleep(for: .seconds(2))
+            platter.removeFromSuperview()
+        }
+        try? await Task.sleep(for: .milliseconds(500))
+        setState("blur-pattern-off")
         try? await Task.sleep(for: .seconds(2))
         setState("done")
     }

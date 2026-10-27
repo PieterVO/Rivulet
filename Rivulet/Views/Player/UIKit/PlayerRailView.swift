@@ -446,7 +446,7 @@ final class PlayerInfoPillButton: UIControl {
     var isSelectedTab = false {
         didSet { if !isFocused { applyAppearance(focused: false) } }
     }
-    private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .clear))
+    private let glass = UIVisualEffectView(effect: TransportControlButton.glassEffect())
     private let highlight = UIView()
     private let label = UILabel()
 
@@ -462,7 +462,6 @@ final class PlayerInfoPillButton: UIControl {
         glass.isUserInteractionEnabled = false
         glass.clipsToBounds = true
         glass.layer.cornerRadius = height / 2
-        glass.backgroundColor = TransportControlButton.restingWash
 
         highlight.backgroundColor = .white
         highlight.isUserInteractionEnabled = false

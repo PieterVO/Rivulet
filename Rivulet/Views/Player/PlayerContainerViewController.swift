@@ -1390,7 +1390,7 @@ class PlayerContainerViewController: UIViewController {
             self.presentRailPanel(
                 content: CardTrackListView(
                     header: "Audio", tracks: vm.audioTracks,
-                    selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
+                    selectedTrackId: vm.currentAudioTrackId, showsOffRow: false, audio: true,
                     choices: SystemAudioAdjustment.menuChoices,
                     toggles: SystemAudioAdjustment.menuToggles,
                     onSelect: { [weak vm, weak self] id in
@@ -1632,6 +1632,7 @@ class PlayerContainerViewController: UIViewController {
         panelRef = panel
         openPaneTab = tab
         rail.setSelectedPill(tabPill)
+        (content.view as? PlayerCardRowView)?.scrollToCurrent()
         adoptRailPanel(panel)
     }
 
@@ -1676,6 +1677,7 @@ class PlayerContainerViewController: UIViewController {
                 let watching = now >= start && now < end
                 return PlayerCardRowView.Card(
                     imageURL: vm.chapterThumbnailURL(chapter),
+                    stillLoader: { [weak vm] in await vm?.chapterStill(at: start) },
                     eyebrow: watching ? "Watching" : nil,
                     title: chapter.tag ?? "Chapter \(index + 1)",
                     isCurrent: watching,

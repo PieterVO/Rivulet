@@ -29,6 +29,8 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
 
     // Audio-specific
     let channels: Int?
+    /// Plex's codec profile ("ma", "dolby truehd + dolby atmos"); nil from the engine.
+    let profile: String?
 
     // Subtitle-specific
     let subtitleKey: String?  // Plex URL path for external subtitles (e.g., "/library/streams/12345")
@@ -64,6 +66,7 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         isCommentary: Bool = false,
         extendedDisplayTitle: String? = nil,
         channels: Int? = nil,
+        profile: String? = nil,
         subtitleKey: String? = nil,
         streamIndex: Int? = nil,
         isExternal: Bool = false
@@ -79,6 +82,7 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isCommentary = isCommentary
         self.extendedDisplayTitle = extendedDisplayTitle
         self.channels = channels
+        self.profile = profile
         self.subtitleKey = subtitleKey
         self.streamIndex = streamIndex
         self.isExternal = isExternal
@@ -97,6 +101,7 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isCommentary = false  // Plex has no commentary flag; title-matched instead.
         self.extendedDisplayTitle = stream.extendedDisplayTitle
         self.channels = stream.channels
+        self.profile = stream.profile
         self.subtitleKey = stream.key
         self.streamIndex = stream.index
         self.isExternal = false
@@ -118,6 +123,7 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isCommentary = false
         self.extendedDisplayTitle = track.extendedTitle
         self.channels = track.channels
+        self.profile = track.profile
         self.subtitleKey = nil
         self.streamIndex = track.index
         self.isExternal = false
@@ -136,6 +142,7 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         self.isCommentary = false
         self.extendedDisplayTitle = track.extendedTitle
         self.channels = nil
+        self.profile = nil
         self.subtitleKey = track.externalURL?.path
         // Sidecars aren't in the container, so they have no stream index.
         self.streamIndex = track.externalURL == nil ? track.index : nil
@@ -160,6 +167,28 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
     }
 
     // MARK: - Audio Display Helpers
+
+    /// "TrueHD 7.1 Atmos", from codec, profile and channels.
+    var audioFormat: String {
+        AudioTrack(id: "", index: 0, codec: codec ?? "", profile: profile, channels: inferredChannels,
+                   channelLayout: nil, language: nil, title: nil, extendedTitle: nil, bitrate: nil,
+                   samplingRate: nil, isDefault: false, isForced: false, isSelected: false).qualityLabel
+    }
+
+    /// "Commentary" or "Audio Description", the only thing a track's own title
+    /// adds once language and format are parsed; the title itself is never shown.
+    var audioRole: String? {
+        guard TrackCommentary.isCommentaryOrDescription(self) else { return nil }
+        let text = [extendedDisplayTitle, name].compactMap { $0?.lowercased() }.joined(separator: " ")
+        let described = ["descri", "narration", "dvs", "impaired"].contains(where: text.contains)
+        return described ? "Audio Description" : "Commentary"
+    }
+
+    /// Audio menu row: the language over "TrueHD 7.1 Atmos • Commentary".
+    var audioMenuTitle: String { language ?? "Unknown Language" }
+    var audioMenuSubtitle: String {
+        [codec == nil ? nil : audioFormat, audioRole].compactMap { $0 }.joined(separator: " • ")
+    }
 
     /// Formatted codec name (e.g., "AAC", "TrueHD", "DTS-HD MA")
     var formattedCodec: String {

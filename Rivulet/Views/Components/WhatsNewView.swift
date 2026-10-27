@@ -152,6 +152,10 @@ struct WhatsNewView: View {
         ("1.1.1 (115)", [
             "A center click now pauses the video once the controls are showing.",
             "Fixed skipping while paused.",
+            "Player controls are easier to read over bright scenes.",
+            "Chapters show a picture even when your server has none, and open on the current chapter.",
+            "Audio tracks are listed by language and format instead of file names.",
+            "Insights cards have a refreshed look and open faster.",
         ]),
         ("1.1.0 (114)", [
             "New generated English subtitles, written from the dialogue on your Apple TV.",

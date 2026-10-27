@@ -229,11 +229,18 @@ enum TrackCommentary {
     /// Keywords that mark a track as commentary or audio description.
     private static let markers = [
         "commentary",
+        "commentaire",
+        "kommentar",
+        "comentario",
+        "commento",
         "director",
-        "audio description",
+        "description",
         "descriptive",
         "described",
-        "narration"
+        "narration",
+        "dvs",
+        "visually impaired",
+        "visual impaired"
     ]
 
     /// Whether a track is commentary or audio description, excluded from auto-select only.

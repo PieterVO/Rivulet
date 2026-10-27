@@ -1233,6 +1233,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 tracks: aether.audioTracks,
                 selectedTrackId: aether.currentAudioTrackId,
                 showsOffRow: false,
+                audio: true,
                 choices: SystemAudioAdjustment.menuChoices,
                 toggles: SystemAudioAdjustment.menuToggles
             ) { [weak self] trackId in
@@ -1266,6 +1267,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 tracks: tracks,
                 selectedTrackId: selectedIndex,
                 showsOffRow: false,
+                audio: true,
                 choices: SystemAudioAdjustment.menuChoices,
                 toggles: SystemAudioAdjustment.menuToggles
             ) { [weak self] trackId in

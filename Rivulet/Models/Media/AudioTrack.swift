@@ -41,7 +41,7 @@ extension AudioTrack {
         case "ac3":                     name = "AC3"
         case "eac3":                    name = "E-AC3"
         case "truehd":                  name = "TrueHD"
-        case "dca":
+        case "dca", "dts":
             if p.contains("ma")     {   name = "DTS-HD MA" }
             else if p.contains("x") {   name = "DTS-X" }
             else                    {   name = "DTS" }

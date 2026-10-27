@@ -2918,6 +2918,17 @@ final class UniversalPlayerViewModel: ObservableObject {
         )
     }
 
+    /// A still for a chapter the server has no thumb for: the BIF frame, else an engine decode.
+    func chapterStill(at time: TimeInterval) async -> UIImage? {
+        if currentScrubThumbnailSource == .server, let partId = metadata.Media?.first?.Part?.first?.id,
+           let image = await PlexThumbnailService.shared.getThumbnail(
+               partId: partId, time: time, serverURL: serverURL, authToken: authToken) {
+            return image
+        }
+        guard let frame = await aetherPlayer?.scrubFrame(atSeconds: time, maxWidth: 640) else { return nil }
+        return UIImage(cgImage: frame)
+    }
+
     /// Build navigation markers from Plex chapters (preferred) or intro/credits markers (fallback).
     private func buildNavigationMarkers() -> [AVNavigationMarkersGroup]? {
         // Prefer real chapters from the media file (Plex returns these at metadata level, not Part level)

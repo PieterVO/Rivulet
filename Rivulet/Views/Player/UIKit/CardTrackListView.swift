@@ -70,7 +70,9 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
     /// The control focus is on: a track row or a stepper's -/+ button.
     private weak var lastFocusedControl: UIView?
 
+    /// `audio` titles each row by language with a format line ("TrueHD 7.1 Atmos").
     convenience init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool,
+                     audio: Bool = false,
                      actions: [CardActionConfig] = [], choices: [CardChoiceConfig] = [],
                      toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
                      onSelect: @escaping (Int?) -> Void) {
@@ -80,8 +82,9 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
         }
         rows.append(contentsOf: tracks.map { track in
             Row(
-                title: track.name,
-                subtitle: [track.language, track.codec?.uppercased()].compactMap { $0 }.joined(separator: " • "),
+                title: audio ? track.audioMenuTitle : track.name,
+                subtitle: audio ? track.audioMenuSubtitle
+                    : [track.language, track.codec?.uppercased()].compactMap { $0 }.joined(separator: " • "),
                 trackId: track.id,
                 isSelected: track.id == selectedTrackId
             )
@@ -127,7 +130,7 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
         // lists hug their rows and long ones scroll. Kept below the header's
         // compression resistance so an overflow scrolls instead of squashing it.
         let scrollHeight = scrollView.heightAnchor.constraint(
-            equalTo: stack.heightAnchor, constant: Metrics.bottomInset)
+            equalTo: stack.heightAnchor, constant: Metrics.focusGrowth + Metrics.bottomInset)
         scrollHeight.priority = .defaultHigh - 1
 
         NSLayoutConstraint.activate([
@@ -135,13 +138,15 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
             headerLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.headerLabelLeading),
             headerLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.headerLabelLeading),
 
-            scrollView.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.headerHeight),
+            // Starts focusGrowth early, with the rows that far down its content, so the
+            // top row's focused pill isn't clipped by the scroll view.
+            scrollView.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.headerHeight - Metrics.focusGrowth),
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollHeight,
 
-            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: Metrics.focusGrowth),
             stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: Metrics.rowInset),
             stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -Metrics.rowInset),
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -Metrics.bottomInset),
