@@ -1342,14 +1342,15 @@ final class AetherPlayer: PlayerProtocol {
 
     /// Decoded playback audio for on-device speech (the engine's audio tap):
     /// mono 48 kHz on the source axis, up to ~10 s ahead of the playhead on the
-    /// loopback route. The tap ends on every load or reload, so it is
-    /// re-installed until the stream is cancelled.
+    /// loopback route. Surround sources deliver the centre (dialogue) channel
+    /// alone; stereo falls back to the downmix. The tap ends on every load or
+    /// reload, so it is re-installed until the stream is cancelled.
     func playbackAudio() -> AsyncStream<PlaybackAudioChunk> {
         let (stream, continuation) = AsyncStream<PlaybackAudioChunk>.makeStream(bufferingPolicy: .bufferingNewest(256))
         let task = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let engine = self?.engine else { break }
-                let tap = engine.installAudioTap()
+                let tap = engine.installAudioTap(channels: .dialogue)
                 if engine.audioTapHasDeliverySource {
                     var first = true
                     for await buffer in tap {
