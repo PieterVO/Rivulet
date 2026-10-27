@@ -26,7 +26,6 @@ class PlayerContainerViewController: UIViewController {
     private var scrubberProxy: ScrubberFocusProxyView?
     private var skipPill: SkipPillButton?
     private var pausedDimView: UIView?
-    private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
     private var ambientScrim: BottomScrimView?
     private var captionOverlay: CaptionOverlayView?
@@ -213,17 +212,7 @@ class PlayerContainerViewController: UIViewController {
                 return true
             }
 
-            // Top-left "Loading" label. The progress bar's own
-            // skeleton shimmer (see `PlayerProgressBarView.setSkeleton`) is
-            // the primary loading visual; this is a quiet text-only cue,
-            // no spinner.
-            let loadingLabel = UILabel()
-            loadingLabel.font = .systemFont(ofSize: 22, weight: .medium)
-            loadingLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-            loadingLabel.text = "Loading"
-            loadingLabel.isHidden = true
-
-            [chromeScrim, dim, ambientBottomScrim, railView, bar, proxy, pill, loadingLabel].forEach {
+            [chromeScrim, dim, ambientBottomScrim, railView, bar, proxy, pill].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
@@ -238,7 +227,6 @@ class PlayerContainerViewController: UIViewController {
             view.bringSubviewToFront(bar)
             view.bringSubviewToFront(proxy)
             view.bringSubviewToFront(pill)
-            view.bringSubviewToFront(loadingLabel)
 
             NSLayoutConstraint.activate([
                 chromeScrim.topAnchor.constraint(equalTo: view.topAnchor),
@@ -290,10 +278,6 @@ class PlayerContainerViewController: UIViewController {
                 // AVKit's it shows only while the controls are hidden.
                 pill.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -11),
                 pill.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -56),
-
-                // Loading label: top 44 / leading 64.
-                loadingLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 44),
-                loadingLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 64),
             ])
             // The proxy is a sibling of the rail, so the rail can't reach it
             // through the view tree — hand it over so its preferredFocus can
@@ -315,7 +299,6 @@ class PlayerContainerViewController: UIViewController {
             skipPill = pill
             ambientScrim = ambientBottomScrim
             pausedDimView = dim
-            self.loadingLabel = loadingLabel
 
             bindChrome(to: vm)
         }
@@ -826,7 +809,7 @@ class PlayerContainerViewController: UIViewController {
     private func endContentPress(_ type: UIPress.PressType) {
         if type == .select, contentSelectPending {
             contentSelectPending = false
-            toggleControlsFromContent()
+            selectFromContent()
             return
         }
         if type == contentDirectionalPressType {
@@ -843,18 +826,26 @@ class PlayerContainerViewController: UIViewController {
         }
     }
 
-    /// Select with nothing else focused shows or hides the controls. It never
-    /// toggles playback (that is the play/pause button, and Select on the
-    /// focused scrubber).
-    private func toggleControlsFromContent() {
+    /// Select with nothing else focused brings the controls up on the scrubber,
+    /// where the next Select toggles playback (#410). With the controls already
+    /// on screen it toggles playback at once.
+    private func selectFromContent() {
         guard let vm = viewModel, !vm.playbackState.isFailed else { return }
+        let chromeUp = vm.showControls && !vm.showPausedPoster
         withAnimation(.easeInOut(duration: 0.25)) {
-            if vm.showControls {
-                vm.showControls = false
+            if chromeUp {
+                inputCoordinator.handle(action: .playPause, source: .irPress)
             } else {
                 vm.showControlsTemporarily()
             }
         }
+        // The chrome sink runs a pass later; the proxy must be focusable now.
+        applyChromeVisibility()
+        guard scrubberProxy?.isFocusEnabled == true else { return }
+        rail?.resetFocusMemory()
+        vm.enterControlsFocus()
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
     }
 
     /// Handle Menu button press with priority:
@@ -1110,6 +1101,10 @@ class PlayerContainerViewController: UIViewController {
                 // "toggle playback" — reopen at whatever the current play state
                 // is and leave the transport alone.
                 vm.showControlsTemporarily()
+            } else if let forward = self?.edgeClickDirection() {
+                // A 1st-gen Siri Remote edge click skips here too, as it does from the content state.
+                self?.inputCoordinator.handle(action: .stepSeek(forward: forward), source: .irPress)
+                vm.showControlsTemporarily()
             } else {
                 self?.inputCoordinator.handle(action: .playPause, source: .irPress)
             }
@@ -1222,13 +1217,6 @@ class PlayerContainerViewController: UIViewController {
                 self.rail?.setLoading(loading)
                 self.progressBar?.setSkeleton(loading)
                 self.progressBar?.setPausedDim(state == .paused && self.hasPlayedSinceLoad)
-
-                // Mid-playback buffering (seek landings, engine stalls)
-                // borrows the same quiet cue — no skeleton, no centered
-                // spinner, just the label. Buffering must NOT feed the
-                // skeleton/focus gates above: the bar keeps its fill and the
-                // scrubber stays focusable through a rebuffer.
-                self.loadingLabel?.isHidden = !(loading || state == .buffering)
 
                 self.applyChromeVisibility()
             }
@@ -1921,9 +1909,6 @@ class PlayerContainerViewController: UIViewController {
         guard let vm = viewModel else { return }
         let ambient = vm.pausePresentation != .frame
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
-        // Buffering shares the loading label but none of the other loading
-        // treatment (no skeleton, no focus gate) — see the state sink.
-        let showsActivityCue = isLoading || vm.playbackState == .buffering
         // The Up Next card sits over the video alone.
         let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient && vm.postVideoState == .hidden
         let railVisible = chromeVisible && !vm.isScrubbing
@@ -2000,7 +1985,6 @@ class PlayerContainerViewController: UIViewController {
             (rail, railAlpha),
             (skipPill, skipVisible ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
-            (loadingLabel, showsActivityCue && !ambient ? 1 : 0),
         ]
         // `setAmbient` drives the rail's sub-view alphas, which `targets` cannot see.
         let railAmbientChanged = rail.map { $0.ambientState != (ambient, keepRailTitle) } ?? false
@@ -2094,6 +2078,8 @@ class PlayerContainerViewController: UIViewController {
             } else {
                 vm.exitControlsFocus()
             }
+            // A user's move (not a re-resolution) counts as input for the paused poster.
+            if !context.focusHeading.isEmpty { vm.hidePausedPoster() }
         }
     }
 

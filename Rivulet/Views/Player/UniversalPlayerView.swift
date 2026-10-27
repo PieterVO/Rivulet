@@ -604,8 +604,7 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 onResetRemoteInput?()
             } else if vm.showPausedPoster {
                 // Back with the ambient pause backdrop up returns to the
-                // paused frame — it does not exit the player. The timer does
-                // not re-arm until the next pause, so the frame stays clean.
+                // paused frame — it does not exit the player.
                 vm.hidePausedPoster()
             } else if vm.controlsFocusActive || vm.showControls {
                 // Back from the transport buttons (or from any visible chrome)
@@ -834,10 +833,6 @@ struct UniversalPlayerView: View {
                         )
                 }
             }
-
-            // Mid-playback buffering has no centered indicator: the quiet
-            // top-left "Loading" cue in PlayerContainerViewController covers
-            // it in the same slot the Paused indicator uses.
 
             // Seek Indicator (10s skip) with the chrome hidden; with it up,
             // the progress bar shows AVKit's glyph beside the time instead.

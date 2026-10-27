@@ -149,6 +149,10 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.1 (115)", [
+            "A center click now pauses the video once the controls are showing.",
+            "Fixed skipping while paused.",
+        ]),
         ("1.1.0 (114)", [
             "New generated English subtitles, written from the dialogue on your Apple TV.",
             "New setting turns on generated English subtitles when a title has none.",

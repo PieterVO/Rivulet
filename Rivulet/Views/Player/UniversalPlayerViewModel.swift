@@ -4801,6 +4801,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     func showControlsTemporarily() {
         showControls = true
         startControlsHideTimer()
+        hidePausedPoster()
     }
 
     /// Enter transport-control focus mode. Called on every focus landing in the
@@ -4871,6 +4872,9 @@ final class UniversalPlayerViewModel: ObservableObject {
                 withAnimation(.easeIn(duration: 1.0)) {
                     self.pausePresentation = .ambient
                 }
+                // The rail goes unfocusable under the poster; hand focus back to
+                // the content anchor so arrows and Select still reach the player.
+                self.controlsFocusActive = false
             }
         }
 
@@ -4898,9 +4902,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Hide paused poster on any control input
+    /// Any control input drops the paused poster; while paused, its timer restarts from now.
     func hidePausedPoster() {
         cancelPausedPosterTimer()
+        if playbackState == .paused { startPausedPosterTimer() }
     }
 
     // MARK: - Marker Detection & Skipping
