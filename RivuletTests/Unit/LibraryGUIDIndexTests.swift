@@ -152,4 +152,28 @@ final class LibraryGUIDIndexTests: XCTestCase {
         let asTV = await index.lookup(tmdbId: 500, type: .tv)
         XCTAssertNil(asTV)
     }
+
+    func testUnchangedStampsSkipRebuildButChangedOnesDoNot() async {
+        var item = PlexMetadata(ratingKey: "1", type: "movie", title: "Foo")
+        item.Guid = [PlexGuid(id: "tmdb://42")]
+        let stamps = ["1": "1038/14513/1793061963"]
+
+        let index = LibraryGUIDIndex()
+        let emptyIsCurrent = await index.isCurrent(for: stamps)
+        XCTAssertFalse(emptyIsCurrent, "an empty index always rebuilds")
+
+        await index.replace(with: guidIndexEntries([item]), completeness: .partial, stamps: stamps)
+        let same = await index.isCurrent(for: stamps)
+        XCTAssertTrue(same)
+        let added = await index.isCurrent(for: ["1": "1039/14513/1793061963"])
+        XCTAssertFalse(added, "a new item moves the count")
+        let newSection = await index.isCurrent(for: stamps.merging(["2": "10/5/1"]) { a, _ in a })
+        XCTAssertFalse(newSection, "a newly visible section has no stamp yet")
+    }
+
+    func testSectionStampNeedsATotal() {
+        XCTAssertNil(LibraryGUIDIndex.sectionStamp(totalSize: nil, newest: nil))
+        let newest = PlexMetadata(ratingKey: "7", type: "movie", title: "X", updatedAt: 99)
+        XCTAssertEqual(LibraryGUIDIndex.sectionStamp(totalSize: 3, newest: newest), "3/7/99")
+    }
 }

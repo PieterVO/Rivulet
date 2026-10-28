@@ -435,8 +435,26 @@ struct TVSidebarView: View {
                     (PlexAuthManager.shared.selectedServerURL, PlexAuthManager.shared.selectedServerToken)
                 }
                 guard let serverURL, let token else { return }
+                guard await LibraryGUIDIndex.shared.claimRebuild() else { return }
+                defer { Task { await LibraryGUIDIndex.shared.finishRebuild() } }
 
                 let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
+
+                // One 1-item probe per section (about 3 KB); an unchanged library skips the
+                // full refetch, about 130 MB at 56k items.
+                var stamps: [String: String] = [:]
+                for library in visible {
+                    if let probe = try? await PlexNetworkManager.shared.getLibraryItemsWithTotal(
+                        serverURL: serverURL, authToken: token, sectionId: library.key,
+                        start: 0, size: 1, sort: "updatedAt:desc"
+                    ), let stamp = LibraryGUIDIndex.sectionStamp(totalSize: probe.totalSize, newest: probe.items.first) {
+                        stamps[library.key] = stamp
+                    }
+                }
+                if stamps.count == visible.count, await LibraryGUIDIndex.shared.isCurrent(for: stamps) {
+                    libraryIndexLog.info("[GUIDIndex] unchanged since last build, skipping rebuild")
+                    return
+                }
 
                 var allItems: [LibraryGUIDIndex.Entry] = []
                 var fetchedCount = 0
@@ -449,6 +467,10 @@ struct TVSidebarView: View {
                     var start = 0
                     var sectionComplete = false
                     while true {
+                        // Not alongside playback: a 4K software decode needs the headroom (#409).
+                        while await MainActor.run(body: { PlexDataStore.shared.isPlaybackActive }) {
+                            try? await Task.sleep(for: .seconds(10))
+                        }
                         do {
                             let result = try await PlexNetworkManager.shared.getLibraryItemsWithTotal(
                                 serverURL: serverURL,
@@ -509,7 +531,10 @@ struct TVSidebarView: View {
                 if fetchedCount == 0 && completeness == .partial { return }
                 // The token changed hands while this ran: not that profile's library.
                 guard await MainActor.run(body: { PlexAuthManager.shared.selectedServerToken }) == token else { return }
-                await LibraryGUIDIndex.shared.replace(with: allItems, completeness: completeness)
+                await LibraryGUIDIndex.shared.replace(
+                    with: allItems, completeness: completeness,
+                    stamps: completeness == .complete && stamps.count == visible.count ? stamps : [:]
+                )
             }
         }
     }

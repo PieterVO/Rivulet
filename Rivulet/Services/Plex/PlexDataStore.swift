@@ -249,7 +249,7 @@ class PlexDataStore: ObservableObject {
     private let continueWatchingPollingInterval: TimeInterval = 30 // 30 seconds
 
     /// Track if playback is active (pause polling during playback)
-    private var isPlaybackActive = false
+    private(set) var isPlaybackActive = false
 
     /// Track if app is in foreground
     private var isInForeground = true

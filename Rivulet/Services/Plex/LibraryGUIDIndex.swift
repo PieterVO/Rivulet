@@ -57,6 +57,11 @@ actor LibraryGUIDIndex {
     private var byTypedTmdbId: [TypedKey: Entry] = [:]
     private var byGuid: [String: Entry] = [:]
 
+    /// Per section, what the server looked like when this snapshot was built (`sectionStamp`).
+    private var stamps: [String: String] = [:]
+    private var snapshotSavedAt: Date?
+    private var isRebuilding = false
+
     /// Live network data always supersedes a disk-hydrated snapshot. Once a real
     /// `replace(with:completeness:)` has run this launch, a late `hydrateFromDisk()`
     /// is a no-op so stale disk contents can't clobber fresh server data. This is
@@ -86,8 +91,10 @@ actor LibraryGUIDIndex {
     ///
     /// Persists to disk only when `completeness` is `.complete`. See the
     /// `Completeness` doc comment for why a partial build must not be written.
-    func replace(with items: [Entry], completeness: Completeness) {
+    func replace(with items: [Entry], completeness: Completeness, stamps: [String: String] = [:]) {
         rebuild(from: items, source: "replace")
+        self.stamps = stamps
+        snapshotSavedAt = Date()
 
         // Set regardless of completeness. `hasFreshData` guards against a late
         // `hydrateFromDisk()` overwriting live server data with the older disk
@@ -102,8 +109,34 @@ actor LibraryGUIDIndex {
         // guidIndexLog carries pre-existing actor-isolation warnings we are not
         // adding to.
         if case .complete = completeness {
-            persist(items)
+            persist(items, stamps: stamps)
         }
+    }
+
+    /// One rebuild at a time: a second caller gets false and leaves it to the first.
+    func claimRebuild() -> Bool {
+        guard !isRebuilding else { return false }
+        isRebuilding = true
+        return true
+    }
+
+    func finishRebuild() {
+        isRebuilding = false
+    }
+
+    /// Whether the loaded snapshot already reflects these sections, so a rebuild would refetch
+    /// the same library. Rebuilt weekly regardless, for changes the stamp can't see.
+    func isCurrent(for stamps: [String: String]) -> Bool {
+        guard !byGuid.isEmpty, !stamps.isEmpty, stamps == self.stamps,
+              let savedAt = snapshotSavedAt else { return false }
+        return Date().timeIntervalSince(savedAt) < 7 * 24 * 3600
+    }
+
+    /// A section's item count plus its most recently updated item. Additions and removals move
+    /// the count; edits and re-matches move `updatedAt` (measured, PMS 1.43.4). Watching doesn't.
+    static func sectionStamp(totalSize: Int?, newest: PlexMetadata?) -> String? {
+        guard let totalSize else { return nil }
+        return "\(totalSize)/\(newest?.ratingKey ?? "-")/\(newest?.updatedAt ?? 0)"
     }
 
     /// Populate the index from the last persisted snapshot. Cheap (local decode),
@@ -115,12 +148,12 @@ actor LibraryGUIDIndex {
             guidIndexLog.info("[GUIDIndex] hydrateFromDisk skipped: fresh network data already present")
             return 0
         }
-        guard let items = Self.loadFromDisk() else {
+        guard let cache = Self.loadFromDisk() else {
             guidIndexLog.info("[GUIDIndex] hydrateFromDisk miss: no valid cache on disk")
             return 0
         }
-        rebuild(from: items, source: "hydrateFromDisk")
-        return items.count
+        adopt(cache, source: "hydrateFromDisk")
+        return cache.items.count
     }
 
     /// Shared ingest + notify used by both `replace` and `hydrateFromDisk`.
@@ -211,6 +244,7 @@ actor LibraryGUIDIndex {
         let version: Int
         let savedAt: Date
         let items: [Entry]
+        let stamps: [String: String]
     }
 
     private static var cacheURL: URL? {
@@ -235,18 +269,30 @@ actor LibraryGUIDIndex {
     /// and take this profile's last snapshot.
     func profileChanged() {
         hasFreshData = false
-        rebuild(from: Self.loadFromDisk() ?? [], source: "profileChanged")
+        if let cache = Self.loadFromDisk() {
+            adopt(cache, source: "profileChanged")
+        } else {
+            rebuild(from: [], source: "profileChanged")
+            stamps = [:]
+            snapshotSavedAt = nil
+        }
+    }
+
+    private func adopt(_ cache: DiskCache, source: String) {
+        rebuild(from: cache.items, source: source)
+        stamps = cache.stamps
+        snapshotSavedAt = cache.savedAt
     }
 
     /// Persist the ingested snapshot for the next launch. Fire-and-forget on a
     /// background task so the encode + write never serializes behind other
     /// actor work or the caller's critical path.
-    private func persist(_ items: [Entry]) {
+    private func persist(_ items: [Entry], stamps: [String: String]) {
         guard let url = Self.cacheURL else { return }
         let legacy = Self.legacyCacheURL
         Task.detached(priority: .utility) {
             if let legacy { try? FileManager.default.removeItem(at: legacy) }
-            let cache = DiskCache(version: Self.cacheVersion, savedAt: Date(), items: items)
+            let cache = DiskCache(version: Self.cacheVersion, savedAt: Date(), items: items, stamps: stamps)
             do {
                 let data = try JSONEncoder().encode(cache)
                 try data.write(to: url, options: .atomic)
@@ -259,7 +305,7 @@ actor LibraryGUIDIndex {
 
     /// Load and validate the persisted snapshot. Returns nil on miss, version
     /// mismatch, or decode failure (caller falls back to the network build).
-    private static func loadFromDisk() -> [Entry]? {
+    private static func loadFromDisk() -> DiskCache? {
         guard let url = cacheURL,
               let data = try? Data(contentsOf: url) else {
             return nil
@@ -272,6 +318,6 @@ actor LibraryGUIDIndex {
             guidIndexLog.info("[GUIDIndex] disk cache version \(cache.version, privacy: .public) != \(cacheVersion, privacy: .public); ignoring")
             return nil
         }
-        return cache.items
+        return cache
     }
 }
