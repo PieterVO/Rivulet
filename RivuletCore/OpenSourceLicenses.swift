@@ -35,13 +35,13 @@ enum OpenSourceLicenses {
     /// Where the corresponding FFmpeg source and the scripts/configure flags used to build the
     /// bundled frameworks can be obtained — required to satisfy the LGPL. FFmpegBuild hosts the
     /// build script (build.sh) with the exact flags and the pinned upstream source revisions
-    /// (FFmpeg n8.1, dav1d 1.5.4).
-    static let ffmpegSourceURL = "https://github.com/superuser404notfound/FFmpegBuild"
+    /// (FFmpeg n8.1.3, dav1d 1.5.4).
+    static let ffmpegSourceURL = "https://github.com/superuser404notfound/FFmpegBuild/tree/3.10.1"
 
     /// Where the corresponding AetherEngine source for the version linked by this app can be
     /// obtained, as required to satisfy the LGPL v3. Rivulet links the upstream release
     /// unmodified; this URL and the tag cited in the entry below must track the SPM pin.
-    static let aetherSourceURL = "https://github.com/superuser404notfound/AetherEngine"
+    static let aetherSourceURL = "https://github.com/superuser404notfound/AetherEngine/tree/7.50.0"
 
     /// Shown at the top of the Licenses & Legal screen.
     static let appLicense = """
@@ -60,7 +60,7 @@ enum OpenSourceLicenses {
         [
             Entry(
                 name: "AetherEngine",
-                summary: "Video playback engine — the default player for on-demand titles. Dynamically linked and used under the GNU Lesser General Public License, version 3, with an Apple Store / DRM Exception. Copyright © 2026 Vincent Herbst. The complete corresponding source for the exact version linked by this app (tag 7.48.0, commit 263dc11) is available at \(aetherSourceURL).",
+                summary: "Video playback engine — the default player for on-demand titles. Dynamically linked and used under the GNU Lesser General Public License, version 3, with an Apple Store / DRM Exception. Copyright © 2026 Vincent Herbst. The complete corresponding source for the exact version linked by this app (tag 7.50.0, commit dceea2a) is available at \(aetherSourceURL).",
                 licenseText: aetherLGPLv3
             ),
             Entry(
@@ -85,7 +85,7 @@ enum OpenSourceLicenses {
             ),
             Entry(
                 name: "libzvbi",
-                summary: "DVB teletext and VBI decoding for Live TV, bundled with the FFmpeg build (libzvbi 0.2.45). The library is dynamically linked and used under the GNU Lesser General Public License, version 2.1 or later, whose full text is reproduced in the FFmpeg entry above. Copyright © the libzvbi authors. Two files in it, src/ure.c and src/ure.h, carry their own MIT license, reproduced here. Source: https://github.com/zapping-vbi/zvbi (tag v0.2.45).",
+                summary: "DVB teletext and VBI decoding for Live TV, bundled with the FFmpeg build (libzvbi 0.2.46). The library is dynamically linked and used under the GNU Lesser General Public License, version 2.1 or later, whose full text is reproduced in the FFmpeg entry above. Copyright © the libzvbi authors. Two files in it, src/ure.c and src/ure.h, carry their own MIT license, reproduced here. Source: https://github.com/zapping-vbi/zvbi (tag v0.2.46).",
                 licenseText: libzvbiUreMIT
             ),
             Entry(
@@ -120,7 +120,7 @@ enum OpenSourceLicenses {
             ),
             Entry(
                 name: "LibTrueHD",
-                summary: "Used to keep the height channels of Dolby TrueHD Atmos soundtracks. LibTrueHD 3.0.0, used under the MIT License. It includes the truehd and oamd crates from the truehdd project (https://github.com/truehdd/truehdd), Copyright © Rainbaby and the truehdd contributors, used under the Apache License, Version 2.0. Source: https://github.com/superuser404notfound/LibTrueHD (tag 3.0.0).",
+                summary: "Used to keep the height channels of Dolby TrueHD Atmos soundtracks. LibTrueHD 3.1.0, used under the MIT License. It includes the truehd and oamd crates from the truehdd project (https://github.com/truehdd/truehdd), Copyright © Rainbaby and the truehdd contributors, used under the Apache License, Version 2.0. Source: https://github.com/superuser404notfound/LibTrueHD (tag 3.1.0).",
                 licenseText: libTrueHDLicenses
             ),
             Entry(

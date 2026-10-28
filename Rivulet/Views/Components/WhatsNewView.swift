@@ -150,6 +150,7 @@ struct WhatsNewView: View {
 
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.1 (115)", [
+            "Updated AetherEngine to 7.50.0.",
             "A center click now pauses the video once the controls are showing.",
             "Fixed skipping while paused.",
             "Player controls are easier to read over bright scenes.",
