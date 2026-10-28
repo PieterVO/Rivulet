@@ -48,6 +48,8 @@ actor IPTVProvider: LiveTVProvider {
     /// Each channel's tvg-id, tvg-name and name, for guide matching.
     private var guideCandidates: [String: [String]] = [:]
     private var cachedEPG: [String: [UnifiedProgram]] = [:]
+    /// The channels the cached guide was parsed for; it only holds theirs.
+    private var cachedEPGChannelIds: Set<String> = []
 
     /// Channel logos parsed from XMLTV `<channel><icon>`, keyed by unified
     /// channel id. Surfaced via `channelLogosFromEPG()` so the data store can
@@ -58,7 +60,8 @@ actor IPTVProvider: LiveTVProvider {
 
     // Cache duration
     private let channelCacheDuration: TimeInterval = 300  // 5 minutes
-    private let epgCacheDuration: TimeInterval = 3600     // 1 hour
+    // Feeds publish about daily; each refetch downloads and parses the whole file.
+    private let epgCacheDuration: TimeInterval = 6 * 3600
 
     // Dispatcharr DVR lookups (IPTVProvider+DVR.swift). The API knows
     // channels by integer id and guide entries by the EPG source's tvg_id,
@@ -231,18 +234,23 @@ actor IPTVProvider: LiveTVProvider {
         // Return cached if still valid
         if let lastFetch = lastEPGFetch,
            Date().timeIntervalSince(lastFetch) < epgCacheDuration,
-           !cachedEPG.isEmpty {
+           !cachedEPG.isEmpty,
+           channels.allSatisfy({ cachedEPGChannelIds.contains($0.id) }) {
             return filterEPG(cachedEPG, channels: channels, startDate: startDate, endDate: endDate)
         }
 
+        let candidates = Dictionary(channels.map { channel in
+            (channel.id, guideCandidates[channel.id] ?? [channel.tvgId, channel.name].compactMap { $0 })
+        }, uniquingKeysWith: { first, _ in first })
+        let filter = XMLTVParser.GuideFilter(candidates: candidates, notBefore: min(startDate, Date()).addingTimeInterval(-3600))
         let xmltvParser = XMLTVParser()
         let parseResult: XMLTVParser.ParseResult
 
         do {
             if let dispatcharr = dispatcharrService {
-                parseResult = try await dispatcharr.fetchParsedEPG()
+                parseResult = try await dispatcharr.fetchParsedEPG(filter: filter)
             } else {
-                parseResult = try await xmltvParser.parse(from: epgURL)
+                parseResult = try await xmltvParser.parse(from: epgURL, filter: filter)
             }
         } catch {
             // Only capture unexpected EPG errors. The EPG URL is user-supplied
@@ -261,9 +269,6 @@ actor IPTVProvider: LiveTVProvider {
             throw error
         }
 
-        let candidates = Dictionary(channels.map { channel in
-            (channel.id, guideCandidates[channel.id] ?? [channel.tvgId, channel.name].compactMap { $0 })
-        }, uniquingKeysWith: { first, _ in first })
         var unifiedEPG: [String: [UnifiedProgram]] = [:]
         // XMLTV `<channel><icon>` logos, for channels whose playlist had no `tvg-logo`.
         var channelLogos: [String: URL] = [:]
@@ -278,6 +283,7 @@ actor IPTVProvider: LiveTVProvider {
 
         // Update cache
         cachedEPG = unifiedEPG
+        cachedEPGChannelIds = Set(channels.map(\.id))
         cachedChannelLogos = channelLogos
         lastEPGFetch = Date()
 
