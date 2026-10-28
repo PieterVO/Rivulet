@@ -149,7 +149,7 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        ("1.1.1 (116)", [
+        ("1.1.1 (117)", [
             "The Home hero can show Trending, Continue Watching, Recently Added or Watchlist.",
             "New Skip Preview setting opens titles straight to their full details.",
             "Posters now show the edition, such as Director's Cut, as a badge.",
