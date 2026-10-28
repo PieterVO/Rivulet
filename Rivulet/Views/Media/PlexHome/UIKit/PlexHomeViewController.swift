@@ -129,7 +129,7 @@ struct HomeSectionData {
     let totalSize: Int?
     /// MediaItems for hub, recommendations, CW and grid sections; shelves render from these
     /// instead of building PlexMetadata at launch.
-    let items: [MediaItem]
+    var items: [MediaItem]
     /// Watchlist entries for the watchlist section.
     let watchlistItems: [PlexWatchlistItem]
     /// Hero carousel items (PlexMetadata).
@@ -1559,7 +1559,15 @@ final class PlexHomeViewController: UIViewController {
                 for (offset, item) in result.items.enumerated() where slots.contains(start + offset) {
                     self.gridItems[start + offset] = item
                 }
-                self.applySnapshot(animated: false)
+                // Same slot count: the identities are unchanged, so patch the page into the
+                // rendered sections instead of rebuilding a snapshot of every slot in the library.
+                if !countChanged, let grid = self.sectionsSnapshot.firstIndex(where: {
+                    if case .grid = $0.kind { $0.items.count == self.gridItems.count } else { false }
+                }) {
+                    for slot in slots { self.sectionsSnapshot[grid].items[slot] = self.gridItems[slot] ?? .gridPlaceholder }
+                } else {
+                    self.applySnapshot(animated: false)
+                }
                 if countChanged || page == 0 {
                     self.refreshSortHeaderCount()
                     self.updateHomeState()
