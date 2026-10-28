@@ -392,9 +392,33 @@ enum SettingsDescriptorStore {
             icon: "key",
             description: "The password your provider gave you. Rivulet keeps it in the Keychain."
         ),
-        "addOwnServer": SettingDescriptor(
+        "addDispatcharr": SettingDescriptor(
+            icon: "antenna.radiowaves.left.and.right",
+            description: "Your Dispatcharr server. Rivulet loads its channels and guide, and records through it if you sign in."
+        ),
+        "addTvheadend": SettingDescriptor(
+            icon: "tv",
+            description: "Your Tvheadend server. Rivulet loads its channels and guide, and records through it if you sign in."
+        ),
+        "addThreadfin": SettingDescriptor(
             icon: "server.rack",
-            description: "A server you run that serves a playlist and guide, such as Dispatcharr, Threadfin, xTeVe or ErsatzTV. Give Rivulet the address."
+            description: "Your Threadfin server. Rivulet loads its playlist and guide from the address."
+        ),
+        "tvhServerField": SettingDescriptor(
+            icon: "globe",
+            description: "Your Tvheadend server's address on your network, with its port. Tvheadend uses 9981 unless you changed it."
+        ),
+        "tvhUsernameField": SettingDescriptor(
+            icon: "person",
+            description: "A Tvheadend user. Needed if your server asks for a login, and to record. Leave it empty to watch without one."
+        ),
+        "tvhPasswordField": SettingDescriptor(
+            icon: "key",
+            description: "That user's password. Rivulet keeps it in the Keychain."
+        ),
+        "threadfinServerField": SettingDescriptor(
+            icon: "globe",
+            description: "Your Threadfin server's address on your network, with its port. Threadfin uses 34400 unless you changed it."
         ),
         "addPlaylistURL": SettingDescriptor(
             icon: "list.bullet.rectangle",
@@ -402,7 +426,7 @@ enum SettingsDescriptorStore {
         ),
         "serverURL": SettingDescriptor(
             icon: "globe",
-            description: "The address of your server on your network, including the port. Pick your app from the suggestions to fill in the usual one."
+            description: "Your Dispatcharr server's address on your network, with its port. Dispatcharr uses 9191 unless you changed it."
         ),
         "displayNameField": SettingDescriptor(
             icon: "textformat",
@@ -556,7 +580,9 @@ enum SettingsDescriptorStore {
         case .liveTVFavorites: return ("star.fill", .systemYellow)
         case .addLiveTVSource: return ("plus.circle.fill", .systemBlue)
         case .addXtream: return ("person.badge.key.fill", .systemIndigo)
-        case .addOwnServer: return ("server.rack", .systemBlue)
+        case .addDispatcharr: return ("antenna.radiowaves.left.and.right", .systemBlue)
+        case .addTvheadend: return ("tv", .systemBlue)
+        case .addThreadfin: return ("server.rack", .systemBlue)
         case .addPlaylistURL: return ("list.bullet.rectangle", .systemGreen)
         }
     }

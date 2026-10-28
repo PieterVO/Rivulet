@@ -50,7 +50,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case plex, plexServerDetail, jellyfin, iptv, libraries, cache
     case homeRows
     case liveTVSourceDetail, liveTVFavorites
-    case addLiveTVSource, addXtream, addOwnServer, addPlaylistURL
+    case addLiveTVSource, addXtream, addDispatcharr, addTvheadend, addThreadfin, addPlaylistURL
     case appIconPicker, detailRatingPicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
     case heightSpeakersPicker, subtitleModePicker, autoplayLimitPicker
     case homeQualityPicker, awayQualityPicker
@@ -74,7 +74,9 @@ enum SettingsPage: Hashable, CaseIterable {
         case .liveTVFavorites: return "Favorites"
         case .addLiveTVSource: return "Add a Source"
         case .addXtream: return "Xtream Codes"
-        case .addOwnServer: return "My Own Server"
+        case .addDispatcharr: return "Dispatcharr"
+        case .addTvheadend: return "Tvheadend"
+        case .addThreadfin: return "Threadfin"
         case .addPlaylistURL: return "Playlist URL"
         case .libraries: return "Sidebar"
         case .homeRows: return "Home Rows"

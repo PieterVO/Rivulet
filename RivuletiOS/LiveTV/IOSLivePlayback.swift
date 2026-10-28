@@ -84,7 +84,7 @@ final class IOSLivePlayback: ObservableObject, IOSPlaybackSession {
             guard !isCancellationError(error) else { return }
             notice = error is PlexLiveTuneError
                 ? "Couldn't tune this channel. All tuners may be busy."
-                : "Couldn't tune this channel."
+                : (error as? TvheadendError)?.errorDescription ?? "Couldn't tune this channel."
             return
         }
         // A tune that finished after Close or a switch still holds the tuner.

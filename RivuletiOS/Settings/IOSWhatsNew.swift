@@ -10,6 +10,8 @@ enum IOSChangelog {
     static let entries: [(version: String, lines: [String])] = [
         // confirm build number at release
         ("1.0.7 (82)", [
+            "New Tvheadend support in Live TV, with channels, guide and recording",
+            "Add Source in Live TV lists Dispatcharr, Tvheadend and Threadfin by name",
             "Updated AetherEngine to 7.49.0",
         ]),
         ("1.0.7 (81)", [

@@ -203,7 +203,9 @@ enum SettingsContent {
         case .liveTVFavorites: return liveTVFavorites
         case .addLiveTVSource:  return addLiveTVSource
         case .addXtream:        return addXtream
-        case .addOwnServer:     return addOwnServer
+        case .addDispatcharr:   return addDispatcharr
+        case .addTvheadend:     return addTvheadend
+        case .addThreadfin:     return addThreadfin
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
         case .appIconPicker:          return appIconPicker

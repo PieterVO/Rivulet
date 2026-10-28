@@ -19,6 +19,7 @@ enum LiveTVSourceType: String, Codable, CaseIterable, Sendable {
     case genericM3U = "m3u"
     case xtream = "xtream"
     case jellyfin = "jellyfin"
+    case tvheadend = "tvheadend"
 
     /// Follows a signed-in media server: added and removed with it, never saved.
     var followsServer: Bool { self == .plex || self == .jellyfin }
@@ -30,6 +31,7 @@ enum LiveTVSourceType: String, Codable, CaseIterable, Sendable {
         case .genericM3U: return "M3U Playlist"
         case .xtream: return "Xtream Codes"
         case .jellyfin: return "Jellyfin Live TV"
+        case .tvheadend: return "Tvheadend"
         }
     }
 
@@ -40,6 +42,7 @@ enum LiveTVSourceType: String, Codable, CaseIterable, Sendable {
         case .genericM3U: return "list.bullet"
         case .xtream: return "person.badge.key"
         case .jellyfin: return "server.rack"
+        case .tvheadend: return "tv"
         }
     }
 }

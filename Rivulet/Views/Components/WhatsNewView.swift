@@ -151,6 +151,8 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         // confirm build number at release
         ("1.1.1 (116)", [
+            "New Tvheadend support in Live TV, with channels, guide and recording.",
+            "Add Source in Live TV lists Dispatcharr, Tvheadend and Threadfin by name.",
             "Fixed playback crashes on very large Plex libraries.",
             "Updated AetherEngine to 7.49.0.",
         ]),
