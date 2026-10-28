@@ -341,7 +341,7 @@ enum SettingsContent {
     private static let heightsFELNoticeShownKey = "heightsFELNoticeShown"
 
     private static var dolbyVisionFEL: Bool {
-        SettingsStore.bool(AetherPlayer.dolbyVisionFELKey, default: true)
+        SettingsStore.bool(AetherPlayer.dolbyVisionFELKey, default: false)
     }
 
     /// Read at play time by the player (`StreamingQuality.setting`).
@@ -567,7 +567,7 @@ enum SettingsContent {
                             kind: .navigationValue(.autoplayLimitPicker, value: { AutoplayLimit.current.description })),
             toggle("showPostVideoUpNext", "Up Next Panel", key: "showPostVideoUpNext", default: true),
             .header("Home Theater"),
-            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: true),
+            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: false),
             SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
                             kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
             .header("Filtering"),

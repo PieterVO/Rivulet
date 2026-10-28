@@ -978,8 +978,19 @@ final class AetherPlayer: PlayerProtocol {
     /// Speaker layout ("7.1.4"…) object audio renders into; absent = off.
     static let heightSpeakersKey = "heightSpeakers"
 
-    /// Profile 7 FEL composition; absent = on.
+    /// Profile 7 FEL composition; absent = off.
     static let dolbyVisionFELKey = "dolbyVisionFEL"
+    private static let felDefaultSettledKey = "dolbyVisionFELDefaultSettled"
+
+    /// FEL used to default on. Once, pin it on for an install that already had a server,
+    /// so only new installs get the off default.
+    static func settleFELDefault(existingInstall: Bool, defaults: UserDefaults = .standard) {
+        guard !defaults.bool(forKey: felDefaultSettledKey) else { return }
+        defaults.set(true, forKey: felDefaultSettledKey)
+        if existingInstall, defaults.object(forKey: dolbyVisionFELKey) == nil {
+            defaults.set(true, forKey: dolbyVisionFELKey)
+        }
+    }
 
     /// DVB teletext caption page, applied to BOTH live and VOD loads. A
     /// `liveTeletextPage` UserDefaults key overrides everything (0 = force
@@ -1133,7 +1144,7 @@ final class AetherPlayer: PlayerProtocol {
         // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
         // FEL wins over heights: on a FEL title the soundtrack plays as 7.1 without them (#362).
         let panelDV = AetherEngine.displayCapabilities.supportsDolbyVision
-        let felOn = UserDefaults.standard.object(forKey: Self.dolbyVisionFELKey) as? Bool ?? true
+        let felOn = UserDefaults.standard.bool(forKey: Self.dolbyVisionFELKey)
         options.preferDualLayerDolbyVision = panelDV && felOn
         // #362: catch the engine's one Profile 7 route line for Sentry. Live TV's capture owns the
         // handler while it runs, and VOD never loads then.
