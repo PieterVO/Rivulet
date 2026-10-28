@@ -35,6 +35,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("hs_") { return descriptors["heightSpeakers"] }
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
         if id.hasPrefix("ai_") { return descriptors["appIcon"] }
+        if id.hasPrefix("hh_") { return descriptors["homeHero"] }
         if id.hasPrefix("dr_") { return descriptors["detailRating"] }
         if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
@@ -111,7 +112,7 @@ enum SettingsDescriptorStore {
         ),
         "homeHero": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
-            description: "Shows a large featured content banner at the top of the Home screen with artwork and quick actions."
+            description: "The large banner at the top of the Home screen. Trending features popular titles from your library. Continue Watching features what you are in the middle of."
         ),
         "topShelfStyle": SettingDescriptor(
             icon: "tv",
@@ -562,6 +563,7 @@ enum SettingsDescriptorStore {
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)
         case .cache: return ("internaldrive", .systemGray)
         case .appIconPicker: return ("app.badge", .systemPurple)
+        case .homeHeroPicker: return ("sparkles.rectangle.stack", .systemPurple)
         case .detailRatingPicker: return ("star.leadinghalf.filled", .systemYellow)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)

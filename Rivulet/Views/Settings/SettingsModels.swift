@@ -51,7 +51,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case homeRows
     case liveTVSourceDetail, liveTVFavorites
     case addLiveTVSource, addXtream, addDispatcharr, addTvheadend, addThreadfin, addPlaylistURL
-    case appIconPicker, detailRatingPicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
+    case appIconPicker, homeHeroPicker, detailRatingPicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
     case heightSpeakersPicker, subtitleModePicker, autoplayLimitPicker
     case homeQualityPicker, awayQualityPicker
     case audioLanguagePicker, subtitleLanguagePicker
@@ -82,6 +82,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .homeRows: return "Home Rows"
         case .cache: return "Cache & Storage"
         case .appIconPicker: return "App Icon"
+        case .homeHeroPicker: return "Hero"
         case .detailRatingPicker: return "Rating"
         case .autoplayCountdownPicker: return "Autoplay Countdown"
         case .skipIntervalPicker: return "Skip Forward Length"

@@ -2176,12 +2176,12 @@ final class PlexHomeViewController: UIViewController {
         var isMediaItemHero = providerLibrary != nil
         if case .discover = mode { isMediaItemHero = true }
         let isHomeMediaHero = { if case .home = mode { homeHeroSource != .plex } else { false } }()
-        if isMediaItemHero || isHomeMediaHero {
+        if isMediaItemHero || isHomeMediaHero || heroShowsContinueWatching {
             // Home's list is computed rather than read off the snapshot: the
             // Plex hero paths set the backdrop before they apply, and a stale
             // empty read would release the splash before the image is up.
-            let items = isHomeMediaHero
-                ? homeMediaHeroItems()
+            let items = heroShowsContinueWatching ? continueWatchingHeroItems
+                : isHomeMediaHero ? homeMediaHeroItems()
                 : sectionsSnapshot.first(where: { $0.kind == .hero })?.heroMediaItems ?? []
             guard showHomeHero, !items.isEmpty else {
                 setHeroBackdrop(url: nil)
@@ -2222,7 +2222,8 @@ final class PlexHomeViewController: UIViewController {
             setHeroBackdrop(url: nil)
             return
         }
-        setHeroBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster, paging: paging)
+        let request = item.heroBackdropRequest()
+        setHeroBackdrop(url: request.backdropURL ?? request.thumbnailURL, paging: paging)
     }
 
     /// Discover hero Play, shown only for library-matched items: plays the match directly, falling back
@@ -3355,9 +3356,21 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Home's MediaItem hero slides as last drawn (Jellyfin's, or both
-    /// servers' mixed). Always empty on a Plex-only Home.
+    /// Home's MediaItem hero slides as last drawn (Jellyfin's, both
+    /// servers' mixed, or Continue Watching's).
     private var homeMediaHeroRefs: [MediaItemRef] = []
+    /// Home's Continue Watching row as last built.
+    private var continueWatchingHeroItems: [MediaItem] = []
+    private var lastWantsContinueWatchingHero = PlexHomeViewController.wantsContinueWatchingHero
+
+    static var wantsContinueWatchingHero: Bool { SettingsStore.bool("homeHeroContinueWatching", default: false) }
+
+    /// Home's hero shows the Continue Watching row instead of trending (#414); an empty row keeps trending.
+    private var heroShowsContinueWatching: Bool {
+        guard case .home = mode, showHomeHero, Self.wantsContinueWatchingHero else { return false }
+        return !continueWatchingHeroItems.isEmpty
+    }
+
     /// `labelsServers` as the hero last drew its badges. Always false on a
     /// Plex-only Home.
     private var homeMediaHeroLabels = false
@@ -3385,6 +3398,8 @@ final class PlexHomeViewController: UIViewController {
         heroCurrentIndex = 0
         reconfigureHeroCell()
         updateBackdropForCurrentHeroItem()
+        // The Continue Watching hero emptied: trending takes the slot back.
+        if refs.isEmpty, Self.wantsContinueWatchingHero { selectHeroItemsIfNeeded() }
     }
 
     private func jellyfinHomeRowsChanged() {
@@ -3471,6 +3486,10 @@ final class PlexHomeViewController: UIViewController {
                 self.reprojectIfHomeLibrariesChanged()
                 self.selectHeroItemsIfNeeded()
                 if case .home = self.mode {
+                    if Self.wantsContinueWatchingHero != self.lastWantsContinueWatchingHero {
+                        self.lastWantsContinueWatchingHero = Self.wantsContinueWatchingHero
+                        self.applySnapshot(animated: false)
+                    }
                     let userID = UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey)
                     if userID != self.recommendationsUserID {
                         self.recommendationsUserID = userID
@@ -4309,6 +4328,12 @@ final class PlexHomeViewController: UIViewController {
             sections.append(section)
         }
 
+        continueWatchingHeroItems = sections.first { $0.kind == .continueWatching }?.items ?? []
+        if heroShowsContinueWatching {
+            sections.removeAll { $0.kind == .hero }
+            sections.insert(.discoverHero(items: continueWatchingHeroItems), at: 0)
+        }
+
         // Watchlist
         // Uncapped: the row is the only place Home shows the watchlist, so a
         // cap here hid entries the user added and could not otherwise reach.
@@ -4673,7 +4698,8 @@ final class PlexHomeViewController: UIViewController {
         case .discover, .search, .watchlist, .collection, .playlists, .playlist:
             return  // no Plex-hub hero on these surfaces
         case .home:
-            guard authManager.hasCredentials else { return }  // Jellyfin-only: MediaItem hero
+            // Jellyfin-only, or showing Continue Watching: MediaItem hero
+            guard authManager.hasCredentials, !heroShowsContinueWatching else { return }
             cacheKey = "home"
             sourceHubs = dataStore.hubs
         case .library(let key, _):

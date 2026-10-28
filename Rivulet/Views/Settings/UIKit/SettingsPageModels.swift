@@ -209,6 +209,7 @@ enum SettingsContent {
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
         case .appIconPicker:          return appIconPicker
+        case .homeHeroPicker:         return homeHeroPicker
         case .detailRatingPicker:     return detailRatingPicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
@@ -233,6 +234,32 @@ enum SettingsContent {
             SettingsRowItem(id: "ai_\(icon.rawValue)", title: icon.title, kind: .option(
                 isSelected: { AppIcon.current == icon },
                 select: { icon.apply() }))
+        }
+    }
+
+    /// Off, or the hero on with its content: `showHomeHero` plus `homeHeroContinueWatching`.
+    private static var homeHeroPicker: [SettingsRowItem] {
+        [("off", "Off", false, false), ("trending", "Trending", true, false),
+         ("continueWatching", "Continue Watching", true, true)].map { id, title, on, cw in
+            SettingsRowItem(id: "hh_\(id)", title: title, kind: .option(
+                isSelected: { homeHeroChoice == id },
+                select: {
+                    SettingsStore.setBool("showHomeHero", on)
+                    if on { SettingsStore.setBool("homeHeroContinueWatching", cw) }
+                }))
+        }
+    }
+
+    private static var homeHeroChoice: String {
+        guard SettingsStore.bool("showHomeHero", default: true) else { return "off" }
+        return PlexHomeViewController.wantsContinueWatchingHero ? "continueWatching" : "trending"
+    }
+
+    private static var homeHeroTitle: String {
+        switch homeHeroChoice {
+        case "off": "Off"
+        case "continueWatching": "Continue Watching"
+        default: "Trending"
         }
     }
 
@@ -439,7 +466,8 @@ enum SettingsContent {
             // bare "Siri" row under SIRI.
             .header("Home"),
             SettingsRowItem(id: "homeRows", title: "Rows", kind: .navigation(.homeRows)),
-            toggle("homeHero", "Hero", key: "showHomeHero", default: true),
+            SettingsRowItem(id: "homeHero", title: "Hero",
+                            kind: .navigationValue(.homeHeroPicker, value: { homeHeroTitle })),
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [
