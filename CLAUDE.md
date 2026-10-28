@@ -41,10 +41,14 @@ The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg 
 
 ## Project Structure
 
-Four code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
+Five code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
 targets (not a module: `internal` spans each target); `Rivulet/` is the tvOS
-app, `RivuletiOS/` the iOS app, `TopShelfExtension/` the tvOS Top Shelf. See
-"Platform Boundary" below for what goes where.
+app, `RivuletiOS/` the iOS app, `TopShelfExtension/` the tvOS Top Shelf, and
+`AssetPackExtension/` the tvOS Background Assets downloader that fetches the
+speech model as an Apple-hosted asset pack (`SpeechModelStore`; Debug builds,
+which can't reach Apple hosting, fall back to Hugging Face into Caches; repack
+with `Scripts/speech-model-pack.json`). See "Platform Boundary" below for what
+goes where.
 
 ```
 RivuletCore/            # Shared tvOS + iOS. The ONE Plex client (PlexNetworkManager,

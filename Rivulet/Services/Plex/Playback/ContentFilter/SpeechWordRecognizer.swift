@@ -9,10 +9,12 @@
 //
 
 import AVFoundation
+import BackgroundAssets
 import Combine
 import FluidAudio
 import Foundation
 import Sentry
+import System
 
 /// Decoded playback audio: mono 48 kHz, stamped on the source axis.
 nonisolated struct PlaybackAudioChunk: @unchecked Sendable {
@@ -25,6 +27,8 @@ nonisolated struct PlaybackAudioChunk: @unchecked Sendable {
 // MARK: - Model
 
 /// The speech model on disk. Downloaded when content filtering is turned on or generated subtitles are first picked.
+/// Release builds get it as an Apple-hosted asset pack, which the system keeps; Debug builds (and any
+/// device the pack can't reach) fall back to Hugging Face into Caches, which tvOS may purge.
 @MainActor
 final class SpeechModelStore: ObservableObject {
     static let shared = SpeechModelStore()
@@ -39,15 +43,27 @@ final class SpeechModelStore: ObservableObject {
     @Published private(set) var state: State
 
     nonisolated static let version: AsrModelVersion = .tdtCtc110m
+    /// Asset-pack ID in App Store Connect (Scripts/speech-model-pack.json).
+    nonisolated static let assetPackID = "SpeechModel"
 
-    // ponytail: Hugging Face download into Caches, which tvOS may purge under
-    // storage pressure (the next playback downloads it again). An Apple-hosted
-    // asset pack (AssetPackManager) is the upgrade when this ships to everyone.
-    nonisolated private static var directory: URL {
+    nonisolated private static var folderName: String {
+        AsrModels.defaultCacheDirectory(for: version).lastPathComponent
+    }
+
+    nonisolated private static var cacheDirectory: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return caches.appendingPathComponent("SpeechModels", isDirectory: true)
-            .appendingPathComponent(AsrModels.defaultCacheDirectory(for: version).lastPathComponent, isDirectory: true)
+            .appendingPathComponent(folderName, isDirectory: true)
     }
+
+    /// The model folder inside the asset pack, when the pack is on the device.
+    nonisolated private static var packDirectory: URL? {
+        guard let file = try? AssetPackManager.shared.url(for: FilePath("\(folderName)/config.json")) else { return nil }
+        let folder = file.deletingLastPathComponent()
+        return AsrModels.modelsExist(at: folder, version: version) ? folder : nil
+    }
+
+    nonisolated private static var directory: URL { packDirectory ?? cacheDirectory }
 
     private var download: Task<Void, Never>?
 
@@ -64,35 +80,57 @@ final class SpeechModelStore: ObservableObject {
         }
     }
 
-    /// Download the model if it isn't on disk. Safe to call repeatedly.
+    /// Fetch the model if the asset pack isn't on disk. A Caches copy is used
+    /// meanwhile and deleted once the pack lands. Safe to call repeatedly.
     func prepare() {
-        if AsrModels.modelsExist(at: Self.directory, version: Self.version) {
+        if Self.packDirectory != nil {
             state = .ready
             return
         }
+        let hasCacheCopy = AsrModels.modelsExist(at: Self.cacheDirectory, version: Self.version)
         guard download == nil else { return }
-        state = .downloading(0)
+        state = hasCacheCopy ? .ready : .downloading(0)
         download = Task {
-            do {
-                try await AsrModels.download(to: Self.directory, version: Self.version) { progress in
-                    Task { @MainActor in
-                        if case .downloading = SpeechModelStore.shared.state {
-                            SpeechModelStore.shared.state = .downloading(progress.fractionCompleted)
-                        }
+            let report: @Sendable (Double) -> Void = { fraction in
+                Task { @MainActor in
+                    if case .downloading = SpeechModelStore.shared.state {
+                        SpeechModelStore.shared.state = .downloading(fraction)
                     }
                 }
+            }
+            if (try? await Self.downloadPack(progress: report)) != nil {
+                try? FileManager.default.removeItem(at: Self.cacheDirectory)
                 state = .ready
-            } catch {
-                state = .failed
-                SentryBridge.log(.warn, "Content filter: speech model download failed")
-                // Keeps trying while the filter or generated subtitles want it.
-                try? await Task.sleep(for: .seconds(30))
-                download = nil
-                if Self.isWanted { prepare() }
-                return
+            } else if !hasCacheCopy {
+                do {
+                    try await AsrModels.download(to: Self.cacheDirectory, version: Self.version) { progress in
+                        report(progress.fractionCompleted)
+                    }
+                    state = .ready
+                } catch {
+                    state = .failed
+                    SentryBridge.log(.warn, "Content filter: speech model download failed")
+                    // Keeps trying while the filter or generated subtitles want it.
+                    try? await Task.sleep(for: .seconds(30))
+                    download = nil
+                    if Self.isWanted { prepare() }
+                    return
+                }
             }
             download = nil
         }
+    }
+
+    nonisolated private static func downloadPack(progress: @escaping @Sendable (Double) -> Void) async throws {
+        let manager = AssetPackManager.shared
+        let pack = try await manager.assetPack(withID: assetPackID)
+        let updates = Task {
+            for await update in manager.statusUpdates(forAssetPackWithID: assetPackID) {
+                if case .downloading(_, let fraction) = update { progress(fraction.fractionCompleted) }
+            }
+        }
+        defer { updates.cancel() }
+        try await manager.ensureLocalAvailability(of: pack)
     }
 
     private static var isWanted: Bool {

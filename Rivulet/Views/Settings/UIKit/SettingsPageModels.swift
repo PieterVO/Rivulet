@@ -576,7 +576,11 @@ enum SettingsContent {
             SettingsRowItem(id: "cf_master", title: "Content Filter", kind: .toggle(
                 get: { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) },
                 set: { SettingsStore.setBool(ContentFilterManager.Keys.enabled, $0) },
-                didChange: { on, _ in if on { SpeechModelStore.shared.prepare() } }))
+                didChange: { on, _ in if on { SpeechModelStore.shared.prepare() } }),
+                isBusy: {
+                    guard case .downloading = SpeechModelStore.shared.state else { return false }
+                    return SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false)
+                })
         ]
 
         // Language categories (auto-detected from subtitles)
