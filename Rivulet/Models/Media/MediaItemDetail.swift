@@ -29,6 +29,20 @@ struct MediaItemDetail: Sendable {
     /// Review scores in display order (`MediaRating.ordered`). The ratings
     /// worker's Metacritic / Letterboxd scores are merged in after load.
     var ratings: [MediaRating] = []
+    /// Native title-page ratings are authoritative (including administrator
+    /// source selection); other providers retain the Appearance-selected mark.
+    enum RatingPresentation: Sendable { case preferred, allAvailable }
+    var ratingPresentation: RatingPresentation = .preferred
+    /// Detailed source facts, not claims about the decoder or HDMI output.
+    var showsTechnicalMetadata = false
+    /// The selected server profile's missing metadata language, not an active job.
+    var pendingDescriptionTranslationLanguage: String? = nil
+
+    var chromeRatings: [MediaRating] {
+        if ratingPresentation == .allAvailable { return ratings }
+        guard item.kind != .episode, let rating = MediaRating.detailRating(in: ratings) else { return [] }
+        return [rating]
+    }
 
     // Wave 1 additions for the detail view
     let nextEpisode: MediaItem?      // shows only — Plex `OnDeck`, Jellyfin `/Shows/NextUp`
@@ -55,6 +69,8 @@ struct MediaItemDetail: Sendable {
         let playbackKey: String?      // provider-specific (Plex extra key / ratingKey)
         let providerID: String        // the server the extra plays from
         var subtype: ExtraSubtype = .unknown
+        /// A remote provider's watch page, opened in its app, never as a media stream.
+        var externalURL: URL? = nil
 
         var isTrailer: Bool { subtype.isTrailer }
     }

@@ -6,7 +6,7 @@
 
 **Built for simplicity.**
 
-A native Apple TV app for Plex, Jellyfin, and Live TV.
+A native Apple TV app for Plex, Jellyfin, Silo, and Live TV.
 
 <a href="https://apps.apple.com/us/app/rivulet-for-plex/id6756892857">
   <img src="https://img.shields.io/badge/Download_on_the-App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download on the App Store">
@@ -53,9 +53,30 @@ I began this project in Decemeber 2025. At the time there was quite a lack of Pl
 - **HomePod Integration**: the Plex app has never worked well when setting HomePod as the default audio output on my Apple TV. It hurts to have a HomePod sitting there collecting dust while my sub-par TV speakers play sound. This app helps the hurt.
 - **Apple-Esque**: I enjoy Apple’s designs and apps, and enjoy the challenge of creating an app that feels native to the Apple ecosystem.
 <br></br>
+## Silo
+
+Choose **Silo** during setup or add it from Settings → Servers. Enter the server's web address, sign in, and choose a household profile. PIN-protected profiles require their PIN. Login tokens and profile verification are kept in Keychain; passwords and PINs are not saved.
+
+The Apple TV app uses Silo's native `/api/v2` API, not its Jellyfin compatibility interface:
+
+- Movie and TV libraries, search, details, versions, collections, and server-curated Home layouts, trending and recommendations.
+- Native watchlists, favorites, watched state and resume progress.
+- Negotiated direct play and server HLS, quality and track selection, chapters, markers and next episodes through the existing player.
+- Subtitle search/download and server-side AI translation/transcription when enabled in Silo, with progress and cancellation. Provider credentials, AI models and quotas remain server-owned.
+- High-resolution artwork, rich source and rating badges, local trailers/extras and external YouTube/Vimeo links. Source badges describe the file, not measured HDMI output. External videos require a compatible installed app.
+
+Descriptions follow the selected Silo profile's metadata language, falling back to its library, and respect the server's `metadata-ai.on_view` auto/button/off policy. Automatic translation can start for the selected visible title before expansion, never adjacent or prefetched cards. Original text dims while pending; provenance and manual controls remain available. Rivulet does not override the server's subtitle language or profile settings.
+
+Settings → Servers → **Show Libraries** hides each Plex, Jellyfin or Silo server's libraries across browsing surfaces without signing out or disabling Live TV. Choices are saved per profile/account and preserve individual library preferences. Redundant source labels are omitted when only one library is visible. Silo's display name comes from its public branding settings.
+
+Use a trusted HTTPS certificate, or HTTP on a trusted local network. Reverse-proxy path prefixes are supported. Accounts requiring a password change must complete it in Silo's web app first. AI subtitle jobs continue on the server after playback stops; reopen **Silo AI Subtitles** to follow a job or install its completed file.
+
+Silo support is tvOS-only and uses the existing upstream player settings. Music/books, editable native playlists, multipart-only playback, live partial AI subtitle cues and delivery plans requiring dynamic transport-header renewal are not supported. Trending, recommendations and AI features depend on the services configured by the Silo administrator.
+
+<br></br>
 ## Live TV
 
-Rivulet works with several kinds of Live TV source. You don't need a Plex or Jellyfin server. Add just a Live TV source and the app opens straight to Live TV.
+Rivulet works with several kinds of Live TV source. You don't need a Plex, Jellyfin, or Silo server. Add just a Live TV source and the app opens straight to Live TV.
 
 - **What's On**: what's airing now, what starts soon, and a For You row that learns what you watch.
 - **Guide**: standard guide layout if you want.
@@ -166,13 +187,17 @@ Third-party components retain their original licenses. FFmpeg is included under 
 - [libass](https://github.com/libass/libass): ASS/SSA subtitle rendering
 - [Plex](https://plex.tv/): media server platform
 - [Jellyfin](https://jellyfin.org/): open source media server
+- [Silo](https://siloserver.org/): native media server
 - [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr): IPTV management
 - [TMDB](https://www.themoviedb.org/): artwork and metadata for Discover
+- [Simple Icons 11.15.0](https://github.com/simple-icons/simple-icons/tree/11.15.0) ([CC0](https://github.com/simple-icons/simple-icons/blob/11.15.0/LICENSE.md)): IMDb, TMDB, Letterboxd, Metacritic, Trakt, and Kinopoisk rating marks.
+- Rotten Tomatoes® score-state artwork by Emily Oberman/Pentagram, adapted by Wikimedia Commons contributors: [Fresh](https://commons.wikimedia.org/wiki/File:Rotten_Tomatoes.svg), [Rotten](https://commons.wikimedia.org/wiki/File:Rotten_Tomatoes_rotten.svg), [Hot](https://commons.wikimedia.org/wiki/File:Rotten_Tomatoes_positive_audience.svg), and [Stale](https://commons.wikimedia.org/wiki/File:Rotten_Tomatoes_negative_audience.svg). Commons identifies these files as public-domain logos; trademark rights remain with their owner.
+- Certified Fresh and Verified Hot retain their original Rotten Tomatoes® artwork and trademark ownership: [Certified Fresh SVG](https://static.wikia.nocookie.net/logopedia/images/3/36/Rotten_Tomatoes_Certified_Fresh_2018.svg), [Verified Hot SVG](https://static.wikia.nocookie.net/logopedia/images/7/7e/Rotten_Tomatoes_Verified_Hot_Audience_2024.svg/revision/latest?cb=20251128031446).
 
 ---
 
 <div align="center">
 
-Rivulet is not affiliated with or endorsed by Plex, Inc. or the Jellyfin project.
+Rivulet is not affiliated with or endorsed by Plex, Inc., the Jellyfin project, or Silo.
 
 </div>

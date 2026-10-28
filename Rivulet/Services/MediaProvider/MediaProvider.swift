@@ -26,6 +26,10 @@ protocol MediaProvider: Sendable, Identifiable {
     var kind: MediaProviderKind { get }
     var displayName: String { get }
     var connectionState: ConnectionState { get }
+    /// Immutable authentication/profile revision captured by this provider instance.
+    var authorityRevision: UInt64 { get }
+    /// Native planners may reserve a counted server session before media is read.
+    var reservesPlaybackOnResolve: Bool { get }
 
     // MARK: - Browse
     func libraries() async throws -> [MediaLibrary]
@@ -53,6 +57,13 @@ protocol MediaProvider: Sendable, Identifiable {
     /// Plex-native curated hubs. Other providers may return [] and rely on
     /// `HomeComposer` to synthesize from primitives.
     func hubs() async throws -> [MediaHub]
+    /// Whether curated rail headers offer a separate See All destination.
+    /// Independent of hub paging: hiding the button must not truncate the rail.
+    var showsHubBrowseAll: Bool { get }
+    /// Continue a provider-native row using the exact page returned by its previous response.
+    func hubItems(_ hubID: String, page: Page) async throws -> PagedResult<MediaItem>
+    /// nil means unsupported; an empty array is a supported, empty Discover feed.
+    func discoveryHubs() async throws -> [MediaHub]?
 
     /// Library-scoped hubs (the library's own Continue Watching, Recently Added,
     /// genre rows, etc.) — NOT the global home hubs.
@@ -77,6 +88,15 @@ protocol MediaProvider: Sendable, Identifiable {
     /// A nil `sourceID` plays the best version by `VersionRanking`.
     /// `maxBitrate` (bps, nil uncapped) is the most the stream may use; a provider without caps ignores it.
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?, maxBitrate: Int?) async throws -> StreamInfo
+    /// Replan a stream that cannot seek locally. nil keeps the current stream.
+    func seekStream(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?,
+                    position: TimeInterval) async throws -> StreamInfo?
+    /// Release a reserved native plan without reporting playback. False requires legacy reporter cleanup.
+    func discardStream(_ stream: StreamInfo) async throws -> Bool
+    /// Replace an active plan using its native session. nil delegates to the legacy replacement path.
+    func replaceStream(for itemRef: MediaItemRef, current: StreamInfo, sourceID: String?,
+                       position: TimeInterval, maxBitrate: Int?, audioStreamIndex: Int?,
+                       subtitleStreamIndex: Int?, forceTranscode: Bool) async throws -> StreamInfo?
 
     /// A server-side transcode starting at `startTime`, played with AVPlayer.
     /// For when the client cannot play the direct-play stream, or a quality cap.
@@ -118,6 +138,10 @@ protocol MediaProvider: Sendable, Identifiable {
     func isOnWatchlist(_ ref: MediaItemRef) async -> Bool
     func addToWatchlist(_ ref: MediaItemRef) async throws
     func removeFromWatchlist(_ ref: MediaItemRef) async throws
+    func watchlistItems() async throws -> [MediaItem]
+    var supportsFavorites: Bool { get }
+    func isFavorite(_ ref: MediaItemRef) async -> Bool
+    func setFavorite(_ ref: MediaItemRef, isFavorite: Bool) async throws
 
     // MARK: - Playlists (video)
     var supportsPlaylists: Bool { get }
@@ -139,9 +163,9 @@ protocol MediaProvider: Sendable, Identifiable {
     /// nil when the backend has none. Default = nil so backends opt in.
     func contentAdvisory(for ref: MediaItemRef) async throws -> ContentAdvisory?
 
-    /// Identity keys (`ContinueWatchingMerge`) for these shows, by show item id,
+    /// Canonical movie/show identity keys, by catalog item id,
     /// fetched in as few requests as the server allows. Default: none.
-    func showIdentityKeys(for showIDs: [String]) async -> [String: [String]]
+    func itemIdentityKeys(for itemIDs: [String]) async -> [String: [String]]
 
     /// Skip markers (intro, credits, ...) for the item. Default: none.
     /// Best effort: a backend without the data returns an empty value.
@@ -149,6 +173,25 @@ protocol MediaProvider: Sendable, Identifiable {
 }
 
 extension MediaProvider {
+    var authorityRevision: UInt64 { 0 }
+    var reservesPlaybackOnResolve: Bool { false }
+    var showsHubBrowseAll: Bool { true }
+    func hubItems(_ hubID: String, page: Page) async throws -> PagedResult<MediaItem> {
+        throw MediaProviderError.backendSpecific(underlying: "hub paging not supported")
+    }
+    func discoveryHubs() async throws -> [MediaHub]? { nil }
+    func watchlistItems() async throws -> [MediaItem] { [] }
+    var supportsFavorites: Bool { false }
+    func isFavorite(_ ref: MediaItemRef) async -> Bool { false }
+    func setFavorite(_ ref: MediaItemRef, isFavorite: Bool) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "favorites not supported")
+    }
+    func seekStream(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?,
+                    position: TimeInterval) async throws -> StreamInfo? { nil }
+    func discardStream(_ stream: StreamInfo) async throws -> Bool { false }
+    func replaceStream(for itemRef: MediaItemRef, current: StreamInfo, sourceID: String?,
+                       position: TimeInterval, maxBitrate: Int?, audioStreamIndex: Int?,
+                       subtitleStreamIndex: Int?, forceTranscode: Bool) async throws -> StreamInfo? { nil }
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?) async throws -> StreamInfo {
         try await resolveStream(for: itemRef, sourceID: sourceID, maxBitrate: nil)
     }
@@ -165,7 +208,7 @@ extension MediaProvider {
         throw MediaProviderError.transcodeRequired
     }
     func playbackExtras(for itemRef: MediaItemRef, sourceID: String?) async -> PlaybackExtras { PlaybackExtras() }
-    func showIdentityKeys(for showIDs: [String]) async -> [String: [String]] { [:] }
+    func itemIdentityKeys(for itemIDs: [String]) async -> [String: [String]] { [:] }
     func contentAdvisory(for ref: MediaItemRef) async throws -> ContentAdvisory? { nil }
     func search(_ query: String, inLibraries libraryIDs: [String]) async throws -> [MediaItem] {
         try await search(query)

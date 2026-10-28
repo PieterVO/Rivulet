@@ -6,6 +6,7 @@
 //  It lays out to whatever width its host gives it; the host owns the vignette and the cascade.
 
 import UIKit
+import Combine
 import os.log
 
 private let chromeLog = Logger(
@@ -39,6 +40,20 @@ final class MediaDetailChromeView: UIView {
         didSet {
             guard mode != oldValue else { return }
             applyMode()
+            refreshDescriptionIndicator()
+        }
+    }
+
+    /// Selection belongs to the host, not the layout mode: the centred movie
+    /// may translate before expansion, while neighbouring cards remain idle.
+    var isDescriptionTranslationActive = false {
+        didSet {
+            guard isDescriptionTranslationActive != oldValue else { return }
+            if isDescriptionTranslationActive {
+                configureDescriptionTranslation()
+            } else {
+                descriptionTranslation.stop()
+            }
         }
     }
 
@@ -64,6 +79,8 @@ final class MediaDetailChromeView: UIView {
     var onPlayVersion: ((String) -> Void)?
     var onToggleWatchlist: (() -> Void)?
     var onShowFullDescription: ((MediaItemDetail) -> Void)?
+    /// Matching detail artwork for hosts whose backdrop lives outside this view.
+    var onDetailArtwork: ((MediaItemRef, MediaArtwork) -> Void)?
 
     /// The Play pill (rebuilt per item). Exposed so the host cell can point the
     /// focus engine at Play when the detail expands.
@@ -79,6 +96,7 @@ final class MediaDetailChromeView: UIView {
     private weak var playTitleLabel: UILabel?
     private weak var playProgressTrack: UIView?
     private var descriptionMaxWidth: NSLayoutConstraint?
+    private var metadataMaxWidth: NSLayoutConstraint?
 
     // MARK: - State
 
@@ -90,6 +108,9 @@ final class MediaDetailChromeView: UIView {
     /// Cached detail, populated by `loadDetail()` when it lands. Used to
     /// repopulate genre + quality rows + cast label with richer fields.
     private var detail: MediaItemDetail?
+    private let descriptionTranslation = SiloDescriptionTranslationController()
+    private let descriptionIndicator = DescriptionTranslationView()
+    private var descriptionObservers = Set<AnyCancellable>()
 
     /// Sizes the logo view to the image's aspect, since `.scaleAspectFit` centres the glyphs
     /// and would push them right of the metadata's leading edge.
@@ -157,8 +178,8 @@ final class MediaDetailChromeView: UIView {
         return s
     }()
 
-    /// The overview (Apple shows no tagline), up to 4 lines / 677pt wide (860 on
-    /// an episode).
+    /// Four-line carousel preview; expanded details truncate after six lines.
+    /// Reading width stays capped at 677pt (860pt for an episode).
     private let descriptionLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
@@ -166,18 +187,16 @@ final class MediaDetailChromeView: UIView {
         l.textColor = UIColor.white.withAlphaComponent(0.85)
         l.numberOfLines = 4
         l.lineBreakMode = .byTruncatingTail
+        l.setContentHuggingPriority(.required, for: .vertical)
+        l.setContentCompressionResistancePriority(.init(749), for: .vertical)
         return l
     }()
 
-    /// "2023 · 49 min   ⭐ 7.8   [4K] [DV] [5.1]", dimmer than the genre row.
-    private let qualityRow: UIStackView = {
-        let s = UIStackView()
-        s.translatesAutoresizingMaskIntoConstraints = false
-        s.axis = .horizontal
-        s.spacing = 12
-        s.alignment = .center
-        return s
-    }()
+    private let qualityRow = MediaMetadataFlowView()
+    private let capabilityBadges = MediaCapabilityBadgesView()
+    private let ratingsView = RatingsGridView()
+    private let metadataSpacer = UIView()
+    private var hasQualityMetadata = false
 
     /// Action buttons left, cast label right. A plain view, since a stack view flashes
     /// the buttons stretched wide on the first layout pass.
@@ -226,6 +245,19 @@ final class MediaDetailChromeView: UIView {
     private func commonInit() {
         backgroundColor = .clear
         isUserInteractionEnabled = false  // host flips this on for .expandedDetail
+        descriptionTranslation.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyDescriptionTranslation() }
+            .store(in: &descriptionObservers)
+        metadataSpacer.isHidden = true
+        let collapsedSpacer = metadataSpacer.heightAnchor.constraint(equalToConstant: 0)
+        collapsedSpacer.priority = .init(1)
+        collapsedSpacer.isActive = true
+        metadataSpacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
+        metadataSpacer.widthAnchor.constraint(equalToConstant: 0).isActive = true
+        [qualityRow, capabilityBadges, ratingsView].forEach {
+            $0.setContentHuggingPriority(.required, for: .vertical)
+        }
 
         logoSlotView.addSubview(titleLogoImageView)
         logoSlotView.addSubview(titleFallbackLabel)
@@ -236,6 +268,9 @@ final class MediaDetailChromeView: UIView {
         metadataBlock.addArrangedSubview(genreRow)
         metadataBlock.addArrangedSubview(descriptionLabel)
         metadataBlock.addArrangedSubview(qualityRow)
+        metadataBlock.addArrangedSubview(metadataSpacer)
+        metadataBlock.addArrangedSubview(capabilityBadges)
+        metadataBlock.addArrangedSubview(ratingsView)
         chromeStack.addArrangedSubview(metadataBlock)
 
         // Apple's rhythm: 18 between the text rows, 32 above the buttons.
@@ -257,6 +292,10 @@ final class MediaDetailChromeView: UIView {
 
         let castWidth = castLabel.widthAnchor.constraint(equalToConstant: 410)
         castWidth.priority = .defaultHigh
+        let metadataWidth = metadataBlock.widthAnchor.constraint(equalTo: chromeStack.widthAnchor)
+        metadataWidth.priority = .defaultHigh
+        let metadataCap = metadataBlock.widthAnchor.constraint(lessThanOrEqualToConstant: Self.episodeDescriptionMaxWidth)
+        metadataMaxWidth = metadataCap
 
         NSLayoutConstraint.activate([
             // Chrome stack fills self.
@@ -292,8 +331,13 @@ final class MediaDetailChromeView: UIView {
 
             descMaxWidth,
 
-            // 860 pt cap; height follows content.
-            metadataBlock.widthAnchor.constraint(lessThanOrEqualToConstant: Self.episodeDescriptionMaxWidth),
+            // Width is capped for reading; native source grids get extra room.
+            metadataCap,
+            metadataBlock.widthAnchor.constraint(lessThanOrEqualTo: chromeStack.widthAnchor),
+            metadataWidth,
+            qualityRow.widthAnchor.constraint(equalTo: metadataBlock.widthAnchor),
+            capabilityBadges.widthAnchor.constraint(equalTo: metadataBlock.widthAnchor),
+            ratingsView.widthAnchor.constraint(equalTo: metadataBlock.widthAnchor),
 
             // The action+cast row spans the full chrome width (the stack is
             // .leading now, so this must be explicit) — buttons leading, cast
@@ -308,7 +352,7 @@ final class MediaDetailChromeView: UIView {
 
             // Row height derives from the action buttons stack
             // (54pt circle/pill height).
-            actionAndCastRow.heightAnchor.constraint(greaterThanOrEqualTo: actionButtonsStack.heightAnchor),
+            actionAndCastRow.heightAnchor.constraint(equalTo: actionButtonsStack.heightAnchor),
 
             // Cast box: 410pt on the trailing margin, bottom on the buttons'
             // bottom. It may grow upward past the row; nothing sits there.
@@ -327,6 +371,9 @@ final class MediaDetailChromeView: UIView {
     // MARK: - Mode
 
     private func applyMode() {
+        descriptionLabel.numberOfLines = mode == .expandedDetail ? 6 : 4
+        metadataSpacer.isHidden = mode != .expandedDetail
+        metadataBlock.setCustomSpacing(mode == .expandedDetail ? 0 : 18, after: qualityRow)
         switch mode {
         case .carouselStable:
             actionAndCastRow.isUserInteractionEnabled = false
@@ -343,6 +390,12 @@ final class MediaDetailChromeView: UIView {
         actionAndCastRow.isUserInteractionEnabled = on
     }
 
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { descriptionTranslation.stop() }
+        else { configureDescriptionTranslation() }
+    }
+
     // MARK: - Reset (host calls during cell reuse)
 
     /// Clears all displayed content and bumps the load token so any
@@ -350,6 +403,9 @@ final class MediaDetailChromeView: UIView {
     /// `prepareForReuse`.
     func reset() {
         loadToken &+= 1
+        isDescriptionTranslationActive = false
+        descriptionTranslation.stop()
+        descriptionIndicator.configure(isTranslating: false, isMachineTranslated: false)
         item = nil
         detail = nil
         if let prev = logoAspectConstraint {
@@ -362,7 +418,9 @@ final class MediaDetailChromeView: UIView {
         titleFallbackLabel.isHidden = false
         descriptionLabel.text = nil
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        qualityRow.setItems([])
+        capabilityBadges.configure(source: nil, style: .summary)
+        ratingsView.configure([])
         actionButtonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         playButton = nil
         castLabel.text = nil
@@ -426,6 +484,9 @@ final class MediaDetailChromeView: UIView {
     }
 
     private func applyItem() {
+        descriptionTranslation.stop()
+        detail = nil
+        descriptionIndicator.configure(isTranslating: false, isMachineTranslated: false)
         loadToken &+= 1
         let token = loadToken
         pendingLoads = 0
@@ -437,7 +498,7 @@ final class MediaDetailChromeView: UIView {
         descriptionLabel.attributedText = nil
         resolvedGenres = []
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        qualityRow.setItems([])
 
         guard let item = item else { return }
 
@@ -532,10 +593,12 @@ final class MediaDetailChromeView: UIView {
             }
             await MainActor.run {
                 defer { self.finishLoad(token) }
-                guard self.loadToken == token else { return }
+                guard self.loadToken == token, self.item?.ref == fetched.item.ref else { return }
                 self.detail = fetched
                 self.resolvedGenres = genres
                 self.applyDetail(item: item, detail: fetched)
+                self.onDetailArtwork?(fetched.item.ref, fetched.item.artwork)
+                self.configureDescriptionTranslation()
             }
         }
     }
@@ -578,19 +641,8 @@ final class MediaDetailChromeView: UIView {
     private func applyDetail(item: MediaItem, detail: MediaItemDetail) {
         rebuildGenreRow(item: item, detail: detail)
         rebuildQualityRow(item: item, detail: detail)
-        if let s = item.seasonNumber, let e = item.episodeNumber,
-           let overview = detail.item.overview, !overview.isEmpty {
-            // Episode: bold "S1, E1:" prefix before the synopsis.
-            let color = UIColor.white.withAlphaComponent(0.85)
-            let attr = NSMutableAttributedString(string: "S\(s), E\(e): ", attributes: [
-                .font: UIFont.systemFont(ofSize: 23, weight: .bold), .foregroundColor: color])
-            attr.append(NSAttributedString(string: overview, attributes: [
-                .font: Self.descriptionFont, .foregroundColor: color]))
-            descriptionLabel.attributedText = attr
-        } else if let overview = detail.item.overview, !overview.isEmpty {
-            descriptionLabel.text = overview
-            descriptionLabel.font = Self.descriptionFont
-        }
+        updateDescription(for: detail.item)
+        refreshDescriptionIndicator()
         let topCast = detail.cast.prefix(3).map { $0.name }
         if !topCast.isEmpty {
             let attr = NSMutableAttributedString(string: "Starring ", attributes: [
@@ -603,10 +655,66 @@ final class MediaDetailChromeView: UIView {
         addVersionsButton(detail)
     }
 
+    private func configureDescriptionTranslation() {
+        guard isDescriptionTranslationActive, window != nil, let detail,
+              let provider = MediaProviderRegistry.shared.provider(for: detail.item.ref.providerID) as? SiloProvider else {
+            refreshDescriptionIndicator()
+            return
+        }
+        descriptionTranslation.configure(provider: provider, detail: detail, allowAutomatic: true)
+    }
+
+    private func applyDescriptionTranslation() {
+        guard let item, let updated = descriptionTranslation.detail, updated.item.ref == item.ref else {
+            refreshDescriptionIndicator()
+            return
+        }
+        let changed = detail?.item.overview != updated.item.overview
+            || detail?.item.overviewIsMachineTranslated != updated.item.overviewIsMachineTranslated
+        detail = updated
+        if changed { updateDescription(for: updated.item) }
+        refreshDescriptionIndicator()
+    }
+
+    private func refreshDescriptionIndicator() {
+        let current = detail?.item ?? item
+        let matches = current?.ref == descriptionTranslation.detail?.item.ref
+        let hasDescription = current?.overview?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let isTranslating = matches && descriptionTranslation.isTranslating
+        descriptionLabel.alpha = isTranslating ? 0.65 : 1
+        descriptionIndicator.configure(
+            isTranslating: isTranslating,
+            isMachineTranslated: hasDescription && current?.overviewIsMachineTranslated == true,
+            canTranslate: matches && mode == .expandedDetail && descriptionTranslation.canTranslate,
+            errorMessage: matches ? descriptionTranslation.errorMessage : nil,
+            onTranslate: { [weak self] in self?.descriptionTranslation.translate() }, compact: true)
+        qualityRow.isHidden = !hasQualityMetadata && descriptionIndicator.isHidden
+        qualityRow.invalidateIntrinsicContentSize()
+        qualityRow.setNeedsLayout()
+    }
+
+    private func updateDescription(for item: MediaItem) {
+        descriptionLabel.attributedText = nil
+        guard let overview = item.overview, !overview.isEmpty else {
+            descriptionLabel.text = nil
+            return
+        }
+        if let season = item.seasonNumber, let episode = item.episodeNumber {
+            let color = UIColor.white.withAlphaComponent(0.85)
+            let text = NSMutableAttributedString(string: "S\(season), E\(episode): ", attributes: [
+                .font: UIFont.systemFont(ofSize: 23, weight: .bold), .foregroundColor: color])
+            text.append(NSAttributedString(string: overview, attributes: [
+                .font: Self.descriptionFont, .foregroundColor: color]))
+            descriptionLabel.attributedText = text
+        } else {
+            descriptionLabel.text = overview
+        }
+    }
+
     /// Versions button after Info, once the detail shows two or more files.
     private func addVersionsButton(_ detail: MediaItemDetail) {
         let versions = VersionPicker.versions(in: detail)
-        guard !versions.isEmpty, versionsButton == nil, let info = infoButton,
+        guard detail.item.isAvailable != false, !versions.isEmpty, versionsButton == nil, let info = infoButton,
               let index = actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
         let button = makeCircleButton(systemImage: "square.stack")
         button.onPrimaryAction = { [weak self, weak button] in
@@ -624,8 +732,8 @@ final class MediaDetailChromeView: UIView {
     private func rebuildActionButtons(item: MediaItem) {
         actionButtonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        // Metadata-only items have no provider, so Play and Watched would no-op.
-        if item.isMetadataOnly {
+        // Metadata-only and unavailable saved titles have no playback or watched action.
+        if item.isMetadataOnly || item.isAvailable == false {
             rebuildMetadataOnlyActions(item: item)
             return
         }
@@ -734,6 +842,11 @@ final class MediaDetailChromeView: UIView {
             icon.heightAnchor.constraint(equalToConstant: 24)
         ])
         pill.invertOnFocus = [icon, label]
+
+        if ProviderWatchlistPill.bind(pill, icon: icon, title: label, item: item,
+                                     presenter: { [weak self] in self?.hostViewController }) {
+            return pill
+        }
 
         guard let tmdbID = item.tmdbID else {
             icon.image = UIImage(systemName: "bookmark")
@@ -865,7 +978,13 @@ final class MediaDetailChromeView: UIView {
     private static let qualityRowAlpha: CGFloat = 0.75
 
     private func rebuildQualityRow(item: MediaItem, detail: MediaItemDetail?) {
-        qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        var metadata: [UIView] = []
+        // Native source marks need room to wrap without pushing the title out
+        // of the carousel. The synopsis keeps its independent reading-width cap.
+        metadataMaxWidth?.constant = detail?.ratingPresentation == .allAvailable ? 1060 : Self.episodeDescriptionMaxWidth
+        ratingsView.configure(detail?.chromeRatings ?? [])
+        capabilityBadges.configure(source: detail?.primarySource,
+                                   style: detail?.showsTechnicalMetadata == true ? .technical : .summary)
 
         var parts: [String] = []
         if item.kind == .episode,
@@ -879,34 +998,11 @@ final class MediaDetailChromeView: UIView {
         if let edition = detail?.item.editionTitle ?? item.editionTitle, !edition.isEmpty { parts.append(edition) }
 
         if !parts.isEmpty {
-            qualityRow.addArrangedSubview(
-                Self.makeCaptionLabel(parts.joined(separator: " · "), alpha: Self.qualityRowAlpha))
+            let caption = Self.makeCaptionLabel(parts.joined(separator: " · "), alpha: Self.qualityRowAlpha)
+            caption.numberOfLines = 0
+            metadata.append(caption)
         }
 
-        // One score, from the source chosen in Appearance; episodes show none.
-        if item.kind != .episode, let rating = MediaRating.detailRating(in: detail?.ratings ?? []) {
-            let label = Self.makeCaptionLabel(rating.badgeText, alpha: Self.qualityRowAlpha)
-            let ratingStack: UIStackView
-            if rating.source == .rottenTomatoes || rating.source == .rottenTomatoesAudience {
-                let glyph = UIImageView(image: Self.emojiGlyph(
-                    rating.source == .rottenTomatoes ? (rating.value >= 6 ? "🍅" : "🤢") : "🍿"))
-                glyph.translatesAutoresizingMaskIntoConstraints = false
-                NSLayoutConstraint.activate([
-                    glyph.widthAnchor.constraint(equalToConstant: 20),
-                    glyph.heightAnchor.constraint(equalToConstant: 20)
-                ])
-                ratingStack = UIStackView(arrangedSubviews: [glyph, label])
-                ratingStack.spacing = 2
-            } else {
-                ratingStack = UIStackView(arrangedSubviews: [
-                    Self.makeCaptionLabel(rating.name, alpha: Self.qualityRowAlpha), label
-                ])
-                ratingStack.spacing = 6
-            }
-            ratingStack.axis = .horizontal
-            ratingStack.alignment = .center
-            qualityRow.addArrangedSubview(ratingStack)
-        }
 
         // The Common Sense age, on movies and shows but not episodes.
         if item.kind != .episode, let age = detail?.contentAdvisory?.ageRating {
@@ -924,36 +1020,15 @@ final class MediaDetailChromeView: UIView {
             ageStack.axis = .horizontal
             ageStack.spacing = 2
             ageStack.alignment = .center
-            qualityRow.addArrangedSubview(ageStack)
+            metadata.append(ageStack)
         }
 
-        for badge in Self.calmBadges(detail?.primarySource) {
-            qualityRow.addArrangedSubview(Self.makeBadge(badge, alpha: Self.qualityRowAlpha))
-        }
+        hasQualityMetadata = !metadata.isEmpty
+        metadata.append(descriptionIndicator)
+        qualityRow.setItems(metadata)
+        qualityRow.isHidden = !hasQualityMetadata && descriptionIndicator.isHidden
     }
 
-    /// The row's quality badges, kept short: 4K only, every range badge (DV, HDR10+ ...), and audio only
-    /// when it is object audio.
-    static func calmBadges(_ source: MediaSource?) -> [String] {
-        guard let source else { return [] }
-        var badges = source.resolutionBadge == "4K" ? ["4K"] : []
-        badges += source.rangeBadges
-        if let audio = source.audioBadge {
-            if audio.hasSuffix("Atmos") { badges.append("Atmos") } else if audio.hasPrefix("DTS-X") { badges.append("DTS:X") }
-        }
-        return badges
-    }
-
-    /// An emoji as the score's glyph (tomato when fresh at 60% and up, nauseated face when rotten,
-    /// popcorn for the audience); the system's art, so no rating-site artwork ships in the app.
-    private static func emojiGlyph(_ emoji: String) -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { _ in
-            let glyph = emoji as NSString
-            let font = UIFont.systemFont(ofSize: 17)
-            let size = glyph.size(withAttributes: [.font: font])
-            glyph.draw(at: CGPoint(x: (20 - size.width) / 2, y: (20 - size.height) / 2), withAttributes: [.font: font])
-        }
-    }
 
     // MARK: - Factories
 

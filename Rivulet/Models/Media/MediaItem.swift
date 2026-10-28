@@ -13,7 +13,7 @@
 
 import Foundation
 
-struct MediaItem: Identifiable, Hashable, Sendable, Codable {
+nonisolated struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     var id: MediaItemRef { ref }
     let ref: MediaItemRef
     let kind: MediaKind
@@ -21,6 +21,8 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     let title: String
     let sortTitle: String?
     let overview: String?
+    /// Optional so saved items encoded before provenance existed still decode.
+    var overviewIsMachineTranslated: Bool? = nil
     let year: Int?
     let releaseDate: String?
     let contentRating: String?
@@ -56,6 +58,11 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     /// Keys naming the same title on any server (`ContinueWatchingMerge`); set
     /// on Continue Watching items only. Optional so cached items still decode.
     var identity: [String]?
+    /// False for catalog titles that are saved but not present on their server.
+    /// Nil keeps existing cached library cards available.
+    let isAvailable: Bool?
+    /// Owning library where the server supplies one; external catalog titles have none.
+    let libraryID: String?
 
     init(
         ref: MediaItemRef,
@@ -63,6 +70,7 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         title: String,
         sortTitle: String?,
         overview: String?,
+        overviewIsMachineTranslated: Bool? = nil,
         year: Int?,
         releaseDate: String? = nil,
         contentRating: String? = nil,
@@ -80,13 +88,16 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         grandparentArtwork: MediaArtwork?,
         versionCount: Int? = nil,
         editionTitle: String? = nil,
-        identity: [String]? = nil
+        identity: [String]? = nil,
+        isAvailable: Bool? = nil,
+        libraryID: String? = nil
     ) {
         self.ref = ref
         self.kind = kind
         self.title = title
         self.sortTitle = sortTitle
         self.overview = overview
+        self.overviewIsMachineTranslated = overviewIsMachineTranslated
         self.year = year
         self.releaseDate = releaseDate
         self.contentRating = contentRating
@@ -105,6 +116,8 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         self.versionCount = versionCount
         self.editionTitle = editionTitle
         self.identity = identity
+        self.isAvailable = isAvailable
+        self.libraryID = libraryID
     }
 }
 
@@ -133,15 +146,16 @@ extension MediaItem {
 
     var isGridPlaceholder: Bool { ref.itemID.isEmpty }
 
-    /// An episode's or season's show as `ContinueWatchingRow` keys it, "<providerID>|<show id>".
-    var showKey: String? {
-        let show: MediaItemRef? = switch kind {
+    /// Catalog lookup needed to merge a movie or the owning show across servers.
+    var lookupKey: String? {
+        let target: MediaItemRef? = switch kind {
+        case .movie, .show: identity?.isEmpty == false ? nil : ref
         case .episode: grandparentRef
         case .season: parentRef
         default: nil
         }
-        guard let show, !show.itemID.isEmpty else { return nil }
-        return "\(show.providerID)|\(show.itemID)"
+        guard let target, !target.itemID.isEmpty else { return nil }
+        return "\(target.providerID)|\(target.itemID)"
     }
 }
 
@@ -158,6 +172,7 @@ extension MediaItem {
             title: title,
             sortTitle: sortTitle,
             overview: overview,
+            overviewIsMachineTranslated: overviewIsMachineTranslated,
             year: year,
             releaseDate: releaseDate,
             contentRating: contentRating,
@@ -179,7 +194,10 @@ extension MediaItem {
             parentArtwork: parentArtwork,
             grandparentArtwork: grandparentArtwork,
             versionCount: versionCount,
-            editionTitle: editionTitle
+            editionTitle: editionTitle,
+            identity: identity,
+            isAvailable: isAvailable,
+            libraryID: libraryID
         )
     }
 }

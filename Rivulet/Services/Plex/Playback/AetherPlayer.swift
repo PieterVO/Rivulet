@@ -102,6 +102,13 @@ final class AetherPlayer: PlayerProtocol {
     /// Equal to currentTime on all current Aether paths (PlaybackClock
     /// unifies source-PTS and wall-clock onto a single value).
     @Published private(set) var sourceTime: Double = 0
+    private var externalSubtitleTimelineOffset: TimeInterval = 0
+
+    private func subtitleClockTime(_ time: TimeInterval) -> TimeInterval {
+        guard let selected = engine.activeSubtitleTrackIndex,
+              engine.subtitleTracks.contains(where: { $0.id == selected && $0.isExternal }) else { return time }
+        return time + externalSubtitleTimelineOffset
+    }
 
     @Published private(set) var audioTracks: [MediaTrack] = []
     /// Published so the host can rebuild its merged track list the moment the
@@ -232,7 +239,8 @@ final class AetherPlayer: PlayerProtocol {
         engine.clock.$sourceTime
             .receive(on: DispatchQueue.main)
             .sink { [weak self] t in
-                self?.sourceTime = t
+                guard let self else { return }
+                self.sourceTime = self.subtitleClockTime(t)
             }
             .store(in: &cancellables)
 
@@ -519,6 +527,8 @@ final class AetherPlayer: PlayerProtocol {
         /// File-extension hint ("srt", "ass", "vtt") for URLs whose path
         /// hides the format (Plex stream keys have no extension).
         let formatHint: String?
+        /// Explicit per-delivery authority; empty prevents inheriting the media source's headers.
+        var httpHeaders: [String: String]? = nil
     }
 
     /// Read panel HDR state for LoadOptions.panelIsInHDRMode. Matches
@@ -981,6 +991,11 @@ final class AetherPlayer: PlayerProtocol {
     /// Profile 7 FEL composition; absent = on.
     static let dolbyVisionFELKey = "dolbyVisionFEL"
 
+    /// Host-facing display capability for provider playback negotiation.
+    static var displaySupportsDolbyVision: Bool {
+        AetherEngine.displayCapabilities.supportsDolbyVision
+    }
+
     /// DVB teletext caption page, applied to BOTH live and VOD loads. A
     /// `liveTeletextPage` UserDefaults key overrides everything (0 = force
     /// libzvbi auto-detect); otherwise Australian regions default to 801
@@ -1018,6 +1033,7 @@ final class AetherPlayer: PlayerProtocol {
         preferredAudioLanguages: [String] = [],
         preferredSubtitleLanguages: [String] = [],
         externalSubtitles: [SidecarSubtitle] = [],
+        externalSubtitleTimelineOffset: TimeInterval = 0,
         isLive: Bool = false,
         stackedParts: StackedParts<PartFile>? = nil
     ) async throws {
@@ -1029,7 +1045,8 @@ final class AetherPlayer: PlayerProtocol {
             try await loadFile(url: url, headers: headers, startTime: startTime,
                                preferredAudioLanguages: preferredAudioLanguages,
                                preferredSubtitleLanguages: preferredSubtitleLanguages,
-                               externalSubtitles: externalSubtitles, isLive: isLive)
+                               externalSubtitles: externalSubtitles,
+                               externalSubtitleTimelineOffset: externalSubtitleTimelineOffset, isLive: isLive)
             return
         }
         partLoad = (headers, preferredAudioLanguages, preferredSubtitleLanguages)
@@ -1089,13 +1106,23 @@ final class AetherPlayer: PlayerProtocol {
         preferredAudioLanguages: [String],
         preferredSubtitleLanguages: [String],
         externalSubtitles: [SidecarSubtitle],
+        externalSubtitleTimelineOffset: TimeInterval = 0,
         isLive: Bool
     ) async throws {
         // .lossless: FLAC for non-stream-copy audio, ~3x realtime on A15 against EAC3's
         // ~0.5x, so 4K segments keep up. Needs a multichannel LPCM sink; others downmix.
         // subtitleLanguageHintsByStreamIndex is unused (the engine has no such parameter).
         // isLive must be declared: the engine does not auto-detect live (broken MKV durations).
-        // externalSubtitles: nil httpHeaders inherits the media's Plex auth headers.
+        // Reanchored HLS sidecars retain source timestamps. Register those after load
+        // for the host overlay, not a native WebVTT rendition on the player's axis.
+        self.externalSubtitleTimelineOffset = externalSubtitleTimelineOffset
+        let sidecars = externalSubtitles.map { sub in
+            ExternalSubtitleTrack(
+                url: sub.url, name: sub.name, language: sub.language,
+                isForced: sub.isForced, isHearingImpaired: sub.isHearingImpaired,
+                isDefault: sub.isDefault, httpHeaders: sub.httpHeaders, formatHint: sub.formatHint
+            )
+        }
         var options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
@@ -1109,18 +1136,7 @@ final class AetherPlayer: PlayerProtocol {
             preserveASSMarkup: true,
             preferredAudioLanguages: preferredAudioLanguages,
             preferredSubtitleLanguages: preferredSubtitleLanguages,
-            externalSubtitles: externalSubtitles.map { sub in
-                ExternalSubtitleTrack(
-                    url: sub.url,
-                    name: sub.name,
-                    language: sub.language,
-                    isForced: sub.isForced,
-                    isHearingImpaired: sub.isHearingImpaired,
-                    isDefault: sub.isDefault,
-                    httpHeaders: nil,
-                    formatHint: sub.formatHint
-                )
-            },
+            externalSubtitles: externalSubtitleTimelineOffset == 0 ? sidecars : [],
             // Same teletext rule as Live TV: a teletext stream decodes the same
             // way whichever surface plays it (VOD recordings/rips included).
             teletextPage: Self.regionTeletextPage()
@@ -1164,6 +1180,9 @@ final class AetherPlayer: PlayerProtocol {
         pendingReloadSince = nil
         do {
             try await engine.load(url: url, startPosition: startTime, options: options)
+            if externalSubtitleTimelineOffset != 0 {
+                for sidecar in sidecars { engine.addExternalSubtitleTrack(sidecar) }
+            }
         } catch {
             // User navigated away / switched items mid-load. Rethrow untouched
             // and stay off errorSubject: wrapping it as PlayerError.loadFailed
@@ -1226,12 +1245,12 @@ final class AetherPlayer: PlayerProtocol {
         if let timebase = engine.softwarePresentationTimebase {
             // The software path presents on the source axis already.
             let t = CMSyncConvertTime(host, from: CMClockGetHostTimeClock(), to: timebase)
-            return t.isNumeric ? t.seconds : nil
+            return t.isNumeric ? subtitleClockTime(t.seconds) : nil
         }
         guard let timebase = engine.currentAVPlayerItem?.timebase else { return nil }
         let item = CMSyncConvertTime(host, from: CMClockGetHostTimeClock(), to: timebase)
         guard item.isNumeric else { return nil }
-        return engine.presentationAxisMap.sourceSeconds(forItemSeconds: item.seconds)
+        return engine.presentationAxisMap.sourceSeconds(forItemSeconds: item.seconds).map { subtitleClockTime($0) }
     }
 
     /// Hand external metadata (title, artwork, description, genre) to the

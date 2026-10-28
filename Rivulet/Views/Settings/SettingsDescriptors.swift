@@ -340,6 +340,26 @@ enum SettingsDescriptorStore {
             icon: "rectangle.portrait.and.arrow.right",
             description: "Sign out of this Jellyfin server and remove its saved credentials."
         ),
+        "siloServer": SettingDescriptor(
+            icon: "externaldrive.fill",
+            description: "Connect to Silo to browse your libraries, curated lists and recommendations."
+        ),
+        "siloURL": SettingDescriptor(
+            icon: "globe",
+            description: "Your Silo web address, including its port or reverse-proxy path. Use the native Silo address, not its Jellyfin-compatible address."
+        ),
+        "siloUsername": SettingDescriptor(icon: "person", description: "Your Silo account username."),
+        "siloPassword": SettingDescriptor(
+            icon: "key",
+            description: "Used only to sign in. Rivulet saves the server's session credentials securely, not your password."
+        ),
+        "siloSignIn": SettingDescriptor(icon: "link", description: "Check the Silo server and sign in, then choose a profile."),
+        "siloSignOut": SettingDescriptor(
+            icon: "rectangle.portrait.and.arrow.right",
+            description: "Sign out of Silo and remove this account's saved credentials from Rivulet."
+        ),
+        "siloProfiles": SettingDescriptor(icon: "person.2", description: "Choose the Silo profile whose libraries, Home and watch state you want to use."),
+        "siloProfilePIN": SettingDescriptor(icon: "lock", description: "Enter this Silo profile's PIN. The PIN is not saved."),
         "connectPlex": SettingDescriptor(
             icon: "link",
             description: "Connect to your Plex server to browse and stream your media library."
@@ -533,6 +553,9 @@ enum SettingsDescriptorStore {
         case .plex: return ("server.rack", .systemOrange)
         case .plexServerDetail: return ("server.rack", .systemOrange)
         case .jellyfin: return ("server.rack", .systemPurple)
+        case .silo: return ("externaldrive.fill", .systemTeal)
+        case .siloProfiles: return ("person.2.fill", .systemTeal)
+        case .siloProfilePIN: return ("lock.fill", .systemTeal)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)

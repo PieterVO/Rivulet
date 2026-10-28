@@ -46,6 +46,7 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
         let subtitle: String?
         let trackId: Int?
         let isSelected: Bool
+        var isEnabled = true
     }
 
     private let rows: [Row]
@@ -160,6 +161,17 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
         rowButtons.prefix(rows.count).first { $0.row.trackId == trackId }?.setSubtitle(subtitle)
     }
 
+    func refreshActionAvailability() {
+        guard openChoice == nil else { return }
+        for (index, config) in actions.enumerated() {
+            let buttonIndex = rows.count + index
+            guard rowButtons.indices.contains(buttonIndex) else { continue }
+            let enabled = config.isEnabled?() ?? true
+            rowButtons[buttonIndex].isEnabled = enabled
+            rowButtons[buttonIndex].alpha = enabled ? 1 : 0.4
+        }
+    }
+
     func checkTrack(_ trackId: Int?) {
         rowButtons.prefix(rows.count).forEach { $0.isChecked = $0.row.trackId == trackId }
     }
@@ -181,6 +193,7 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
 
         for row in rows {
             let button = CardTrackRowButton(row: row)
+            button.isEnabled = row.isEnabled
             button.onTap = { [weak self] in
                 self?.onSelect(row.trackId)
             }
@@ -201,6 +214,9 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
             }
             stack.addArrangedSubview(button)
             rowButtons.append(button)
+            let enabled = config.isEnabled?() ?? true
+            button.isEnabled = enabled
+            button.alpha = enabled ? 1 : 0.4
         }
 
         // Choices (Enhance Dialogue levels): one row naming the current option
@@ -354,6 +370,7 @@ struct CardChoiceConfig {
 /// A row that runs `run`, which receives the row so it can retitle it.
 struct CardActionConfig {
     let title: String
+    var isEnabled: (() -> Bool)? = nil
     let run: (CardTrackRowButton) -> Void
 }
 
@@ -605,11 +622,12 @@ final class CardTrackRowButton: UIControl {
         pill.layer.shadowPath = UIBezierPath(roundedRect: pill.bounds, cornerRadius: pill.layer.cornerRadius).cgPath
     }
 
-    override var canBecomeFocused: Bool { true }
+    override var canBecomeFocused: Bool { isEnabled }
 
     // Select does not fire .primaryActionTriggered on a plain UIControl
     // on tvOS; handle the press directly.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard isEnabled else { return }
         for press in presses where press.type == .select {
             onTap?()
             return

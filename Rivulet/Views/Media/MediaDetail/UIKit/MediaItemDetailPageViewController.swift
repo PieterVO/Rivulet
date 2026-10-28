@@ -50,9 +50,18 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let genreLabel = UILabel()
     private let ratingBadge = MediaItemDetailPageViewController.badge()
     private let synopsisLabel = UILabel()
+    private let descriptionIndicator = DescriptionTranslationView()
+    private let descriptionTranslation = SiloDescriptionTranslationController()
+    private var descriptionObservers = Set<AnyCancellable>()
+    private var latestDetail: MediaItemDetail?
+    private var allowsAutomaticDescriptionTranslation = false
+    private let metadataSpacer = UIView()
     private let dateRow = UIStackView()
     private let dateLabel = UILabel()
-    private let badgeRow = UIStackView()
+    private let capabilityBadges = MediaCapabilityBadgesView()
+    private let ratingsView = RatingsGridView()
+    private var preferredTextColumnWidth: NSLayoutConstraint?
+    private weak var infoButton: FocusableActionButton?
     private var playButton: FocusableActionButton?
     /// The Play pill's own label, held so a post-playback refresh can flip
     /// Play ↔ Resume without rebuilding (and re-focusing) the action row.
@@ -86,6 +95,10 @@ final class MediaItemDetailPageViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
+        descriptionTranslation.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyDescriptionTranslation() }
+            .store(in: &descriptionObservers)
 
         // Fixed backdrop behind everything.
         backdrop.translatesAutoresizingMaskIntoConstraints = false
@@ -139,7 +152,10 @@ final class MediaItemDetailPageViewController: UIViewController {
 
             textColumn.leadingAnchor.constraint(equalTo: heroContent.leadingAnchor, constant: PreviewCarouselGeometry.expandedChromeInset),
             textColumn.bottomAnchor.constraint(equalTo: heroContent.safeAreaLayoutGuide.bottomAnchor, constant: -115),   // measured on device, tvOS 27
-            textColumn.widthAnchor.constraint(lessThanOrEqualToConstant: 860),
+            textColumn.topAnchor.constraint(greaterThanOrEqualTo: heroContent.safeAreaLayoutGuide.topAnchor, constant: 40),
+            textColumn.widthAnchor.constraint(lessThanOrEqualToConstant: 1060),
+            textColumn.widthAnchor.constraint(lessThanOrEqualTo: heroContent.widthAnchor,
+                                               constant: -2 * PreviewCarouselGeometry.expandedChromeInset),
 
             belowFold.topAnchor.constraint(equalTo: heroContent.bottomAnchor),
             belowFold.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -200,8 +216,16 @@ final class MediaItemDetailPageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        allowsAutomaticDescriptionTranslation = true
+        configureDescriptionTranslation()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        allowsAutomaticDescriptionTranslation = false
+        descriptionTranslation.stop()
     }
 
     @objc private func dismissSelf() { dismiss(animated: true) }
@@ -246,27 +270,47 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         // 4. Synopsis with a bold "S2, E1:" prefix.
         style(synopsisLabel, size: 23, weight: .medium, alpha: 0.9)
-        synopsisLabel.numberOfLines = 4
+        synopsisLabel.numberOfLines = 6
+        synopsisLabel.lineBreakMode = .byTruncatingTail
+        synopsisLabel.setContentHuggingPriority(.required, for: .vertical)
+        synopsisLabel.setContentCompressionResistancePriority(.init(749), for: .vertical)
         synopsisLabel.attributedText = synopsisAttributed()
         synopsisLabel.isHidden = (synopsisLabel.attributedText?.length ?? 0) == 0
         synopsisLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 860).isActive = true
         textColumn.addArrangedSubview(synopsisLabel)
 
-        // 5. Date · runtime + capability badges.
+        // 5. Date/runtime, source capabilities and review marks size independently.
         dateRow.axis = .horizontal
         dateRow.alignment = .center
         dateRow.spacing = 12
         style(dateLabel, size: 25, weight: .medium, alpha: 0.75)
         dateLabel.text = dateRuntimeText()
         dateRow.addArrangedSubview(dateLabel)
-        badgeRow.axis = .horizontal
-        badgeRow.alignment = .center
-        badgeRow.spacing = 12
-        dateRow.addArrangedSubview(badgeRow)
+        dateRow.addArrangedSubview(descriptionIndicator)
+        dateRow.setContentHuggingPriority(.required, for: .vertical)
         textColumn.addArrangedSubview(dateRow)
+        textColumn.addArrangedSubview(metadataSpacer)
+        let collapsedSpacer = metadataSpacer.heightAnchor.constraint(equalToConstant: 0)
+        collapsedSpacer.priority = .init(1)
+        collapsedSpacer.isActive = true
+        metadataSpacer.heightAnchor.constraint(greaterThanOrEqualToConstant: 0).isActive = true
+        metadataSpacer.widthAnchor.constraint(equalToConstant: 0).isActive = true
+        let metadataViews: [UIView] = [capabilityBadges, ratingsView]
+        for metadata in metadataViews {
+            metadata.isHidden = true
+            textColumn.addArrangedSubview(metadata)
+            metadata.widthAnchor.constraint(equalTo: textColumn.widthAnchor).isActive = true
+            metadata.setContentHuggingPriority(.required, for: .vertical)
+        }
+        let preferredWidth = textColumn.widthAnchor.constraint(equalToConstant: 860)
+        preferredWidth.priority = .defaultHigh
+        preferredWidth.isActive = true
+        preferredTextColumnWidth = preferredWidth
 
         // 6. Actions.
-        textColumn.setCustomSpacing(32, after: dateRow)
+        textColumn.setCustomSpacing(0, after: dateRow)
+        textColumn.setCustomSpacing(32, after: capabilityBadges)
+        textColumn.setCustomSpacing(32, after: ratingsView)
         textColumn.addArrangedSubview(makeActionRow())
     }
 
@@ -344,7 +388,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         // Metadata-only items (TMDB/Discover, unmatched) have no playback
         // route — the primary action is the Watchlist toggle, and the
         // watched/watchlist circles are dropped (no provider state).
-        if item.isMetadataOnly { return makeMetadataOnlyActionRow() }
+        if item.isMetadataOnly || item.isAvailable == false { return makeMetadataOnlyActionRow() }
         let pill = FocusableActionButton()
         pill.translatesAutoresizingMaskIntoConstraints = false
         pill.layer.cornerRadius = HeroPillButton.buttonHeight / 2
@@ -440,7 +484,10 @@ final class MediaItemDetailPageViewController: UIViewController {
         ])
         pill.invertOnFocus = [icon, title]
 
-        if let tmdbID = item.tmdbID {
+        if ProviderWatchlistPill.bind(pill, icon: icon, title: title, item: item,
+                                     presenter: { [weak self] in self }) {
+            // The saved title belongs to its native server, not Plex Discover.
+        } else if let tmdbID = item.tmdbID {
             let guid = "tmdb://\(tmdbID)"
             func render() {
                 let isOn = PlexWatchlistService.shared.contains(guid: guid)
@@ -549,7 +596,10 @@ final class MediaItemDetailPageViewController: UIViewController {
                 if !showGenres.isEmpty { await MainActor.run { self.setGenres(showGenres) } }
                 return
             }
-            await MainActor.run { self.applyDetail(detail, fallbackGenres: showGenres) }
+            await MainActor.run {
+                self.applyDetail(detail, fallbackGenres: showGenres)
+                self.configureDescriptionTranslation()
+            }
         }
     }
 
@@ -560,25 +610,60 @@ final class MediaItemDetailPageViewController: UIViewController {
     }
 
     private func applyDetail(_ detail: MediaItemDetail, fallbackGenres: [String]) {
+        latestDetail = detail
         // The seed can be stale on open; `detail` is a fresh read, so reuse it.
         applyWatchState(from: detail.item)
+        synopsisLabel.attributedText = synopsisAttributed()
+        synopsisLabel.isHidden = (synopsisLabel.attributedText?.length ?? 0) == 0
+        refreshDescriptionIndicator()
         setGenres(detail.genres.isEmpty ? fallbackGenres : detail.genres)
         infoColumns.configure(detail: detail)
-        // Capability badges: file quality (4K/DV/Atmos/…) + SDH/AD. Strip any
-        // parenthetical channel-layout noise ("5.1(side)" → "5.1").
-        let source = detail.primarySource
-        var badges = source?.qualityBadges() ?? []
-        if source?.subtitleTracks.contains(where: { $0.isHearingImpaired }) ?? false { badges.append("SDH") }
-        if source?.audioTracks.contains(where: {
-            ($0.title ?? $0.extendedTitle ?? "").localizedCaseInsensitiveContains("descri")
-        }) ?? false { badges.append("AD") }
-        badgeRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for raw in badges {
-            let text = raw.replacingOccurrences(of: "\\([^)]*\\)", with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespaces)
-            if !text.isEmpty { badgeRow.addArrangedSubview(Self.badge(text)) }
+        preferredTextColumnWidth?.constant = detail.ratingPresentation == .allAvailable ? 1060 : 860
+        capabilityBadges.configure(source: detail.primarySource,
+                                   style: detail.showsTechnicalMetadata ? .technical : .standard,
+                                   includesAccessibility: true)
+        ratingsView.configure(detail.chromeRatings)
+        textColumn.setCustomSpacing(capabilityBadges.isHidden && ratingsView.isHidden ? 32 : 18, after: metadataSpacer)
+        if detail.showsTechnicalMetadata, infoButton == nil, let actionRow {
+            let button = circleButton(systemImage: "info")
+            button.onPrimaryAction = { [weak self] in
+                guard let self, let latest = self.latestDetail else { return }
+                self.present(InfoPopupViewController(content: InfoPopupContent.fullInfo(detail: latest),
+                                                      height: 940), animated: true)
+            }
+            actionRow.addArrangedSubview(button)
+            infoButton = button
         }
         addVersionsButton(detail)
+    }
+
+    private func configureDescriptionTranslation() {
+        guard let detail = latestDetail, let provider = provider as? SiloProvider else { return }
+        descriptionTranslation.configure(provider: provider, detail: detail,
+                                         allowAutomatic: allowsAutomaticDescriptionTranslation)
+    }
+
+    private func applyDescriptionTranslation() {
+        if let updated = descriptionTranslation.detail, updated.item.ref == item.ref {
+            let changed = item.overview != updated.item.overview
+                || item.overviewIsMachineTranslated != updated.item.overviewIsMachineTranslated
+            if changed { applyDetail(updated, fallbackGenres: []) }
+            else { latestDetail = updated }
+        }
+        refreshDescriptionIndicator()
+    }
+
+    private func refreshDescriptionIndicator() {
+        let matches = descriptionTranslation.detail?.item.ref == item.ref
+        let hasDescription = item.overview?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let isTranslating = matches && descriptionTranslation.isTranslating
+        synopsisLabel.alpha = isTranslating ? 0.65 : 1
+        descriptionIndicator.configure(
+            isTranslating: isTranslating,
+            isMachineTranslated: hasDescription && item.overviewIsMachineTranslated == true,
+            canTranslate: matches && descriptionTranslation.canTranslate,
+            errorMessage: matches ? descriptionTranslation.errorMessage : nil,
+            onTranslate: { [weak self] in self?.descriptionTranslation.translate() }, compact: true)
     }
 
     /// Versions button after Watchlist, once the detail shows two or more files.
@@ -604,7 +689,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     /// Repaints the Watched glyph and Play label on `.plexDataNeedsRefresh`, posted once
     /// the player's last report has committed (dismiss is about 2 s too early).
     private func refreshWatchState() {
-        guard isViewLoaded, !item.isMetadataOnly, let provider else { return }
+        guard isViewLoaded, !item.isMetadataOnly, item.isAvailable != false, let provider else { return }
         watchRefreshToken &+= 1
         let token = watchRefreshToken
         let ref = item.ref

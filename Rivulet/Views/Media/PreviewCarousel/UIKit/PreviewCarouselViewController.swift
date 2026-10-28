@@ -265,7 +265,8 @@ final class PreviewCarouselViewController: UIViewController {
             let content = InfoPopupContent.description(
                 title: detail.item.title,
                 subtitle: detail.genres.prefix(3).joined(separator: ", "),
-                body: detail.item.overview)
+                body: detail.item.overview,
+                overviewIsMachineTranslated: detail.item.overviewIsMachineTranslated == true)
             let size = InfoPopupViewController.descriptionSize
             self.present(InfoPopupViewController(content: content, width: size.width, height: size.height), animated: true)
         }
@@ -875,6 +876,9 @@ final class PreviewCarouselViewController: UIViewController {
                       self.items.indices.contains(index),
                       self.items[index].ref == detail.item.ref
                 else { return }
+                if provider.kind == .silo {
+                    self.backdropPlane.updateArtwork(detail.item.artwork, for: detail.item.ref)
+                }
                 let refreshed = detail.item
                 guard refreshed != self.items[index] else { return }
                 self.items[index] = refreshed
@@ -1040,6 +1044,12 @@ final class PreviewCarouselViewController: UIViewController {
     /// extra has none, only `key`, an absolute part path (`/services/iva/assets/...`) that
     /// 404s under `/library/metadata` (#255); it plays directly through a synthetic PlexMetadata.
     private func presentExtraPlayer(_ trailer: BelowFoldTrailer) {
+        if let url = trailer.externalURL {
+            guard let provider = MediaProviderRegistry.shared.provider(for: trailer.providerID),
+                  MediaProviderRegistry.shared.isCurrentAuthority(provider) else { return }
+            openRemoteVideo(url)
+            return
+        }
         let key = trailer.playbackKey ?? trailer.id
         // Off Plex an extra is a library item of its own provider.
         if let provider = MediaProviderRegistry.shared.provider(for: trailer.providerID), provider.kind != .plex {
@@ -1081,6 +1091,31 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
+    /// Remote metadata videos are watch pages, not Aether inputs. Apple TV has
+    /// no web view; YouTube's TV app accepts its app-scheme watch destination.
+    private func openRemoteVideo(_ url: URL) {
+        var destination = url
+        if url.host == "www.youtube.com", var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.scheme = "youtube"
+            destination = components.url ?? url
+        }
+        let options: [UIApplication.OpenExternalURLOptionsKey: Any] = destination.scheme == "https"
+            ? [.universalLinksOnly: true] : [:]
+        UIApplication.shared.open(destination, options: options) { [weak self] opened in
+            guard !opened else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let message = url.host == "www.youtube.com"
+                    ? "Install or update YouTube on this Apple TV, then try again. Silo provides a YouTube link, not a video stream Rivulet can play."
+                    : "No installed Apple TV app can open this Vimeo video. Open it in Vimeo on another device."
+                let popup = ConfirmationPopupViewController(
+                    title: "Couldn't Open Video", message: message,
+                    confirmTitle: "OK", cancelTitle: nil, onConfirm: {})
+                self.present(popup, animated: true)
+            }
+        }
+    }
+
     private func playProviderExtra(_ ref: MediaItemRef, provider: any MediaProvider) {
         Task { [weak self] in
             do {
@@ -1089,6 +1124,11 @@ final class PreviewCarouselViewController: UIViewController {
                 ProviderPlayer.play(detail.item, fromBeginning: false, from: self, onDismiss: nil)
             } catch {
                 previewCarouselLog.error("[PCV] extra play: \(error.localizedDescription, privacy: .public)")
+                guard let self else { return }
+                let popup = ConfirmationPopupViewController(
+                    title: "Couldn't Play", message: ProviderPlayer.errorMessage(for: error),
+                    confirmTitle: "OK", cancelTitle: nil, onConfirm: {})
+                self.present(popup, animated: true)
             }
         }
     }
@@ -1600,6 +1640,11 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
             withReuseIdentifier: PreviewCardView.reuseIdentifier,
             for: indexPath
         ) as! PreviewCardView
+        cell.onDetailArtwork = { [weak self] ref, artwork in
+            guard let self,
+                  MediaProviderRegistry.shared.provider(for: ref.providerID)?.kind == .silo else { return }
+            self.backdropPlane.updateArtwork(artwork, for: ref)
+        }
         if items.indices.contains(indexPath.item) {
             cell.item = items[indexPath.item]
         }

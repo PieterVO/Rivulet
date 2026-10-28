@@ -1,6 +1,6 @@
 # Rivulet - Claude Context
 
-Rivulet is a tvOS media client for Plex, Jellyfin and IPTV (the iOS app is Plex and IPTV only). The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, Music, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells and Live TV slots.
+Rivulet is a tvOS media client for Plex, Jellyfin, Silo and IPTV (the iOS app is Plex and IPTV only). The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, Music, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells and Live TV slots.
 
 **UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it.
 
@@ -28,6 +28,8 @@ whether the linter fired.
 **Detail is UIKit, with no SwiftUI fallback.** Every route lands on the same two surfaces: `MediaItemDetailPageViewController` for episodes, `PreviewCarouselViewController(standaloneDetail:)` for everything else. That holds for in-app taps, tile-menu "More Info" / "Go to …", hero Info, and `rivulet://detail` deep links from Top Shelf / Siri (`TVSidebarView.presentDetailForDeepLink`). The old SwiftUI `MediaDetailView` + `MediaItemContextMenu` + `SummarySheet` are **deleted** (`c0b0bf7`); if you find a comment referencing them, it is stale.
 
 The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg demux + HLS-fMP4 remux + AVPlayer, with HDR10+ / HLG / EAC3+JOC Atmos, plus a software sample-buffer backend for AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). It is the only player: VOD **and** Live TV. Video MUST render through the engine surface (`AetherVideoSurfaceView` → `engine.bind(view:)`), never an AVPlayerLayer on `currentAVPlayer`. The only other path is `hls`: AVPlayer on a Plex server transcode, used when no direct-play URL exists or as the fallback after an Aether startup failure. `ContentRouter.plan(...)` picks aether vs hls per item. (RPlayer and the localRemux/avPlayerDirect routes have been removed — see git history.)
+
+Silo's negotiated file and server-HLS deliveries stay on the **Aether host**, including native sidecar tracks; they do not use the legacy AVPlayer-only `hls` route.
 
 ## Quick Reference
 
@@ -298,15 +300,20 @@ sidebar.
   Closing the panel on the profile it opened on reopens the sidebar on the
   profile row (`profileRowRequest`). Switching to another profile goes to Home
   with the sidebar closed (`collapseRequest`), as the Apple TV app does.
-- **Live TV with no media server opens on Live TV.** With no Plex or Jellyfin
-  signed in, `ShellSidebarModel` hides Search, Home, Discover and Watchlist
+- **Live TV with no media server opens on Live TV.** With no Plex, Jellyfin or
+  Silo signed in, `ShellSidebarModel` hides Search, Home, Discover and Watchlist
   (`opensToLiveTV`) and `TVSidebarView` switches to the Live TV tab.
 - **A new install sees the setup landing instead of the shell.**
-  `SetupLandingViewController` (cards for Plex, Jellyfin and Live TV on
+  `SetupLandingViewController` (cards for Plex, Jellyfin, Silo and Live TV on
   `WelcomeGlowView`, maps from `tools/welcome/flow_map.py`) stands in until Start
   Watching sets `setupComplete`; signing out of everything clears it. Its flows
   are the Settings pages themselves, run standalone
   (`SettingsContainerViewController(rootPage:)` + `onExit`): never a second form.
+- **Settings must not drop navigation during a page transition.** The incoming
+  page already accepts focus and form completions. `SettingsContainerViewController`
+  defers the pending push/pop until the transition finishes; a successful Silo PIN
+  selection returns past both the PIN and profile pages. Only the top page may
+  navigate or update focus help; changing pages clears the previous row's help.
 - **"Profile Picker on Launch" is a hard gate.** `ProfilePickerOverlay` reports a
   chosen profile through `onSelected`; `TVSidebarView` re-presents the picker on
   any other close, so Menu cannot dismiss it into the last profile's content.
@@ -739,37 +746,90 @@ write either number anywhere else.
 - Music (already at 80), Live TV (`liveLeading`, `EPGTheme.pageMargin`), Settings
   and the sidebar keep margins of their own.
 
-### Media providers (Plex, Jellyfin)
+### Media providers (Plex, Jellyfin, Silo)
 
-Jellyfin is tvOS only. Both backends sit behind one seam,
-`Services/MediaProvider/MediaProvider.swift`, with `Plex/` and `Jellyfin/` below it.
+Jellyfin and Silo are tvOS only. All backends sit behind one seam,
+`Services/MediaProvider/MediaProvider.swift`, with `Plex/`, `Jellyfin/` and `Silo/` below it.
 Views talk to the protocol. A non-Plex item plays through `ProviderPlayback+Prepare.swift`,
 which never names a backend.
 
-- **One GUI for both servers.** No Jellyfin-only surface. A Plex-only feature
-  is simply absent on a Jellyfin item.
+- **One GUI for every server.** No backend-only browse or player surface. A feature
+  is simply absent when the item's provider does not support it.
 - **Never merge across servers, except Continue Watching.** Each server's
-  libraries and Home rows show on their own, labelled by server. With more than
-  one server signed in, Continue Watching is ONE row (`ContinueWatchingRow`,
+  libraries and Home rows show on their own. Names appear only when more than
+  one library source is visible. In that case Continue Watching is ONE row (`ContinueWatchingRow`,
   `ContinueWatchingMerge`): the same title on two servers is one card, matched
   on ids only (never title), episodes per show, the copy watched last shown.
   Plex to Plex costs no request (`plex://` guids, `includeGuids=1` on the hub);
-  show ids for episodes come from one batched lookup per server, kept forever.
+  missing movie/show ids come from `itemIdentityKeys(for:)`, cached per provider.
+  Episodes resolve their owning show's identity, never their own episode ids;
+  static merged See All grids await `resolveIdentities` before freezing cards.
   A card's Mark Watched / Remove reach every copy.
+- **Server library visibility composes with individual library choices.**
+  `LibrarySettingsManager` owns the per-server `Show Libraries` gate, scoped to
+  the Plex profile or native server account. Turning it off hides library/VOD
+  surfaces, including native feeds, without signing out or disabling Live TV.
+  Keep each library's own hidden state and order so showing the server restores
+  those choices; newly discovered libraries inherit the server gate.
 - **The account's other Plex servers (#87) ride the same seam.** The selected
   server keeps `PlexDataStore` and the legacy `.plex` paths; every other server
   on the account is a `PlexProvider` from `PlexExtraServers` (RivuletCore:
   per-profile list and tokens from `/resources`, shared with iOS), shown beside
-  Jellyfin by `ServerDataStore`. iOS keys the same servers on
+  Jellyfin and Silo by `ServerDataStore`. iOS keys the same servers on
   `PlexMetadata.serverID` / `PlexLibrary.serverID` / `PlexHub.serverID` (nil is
   the selected server) and resolves each through `IOSPlexSession.configuration(serverID:)`.
   `MediaItemRef.isPlex` means the SELECTED server only, so an extra server's
   item takes the provider path; never test `hasPrefix("plex:")` to mean
   "the Plex server".
 - **A new feature is a protocol requirement plus one implementation per provider.**
-  When a decision point names Jellyfin, generalize it onto the seam.
-- Server floor is 10.10 (`JellyfinSession.minimumVersion`), tested on 12.1. No
+  When a decision point names one backend, generalize it onto the seam.
+- Jellyfin's server floor is 10.10 (`JellyfinSession.minimumVersion`), tested on 12.1. No
   per-version code paths.
+
+**Silo's native contract.** Uses API v2 and negotiated playback protocol v3,
+never compatibility endpoints or Plex Discover substitutions.
+
+- `SiloSession` stages login/profile/PIN before atomically committing the account.
+  Keychain holds token pairs and profile proofs, not passwords/PINs. Providers
+  capture `authorityRevision`; reject stale prepare/presentation work after a switch.
+  `ServerDataStore` scopes cached slices by account and revision; reload invalidates
+  stale work without publishing unchanged empty state.
+- The configured display name comes from public `theme/branding.server_name`,
+  not the server URL or `system/identity`. Refresh saved names only after account
+  and profile verification. Branding failures must not invalidate credentials.
+- Description translation follows the Silo profile/library metadata language
+  and `metadata-ai.on_view`: `auto`, `button`, or `off`. The selected visible
+  movie may start before expansion; adjacent/prefetched cards must not create
+  jobs. Keep the original description dimmed while running, restore contrast
+  afterward, and retain the provenance icon. Stopping local observation never
+  cancels the durable server job or automatically replays an uncertain POST.
+- Home rows retain server order, presentation, source ids and cursors. Use
+  `hubItems`/`discoveryItems`; respect `MediaHub.canBrowse` when no native
+  continuation exists. Native-only Continue Watching keeps its layout position.
+- `allEpisodes` traverses the returned season content ids: the catalog
+  `items/{id}/episodes` endpoint accepts a **season**, not a show.
+- Played sessions stop with a final observed sample; `discardStream` retires
+  unplayed reservations without writing zero progress. Native `stop_id` values
+  must be canonical lowercase UUIDs. Mutations are never automatically replayed.
+- `replaceStream` keeps the native session for track/quality changes. Explicit
+  version and Up Next handoffs retire the old reservation before preparing a
+  new one when `reservesPlaybackOnResolve` is true.
+- Native track menus use provider shim ids. Engine active-track publishers must
+  not overwrite these picks with engine indices.
+- The native HLS delivery advertises `containers: ["hls"]`, not its MP4/TS
+  segment packaging; the server compares this with the plan's stream container.
+- Map HLS player time through `StreamInfo.timelineOffset` and `playerStartTime`;
+  report source position, retain full source duration, and replan restricted seeks.
+  Aether's caption clock already uses source PTS, matching native sidecars' absolute
+  source timestamps; do not add the video-window offset to that clock again.
+- `SiloMediaRelay` streams media with fresh scoped authentication, Range/HEAD,
+  redirect checks, opaque resource grants and HLS variable substitution. Player
+  headers are explicitly empty, never inherited from Plex. Playlist input/output
+  is bounded at 32 MiB and retained expansion state at 128 MiB per relay.
+- Both catalog and `/watch` bitrates are normalized from **kbps** at the DTO boundary.
+- Native editable playlists, multipart-only sources and dynamic transport-header
+  renewal plans are unsupported; do not fabricate fallback playback.
+
 
 ### Photos
 
@@ -1015,7 +1075,7 @@ xcodebuild test -scheme Rivulet -destination 'platform=tvOS Simulator,name=Apple
 xcodebuild test -scheme Rivulet -destination 'platform=tvOS Simulator,name=Apple TV' \
   -only-testing:RivuletTests/MediaItemTests
 xcodebuild test -scheme Rivulet -destination 'platform=tvOS Simulator,name=Apple TV' \
-  -only-testing:RivuletTests/MediaItemTests/test_id_returnsRef
+  -only-testing:RivuletTests/SiloHierarchyTests/test_allEpisodesFlattensEverySeasonAndPreservesOpaqueParents
 ```
 
 Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature — Parsers, Playback, Player, Preferences, Services, Siri, etc.), with shared fixtures/mocks in `RivuletTests/Fixtures/`, `RivuletTests/Helpers/`, `RivuletTests/Mocks/`. A few sit at the `RivuletTests/` root (`PlexDeviceDecodingTests.swift`).

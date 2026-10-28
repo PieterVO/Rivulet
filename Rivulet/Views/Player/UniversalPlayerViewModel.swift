@@ -507,6 +507,40 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// `.provider` branch below returns before any Plex request is built.
     private(set) var source: PlaybackSource = .plex
 
+    private var providerTimelineOffset: TimeInterval {
+        guard case .provider(let playback) = source else { return 0 }
+        return playback.stream.timelineOffset
+    }
+
+    private func sourcePosition(forPlayerTime time: TimeInterval) -> TimeInterval {
+        time + providerTimelineOffset
+    }
+
+    private func playerPosition(forSourceTime time: TimeInterval) -> TimeInterval {
+        max(0, time - providerTimelineOffset)
+    }
+
+    private var negotiatedPlayerStartTime: TimeInterval? {
+        guard case .provider(let playback) = source else { return nil }
+        return playback.stream.playerStartTime
+    }
+
+    private func setPlayerDuration(_ duration: TimeInterval) {
+        if case .provider(let playback) = source, playback.stream.source.duration > 0 {
+            self.duration = playback.stream.source.duration
+        } else {
+            self.duration = duration + providerTimelineOffset
+        }
+    }
+
+    private var providerTracksRequireReplan: Bool {
+        guard case .provider(let playback) = source else { return false }
+        return !playback.stream.canSelectTracksLocally
+    }
+
+    private var nativeEngineAudioSelection = NativeAudioSelection()
+    private var hasAppliedNativeEngineSubtitleSelection = false
+
     // MARK: - Progress Reporting
 
     private let reportingInterval: TimeInterval = 10
@@ -515,9 +549,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// stream (and with it the play session) changes; nil once stopped.
     private var providerReporter: (any ProgressReporter)?
     private var providerReporterStarted = false
+    private var providerInitialPosition: TimeInterval?
+    private var providerSeekRequestGeneration = 0
+    /// Latest transport intention while a provider load/replan is suspended.
+    private var pendingProviderPlaybackIntent: Bool?
     /// Provider reports run in call order: a progress must never reach the
     /// server ahead of the start it follows.
     private var providerReportTail: Task<Void, Never>?
+    let descriptionTranslationController = SiloDescriptionTranslationController()
+    private var descriptionTranslationVisible = false
 
     // MARK: - Loading Screen Images (passed from detail view for instant display)
 
@@ -570,6 +610,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var streamWorkTask: Task<Void, Never>?
     private var isReloadingStream = false
     private var trackReloadQueued = false
+    private var pendingTrackReload: (tracks: PlexTrackIDs, item: MediaItemRef?, fileID: String?)?
     /// The picks a Plex transcode was started with, when Rivulet PUT them; seeds the HLS track ids.
     private var transcodeTrackIDs: PlexTrackIDs?
     /// `.provider`: the version the next quality reload plays, when the cap moved off the playing one.
@@ -603,7 +644,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var providerUpNextFetch: (generation: Int, task: Task<(season: [MediaItem], next: MediaItem?), Never>)?
     /// `.provider` only: the next episode's prepare, keyed by its ratingKey,
     /// shared by the countdown-start prepare and the swap.
-    private var nextProviderPrepare: (key: String, task: Task<ProviderPlayback?, Never>)?
+    private var nextProviderPrepare: (key: String, token: Int, task: Task<ProviderPlayback?, Never>)?
+    private var nextProviderPreparationToken = 0
     /// Shown on the post-video page when the next episode can't be prepared.
     @Published private(set) var nextEpisodeError: String?
     /// Bumped by every `stopPlayback()`, so a swap that awaited its provider
@@ -696,7 +738,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             loadingThumbImage: loadingThumbImage,
             preferredMediaID: preferredMediaID
         )
-        setProviderStream(providerPlayback)
+        setProviderStream(providerPlayback, startPosition: startOffset)
         // Lets `preparedNextProviderPlayback` start any entry.
         for entry in playQueue?.entries ?? [] {
             providerEpisodeItems[entry.item.ref.itemID] = entry.item
@@ -705,14 +747,78 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Store the provider's current stream and a reporter for its play
     /// session. A new stream is a new play session, so the reporter follows it.
-    private func setProviderStream(_ playback: ProviderPlayback) {
+    private func setProviderStream(_ playback: ProviderPlayback, startPosition: TimeInterval? = nil,
+                                   preservingReporter: Bool = false) {
+        if case .provider(let previous) = source,
+           previous.item.ref != playback.item.ref || previous.stream.source.id != playback.stream.source.id {
+            resetSiloSubtitleActions()
+            Task { [weak self] in await self?.resolveSubtitleSearchAccess() }
+        }
         source = .provider(playback)
-        providerReporter = playback.provider.progressReporter(
-            for: playback.item.ref,
-            sourceID: playback.stream.source.id,
-            playSessionID: playback.stream.playSessionID
-        )
-        providerReporterStarted = false
+        if !preservingReporter || !providerReporterStarted {
+            providerInitialPosition = startPosition ?? playback.stream.playerStartTime.map { $0 + playback.stream.timelineOffset }
+        }
+        if !playback.stream.canSelectTracksLocally {
+            audioTracks = []
+            subtitleTracks = []
+            hasAppliedAudioPreference = false
+            hasAppliedSubtitlePreference = false
+            currentAudioTrackId = nil
+            currentSubtitleTrackId = nil
+        }
+        if !preservingReporter {
+            providerReporter = playback.provider.progressReporter(
+                for: playback.item.ref,
+                sourceID: playback.stream.source.id,
+                playSessionID: playback.stream.playSessionID
+            )
+            providerReporterStarted = false
+        }
+        if descriptionTranslationController.detail?.item.ref != playback.item.ref {
+            configureDescriptionTranslation()
+        }
+    }
+
+    var descriptionText: String? {
+        guard case .provider(let playback) = source, playback.provider is SiloProvider,
+              let detail = descriptionTranslationController.detail, detail.item.ref == playback.item.ref else {
+            return metadata.summary
+        }
+        return detail.item.overview ?? metadata.summary
+    }
+
+    var descriptionOverviewIsMachineTranslated: Bool {
+        guard descriptionText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+              case .provider(let playback) = source, playback.provider is SiloProvider else { return false }
+        if let detail = descriptionTranslationController.detail, detail.item.ref == playback.item.ref {
+            return detail.item.overviewIsMachineTranslated == true
+        }
+        return playback.detail.item.overviewIsMachineTranslated == true
+    }
+
+    func beginDescriptionTranslation() {
+        descriptionTranslationVisible = true
+        configureDescriptionTranslation()
+    }
+
+    func endDescriptionTranslation() {
+        descriptionTranslationVisible = false
+        descriptionTranslationController.stop()
+    }
+
+    private func configureDescriptionTranslation() {
+        guard case .provider(let playback) = source, let provider = playback.provider as? SiloProvider else {
+            descriptionTranslationController.stop()
+            return
+        }
+        let detail: MediaItemDetail
+        if let current = descriptionTranslationController.detail, current.item.ref == playback.item.ref {
+            detail = current
+        } else {
+            detail = playback.detail
+        }
+        descriptionTranslationController.configure(provider: provider, detail: detail,
+                                                   allowAutomatic: descriptionTranslationVisible)
     }
 
     /// The provider stream's first route. A direct-play stream goes to Aether
@@ -720,11 +826,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// with nothing behind it. nil when the provider gave no URL.
     static func initialRoutes(for stream: StreamInfo) -> (primary: PlaybackRoute, hasTranscodeFallback: Bool)? {
         guard let url = stream.source.streamURL else { return nil }
+        if stream.prefersAetherPlayback {
+            return (.aether(url: url, headers: stream.httpHeaders), stream.source.streamKind != .hlsTranscode)
+        }
         switch stream.source.streamKind {
         case .hlsTranscode:
-            return (.hls(url: url, headers: nil), false)
+            return (.hls(url: url, headers: stream.httpHeaders), false)
         case .directPlay, .progressiveTranscode:
-            return (.aether(url: url, headers: nil), true)
+            return (.aether(url: url, headers: stream.httpHeaders), true)
         }
     }
 
@@ -1306,7 +1415,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         playbackPlan = plan
         activeRoute = plan.primary
         streamURL = url
-        streamHeaders = [:]
+        streamHeaders = playback.stream.httpHeaders
         AppHangContext.setPlaybackRoute(plan.primary.description)
         diagnostics.setMedia(metadata, route: plan.primary.description, startOffset: startOffset, isRelay: false,
                              quality: quality.choice.rawValue, location: quality.isHome ? "home" : "away")
@@ -1318,7 +1427,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         return PlaybackPlan(
             policy: .directPlayFirst,
             primary: routes.primary,
-            fallbacks: routes.hasTranscodeFallback ? [.hls(url: url, headers: nil)] : [],
+            fallbacks: routes.hasTranscodeFallback
+                ? [.hls(url: url, headers: stream.httpHeaders.isEmpty ? nil : stream.httpHeaders)] : [],
             reasoning: ["provider stream: \(stream.source.streamKind)"]
         )
     }
@@ -1421,8 +1531,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     private func bindPlayerState() {
-        // Nothing to bind at init — observers are set up in setupAVPlayerObservers()
-        // when the player is created during startPlayback()
+        NotificationCenter.default.publisher(for: .mediaProviderAccountsChanged)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, case .provider(let playback) = self.source,
+                      !MediaProviderRegistry.shared.isCurrentAuthority(playback.provider) else { return }
+                self.stopPlayback()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - AVPlayer Observation (standard KVO)
@@ -1487,7 +1603,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                     case .readyToPlay:
                         print("[Player] AVPlayerItem status: readyToPlay")
                         let dur = item.duration.seconds
-                        if dur.isFinite { self.duration = dur }
+                        if dur.isFinite { self.setPlayerDuration(dur) }
                         self.updateTrackLists()
                         self.startTranscodeSubtitles()
                     case .failed:
@@ -1570,10 +1686,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         let observer = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.currentTime = time.seconds
-                self.checkMarkers(at: time.seconds)
-                self.tickReplayWindow(at: time.seconds)
-                self.applyContentFilter(at: time.seconds)
+                let sourceTime = self.sourcePosition(forPlayerTime: time.seconds)
+                self.currentTime = sourceTime
+                self.checkMarkers(at: sourceTime)
+                self.tickReplayWindow(at: sourceTime)
+                self.applyContentFilter(at: sourceTime)
             }
         }
         timeObserver = observer
@@ -1718,6 +1835,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func startPlayback() async {
+        guard stopCount == 0 else { return }
         Task { await resolveSubtitleSearchAccess() }
         // Fetch detailed metadata if markers or chapters are missing
         let hasMarkers = !(metadata.Marker ?? []).isEmpty
@@ -1767,7 +1885,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - AVPlayer Startup
 
     private func startAVPlayerPlayback() async {
+        guard stopCount == 0 else { return }
+        let stops = stopCount
+        if providerTracksRequireReplan { pendingProviderPlaybackIntent = true }
+        defer { pendingProviderPlaybackIntent = nil }
         await ensureStreamURLPrepared()
+        guard !Task.isCancelled, stops == stopCount else { return }
 
         guard let url = streamURL else {
             errorMessage = "No stream URL available"
@@ -1786,6 +1909,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Rivulet's DisplayCriteriaManager stands down here to avoid
             // two writers fighting over the panel-mode handshake.
 
+            if let startOffset { _ = try await prepareProviderSeek(to: startOffset) }
             let plan = playbackPlan ?? ContentRouter.plan(for: ContentRoutingContext(
                 metadata: metadata,
                 serverURL: URL(string: serverURL)!,
@@ -1794,13 +1918,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 transcodeStep: activeStreamPlan.step
             ))
             try await startWithFallback(plan: plan, startTime: startOffset)
+            guard !Task.isCancelled, stops == stopCount else { return }
 
             if let ap = aetherPlayer {
                 // Aether kicks playback through its own internal AVPlayer;
                 // Rivulet's `player` is nil on this path. Just call play()
                 // on the adapter and let Aether's state machine drive.
                 print("[Aether] play() — adapter")
-                ap.play()
+                if pendingProviderPlaybackIntent == false { ap.pause() } else { ap.play() }
             } else {
                 let itemStatus = player?.currentItem?.status.rawValue ?? -1
                 let bufferEmpty = player?.currentItem?.isPlaybackBufferEmpty ?? true
@@ -1822,7 +1947,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 activity.becomeCurrent()
             }
             if let dur = player?.currentItem?.duration.seconds, dur.isFinite {
-                self.duration = dur
+                self.setPlayerDuration(dur)
             }
             updateTrackLists()
             preloadThumbnails()
@@ -2035,6 +2160,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func startWithFallback(plan: PlaybackPlan, startTime: TimeInterval?) async throws {
         stallTracker.noteSeekOrLoad(at: Date())
         defer { stallTracker.noteSeekOrLoad(at: Date()) }
+        let playerStart = startTime.map { playerPosition(forSourceTime: $0) } ?? negotiatedPlayerStartTime
         switch plan.primary {
         case .hls:
             // Up Next can move a session from the file to a transcode.
@@ -2067,8 +2193,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             try loadAVPlayer(url: hlsURL, headers: streamHeaders)
 
-            if let startTime, startTime > 0 {
-                await player?.seek(to: CMTime(seconds: startTime, preferredTimescale: 600))
+            if let playerStart, playerStart > 0 {
+                await player?.seek(to: CMTime(seconds: playerStart, preferredTimescale: 600))
             }
 
         case .aether(let url, let headers):
@@ -2076,6 +2202,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             let aetherHeaders = streamHeaders.isEmpty ? (headers ?? rivuletDirectPlayHeaders()) : streamHeaders
             // And from a transcode back to the file.
             releaseAVPlayer()
+            if case .provider(let playback) = source, playback.stream.source.streamKind == .hlsTranscode {
+                guard await waitForHLSTranscodeReady(url: aetherURL, headers: aetherHeaders) else {
+                    throw PlayerError.loadFailed("The provider's HLS stream did not become ready")
+                }
+            }
             do {
                 let ap = aetherPlayer ?? AetherPlayer()
                 aetherPlayer = ap
@@ -2094,7 +2225,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                     ap,
                     url: aetherURL,
                     headers: aetherHeaders,
-                    startTime: startTime
+                    startTime: playerStart
                 )
                 aetherLoadReturned = true
                 // An item with no subtitles publishes nothing to replace the last item's list.
@@ -2157,6 +2288,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         let subtitleLanguages = aetherPreferredSubtitleLanguages()
         let externalSubtitles = aetherExternalSubtitles()
         let stackedParts = stackedParts()
+        let subtitleTimelineOffset = providerTimelineOffset
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
@@ -2168,6 +2300,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                     preferredAudioLanguages: audioLanguages,
                     preferredSubtitleLanguages: subtitleLanguages,
                     externalSubtitles: externalSubtitles,
+                    externalSubtitleTimelineOffset: subtitleTimelineOffset,
                     stackedParts: stackedParts
                 )
             }
@@ -2225,7 +2358,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     isForced: track.isForced,
                     isHearingImpaired: track.isHearingImpaired,
                     isDefault: track.isDefault,
-                    formatHint: track.codec
+                    formatHint: track.codec,
+                    httpHeaders: track.externalHTTPHeaders
                 )
             }
         }
@@ -2265,6 +2399,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     private func aetherPreferredAudioLanguages() -> [String] {
+        if providerTracksRequireReplan { return [] }
         var languages: [String] = []
 
         if let id = initialAudioTrackId,
@@ -2292,6 +2427,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     private func aetherPreferredSubtitleLanguages() -> [String] {
+        if providerTracksRequireReplan { return [] }
         var languages: [String] = []
 
         switch initialSubtitleSelection {
@@ -2383,12 +2519,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         seekHold = SeekHoldLogic()
         inFlightRelativeSeekTarget = nil
         seekGeneration += 1
+        nativeEngineAudioSelection = NativeAudioSelection()
+        hasAppliedNativeEngineSubtitleSelection = false
         player.seekEvents
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
                 if let time = self.seekHold.apply(event) {
-                    self.currentTime = time
+                    self.currentTime = self.sourcePosition(forPlayerTime: time)
                 }
             }
             .store(in: &aetherCancellables)
@@ -2402,23 +2540,24 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // where the seek started, and hand markers and the content
                 // filter a stale playhead to act on.
                 guard !self.seekHold.isHolding else { return }
-                self.currentTime = time
+                let sourceTime = self.sourcePosition(forPlayerTime: time)
+                self.currentTime = sourceTime
                 // Drive marker handling for Aether (skip intro/credits/ad buttons,
                 // auto-skip, and the real Plex credits-marker post-video trigger).
                 // Mirrors the AVPlayer periodic observer (~line 979). Aether
                 // ticks at 0.1s (native host)
                 // or 0.25s (software host), both finer than checkMarkers' ~0.5s
                 // assumption, so no throttle change is needed.
-                self.checkMarkers(at: time)
-                self.tickReplayWindow(at: time)
-                self.applyContentFilter(at: time)
+                self.checkMarkers(at: sourceTime)
+                self.tickReplayWindow(at: sourceTime)
+                self.applyContentFilter(at: sourceTime)
             }
             .store(in: &aetherCancellables)
 
         player.durationPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] dur in
-                if dur > 0 { self?.duration = dur }
+                if dur > 0 { self?.setPlayerDuration(dur) }
             }
             .store(in: &aetherCancellables)
 
@@ -2506,7 +2645,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         player.$activeAudioTrackId
             .receive(on: DispatchQueue.main)
             .sink { [weak self] id in
-                guard let self, let id else { return }
+                guard let self, !self.providerTracksRequireReplan, let id else { return }
                 self.currentAudioTrackId = id
             }
             .store(in: &aetherCancellables)
@@ -2518,7 +2657,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // Ignore engine nil: the engine clears it transiently while it
                 // rebuilds the pipeline. A user turn-off does not come through here.
                 // A track read unseen for the content filter is not the user's pick.
-                guard let self, let id, self.silentSubtitleTrackId == nil else { return }
+                guard let self, !self.providerTracksRequireReplan, let id, self.silentSubtitleTrackId == nil else { return }
                 // Track ids ARE engine indices on this route (see TrackMerge) —
                 // the engine's active index needs no translation.
                 self.currentSubtitleTrackId = id
@@ -3005,7 +3144,20 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         let fallback: (url: URL, headers: [String: String], sessionId: String?)?
         if case .provider = source {
-            fallback = try await switchToProviderTranscode(resumeTime: resumeTime).map { ($0, [:], nil) }
+            if let url = try await switchToProviderTranscode(resumeTime: resumeTime),
+               case .provider(let playback) = source {
+                if playback.stream.prefersAetherPlayback {
+                    prepareProviderStream(playback)
+                    guard let plan = playbackPlan else { throw MediaProviderError.notPlayable }
+                    releaseAetherPlayer()
+                    releaseAVPlayer()
+                    try await startWithFallback(plan: plan, startTime: resumeTime)
+                    return
+                }
+                fallback = (url, playback.stream.httpHeaders, nil)
+            } else {
+                fallback = nil
+            }
         } else if resumeTime <= 0.5, let prebuiltURL = rivuletFallbackURL, !rivuletFallbackHeaders.isEmpty {
             let sessionId = URLComponents(url: prebuiltURL, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "session" })?.value
@@ -3067,7 +3219,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                                  resumeTime: TimeInterval) async throws {
         try loadAVPlayer(url: hls.url, headers: hls.headers)
         if resumeTime > 0 {
-            await player?.seek(to: CMTime(seconds: resumeTime, preferredTimescale: 600))
+            await player?.seek(to: CMTime(seconds: playerPosition(forSourceTime: resumeTime), preferredTimescale: 600))
         }
         stallTracker.noteSeekOrLoad(at: Date())
     }
@@ -3114,28 +3266,46 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// The provider's server transcode, from where playback stopped. A new
-    /// play session: the old one is stopped, and the stored stream and its
-    /// reporter follow the new one. Returns the URL to play, with no headers.
+    /// Negotiate a provider delivery at the source playhead. Native replans keep
+    /// their session/reporter; backends without replanning use a new transcode.
     /// `maxBitrate` (bps) caps it; nil leaves the bitrate to the server.
     func switchToProviderTranscode(resumeTime: TimeInterval, maxBitrate: Int? = nil,
-                                   tracks: PlexTrackIDs = PlexTrackIDs()) async throws -> URL? {
+                                   tracks: PlexTrackIDs = PlexTrackIDs(), forceTranscode: Bool = true) async throws -> URL? {
         guard case .provider(var playback) = source else { return nil }
-        playback.stream = try await playback.provider.transcodeStream(
-            for: playback.item.ref,
-            sourceID: providerTargetSourceID ?? playback.stream.source.id,
-            startTime: resumeTime,
-            maxBitrate: maxBitrate,
-            // A shim stream id is the provider's index; Plex's 0 (off) is -1 there.
-            audioStreamIndex: tracks.audio,
-            subtitleStreamIndex: tracks.subtitle.map { $0 == 0 ? -1 : $0 }
-        )
-        try Task.checkCancellation()
+        let stops = stopCount
+        let oldSessionID = playback.stream.playSessionID
+        let explicitSource = providerTargetSourceID
+        let retargetingNative = providerTracksRequireReplan && explicitSource != nil
+        let audio = retargetingNative ? nil : providerAudioIndex(for: tracks.audio, source: playback.stream.source)
+        let subtitle = retargetingNative ? nil : providerSubtitleIndex(for: tracks.subtitle, source: playback.stream.source)
+        if let replacement = try await playback.provider.replaceStream(
+            for: playback.item.ref, current: playback.stream, sourceID: explicitSource,
+            position: resumeTime, maxBitrate: maxBitrate, audioStreamIndex: audio,
+            subtitleStreamIndex: subtitle, forceTranscode: forceTranscode
+        ) {
+            playback.stream = replacement
+        } else {
+            playback.stream = try await playback.provider.transcodeStream(
+                for: playback.item.ref, sourceID: explicitSource ?? playback.stream.source.id,
+                startTime: resumeTime, maxBitrate: maxBitrate,
+                audioStreamIndex: audio, subtitleStreamIndex: subtitle)
+        }
+        guard !Task.isCancelled, stops == stopCount else {
+            await ProviderPlayback.discardUnplayedStream(playback.stream, provider: playback.provider)
+            throw CancellationError()
+        }
         providerTargetSourceID = nil
         playback.quality.choice = qualityChoice
         playback.quality.plan = activeStreamPlan
-        await stopProviderReporter(at: resumeTime)
-        setProviderStream(playback)
+        let sameSession = oldSessionID != nil && oldSessionID == playback.stream.playSessionID
+        if !sameSession { await stopProviderReporter(at: resumeTime) }
+        guard !Task.isCancelled, stops == stopCount else {
+            await ProviderPlayback.discardUnplayedStream(playback.stream, provider: playback.provider)
+            throw CancellationError()
+        }
+        metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: playback.stream.source, extras: playback.extras)
+        setProviderStream(playback, preservingReporter: sameSession)
+        currentTime = resumeTime
         return playback.stream.source.streamURL
     }
 
@@ -3143,16 +3313,43 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// server would only transcode it (nothing changes then).
     private func resolveProviderOriginal(at time: TimeInterval) async throws -> PlaybackPlan? {
         guard case .provider(var playback) = source else { return nil }
-        let stream = try await playback.provider.resolveStream(for: playback.item.ref,
-                                                               sourceID: providerTargetSourceID ?? playback.stream.source.id)
-        try Task.checkCancellation()
-        guard stream.source.streamKind != .hlsTranscode, let plan = Self.providerPlan(for: stream) else { return nil }
+        let stops = stopCount
+        let oldSessionID = playback.stream.playSessionID
+        let replacement = try await playback.provider.replaceStream(
+            for: playback.item.ref, current: playback.stream, sourceID: providerTargetSourceID,
+            position: time, maxBitrate: nil, audioStreamIndex: nil,
+            subtitleStreamIndex: nil, forceTranscode: false)
+        let stream: StreamInfo
+        if let replacement {
+            stream = replacement
+        } else {
+            stream = try await playback.provider.resolveStream(
+                for: playback.item.ref, sourceID: providerTargetSourceID ?? playback.stream.source.id)
+        }
+        guard !Task.isCancelled, stops == stopCount else {
+            await ProviderPlayback.discardUnplayedStream(stream, provider: playback.provider)
+            throw CancellationError()
+        }
+        guard (replacement != nil || stream.source.streamKind != .hlsTranscode),
+              let plan = Self.providerPlan(for: stream) else {
+            if stream.playSessionID != oldSessionID {
+                await ProviderPlayback.discardUnplayedStream(stream, provider: playback.provider)
+            }
+            return nil
+        }
         providerTargetSourceID = nil
         playback.stream = stream
         playback.quality.choice = qualityChoice
         playback.quality.plan = .original
-        await stopProviderReporter(at: time)
-        setProviderStream(playback)
+        let sameSession = oldSessionID != nil && oldSessionID == stream.playSessionID
+        if !sameSession { await stopProviderReporter(at: time) }
+        guard !Task.isCancelled, stops == stopCount else {
+            await ProviderPlayback.discardUnplayedStream(stream, provider: playback.provider)
+            throw CancellationError()
+        }
+        metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: stream.source, extras: playback.extras)
+        setProviderStream(playback, preservingReporter: sameSession)
+        currentTime = time
         return plan
     }
 
@@ -3213,7 +3410,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         if target.id != versionID {
             metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: target, extras: playback.extras)
         }
-        providerTargetSourceID = target.id == playing.id ? nil : target.id
+        if case .source(let id) = baseVersionChoice {
+            providerTargetSourceID = id
+        } else {
+            providerTargetSourceID = target.id == playing.id ? nil : target.id
+        }
         // The detail's entry is the file itself, never a transcode's numbers.
         let file = playback.detail.mediaSources.first { $0.id == target.id } ?? target
         activeStreamPlan = QualityDecision.decide(setting: setting, sourceKbps: file.sourceKbps,
@@ -3302,22 +3503,42 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// A transcode carries the server's selected audio and subtitle, so a new pick restarts it at the playhead.
     private func reloadTranscodeForTrackChange() {
-        guard case .hls = activeRoute, player != nil, !trackReloadQueued else { return }
+        if !providerTracksRequireReplan {
+            guard case .hls = activeRoute, player != nil else { return }
+        }
+        // A plan arriving from an earlier pick reseeds current*TrackId.
+        // Keep the user's newer queued pick instead of rereading that plan.
+        let tracks = currentPlexTrackIDs()
+        if case .provider(let playback) = source {
+            pendingTrackReload = (tracks, playback.item.ref, playback.stream.source.id)
+        } else {
+            pendingTrackReload = (tracks, nil, nil)
+        }
+        guard !trackReloadQueued else { return }
         trackReloadQueued = true
         enqueueStreamWork { vm in
             vm.trackReloadQueued = false
-            guard vm.aetherPlayer == nil, case .hls = vm.activeRoute else { return }
-            await vm.reloadStream(toOriginal: false, reason: "track_change", tracks: vm.currentPlexTrackIDs(),
+            guard let reload = vm.pendingTrackReload else { return }
+            vm.pendingTrackReload = nil
+            if let item = reload.item {
+                guard case .provider(let playback) = vm.source,
+                      playback.item.ref == item, playback.stream.source.id == reload.fileID else { return }
+            }
+            if !vm.providerTracksRequireReplan {
+                guard vm.aetherPlayer == nil, case .hls = vm.activeRoute else { return }
+            }
+            await vm.reloadStream(toOriginal: false, reason: "track_change", tracks: reload.tracks,
                                   restoring: vm.planSnapshot)
         }
     }
 
     /// Cancelling the newest task cancels the whole chain. Work queued for an item that was swapped out never runs.
-    private func enqueueStreamWork(_ work: @escaping @MainActor (UniversalPlayerViewModel) async -> Void) {
+    @discardableResult
+    private func enqueueStreamWork(_ work: @escaping @MainActor (UniversalPlayerViewModel) async -> Void) -> Task<Void, Never> {
         let previous = streamWorkTask
         let stops = stopCount
         let generation = itemGeneration
-        streamWorkTask = Task { @MainActor [weak self] in
+        let task = Task { @MainActor [weak self] in
             await withTaskCancellationHandler {
                 await previous?.value
             } onCancel: {
@@ -3329,6 +3550,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             defer { self.isReloadingStream = false }
             await work(self)
         }
+        streamWorkTask = task
+        return task
     }
 
     /// Reloads at the playhead on the file or on a transcode at `activeStreamPlan`'s step,
@@ -3338,6 +3561,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                               restoring snapshot: PlanSnapshot) async {
         let resumeTime = playheadForReload
         let resume = playbackState != .paused
+        if providerTracksRequireReplan { pendingProviderPlaybackIntent = resume }
+        defer { pendingProviderPlaybackIntent = nil }
         diagnostics.step("quality_reload", detail: "reason=\(reason) step=\(activeStreamPlan.step?.kbps ?? 0)")
         do {
             if toOriginal {
@@ -3346,7 +3571,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 try await reloadTranscode(at: resumeTime, tracks: tracks)
             }
             guard !Task.isCancelled else { return }
-            if resume {
+            if pendingProviderPlaybackIntent ?? resume {
                 activePlayer_play()
             } else {
                 activePlayer_pause()
@@ -3372,7 +3597,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// The AVPlayer item's own clock; the periodic observer behind `currentTime` lags a fresh seek.
     private var playheadForReload: TimeInterval {
         if aetherPlayer == nil, let seconds = player?.currentTime().seconds, seconds.isFinite, seconds > 0 {
-            return seconds
+            return sourcePosition(forPlayerTime: seconds)
         }
         return currentTime
     }
@@ -3381,11 +3606,22 @@ final class UniversalPlayerViewModel: ObservableObject {
         let hls: (url: URL, headers: [String: String], sessionId: String?)
         if case .provider = source {
             guard let url = try await switchToProviderTranscode(
-                resumeTime: time, maxBitrate: activeStreamPlan.step.map { $0.kbps * 1000 }, tracks: tracks) else {
+                resumeTime: time, maxBitrate: activeStreamPlan.step.map { $0.kbps * 1000 },
+                tracks: tracks, forceTranscode: false) else {
                 throw PlayerError.loadFailed("Unable to start the provider transcode")
             }
             transcodeTrackIDs = tracks
-            hls = (url, [:], nil)
+            guard case .provider(let playback) = source else { throw MediaProviderError.notPlayable }
+            if playback.stream.prefersAetherPlayback {
+                prepareProviderStream(playback)
+                guard let plan = playbackPlan else { throw MediaProviderError.notPlayable }
+                releaseAetherPlayer()
+                releaseAVPlayer()
+                try await startWithFallback(plan: plan, startTime: time)
+                updateTrackLists()
+                return
+            }
+            hls = (url, playback.stream.httpHeaders, nil)
         } else {
             transcodeTrackIDs = tracks
             await putTrackSelection(tracks)
@@ -3449,12 +3685,63 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Audio and subtitle picks as Plex stream ids, which survive a route change.
     /// `subtitle` 0 is off; nil leaves the server's choice alone.
-    struct PlexTrackIDs {
+    nonisolated struct PlexTrackIDs: Sendable {
         var audio: Int?
         var subtitle: Int?
     }
 
+    private func providerAudioIndex(for shimID: Int?, source: MediaSource) -> Int? {
+        guard let shimID, let ordinal = plexAudioTracksFromMetadata().firstIndex(where: { $0.id == shimID }),
+              source.audioTracks.indices.contains(ordinal) else { return nil }
+        return source.audioTracks[ordinal].index
+    }
+
+    private func providerSubtitleIndex(for shimID: Int?, source: MediaSource) -> Int? {
+        guard let shimID else { return nil }
+        if shimID == 0 { return -1 }
+        guard let ordinal = plexSubtitleTracksFromMetadata().firstIndex(where: { $0.id == shimID }),
+              source.subtitleTracks.indices.contains(ordinal) else { return nil }
+        return source.subtitleTracks[ordinal].index
+    }
+
+    private func nativeSubtitleEngineID(for shimID: Int?) -> Int? {
+        guard let shimID, case .provider(let playback) = source,
+              let ordinal = plexSubtitleTracksFromMetadata().firstIndex(where: { $0.id == shimID }),
+              let player = aetherPlayer else { return nil }
+        return NativeSubtitleSelection.engineID(ordinal: ordinal, tracks: playback.stream.source.subtitleTracks,
+                                               engine: player.subtitleTracks)
+    }
+
+    private func applyNativeEngineTrackSelection() {
+        guard case .provider(let playback) = source, let player = aetherPlayer else { return }
+        // A probe can publish tracks while load is still choosing/starting its
+        // initial audio. Selecting then can race that load or be overwritten.
+        // Resolve only after load returns; a later inventory publication can
+        // still supply a track that was missing at that boundary.
+        if playback.stream.source.streamKind == .directPlay,
+           let id = nativeEngineAudioSelection.resolve(
+               ordinal: playback.stream.source.audioTracks.firstIndex(where: \.isSelected),
+               engine: player.audioTracks, loadReturned: aetherLoadReturned
+           ) {
+            player.selectAudioTrack(id: id)
+        }
+        if aetherLoadReturned, !hasAppliedNativeEngineSubtitleSelection {
+            let selected = currentSubtitleTrackId.flatMap { nativeSubtitleEngineID(for: $0) }
+            let waitingForDelivery = currentSubtitleTrackId != nil && selected == nil &&
+                playback.stream.source.subtitleTracks.contains {
+                    $0.isSelected && ($0.nativeStreamIndex != nil || $0.externalURL != nil)
+                }
+            if !waitingForDelivery {
+                player.selectSubtitleTrack(id: selected)
+                hasAppliedNativeEngineSubtitleSelection = true
+            }
+        }
+    }
+
     private func currentPlexTrackIDs() -> PlexTrackIDs {
+        if providerTracksRequireReplan {
+            return PlexTrackIDs(audio: currentAudioTrackId, subtitle: showsGeneratedSubtitles ? 0 : currentSubtitleTrackId ?? 0)
+        }
         guard aetherPlayer != nil else {
             return PlexTrackIDs(audio: currentAudioTrackId, subtitle: currentSubtitleTrackId ?? 0)
         }
@@ -3779,6 +4066,11 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func stopPlayback() {
         stopCount += 1
+        resetSiloSubtitleActions()
+        endDescriptionTranslation()
+        let finalPosition = currentTime
+        Task { await self.stopProviderReporter(at: finalPosition) }
+        clearPreloadedData()
         streamPreparationTask?.cancel()
         streamPreparationTask = nil
         streamWorkTask?.cancel()
@@ -3837,7 +4129,9 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func togglePlayPause() {
         hidePausedPoster()
-        if isPlaying {
+        let intendsToPlay = pendingProviderPlaybackIntent ?? isPlaying
+        if pendingProviderPlaybackIntent != nil { pendingProviderPlaybackIntent = !intendsToPlay }
+        if intendsToPlay {
             activePlayer_pause()
         } else {
             activePlayer_play()
@@ -3849,12 +4143,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     func resume() {
         pausedDueToAppInactive = false
         hidePausedPoster()
+        if pendingProviderPlaybackIntent != nil { pendingProviderPlaybackIntent = true }
         activePlayer_play()
         showControlsTemporarily()
     }
 
     /// Pause playback (used by remote commands)
     func pause() {
+        if pendingProviderPlaybackIntent != nil { pendingProviderPlaybackIntent = false }
         activePlayer_pause()
         showControlsTemporarily()
     }
@@ -3930,8 +4226,12 @@ final class UniversalPlayerViewModel: ObservableObject {
             let recoveryTime = self.currentTime
             guard recoveryTime <= baselineTime + 0.5 else { return }
 
-            let kickTarget = min(max(0, recoveryTime + 0.1), max(player.duration, recoveryTime))
-            await player.seek(to: kickTarget)
+            let kickTarget = min(max(0, recoveryTime + 0.1), max(self.duration, recoveryTime))
+            if case .provider(let playback) = self.source, !playback.stream.canSeekAnywhere {
+                await self.seek(to: kickTarget, revealsControls: false)
+                return
+            }
+            await player.seek(to: self.playerPosition(forSourceTime: kickTarget))
             player.play()
 
             try? await Task.sleep(nanoseconds: UInt64(self.aetherStallFailureDelay * 1_000_000_000))
@@ -3946,6 +4246,75 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Reanchor restricted deliveries in their native protocol before installing the new URL.
+    /// Same-session replans retain the reporter's monotonic sequence and do not send stop.
+    private func prepareProviderSeek(to position: TimeInterval) async throws -> Bool {
+        guard case .provider(var playback) = source, !playback.stream.canSeekAnywhere else { return false }
+        let stops = stopCount
+        guard let stream = try await playback.provider.seekStream(
+            for: playback.item.ref, sourceID: playback.stream.source.id,
+            playSessionID: playback.stream.playSessionID, position: position
+        ) else { throw MediaProviderError.notPlayable }
+        guard !Task.isCancelled, stops == stopCount else {
+            await ProviderPlayback.discardUnplayedStream(stream, provider: playback.provider)
+            throw CancellationError()
+        }
+        let sameSession = stream.playSessionID != nil && stream.playSessionID == playback.stream.playSessionID
+        if !sameSession { await stopProviderReporter(at: currentTime) }
+        guard !Task.isCancelled, stops == stopCount else {
+            await ProviderPlayback.discardUnplayedStream(stream, provider: playback.provider)
+            throw CancellationError()
+        }
+        releaseAVPlayer()
+        releaseAetherPlayer()
+        playback.stream = stream
+        if sameSession {
+            source = .provider(playback)
+        } else {
+            setProviderStream(playback)
+        }
+        metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: stream.source, extras: playback.extras)
+        prepareProviderStream(playback)
+        currentTime = sourcePosition(forPlayerTime: stream.playerStartTime ?? 0)
+        if !providerReporterStarted { providerInitialPosition = currentTime }
+        return true
+    }
+
+    private func seekProviderIfNeeded(to position: TimeInterval) async -> Bool {
+        guard case .provider(let playback) = source, !playback.stream.canSeekAnywhere else { return false }
+        providerSeekRequestGeneration += 1
+        let request = providerSeekRequestGeneration
+        await enqueueStreamWork { model in
+            guard model.providerSeekRequestGeneration == request else { return }
+            let wasPlaying = model.isPlaying
+            model.pendingProviderPlaybackIntent = wasPlaying
+            defer { model.pendingProviderPlaybackIntent = nil }
+            do {
+                if try await model.prepareProviderSeek(to: position) {
+                    guard let plan = model.playbackPlan else { throw MediaProviderError.notPlayable }
+                    try await model.startWithFallback(plan: plan, startTime: nil)
+                    if model.pendingProviderPlaybackIntent ?? wasPlaying {
+                        model.aetherPlayer?.play()
+                        model.player?.play()
+                    } else {
+                        model.aetherPlayer?.pause()
+                        model.player?.pause()
+                    }
+                } else if let player = model.aetherPlayer {
+                    await player.seek(to: model.playerPosition(forSourceTime: position))
+                } else {
+                    await model.player?.seek(to: CMTime(seconds: model.playerPosition(forSourceTime: position),
+                                                       preferredTimescale: 600))
+                }
+            } catch {
+                guard !isCancellationError(error), !Task.isCancelled else { return }
+                model.errorMessage = PlayerError.loadFailed(error.localizedDescription).userFacingDescription
+                model.updatePlaybackState(.failed(.loadFailed(error.localizedDescription)))
+            }
+        }.value
+        return true
+    }
+
     /// - Parameter revealsControls: whether the seek should surface the
     ///   transport chrome (the normal reveal-the-scrubber affordance). A marker
     ///   skip taken while the chrome is hidden passes `false` so the jump
@@ -3956,10 +4325,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         seekGeneration += 1
         inFlightRelativeSeekTarget = nil
         stallTracker.noteSeekOrLoad(at: Date())
+        if await seekProviderIfNeeded(to: time) {
+            if revealsControls { showControlsTemporarily() }
+            return
+        }
         if let ap = aetherPlayer {
-            await ap.seek(to: time)
+            await ap.seek(to: playerPosition(forSourceTime: time))
         } else {
-            await player?.seek(to: CMTime(seconds: time, preferredTimescale: 600))
+            await player?.seek(to: CMTime(seconds: playerPosition(forSourceTime: time), preferredTimescale: 600))
         }
         stallTracker.noteSeekOrLoad(at: Date())
         if revealsControls { showControlsTemporarily() }
@@ -3981,10 +4354,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         seekGeneration += 1
         let generation = seekGeneration
         stallTracker.noteSeekOrLoad(at: Date())
+        if await seekProviderIfNeeded(to: targetTime) {
+            if seekGeneration == generation { inFlightRelativeSeekTarget = nil }
+            if showControls { showControlsTemporarily() }
+            return
+        }
         if let ap = aetherPlayer {
-            await ap.seek(to: targetTime)
+            await ap.seek(to: playerPosition(forSourceTime: targetTime))
         } else {
-            await player?.seek(to: CMTime(seconds: targetTime, preferredTimescale: 600))
+            await player?.seek(to: CMTime(seconds: playerPosition(forSourceTime: targetTime), preferredTimescale: 600))
         }
         stallTracker.noteSeekOrLoad(at: Date())
         // Only the newest seek clears it; an older one returning late must not
@@ -4427,6 +4805,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Select audio track without saving preference (for auto-selection)
     private func selectAudioTrackWithoutSaving(id: Int) {
+        if providerTracksRequireReplan {
+            let changed = id != currentAudioTrackId
+            currentAudioTrackId = id
+            if changed { reloadTranscodeForTrackChange() }
+            return
+        }
         if let ap = aetherPlayer {
             ap.selectAudioTrack(id: id)
             currentAudioTrackId = id
@@ -4460,13 +4844,39 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Subtitle Search
 
-    /// Plex writes the file next to the media, which only the server's admin may
-    /// do. `selectedServer` (and its `owned`) is nil after a warm launch, so ask the server.
-    private(set) var canSearchSubtitles = false
-    /// Admin answers per server URL + token, for the session.
+    @Published private(set) var canSearchSubtitles = false
+    @Published private(set) var subtitleSearchWarning: String?
+    @Published private(set) var subtitleOperation: PlayerSubtitleOperation = .idle
+    @Published private(set) var siloSubtitleJobs: [SiloSubtitleAIJob] = []
+    private var siloSubtitleAIStatus: SiloSubtitleAIStatus?
+    private var siloSubtitleTask: Task<Void, Never>?
     private static var serverAdminAnswers: [String: Bool] = [:]
 
+    var siloSubtitleGenerationOptions: [SiloSubtitleGenerationOption] {
+        guard case .provider(let playback) = source, playback.provider is SiloProvider else { return [] }
+        return siloSubtitleAIStatus?.generationOptions(for: playback.stream.source, targetLanguage: subtitleSearchLanguage) ?? []
+    }
+
+    func refreshSubtitleActions() async { await resolveSubtitleSearchAccess() }
+
     private func resolveSubtitleSearchAccess() async {
+        let generation = itemGeneration
+        canSearchSubtitles = false
+        if case .provider(let playback) = source, let provider = playback.provider as? SiloProvider {
+            let fileID = playback.stream.source.id
+            async let providers = try? provider.subtitleProviderStatus()
+            async let ai = try? provider.subtitleAIStatus()
+            let (providerStatus, aiStatus) = await (providers, ai)
+            guard isCurrentSiloFile(fileID, generation: generation), stopCount == 0 else { return }
+            canSearchSubtitles = providerStatus?.canSearch == true
+            siloSubtitleAIStatus = aiStatus
+            if aiStatus?.canTranslate == true || aiStatus?.canTranscribe == true {
+                let jobs = try? await provider.subtitleJobs(fileID: fileID)
+                guard isCurrentSiloFile(fileID, generation: generation) else { return }
+                siloSubtitleJobs = jobs ?? []
+            }
+            return
+        }
         guard case .plex = source, metadata.ratingKey != nil,
               PlexUserProfileManager.shared.selectedUser?.restricted != true else { return }
         let key = serverURL + authToken
@@ -4476,6 +4886,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         let isAdmin = await PlexNetworkManager.shared.canAdministerServer(serverURL: serverURL, authToken: authToken)
         Self.serverAdminAnswers[key] = isAdmin
+        guard generation == itemGeneration, stopCount == 0, case .plex = source else { return }
         canSearchSubtitles = isAdmin
     }
 
@@ -4487,16 +4898,27 @@ final class UniversalPlayerViewModel: ObservableObject {
         return code.isEmpty ? device : Locale.LanguageCode(code).identifier(.alpha2) ?? device
     }
 
-    func searchSubtitles() async throws -> [PlexStream] {
-        guard let ratingKey = metadata.ratingKey else { return [] }
+    func searchSubtitles() async throws -> [PlayerSubtitleSearchResult] {
+        subtitleSearchWarning = nil
+        let generation = itemGeneration
+        if case .provider(let playback) = source, let provider = playback.provider as? SiloProvider {
+            guard canSearchSubtitles else { throw MediaProviderError.backendSpecific(underlying: "Subtitle search is not enabled on Silo.") }
+            let fileID = playback.stream.source.id
+            let response = try await provider.searchSubtitles(fileID: fileID, language: subtitleSearchLanguage)
+            guard isCurrentSiloFile(fileID, generation: generation) else { throw CancellationError() }
+            subtitleSearchWarning = response.warnings.isEmpty ? nil : "Some Silo subtitle providers could not return results."
+            return response.results.map { .silo($0, fileID: fileID, providerID: provider.id) }
+        }
+        guard case .plex = source, let ratingKey = metadata.ratingKey else { return [] }
         return try await PlexNetworkManager.shared.searchSubtitles(
             serverURL: serverURL, authToken: authToken, ratingKey: ratingKey, language: subtitleSearchLanguage)
+            .map(PlayerSubtitleSearchResult.plex)
     }
 
     /// Downloads `result`, waits for the server to list it, then reloads at the
     /// playhead with it on. A reload re-registers every sidecar in Plex's order,
     /// which `TrackMerge` pairs on; adding one to the live engine would not.
-    func installSubtitle(_ result: PlexStream) async {
+    private func installPlexSubtitle(_ result: PlexStream) async {
         guard let ratingKey = metadata.ratingKey, let resultKey = result.key else { return }
         let network = PlexNetworkManager.shared
         let generation = itemGeneration
@@ -4532,6 +4954,174 @@ final class UniversalPlayerViewModel: ObservableObject {
             if isCancellationError(error) || generation != itemGeneration { return }
             showCompatibilityNotice("Couldn't Download Subtitles")
         }
+    }
+
+    func installSubtitle(_ result: PlayerSubtitleSearchResult) async {
+        switch result {
+        case .plex(let result): await installPlexSubtitle(result)
+        case .silo(let result, let resultFileID, let resultProviderID):
+            guard case .provider(let playback) = source, let provider = playback.provider as? SiloProvider else { return }
+            let generation = itemGeneration
+            let fileID = playback.stream.source.id
+            guard fileID == resultFileID, provider.id == resultProviderID else {
+                subtitleOperation = .failed("These subtitle results belong to another file. Search again.")
+                return
+            }
+            guard siloSubtitleTask == nil, !subtitleOperation.isBusy else {
+                showCompatibilityNotice("Wait for the Silo subtitle operation, or cancel its job first.")
+                return
+            }
+            subtitleOperation = .downloading
+            do {
+                let stored = try await provider.downloadSubtitle(result, fileID: fileID)
+                guard isCurrentSiloFile(fileID, generation: generation) else { return }
+                await activateSiloSubtitle(stored.id, fileID: fileID, generation: generation)
+            } catch {
+                guard isCurrentSiloFile(fileID, generation: generation), !isCancellationError(error) else { return }
+                subtitleOperation = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func generateSiloSubtitles(_ option: SiloSubtitleGenerationOption) {
+        guard siloSubtitleTask == nil, !subtitleOperation.isBusy, case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider,
+              option.fileID == playback.stream.source.id else { return }
+        let generation = itemGeneration
+        let fileID = playback.stream.source.id
+        subtitleOperation = .starting
+        siloSubtitleTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.isCurrentSiloFile(fileID, generation: generation) { self.siloSubtitleTask = nil } }
+            do {
+                try Task.checkCancellation()
+                guard self.isCurrentSiloFile(fileID, generation: generation) else { return }
+                if option.kind != .translate {
+                    let quota = try await provider.subtitleQuota()
+                    guard self.isCurrentSiloFile(fileID, generation: generation) else { return }
+                    guard !quota.limited || quota.remaining > 0 else {
+                        throw MediaProviderError.backendSpecific(underlying: "Silo's transcription quota is used up.")
+                    }
+                }
+                try Task.checkCancellation()
+                let job = try await provider.generateSubtitles(fileID: fileID, option: option)
+                try await self.followSiloSubtitleJob(job, provider: provider, fileID: fileID, generation: generation)
+            } catch {
+                guard self.isCurrentSiloFile(fileID, generation: generation), !isCancellationError(error) else { return }
+                self.subtitleOperation = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func followSiloSubtitleJob(_ job: SiloSubtitleAIJob) {
+        guard siloSubtitleTask == nil, !subtitleOperation.isBusy, case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider,
+              job.mediaFileId == playback.stream.source.id else { return }
+        let generation = itemGeneration
+        let fileID = playback.stream.source.id
+        siloSubtitleTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.isCurrentSiloFile(fileID, generation: generation) { self.siloSubtitleTask = nil } }
+            do {
+                try await self.followSiloSubtitleJob(job, provider: provider, fileID: fileID, generation: generation)
+            } catch {
+                guard self.isCurrentSiloFile(fileID, generation: generation), !isCancellationError(error) else { return }
+                self.subtitleOperation = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func followSiloSubtitleJob(_ initial: SiloSubtitleAIJob, provider: SiloProvider,
+                                       fileID: String, generation: Int) async throws {
+        var job = initial
+        while isCurrentSiloFile(fileID, generation: generation) {
+            try Task.checkCancellation()
+            guard job.mediaFileId == fileID else { throw MediaProviderError.notFound }
+            subtitleOperation = .job(job)
+            if let index = siloSubtitleJobs.firstIndex(where: { $0.id == job.id }) { siloSubtitleJobs[index] = job }
+            else { siloSubtitleJobs.insert(job, at: 0) }
+            if !job.isActive {
+                if job.status == "completed" {
+                    guard let storedID = job.resultSubtitleId else {
+                        throw MediaProviderError.backendSpecific(underlying: "Silo completed the job without a subtitle file.")
+                    }
+                    await activateSiloSubtitle(storedID, fileID: fileID, generation: generation)
+                } else if job.status == "failed" {
+                    subtitleOperation = .failed(job.errorMessage ?? "Silo could not generate subtitles.")
+                } else if job.status != "cancelled" {
+                    throw MediaProviderError.backendSpecific(underlying: "Silo returned an unsupported subtitle job state.")
+                }
+                return
+            }
+            try await Task.sleep(for: .seconds(2))
+            job = try await provider.subtitleJob(id: job.id)
+        }
+    }
+
+    func cancelSiloSubtitleJob() async {
+        guard let id = subtitleOperation.cancellableJobID, case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider else { return }
+        let generation = itemGeneration
+        let fileID = playback.stream.source.id
+        do {
+            try await provider.cancelSubtitleJob(id: id)
+            let job = try await provider.subtitleJob(id: id)
+            guard isCurrentSiloFile(fileID, generation: generation) else { return }
+            subtitleOperation = .job(job)
+        } catch {
+            guard isCurrentSiloFile(fileID, generation: generation), !isCancellationError(error) else { return }
+            showCompatibilityNotice("Silo couldn't cancel the subtitle job")
+        }
+    }
+
+    private func isCurrentSiloFile(_ fileID: String, generation: Int) -> Bool {
+        guard generation == itemGeneration, stopCount == 0, case .provider(let playback) = source,
+              playback.provider is SiloProvider else { return false }
+        return playback.stream.source.id == fileID
+    }
+
+    private func resetSiloSubtitleActions() {
+        siloSubtitleTask?.cancel()
+        siloSubtitleTask = nil
+        siloSubtitleAIStatus = nil
+        siloSubtitleJobs = []
+        subtitleOperation = .idle
+        subtitleSearchWarning = nil
+        canSearchSubtitles = false
+    }
+
+    private func activateSiloSubtitle(_ storedID: String, fileID: String, generation: Int) async {
+        subtitleOperation = .activating
+        await enqueueStreamWork { vm in
+            guard vm.isCurrentSiloFile(fileID, generation: generation), case .provider(var playback) = vm.source,
+                  let provider = playback.provider as? SiloProvider else { return }
+            let position = vm.playheadForReload
+            let resume = vm.playbackState != .paused
+            vm.pendingProviderPlaybackIntent = resume
+            defer { vm.pendingProviderPlaybackIntent = nil }
+            do {
+                let previousSession = playback.stream.playSessionID
+                playback.stream = try await provider.streamSelectingStoredSubtitle(storedID, current: playback.stream, position: position)
+                guard vm.isCurrentSiloFile(fileID, generation: generation), !Task.isCancelled else { return }
+                vm.metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: playback.stream.source, extras: playback.extras)
+                vm.setProviderStream(playback, startPosition: position, preservingReporter: previousSession == playback.stream.playSessionID)
+                vm.prepareProviderStream(playback)
+                guard let plan = vm.playbackPlan else { throw MediaProviderError.notPlayable }
+                vm.releaseAetherPlayer()
+                vm.releaseAVPlayer()
+                try await vm.startWithFallback(plan: plan, startTime: position)
+                vm.updateTrackLists()
+                if resume { vm.activePlayer_play() } else { vm.activePlayer_pause(); vm.updatePlaybackState(.paused) }
+                if let selected = vm.subtitleTracks.first(where: { $0.id == vm.currentSubtitleTrackId }) {
+                    TrackIntentStore.subtitleIntent = .afterPick(selected, replacing: TrackIntentStore.effectiveSubtitleIntent,
+                                                               audioLanguage: vm.playingAudioLanguage)
+                }
+                vm.subtitleOperation = .completed
+            } catch {
+                guard vm.isCurrentSiloFile(fileID, generation: generation), !isCancellationError(error) else { return }
+                vm.subtitleOperation = .failed(error.localizedDescription)
+            }
+        }.value
     }
 
     /// Native (AVKit) subtitle picker bridge. Track ids ARE engine indices on
@@ -4571,6 +5161,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         let plexAudio = plexStreams.filter { $0.isAudio }.map { MediaTrack(from: $0) }
         let plexSubs = plexStreams.filter { $0.isSubtitle }.map { MediaTrack(from: $0) }
 
+        if providerTracksRequireReplan {
+            audioTracks = plexAudio
+            subtitleTracks = plexSubs
+            if !hasAppliedAudioPreference {
+                currentAudioTrackId = plexStreams.first { $0.isAudio && $0.selected == true }?.id
+                hasAppliedAudioPreference = !audioTracks.isEmpty
+            }
+            if !hasAppliedSubtitlePreference {
+                currentSubtitleTrackId = plexStreams.first { $0.isSubtitle && $0.selected == true }?.id
+                hasAppliedSubtitlePreference = !subtitleTracks.isEmpty
+            }
+            applyNativeEngineTrackSelection()
+            return
+        }
         if let ap = aetherPlayer {
             // Engine list drives membership; Plex supplies the labels. Until the
             // engine reports (empty list), leave the current tracks alone rather
@@ -4738,13 +5342,20 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func selectSubtitleTrackWithoutSaving(id: Int?, reloadsTranscode: Bool = true) {
         let generated = id == Self.generatedSubtitleId
         let wasGenerated = showsGeneratedSubtitles
-        if generated || wasGenerated && id == nil {
+        let changed = id != currentSubtitleTrackId
+        if providerTracksRequireReplan {
+            currentSubtitleTrackId = id
+            if changed, reloadsTranscode {
+                reloadTranscodeForTrackChange()
+            } else if !reloadsTranscode {
+                aetherPlayer?.selectSubtitleTrack(id: nativeSubtitleEngineID(for: id))
+            }
+        } else if generated || wasGenerated && id == nil {
             // The engine's one selection stays with the filter's unseen read; only a shown track leaves it.
             if !wasGenerated, currentSubtitleTrackId != nil { aetherPlayer?.selectSubtitleTrack(id: nil) }
         } else {
             aetherPlayer?.selectSubtitleTrack(id: id)
         }
-        let changed = id != currentSubtitleTrackId
         currentSubtitleTrackId = id
         if generated {
             SpeechModelStore.shared.prepare()
@@ -4753,7 +5364,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             aetherSubtitleModel.update(cues: engineCues)
         }
         syncSilentSubtitleRead()
-        if changed, reloadsTranscode, aetherPlayer == nil {
+        if changed, reloadsTranscode, aetherPlayer == nil, !providerTracksRequireReplan {
             // The old track's captions go now, not when the reloaded transcode is ready.
             stopTranscodeSubtitleReader()
             clearTranscodeSubtitles()
@@ -5572,7 +6183,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Preload next episode in background for instant playback. A provider
         // episode is prepared now, so a failure shows before the countdown fires.
         Task {
-            if case .provider = source, let next = nextEpisode {
+            if case .provider(let playback) = source, let next = nextEpisode {
+                guard !playback.provider.reservesPlaybackOnResolve else { return }
                 await preparedNextProviderPlayback(for: next)
             } else {
                 await preloadNextEpisode()
@@ -6200,8 +6812,21 @@ final class UniversalPlayerViewModel: ObservableObject {
         preloadedNextStreamURL = nil
         preloadedNextStreamHeaders = [:]
         preloadedNextMetadata = nil
-        nextProviderPrepare = nil
+        discardNextProviderPreparation()
         nextEpisodeError = nil
+    }
+
+    private func discardNextProviderPreparation() {
+        guard let pending = nextProviderPrepare else { return }
+        nextProviderPrepare = nil
+        nextProviderPreparationToken += 1
+        pending.task.cancel()
+        Task { @MainActor [weak self] in
+            guard let prepared = await pending.task.value else { return }
+            if let self, case .provider(let current) = self.source,
+               current.stream.playSessionID == prepared.stream.playSessionID { return }
+            await ProviderPlayback.discardUnplayedStream(prepared.stream, provider: prepared.provider)
+        }
     }
 
     /// `.provider` only: the next episode's playback. One prepare per target,
@@ -6213,9 +6838,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         let generation = itemGeneration
         let key = next.ratingKey ?? ""
         let task: Task<ProviderPlayback?, Never>
+        let preparationToken: Int
         if let pending = nextProviderPrepare, pending.key == key {
             task = pending.task
+            preparationToken = pending.token
         } else if let item = providerEpisodeItems[key] {
+            discardNextProviderPreparation()
+            nextProviderPreparationToken += 1
+            preparationToken = nextProviderPreparationToken
             let provider = playback.provider
             let version = upNextVersionChoice()
             let quality = sessionQuality
@@ -6229,13 +6859,13 @@ final class UniversalPlayerViewModel: ObservableObject {
                     return nil
                 }
             }
-            nextProviderPrepare = (key, task)
+            nextProviderPrepare = (key, preparationToken, task)
         } else {
             showNextEpisodeError()
             return nil
         }
         let prepared = await task.value
-        guard generation == itemGeneration else { return nil }
+        guard generation == itemGeneration, preparationToken == nextProviderPreparationToken else { return nil }
         if prepared == nil {
             if nextProviderPrepare?.key == key { nextProviderPrepare = nil }
             showNextEpisodeError()
@@ -6302,18 +6932,25 @@ final class UniversalPlayerViewModel: ObservableObject {
         isSwappingItem = true
         defer { isSwappingItem = false }
 
-        // A provider episode's stream comes before anything is torn down: if
-        // the provider can't serve it, the current episode plays on.
+        // Legacy providers prepare before teardown. A native planner reserves
+        // admission during resolve, so its old session must close before handoff.
         var nextProviderPlayback: ProviderPlayback?
+        let transitionStops = stopCount
         // Plex playlist target's metadata, held locally: a preload for another entry can land at any await.
         var queuePlexMetadata: PlexMetadata?
-        if case .provider = source {
+        if case .provider(let playback) = source {
             nextEpisodeError = nil
             let stops = stopCount
+            if playback.provider.reservesPlaybackOnResolve {
+                activePlayer_pause()
+                await stopProviderReporter(at: currentTime)
+                guard stops == stopCount else { return }
+            }
             guard let prepared = await preparedNextProviderPlayback(for: next) else { return }
             // The player was closed while the provider answered.
             guard stops == stopCount else { return }
             nextProviderPlayback = prepared
+            nextProviderPrepare = nil
         } else if playQueue != nil, let key = next.ratingKey {
             if let preloaded = preloadedNextMetadata, preloaded.ratingKey == key, preloaded.Media?.isEmpty == false {
                 queuePlexMetadata = preloaded
@@ -6343,6 +6980,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         // The outgoing item's play session ends here.
         if case .provider = source {
             await stopProviderReporter(at: currentTime)
+        }
+        guard transitionStops == stopCount else {
+            if let prepared = nextProviderPlayback {
+                await ProviderPlayback.discardUnplayedStream(prepared.stream, provider: prepared.provider)
+            }
+            return
         }
 
         // Stop countdown and reset all countdown state
@@ -6377,10 +7020,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         // signal), so bump this explicitly for anything that caches
         // per-item state and needs to reset across the swap.
         itemGeneration += 1
+        resetSiloSubtitleActions()
         if let queueIndex { playQueue?.jump(to: queueIndex) } else { playQueue?.advance() }
         providerTargetSourceID = nil
         // Work queued for the outgoing item never runs, so nothing else clears this.
         trackReloadQueued = false
+        pendingTrackReload = nil
         // Nothing has played on the new item yet, so nothing can have ended.
         currentItemHasStarted = false
         // Clear stale Up Next rows from the outgoing episode's season; the
@@ -6621,13 +7266,14 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     private func reportProviderState(_ newState: UniversalPlaybackState) {
         guard let reporter = providerReporter else { return }
-        let position = currentTime
+        let position = providerReporterStarted ? currentTime : providerInitialPosition ?? currentTime
         switch newState {
         case .playing:
             if providerReporterStarted {
                 enqueueProviderReport { await reporter.progress(position: position) }
             } else {
                 providerReporterStarted = true
+                providerInitialPosition = nil
                 enqueueProviderReport { await reporter.start(position: position) }
             }
         case .paused:
@@ -6640,15 +7286,31 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Send `stopped` once for the current play session, even if it never
-    /// started: the provider ends its encoding on it.
+    /// Retire the current session once. Unplayed native plans omit the final
+    /// position sample so cancellation cannot reset an existing resume point.
     private func stopProviderReporter(at position: TimeInterval) async {
         guard let reporter = providerReporter else {
             await providerReportTail?.value
             return
         }
+        let started = providerReporterStarted
+        let playback: ProviderPlayback?
+        if case .provider(let current) = source { playback = current } else { playback = nil }
         providerReporter = nil
         providerReporterStarted = false
+        providerInitialPosition = nil
+        if !started, let playback {
+            await enqueueProviderReport {
+                do {
+                    if try await playback.provider.discardStream(playback.stream) { return }
+                } catch {
+                    DiagLog.error(.playback, "Unplayed provider session cleanup failed: \(DiagLog.describe(error))")
+                    return
+                }
+                await reporter.stopped(at: position)
+            }.value
+            return
+        }
         await enqueueProviderReport { await reporter.stopped(at: position) }.value
     }
 
@@ -6730,6 +7392,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 // MARK: - Navigation Notifications
 
 extension Notification.Name {
+    /// Native account/profile authority changed; consumers discard work owned by a removed provider.
+    static let mediaProviderAccountsChanged = Notification.Name("mediaProviderAccountsChanged")
     /// Posted when player requests navigation to a specific content item
     /// userInfo contains: "ratingKey" (String), "type" (String: "show", "season", "movie")
     static let navigateToContent = Notification.Name("navigateToContent")

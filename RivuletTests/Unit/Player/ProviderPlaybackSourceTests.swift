@@ -72,26 +72,6 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         guard case .plex = vm.source else { return XCTFail("expected .plex, got \(vm.source)") }
     }
 
-    func test_initialRoutes_directPlayHasATranscodeFallback() throws {
-        let routes = try XCTUnwrap(UniversalPlayerViewModel.initialRoutes(for: stream(kind: .directPlay)))
-        guard case .aether(let url, let headers) = routes.primary else {
-            return XCTFail("expected aether, got \(routes.primary)")
-        }
-        XCTAssertEqual(url, directURL)
-        XCTAssertNil(headers)
-        XCTAssertTrue(routes.hasTranscodeFallback)
-    }
-
-    func test_initialRoutes_hlsPlaysOnAVPlayerWithoutFallback() throws {
-        let routes = try XCTUnwrap(UniversalPlayerViewModel.initialRoutes(for: stream(kind: .hlsTranscode, url: hlsURL)))
-        guard case .hls(let url, let headers) = routes.primary else {
-            return XCTFail("expected hls, got \(routes.primary)")
-        }
-        XCTAssertEqual(url, hlsURL)
-        XCTAssertNil(headers)
-        XCTAssertFalse(routes.hasTranscodeFallback)
-    }
-
     func test_providerReporting_routesToProviderReporter() async {
         let provider = StubMediaProvider(id: "jellyfin:srv", kind: .jellyfin)
         let recorder = RecordingReporter()

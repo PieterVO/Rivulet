@@ -149,6 +149,15 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.1 (116)", [
+            "Connect to Silo for native libraries, profiles, Home rows, watchlists and playback.",
+            "Find subtitles, translate them or transcribe audio using services enabled on your Silo server.",
+            "Silo descriptions follow your profile and library language, with translation controls and progress.",
+            "Richer artwork, ratings and source badges on Silo title pages.",
+            "Hide a server's libraries without disabling its Live TV channels.",
+            "Silo shows its configured server name.",
+            "Library sections omit redundant source names when only one library is visible.",
+        ]),
         ("1.1.1 (115)", [
             "A center click now pauses the video once the controls are showing.",
             "Fixed skipping while paused.",
