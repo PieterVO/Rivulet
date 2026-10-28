@@ -63,6 +63,11 @@ actor ImageCacheManager: NSObject {
     nonisolated(unsafe) private let keyCache = NSCache<NSString, NSString>()
     private var cacheMetadata: [String: ImageCacheEntry] = [:]
     private var metadataLoaded = false
+    /// Bytes on disk, measured once and then kept up to date, so a download never lists the
+    /// directory. Rewriting the metadata and listing the cache per download was O(cache size)
+    /// on every image, which stalled every image load during a logo flood.
+    private var diskBytes: Int64?
+    private var metadataSaveScheduled = false
 
     // MARK: - URL Session (with SSL handling)
 
@@ -216,6 +221,7 @@ actor ImageCacheManager: NSObject {
     func clearAll() async {
         memoryCache.removeAllObjects()
         cacheMetadata.removeAll()
+        diskBytes = 0
 
         guard let dir = cacheDirectory else { return }
         try? FileManager.default.removeItem(at: dir)
@@ -406,9 +412,11 @@ actor ImageCacheManager: NSObject {
     private func saveToDisk(data: Data, key: String, url: URL) {
         guard let cacheDir = cacheDirectory else { return }
         let fileURL = cacheDir.appendingPathComponent(key)
+        loadMetadataIfNeeded()
 
         do {
             try data.write(to: fileURL, options: .atomic)
+            diskBytes? += Int64(data.count) - (cacheMetadata[key]?.fileSize ?? 0)
 
             // Update metadata
             let entry = ImageCacheEntry(
@@ -418,12 +426,8 @@ actor ImageCacheManager: NSObject {
                 fileSize: Int64(data.count)
             )
             cacheMetadata[key] = entry
-            saveMetadata()
-
-            // Check if we need to evict
-            Task {
-                await evictIfNeeded()
-            }
+            scheduleMetadataSave()
+            evictIfNeeded()
         } catch {
             print("💾 ImageCacheManager: Failed to save image to disk: \(error.localizedDescription)")
         }
@@ -431,8 +435,8 @@ actor ImageCacheManager: NSObject {
 
     // MARK: - LRU Eviction
 
-    private func evictIfNeeded() async {
-        let currentSize = getCacheSize()
+    private func evictIfNeeded() {
+        let currentSize = diskBytes ?? measureDiskAndDropOrphans()
         guard currentSize > maxDiskCacheSize else { return }
 
         // Sort by last accessed time (oldest first)
@@ -450,6 +454,7 @@ actor ImageCacheManager: NSObject {
             do {
                 try FileManager.default.removeItem(at: fileURL)
                 freedSpace += entry.fileSize
+                diskBytes? -= entry.fileSize
                 cacheMetadata.removeValue(forKey: key)
                 // Drop any decoded tiers for this key
                 memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .thumb))
@@ -459,19 +464,52 @@ actor ImageCacheManager: NSObject {
             }
         }
 
-        saveMetadata()
+        scheduleMetadataSave()
+    }
+
+    /// Lists the cache once: sums its size and deletes files the metadata doesn't track (a file
+    /// written within the save debounce of the app being killed), which LRU eviction can't reach.
+    private func measureDiskAndDropOrphans() -> Int64 {
+        guard let dir = cacheDirectory,
+              let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])
+        else { return 0 }
+        var size: Int64 = 0
+        for file in files where file.lastPathComponent != metadataFileName {
+            if cacheMetadata[file.lastPathComponent] == nil {
+                try? FileManager.default.removeItem(at: file)
+                continue
+            }
+            size += Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        diskBytes = size
+        return size
     }
 
     // MARK: - Metadata Persistence
 
     private func ensureMetadataLoaded() async {
+        loadMetadataIfNeeded()
+    }
+
+    private func loadMetadataIfNeeded() {
         if !metadataLoaded {
             loadMetadata()
         }
     }
 
+    /// Writes the metadata at most every 5 s instead of once per download.
+    private func scheduleMetadataSave() {
+        guard !metadataSaveScheduled else { return }
+        metadataSaveScheduled = true
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            metadataSaveScheduled = false
+            saveMetadata()
+        }
+    }
+
     private func loadMetadata() {
-        guard let cacheDir = cacheDirectory else { return }
+        guard !metadataLoaded, let cacheDir = cacheDirectory else { return }
         let fileURL = cacheDir.appendingPathComponent(metadataFileName)
 
         guard let data = try? Data(contentsOf: fileURL),
@@ -480,7 +518,8 @@ actor ImageCacheManager: NSObject {
             return
         }
 
-        cacheMetadata = decoded
+        // Entries saved before this load ran are newer than the file's.
+        cacheMetadata = decoded.merging(cacheMetadata) { _, new in new }
         metadataLoaded = true
 
         // One-time scrub of tokens older builds wrote into the metadata file.
