@@ -8,6 +8,11 @@
 import XCTest
 @testable import Rivulet
 
+/// The index keeps entries, never full metadata (#409); tests build them from metadata.
+func guidIndexEntries(_ items: [PlexMetadata]) -> [LibraryGUIDIndex.Entry] {
+    items.compactMap { LibraryGUIDIndex.Entry($0, sectionID: "1") }
+}
+
 final class LibraryGUIDIndexTests: XCTestCase {
 
     func testParsesTMDBImdbTvdbGUIDs() async {
@@ -24,7 +29,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         ]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .complete)
+        await index.replace(with: guidIndexEntries([item]), completeness: .complete)
 
         let byTmdb = await index.lookup(tmdbId: 12345, type: .movie)
         XCTAssertEqual(byTmdb?.ratingKey, "1")
@@ -42,7 +47,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
     func testIgnoresItemsWithoutExternalGUIDs() async {
         let item = PlexMetadata(ratingKey: "1", guid: "plex://movie/abc", type: "movie", title: "Foo")
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .complete)
+        await index.replace(with: guidIndexEntries([item]), completeness: .complete)
 
         let result = await index.lookup(tmdbId: 1, type: .movie)
         XCTAssertNil(result)
@@ -56,7 +61,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         show.Guid = [PlexGuid(id: "tmdb://100")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [movie, show], completeness: .complete)
+        await index.replace(with: guidIndexEntries([movie, show]), completeness: .complete)
 
         let movieMatch = await index.lookup(tmdbId: 100, type: .movie)
         XCTAssertEqual(movieMatch?.ratingKey, "1")
@@ -73,8 +78,8 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item2.Guid = [PlexGuid(id: "tmdb://2")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item1], completeness: .complete)
-        await index.replace(with: [item2], completeness: .complete)
+        await index.replace(with: guidIndexEntries([item1]), completeness: .complete)
+        await index.replace(with: guidIndexEntries([item2]), completeness: .complete)
 
         let stale = await index.lookup(tmdbId: 1, type: .movie)
         XCTAssertNil(stale)
@@ -91,7 +96,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .partial)
+        await index.replace(with: guidIndexEntries([item]), completeness: .partial)
 
         let match = await index.lookup(tmdbId: 42, type: .movie)
         XCTAssertEqual(match?.ratingKey, "1")
@@ -105,7 +110,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .partial)
+        await index.replace(with: guidIndexEntries([item]), completeness: .partial)
 
         let hydrated = await index.hydrateFromDisk()
         XCTAssertEqual(hydrated, 0, "a late hydrate must be a no-op after any live build")
@@ -124,11 +129,11 @@ final class LibraryGUIDIndexTests: XCTestCase {
         let index = LibraryGUIDIndex()
         let start = await index.generation
 
-        await index.replace(with: [item], completeness: .complete)
+        await index.replace(with: guidIndexEntries([item]), completeness: .complete)
         let afterComplete = await index.generation
         XCTAssertEqual(afterComplete, start + 1)
 
-        await index.replace(with: [item], completeness: .partial)
+        await index.replace(with: guidIndexEntries([item]), completeness: .partial)
         let afterPartial = await index.generation
         XCTAssertEqual(afterPartial, start + 2)
     }
@@ -138,7 +143,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         episode.Guid = [PlexGuid(id: "tmdb://500")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [episode], completeness: .complete)
+        await index.replace(with: guidIndexEntries([episode]), completeness: .complete)
 
         // Episodes shouldn't be indexed by tmdbId — that index is movie/show only.
         let asMovie = await index.lookup(tmdbId: 500, type: .movie)

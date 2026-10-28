@@ -427,7 +427,8 @@ struct TVSidebarView: View {
             dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
 
             // Rebuild the GUID index ("do I own this?") with includeGuids, which
-            // Plex omits by default. Deferred 5s: each 5000-item page is ~5MB.
+            // Plex omits by default. Deferred 5s: each 5000-movie page is ~12MB, so
+            // each page is cut to index entries before the next one arrives (#409).
             Task.detached(priority: .background) {
                 try? await Task.sleep(for: .seconds(5))
                 let (serverURL, token) = await MainActor.run {
@@ -437,7 +438,8 @@ struct TVSidebarView: View {
 
                 let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
 
-                var allItems: [PlexMetadata] = []
+                var allItems: [LibraryGUIDIndex.Entry] = []
+                var fetchedCount = 0
                 // Per section: one that failed mid-way still contributes a
                 // plausible count, and the totals would hide it.
                 var incompleteSections = 0
@@ -456,7 +458,8 @@ struct TVSidebarView: View {
                                 size: pageSize,
                                 includeGuids: true
                             )
-                            allItems.append(contentsOf: result.items)
+                            allItems += result.items.compactMap { LibraryGUIDIndex.Entry($0, sectionID: library.key) }
+                            fetchedCount += result.items.count
                             start += result.items.count
                             // An empty page or reaching the reported total is the
                             // only way out that means we actually saw the section
@@ -484,17 +487,16 @@ struct TVSidebarView: View {
                 let completeness: LibraryGUIDIndex.Completeness =
                     incompleteSections == 0 ? .complete : .partial
 
-                let withGuids = allItems.filter { ($0.Guid ?? []).isEmpty == false }
-                let sample = withGuids.first.flatMap { $0.Guid?.first?.id } ?? "(none)"
-                libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, \(incompleteSections) incomplete sections, sample=\(sample, privacy: .public)")
+                let sample = allItems.first?.guids.first ?? "(none)"
+                libraryIndexLog.info("[GUIDIndex] populated: \(fetchedCount) items total, \(allItems.count) with external GUIDs, \(incompleteSections) incomplete sections, sample=\(sample, privacy: .public)")
 
                 let crumb = Breadcrumb(level: .info, category: "guid_index")
                 crumb.message = "Library GUID index rebuilt"
                 crumb.data = [
                     "libraries": visible.count,
                     "failed_sections": incompleteSections,
-                    "items": allItems.count,
-                    "with_guids": withGuids.count
+                    "items": fetchedCount,
+                    "with_guids": allItems.count
                 ]
                 SentryBridge.addBreadcrumb(crumb)
 
@@ -504,7 +506,7 @@ struct TVSidebarView: View {
                 // An empty result with at least one section incomplete means we
                 // learned nothing from the server, so keep whatever the disk
                 // hydrate gave us rather than blanking a working index.
-                if allItems.isEmpty && completeness == .partial { return }
+                if fetchedCount == 0 && completeness == .partial { return }
                 // The token changed hands while this ran: not that profile's library.
                 guard await MainActor.run(body: { PlexAuthManager.shared.selectedServerToken }) == token else { return }
                 await LibraryGUIDIndex.shared.replace(with: allItems, completeness: completeness)

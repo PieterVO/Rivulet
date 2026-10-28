@@ -2354,19 +2354,26 @@ final class PlexHomeViewController: UIViewController {
     /// Swap library-matched TMDB items for their provider-backed MediaItems
     /// so the carousel / detail chrome offers Play + Watched for content the
     /// user owns; metadata-only items keep the Watchlist primary. Lookups are
-    /// in-memory (LibraryGUIDIndex).
+    /// in-memory (LibraryGUIDIndex); the matched items arrive in one batched fetch.
     private func upgradeDiscoverItems(_ items: [MediaItem]) async -> [MediaItem] {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return items }
         let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
-        var out = items
+        var matches: [(index: Int, entry: LibraryGUIDIndex.Entry)] = []
         for (i, item) in items.enumerated() {
             guard let decoded = TMDBMediaMapper.decodeItemID(item.ref.itemID),
                   item.isMetadataOnly,
                   discoverModel.inLibraryTMDBIds.contains(decoded.tmdbId),
-                  let match = await LibraryGUIDIndex.shared.lookup(tmdbId: decoded.tmdbId, type: decoded.type)
+                  let entry = await LibraryGUIDIndex.shared.lookup(tmdbId: decoded.tmdbId, type: decoded.type)
             else { continue }
-            out[i] = PlexMediaMapper.item(match, providerID: providerID, serverURL: serverURL, authToken: token)
+            matches.append((i, entry))
+        }
+        guard !matches.isEmpty else { return items }
+        let owned = await LibraryGUIDIndex.items(for: matches.map(\.entry), serverURL: serverURL, authToken: token)
+        var out = items
+        for match in matches {
+            guard let plex = owned[match.entry.ratingKey] else { continue }
+            out[match.index] = PlexMediaMapper.item(plex, providerID: providerID, serverURL: serverURL, authToken: token)
         }
         return out
     }
@@ -4817,12 +4824,18 @@ final class PlexHomeViewController: UIViewController {
         }
 
         // Twice the cap, so dropping low-resolution art still fills the hero.
-        var matches: [PlexMetadata] = []
+        var entries: [LibraryGUIDIndex.Entry] = []
         for item in ordered {
-            if let plex = await LibraryGUIDIndex.shared.lookup(tmdbId: item.id, type: item.mediaType) {
-                matches.append(plex)
-                if matches.count >= cap * 2 { break }
+            if let entry = await LibraryGUIDIndex.shared.lookup(tmdbId: item.id, type: item.mediaType) {
+                entries.append(entry)
+                if entries.count >= cap * 2 { break }
             }
+        }
+        let auth = PlexAuthManager.shared
+        var matches: [PlexMetadata] = []
+        if let serverURL = auth.selectedServerURL, let token = auth.selectedServerToken, !entries.isEmpty {
+            let owned = await LibraryGUIDIndex.items(for: entries, serverURL: serverURL, authToken: token)
+            matches = entries.compactMap { owned[$0.ratingKey] }
         }
         matches = Array(await sharpHeroItems(matches).prefix(cap))
         let matchTitles = matches.map { "\($0.title ?? "?") [\($0.type ?? "?")]" }.joined(separator: ", ")
@@ -5488,31 +5501,36 @@ final class PlexHomeViewController: UIViewController {
         // Resolve each entry to the owned library item so detail offers Play (#188). Warm: LibraryGUIDIndex
         // on any external guid. Cold (the bulk index loads ~20s after launch): PMS does not match external
         // guids on /library/all?guid=, but it does match the shared plex:// guid, so resolve that directly.
-        let lookups = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
-            for (index, entry) in entries.enumerated() {
-                let guids = entry.guids
-                let tmdbId = entry.tmdbId
-                let tmdbType: TMDBMediaType = entry.type == .movie ? .movie : .tv
-                let plexGUID = entry.plexGUID
+        // Warm path: in-memory index. Type-safe tmdb first (a movie and a show can share the same numeric
+        // tmdb id), then imdb/tvdb guids, which are globally unique. The owned items arrive in one batch.
+        var indexed: [Int: LibraryGUIDIndex.Entry] = [:]
+        for (index, entry) in entries.enumerated() {
+            if let tmdbId = entry.tmdbId,
+               let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: entry.type == .movie ? .movie : .tv) {
+                indexed[index] = match
+                continue
+            }
+            for guid in entry.guids where !guid.hasPrefix("tmdb://") {
+                if let match = await LibraryGUIDIndex.shared.lookup(guid: guid) {
+                    indexed[index] = match
+                    break
+                }
+            }
+        }
+        var lookups: [Int: PlexMetadata] = [:]
+        if !indexed.isEmpty, !serverURL.isEmpty {
+            let owned = await LibraryGUIDIndex.items(for: Array(indexed.values), serverURL: serverURL, authToken: token)
+            for (index, entry) in indexed {
+                lookups[index] = owned[entry.ratingKey]
+            }
+        }
+        // Cold path, and any warm match the batch did not return.
+        let cold = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
+            for (index, entry) in entries.enumerated() where lookups[index] == nil {
+                guard let plexGUID = entry.plexGUID, !serverURL.isEmpty else { continue }
                 group.addTask {
-                    // Warm path: in-memory index. Type-safe tmdb first (a movie and a show can share
-                    // the same numeric tmdb id), then imdb/tvdb guids, which are globally unique.
-                    if let tmdbId,
-                       let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: tmdbType) {
-                        return (index, match)
-                    }
-                    for guid in guids where !guid.hasPrefix("tmdb://") {
-                        if let match = await LibraryGUIDIndex.shared.lookup(guid: guid) {
-                            return (index, match)
-                        }
-                    }
-                    // Cold path: resolve the primary plex:// guid against the server directly.
-                    if let plexGUID, !serverURL.isEmpty,
-                       let match = try? await PlexNetworkManager.shared.findByGuid(
-                        serverURL: serverURL, authToken: token, guid: plexGUID) {
-                        return (index, match)
-                    }
-                    return (index, nil)
+                    (index, try? await PlexNetworkManager.shared.findByGuid(
+                        serverURL: serverURL, authToken: token, guid: plexGUID))
                 }
             }
             var out: [Int: PlexMetadata] = [:]
@@ -5521,6 +5539,7 @@ final class PlexHomeViewController: UIViewController {
             }
             return out
         }
+        lookups.merge(cold) { warm, _ in warm }
 
         // The carousel renders artwork as-is, so add the TMDB logo to every item (withLogoIfMissing keeps
         // a real Plex logo) and the TMDB backdrop to un-owned ones. Network runs off the main actor.

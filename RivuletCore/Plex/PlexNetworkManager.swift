@@ -546,6 +546,31 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return item
     }
 
+    /// Section-listing items by rating key, the shape `getLibraryItemsWithTotal` returns
+    /// (measured: 40 movies, 94 KB; the same keys on `/library/metadata` were 570 KB).
+    func getLibraryItems(
+        serverURL: String,
+        authToken: String,
+        sectionId: String,
+        ratingKeys: [String]
+    ) async throws -> [PlexMetadata] {
+        var items: [PlexMetadata] = []
+        for start in stride(from: 0, to: ratingKeys.count, by: 100) {
+            let chunk = ratingKeys[start..<min(start + 100, ratingKeys.count)]
+            guard var components = URLComponents(string: "\(serverURL)/library/sections/\(sectionId)/all") else {
+                throw PlexAPIError.invalidURL
+            }
+            components.queryItems = [
+                URLQueryItem(name: "id", value: chunk.joined(separator: ",")),
+                URLQueryItem(name: "includeGuids", value: "1")
+            ]
+            guard let url = components.url else { throw PlexAPIError.invalidURL }
+            let container: PlexMediaContainerWrapper = try await request(url, headers: plexHeaders(authToken: authToken))
+            items += container.MediaContainer.Metadata ?? []
+        }
+        return items
+    }
+
     /// Several items' guids in one request: `/library/metadata/<k1>,<k2>,…` with
     /// the `Guid` array and nothing heavy (measured: 6 shows, 2.5 KB).
     func getGuids(serverURL: String, authToken: String, ratingKeys: [String]) async throws -> [PlexMetadata] {
