@@ -237,30 +237,30 @@ enum SettingsContent {
         }
     }
 
-    /// Off, or the hero on with its content: `showHomeHero` plus `homeHeroContinueWatching`.
+    private static let homeHeroOptions: [(id: String, title: String)] = [
+        ("off", "Off"), ("trending", "Trending"), ("continueWatching", "Continue Watching"),
+        ("recentlyAdded", "Recently Added"), ("watchlist", "Watchlist"),
+    ]
+
+    /// Off, or the hero on with what it shows: `showHomeHero` plus `homeHeroContent`.
     private static var homeHeroPicker: [SettingsRowItem] {
-        [("off", "Off", false, false), ("trending", "Trending", true, false),
-         ("continueWatching", "Continue Watching", true, true)].map { id, title, on, cw in
-            SettingsRowItem(id: "hh_\(id)", title: title, kind: .option(
-                isSelected: { homeHeroChoice == id },
+        homeHeroOptions.map { option in
+            SettingsRowItem(id: "hh_\(option.id)", title: option.title, kind: .option(
+                isSelected: { homeHeroChoice == option.id },
                 select: {
-                    SettingsStore.setBool("showHomeHero", on)
-                    if on { SettingsStore.setBool("homeHeroContinueWatching", cw) }
+                    SettingsStore.setBool("showHomeHero", option.id != "off")
+                    if option.id != "off" { SettingsStore.setString("homeHeroContent", option.id) }
                 }))
         }
     }
 
     private static var homeHeroChoice: String {
         guard SettingsStore.bool("showHomeHero", default: true) else { return "off" }
-        return PlexHomeViewController.wantsContinueWatchingHero ? "continueWatching" : "trending"
+        return PlexHomeViewController.heroContent.rawValue
     }
 
     private static var homeHeroTitle: String {
-        switch homeHeroChoice {
-        case "off": "Off"
-        case "continueWatching": "Continue Watching"
-        default: "Trending"
-        }
+        homeHeroOptions.first { $0.id == homeHeroChoice }?.title ?? "Trending"
     }
 
     private static var detailRatingPicker: [SettingsRowItem] {

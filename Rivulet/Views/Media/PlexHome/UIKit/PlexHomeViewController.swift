@@ -2176,11 +2176,11 @@ final class PlexHomeViewController: UIViewController {
         var isMediaItemHero = providerLibrary != nil
         if case .discover = mode { isMediaItemHero = true }
         let isHomeMediaHero = { if case .home = mode { homeHeroSource != .plex } else { false } }()
-        if isMediaItemHero || isHomeMediaHero || heroShowsContinueWatching {
+        if isMediaItemHero || isHomeMediaHero || heroShowsList {
             // Home's list is computed rather than read off the snapshot: the
             // Plex hero paths set the backdrop before they apply, and a stale
             // empty read would release the splash before the image is up.
-            let items = heroShowsContinueWatching ? continueWatchingHeroItems
+            let items = heroShowsList ? listHeroItems
                 : isHomeMediaHero ? homeMediaHeroItems()
                 : sectionsSnapshot.first(where: { $0.kind == .hero })?.heroMediaItems ?? []
             guard showHomeHero, !items.isEmpty else {
@@ -2258,6 +2258,12 @@ final class PlexHomeViewController: UIViewController {
     private func applyMediaItemHeroState(for item: MediaItem, on cell: HeroOverlayCell?) {
         if case .discover = mode {
             applyDiscoverHeroState(for: item, on: cell)
+            return
+        }
+        // A watchlist title not in the library: no Play, only its watchlist pill.
+        if item.ref.providerID == TMDBMediaMapper.providerID {
+            let onWatchlist = item.tmdbID.map { watchlistService.contains(tmdbId: $0) } ?? false
+            cell?.overlay.setMediaItemPrimaryAction(matchedInLibrary: false, isOnWatchlist: onWatchlist)
             return
         }
         let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID)
@@ -3077,17 +3083,20 @@ final class PlexHomeViewController: UIViewController {
                     onInfo: { [weak self] item in
                         if isDiscover { self?.discoverHeroInfo(item) } else { self?.presentStandaloneExpandedDetail(item) }
                     },
-                    onToggleWatchlist: isDiscover ? { [weak self, weak cell] item in
+                    onToggleWatchlist: { [weak self, weak cell] item in
+                        guard isDiscover || item.ref.providerID == TMDBMediaMapper.providerID else {
+                            self?.toggleProviderWatchlist(for: item, on: cell)
+                            return
+                        }
                         self?.toggleDiscoverWatchlist(for: item) { [weak self, weak cell] in
                             self?.applyMediaItemHeroState(for: item, on: cell)
                         }
-                    } : { [weak self, weak cell] item in
-                        self?.toggleProviderWatchlist(for: item, on: cell)
                     },
                     // Home names each slide's server while both are signed in.
                     badge: isHome ? { item in
-                        Self.sourceBadge(for: item.ref,
-                                         labelsServers: ServerDataStore.shared.labelsServers)
+                        guard item.ref.providerID != TMDBMediaMapper.providerID else { return nil }
+                        return Self.sourceBadge(for: item.ref,
+                                                labelsServers: ServerDataStore.shared.labelsServers)
                     } : nil
                 ))
                 cell.overlay.onFocusEntered = { [weak self] in
@@ -3357,18 +3366,77 @@ final class PlexHomeViewController: UIViewController {
     }
 
     /// Home's MediaItem hero slides as last drawn (Jellyfin's, both
-    /// servers' mixed, or Continue Watching's).
+    /// servers' mixed, or one of Home's lists).
     private var homeMediaHeroRefs: [MediaItemRef] = []
-    /// Home's Continue Watching row as last built.
-    private var continueWatchingHeroItems: [MediaItem] = []
-    private var lastWantsContinueWatchingHero = PlexHomeViewController.wantsContinueWatchingHero
 
-    static var wantsContinueWatchingHero: Bool { SettingsStore.bool("homeHeroContinueWatching", default: false) }
+    /// What Home's hero shows (#414): trending, or one of Home's own lists.
+    enum HeroContent: String, CaseIterable {
+        case trending, continueWatching, recentlyAdded, watchlist
+    }
 
-    /// Home's hero shows the Continue Watching row instead of trending (#414); an empty row keeps trending.
-    private var heroShowsContinueWatching: Bool {
-        guard case .home = mode, showHomeHero, Self.wantsContinueWatchingHero else { return false }
-        return !continueWatchingHeroItems.isEmpty
+    static var heroContent: HeroContent {
+        HeroContent(rawValue: SettingsStore.string("homeHeroContent", default: "")) ?? .trending
+    }
+
+    /// The list the hero shows, as Home last built it.
+    private var listHeroItems: [MediaItem] = []
+    private var lastHeroContent = PlexHomeViewController.heroContent
+    /// The watchlist's first entries mapped to library or TMDB items, and the entry ids they came from.
+    private var watchlistHeroItems: [MediaItem] = []
+    private var watchlistHeroSourceIDs: [String]?
+    private var watchlistHeroTask: Task<Void, Never>?
+
+    /// Home's hero shows a list instead of trending; an empty list keeps trending.
+    private var heroShowsList: Bool {
+        guard case .home = mode, showHomeHero, Self.heroContent != .trending else { return false }
+        return !listHeroItems.isEmpty
+    }
+
+    /// The hero's slides for a list choice, from Home's rows as just built.
+    private func heroItemsForList(from sections: [HomeSectionData], rail: [(row: CachedHomeHub, kind: MediaProviderKind)]) -> [MediaItem] {
+        switch Self.heroContent {
+        case .trending: return []
+        case .continueWatching: return sections.first { $0.kind == .continueWatching }?.items ?? []
+        case .recentlyAdded:
+            let rows = rail.filter { !$0.row.isContinueWatching && Self.isRecentlyAddedRow($0.row) }
+            return Array(Self.roundRobin(rows.map(\.row.items))
+                .filter { ($0.grandparentArtwork?.backdrop ?? $0.artwork.backdrop) != nil }
+                .prefix(10))
+        case .watchlist:
+            refreshWatchlistHeroIfNeeded()
+            return watchlistHeroItems
+        }
+    }
+
+    /// Plex's recently added hubs (`movie.recentlyadded`) and every other server's `<library>.recentlyAdded` row.
+    static func isRecentlyAddedRow(_ row: CachedHomeHub) -> Bool {
+        (row.hubIdentifier ?? row.id).lowercased().contains("recentlyadded")
+    }
+
+    /// One item from each list in turn, so no library's additions bury another's.
+    static func roundRobin(_ lists: [[MediaItem]]) -> [MediaItem] {
+        var out: [MediaItem] = []
+        for i in 0..<(lists.map(\.count).max() ?? 0) {
+            for list in lists where i < list.count { out.append(list[i]) }
+        }
+        return out
+    }
+
+    /// Maps the watchlist's first entries once per change; Home redraws when they land.
+    private func refreshWatchlistHeroIfNeeded() {
+        let entries = Array(watchlistService.watchlistItems.prefix(10))
+        let ids = entries.map(\.id)
+        guard ids != watchlistHeroSourceIDs else { return }
+        watchlistHeroSourceIDs = ids
+        watchlistHeroTask?.cancel()
+        watchlistHeroTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let items = await self.buildWatchlistMediaItems(from: entries).map(\.item)
+                .filter { ($0.grandparentArtwork?.backdrop ?? $0.artwork.backdrop) != nil }
+            guard !Task.isCancelled else { return }
+            self.watchlistHeroItems = items
+            self.applySnapshot(animated: false)
+        }
     }
 
     /// `labelsServers` as the hero last drew its badges. Always false on a
@@ -3398,8 +3466,8 @@ final class PlexHomeViewController: UIViewController {
         heroCurrentIndex = 0
         reconfigureHeroCell()
         updateBackdropForCurrentHeroItem()
-        // The Continue Watching hero emptied: trending takes the slot back.
-        if refs.isEmpty, Self.wantsContinueWatchingHero { selectHeroItemsIfNeeded() }
+        // The list hero emptied: trending takes the slot back.
+        if refs.isEmpty, Self.heroContent != .trending { selectHeroItemsIfNeeded() }
     }
 
     private func jellyfinHomeRowsChanged() {
@@ -3486,8 +3554,8 @@ final class PlexHomeViewController: UIViewController {
                 self.reprojectIfHomeLibrariesChanged()
                 self.selectHeroItemsIfNeeded()
                 if case .home = self.mode {
-                    if Self.wantsContinueWatchingHero != self.lastWantsContinueWatchingHero {
-                        self.lastWantsContinueWatchingHero = Self.wantsContinueWatchingHero
+                    if Self.heroContent != self.lastHeroContent {
+                        self.lastHeroContent = Self.heroContent
                         self.applySnapshot(animated: false)
                     }
                     let userID = UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey)
@@ -4328,10 +4396,10 @@ final class PlexHomeViewController: UIViewController {
             sections.append(section)
         }
 
-        continueWatchingHeroItems = sections.first { $0.kind == .continueWatching }?.items ?? []
-        if heroShowsContinueWatching {
+        listHeroItems = heroItemsForList(from: sections, rail: rail)
+        if heroShowsList {
             sections.removeAll { $0.kind == .hero }
-            sections.insert(.discoverHero(items: continueWatchingHeroItems), at: 0)
+            sections.insert(.discoverHero(items: listHeroItems), at: 0)
         }
 
         // Watchlist
@@ -4698,8 +4766,8 @@ final class PlexHomeViewController: UIViewController {
         case .discover, .search, .watchlist, .collection, .playlists, .playlist:
             return  // no Plex-hub hero on these surfaces
         case .home:
-            // Jellyfin-only, or showing Continue Watching: MediaItem hero
-            guard authManager.hasCredentials, !heroShowsContinueWatching else { return }
+            // Jellyfin-only, or showing a list: MediaItem hero
+            guard authManager.hasCredentials, !heroShowsList else { return }
             cacheKey = "home"
             sourceHubs = dataStore.hubs
         case .library(let key, _):

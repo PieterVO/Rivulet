@@ -112,7 +112,7 @@ enum SettingsDescriptorStore {
         ),
         "homeHero": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
-            description: "The large banner at the top of the Home screen. Trending features popular titles from your library. Continue Watching features what you are in the middle of."
+            description: "The large banner at the top of the Home screen. Trending features popular titles from your library. Or pick one of your Home lists: Continue Watching, Recently Added or your Watchlist."
         ),
         "topShelfStyle": SettingDescriptor(
             icon: "tv",
