@@ -330,7 +330,7 @@ enum SettingsContent {
                 SettingsStore.setBool(heightsFELNoticeShownKey, true)
                 vc.present(ConfirmationPopupViewController(
                     title: "Height Speakers and FEL",
-                    message: "When a video has both Dolby Vision FEL and Atmos or DTS:X, Rivulet plays FEL, and the soundtrack plays without height channels. Turn off Dolby Vision FEL to keep heights instead.",
+                    message: "When a video has both Dolby Vision FEL and a soundtrack with height channels, Rivulet plays FEL, and the soundtrack plays without them. Turn off Dolby Vision FEL to keep heights instead.",
                     confirmTitle: "Got It", cancelTitle: nil,
                     onConfirm: { page?.onPop?() }, onCancel: { page?.onPop?() }), animated: true)
             }))
