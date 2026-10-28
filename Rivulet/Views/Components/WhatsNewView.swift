@@ -149,11 +149,17 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
-        // confirm build number at release
         ("1.1.1 (116)", [
-            "New Tvheadend support in Live TV, with channels, guide and recording.",
-            "Add Source in Live TV lists Dispatcharr, Tvheadend and Threadfin by name.",
+            "The Home hero can show Trending, Continue Watching, Recently Added or Watchlist.",
+            "New Skip Preview setting opens titles straight to their full details.",
+            "Posters now show the edition, such as Director's Cut, as a badge.",
+            "Generated subtitles and word muting now get their speech model from the App Store.",
+            "Redesigned adding a Live TV source, with every source type listed by name.",
+            "New early support for Tvheadend in Live TV, with channels, guide and recording.",
+            "Generated subtitles and word muting hear only the dialogue on surround titles.",
+            "Generated subtitles no longer switch to another track after the player reloads.",
             "Fixed playback crashes on very large Plex libraries.",
+            "Large libraries and Live TV guides use less memory.",
             "Height channels now also play with Dolby Vision FEL.",
             "Updated AetherEngine to 7.50.0.",
         ]),
