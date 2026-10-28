@@ -118,6 +118,10 @@ enum SettingsDescriptorStore {
             icon: "tv",
             description: "The top row of the Apple TV Home Screen. Posters shows a row of posters. Full Screen fills it with artwork from what you are watching."
         ),
+        "skipPreview": SettingDescriptor(
+            icon: "rectangle.expand.vertical",
+            description: "Selecting a movie or show opens its full details at once, skipping the preview card. Off keeps the preview, where you can browse the row."
+        ),
         "detailRating": SettingDescriptor(
             icon: "star.leadinghalf.filled",
             description: "Choose the one rating shown at the top of a movie or show's details. If a title doesn't have the rating you choose, Rotten Tomatoes is shown instead."

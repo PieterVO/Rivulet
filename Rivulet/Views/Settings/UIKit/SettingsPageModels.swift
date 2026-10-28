@@ -441,6 +441,7 @@ enum SettingsContent {
             SettingsRowItem(id: "topShelfStyle", title: "Top Shelf",
                             kind: .cycle(value: { TopShelfCache.shared.fullScreen ? "Full Screen" : "Posters" },
                                          next: { TopShelfCache.shared.fullScreen.toggle() })),
+            toggle("skipPreview", "Skip Preview", key: "skipPreviewCarousel", default: false),
 
             // Titles drop whatever their caption already says ("Home Hero" under
             // HOME reads as "Home Home Hero"), the way Apple TV Settings puts a

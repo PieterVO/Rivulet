@@ -5779,6 +5779,14 @@ final class PlexHomeViewController: UIViewController {
         sourceIndexMap: [Int: Int]? = nil,
         sourceItemIDs: [String]? = nil
     ) {
+        // Skip Preview (#416): open the carousel's own expanded detail directly. An
+        // episode keeps its hero and Play, with the show's seasons below.
+        if SettingsStore.bool("skipPreviewCarousel", default: false) {
+            guard items.indices.contains(selectedIndex) else { return }
+            let item = items[selectedIndex]
+            if item.kind == .season { selectMediaItem(item) } else { presentStandaloneExpandedDetail(item) }
+            return
+        }
         // Capture the source cell's frame in window coordinates so the
         // entry-morph has something to interpolate from.
         var sourceFrames: [PreviewSourceTarget: CGRect] = [:]
