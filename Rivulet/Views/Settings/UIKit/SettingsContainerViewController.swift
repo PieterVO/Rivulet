@@ -40,6 +40,11 @@ final class SettingsContainerViewController: UIViewController {
     /// Set for a standalone flow: Menu or a pop from its first page calls it.
     var onExit: (() -> Void)?
 
+    /// The pages' frosted wash of the last page's artwork. Off for a flow that brings its own
+    /// backdrop (the setup landing); set before the view loads.
+    var drawsBackdrop = true
+    private let ambientView = AmbientBackdropView()
+
     init(rootPage: SettingsPage = .root) {
         self.rootPage = rootPage
         super.init(nibName: nil, bundle: nil)
@@ -49,7 +54,7 @@ final class SettingsContainerViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        if drawsBackdrop { installBackdrop() } else { view.backgroundColor = .clear }
         setupLayout()
         let root = makePage(rootPage)
         pages = [root]
@@ -64,6 +69,23 @@ final class SettingsContainerViewController: UIViewController {
     }
 
     @objc private func menuPressed() { pop() }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if drawsBackdrop { ambientView.setAmbient(url: AmbientBackdropView.lastURL) }
+    }
+
+    /// Home's background, layer for layer: black, the artwork wash with its vignette, the adaptive material.
+    private func installBackdrop() {
+        view.backgroundColor = .black
+        let frost = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+        for layer in [ambientView, frost] as [UIView] {
+            layer.isUserInteractionEnabled = false
+            layer.frame = view.bounds
+            layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(layer)
+        }
+    }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
