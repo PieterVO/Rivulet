@@ -1340,6 +1340,9 @@ final class AetherPlayer: PlayerProtocol {
         currentAVPlayer?.isMuted = muted
     }
 
+    /// Bumped per `playbackAudio()` stream, so an ended stream can tell it no longer owns the tap.
+    private var audioTapOwner = 0
+
     /// Decoded playback audio for on-device speech (the engine's audio tap):
     /// mono 48 kHz on the source axis, up to ~10 s ahead of the playhead on the
     /// loopback route. Surround sources deliver the centre (dialogue) channel
@@ -1364,10 +1367,15 @@ final class AetherPlayer: PlayerProtocol {
             }
             continuation.finish()
         }
-        let engine = engine
+        audioTapOwner += 1
+        let owner = audioTapOwner
         continuation.onTermination = { _ in
             task.cancel()
-            Task { @MainActor in engine.removeAudioTap() }
+            // A newer stream may already own the engine's one tap; only the latest removes it.
+            Task { @MainActor [weak self] in
+                guard let self, self.audioTapOwner == owner else { return }
+                self.engine.removeAudioTap()
+            }
         }
         return stream
     }

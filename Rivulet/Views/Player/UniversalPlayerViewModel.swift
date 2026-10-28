@@ -2519,6 +2519,11 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // rebuilds the pipeline. A user turn-off does not come through here.
                 // A track read unseen for the content filter is not the user's pick.
                 guard let self, let id, self.silentSubtitleTrackId == nil else { return }
+                // Generated subtitles are not an engine track: an engine re-activation (after a reload) is undone, not adopted.
+                if self.showsGeneratedSubtitles {
+                    self.aetherPlayer?.selectSubtitleTrack(id: nil)
+                    return
+                }
                 // Track ids ARE engine indices on this route (see TrackMerge) —
                 // the engine's active index needs no translation.
                 self.currentSubtitleTrackId = id
@@ -4583,7 +4588,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             // Re-read every call: the engine renumbers its tracks mid-session
             // (an audio switch rebuilds them), so its active index is authoritative.
-            if silentSubtitleTrackId == nil, let active = ap.activeSubtitleTrackId {
+            if silentSubtitleTrackId == nil, !showsGeneratedSubtitles, let active = ap.activeSubtitleTrackId {
                 currentSubtitleTrackId = active
             }
             if let active = ap.activeAudioTrackId {
