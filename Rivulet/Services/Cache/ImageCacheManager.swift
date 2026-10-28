@@ -19,11 +19,14 @@ enum ImageQuality: Sendable {
     case thumb
     /// Large surfaces that fill much of the screen: home hero, carousel, detail backdrops.
     case full
+    /// Channel logos drawn at under 128 pt. A 900 px decode of each was about 1 MB per logo.
+    case logo
 
     nonisolated var maxPixelSize: CGFloat {
         switch self {
         case .thumb: return 900
         case .full:  return 3840
+        case .logo:  return 256
         }
     }
 
@@ -31,6 +34,7 @@ enum ImageQuality: Sendable {
         switch self {
         case .thumb: return "t"
         case .full:  return "f"
+        case .logo:  return "l"
         }
     }
 }
@@ -94,6 +98,9 @@ actor ImageCacheManager: NSObject {
         var waiters: Int
     }
     private var activeDownloads: [URL: Download] = [:]
+    /// URLs the server answered 4xx for this session; a dead channel logo otherwise
+    /// re-requests every time its cell is configured.
+    private var missingURLs: Set<URL> = []
 
     // MARK: - Cache Directory
 
@@ -222,6 +229,7 @@ actor ImageCacheManager: NSObject {
         memoryCache.removeAllObjects()
         cacheMetadata.removeAll()
         diskBytes = 0
+        missingURLs.removeAll()
 
         guard let dir = cacheDirectory else { return }
         try? FileManager.default.removeItem(at: dir)
@@ -304,8 +312,9 @@ actor ImageCacheManager: NSObject {
         if age > defaultTTL {
             if await fetchOriginalData(url: url, key: key) != nil {
                 // Drop decoded tiers so the next read re-decodes the fresh bytes.
-                memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .thumb))
-                memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .full))
+                for quality in [ImageQuality.thumb, .full, .logo] {
+                    memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: quality))
+                }
             }
         }
     }
@@ -313,6 +322,7 @@ actor ImageCacheManager: NSObject {
     /// Download the original image bytes, validate, persist to disk, and return them.
     /// Coalesced per-URL so concurrent requests share a single network fetch.
     private func fetchOriginalData(url: URL, key: String) async -> Data? {
+        guard !missingURLs.contains(url) else { return nil }
         if var existing = activeDownloads[url] {
             existing.waiters += 1
             activeDownloads[url] = existing
@@ -366,6 +376,7 @@ actor ImageCacheManager: NSObject {
                         try? await Task.sleep(nanoseconds: backoff[attempt])
                         continue
                     }
+                    if (400...499).contains(status), status != 408, status != 429 { await self.markMissing(url) }
                     return nil
                 } catch {
                     if Task.isCancelled { return nil }
@@ -401,6 +412,10 @@ actor ImageCacheManager: NSObject {
             activeDownloads[url] = nil
             download.task.cancel()
         }
+    }
+
+    private func markMissing(_ url: URL) {
+        missingURLs.insert(url)
     }
 
     private func removeActiveDownload(for url: URL, id: UUID) {
@@ -457,8 +472,9 @@ actor ImageCacheManager: NSObject {
                 diskBytes? -= entry.fileSize
                 cacheMetadata.removeValue(forKey: key)
                 // Drop any decoded tiers for this key
-                memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .thumb))
-                memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .full))
+                for quality in [ImageQuality.thumb, .full, .logo] {
+                    memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: quality))
+                }
             } catch {
                 // File might already be gone
             }

@@ -1683,7 +1683,7 @@ final class ChannelColumnView: UICollectionReusableView {
         guard let url = currentLogoURL else { return }
 
         logoLoadTask = Task { [weak self] in
-            let image = await ImageCacheManager.shared.image(for: url, quality: .thumb)
+            let image = await ImageCacheManager.shared.image(for: url, quality: .logo)
             guard let self,
                   !Task.isCancelled,
                   self.currentLogoURL == url
