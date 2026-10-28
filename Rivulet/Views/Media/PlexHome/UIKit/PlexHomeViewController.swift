@@ -2269,7 +2269,10 @@ final class PlexHomeViewController: UIViewController {
         let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID)
         let canWatchlist = provider?.supportsWatchlist ?? false
         heroWatchlistRef = item.ref
-        cell?.overlay.setMediaItemPrimaryAction(matchedInLibrary: true, isOnWatchlist: false,
+        // A Watchlist hero slide starts bookmarked, so the lookup below does not flash the + first.
+        let likelyOnList = heroShowsList && Self.heroContent == .watchlist
+            && watchlistHeroItems.contains { $0.ref == item.ref }
+        cell?.overlay.setMediaItemPrimaryAction(matchedInLibrary: true, isOnWatchlist: likelyOnList,
                                                 canWatchlist: canWatchlist)
         guard canWatchlist, let provider else { return }
         Task { @MainActor [weak self, weak cell] in
