@@ -35,7 +35,7 @@ enum OpenSourceLicenses {
     /// Where the corresponding FFmpeg source and the scripts/configure flags used to build the
     /// bundled frameworks can be obtained — required to satisfy the LGPL. FFmpegBuild hosts the
     /// build script (build.sh) with the exact flags and the pinned upstream source revisions
-    /// (FFmpeg n8.1, dav1d 1.5.4).
+    /// (FFmpeg n8.1.3, dav1d 1.5.4).
     static let ffmpegSourceURL = "https://github.com/superuser404notfound/FFmpegBuild"
 
     /// Where the corresponding AetherEngine source for the version linked by this app can be
@@ -85,7 +85,7 @@ enum OpenSourceLicenses {
             ),
             Entry(
                 name: "libzvbi",
-                summary: "DVB teletext and VBI decoding for Live TV, bundled with the FFmpeg build (libzvbi 0.2.45). The library is dynamically linked and used under the GNU Lesser General Public License, version 2.1 or later, whose full text is reproduced in the FFmpeg entry above. Copyright © the libzvbi authors. Two files in it, src/ure.c and src/ure.h, carry their own MIT license, reproduced here. Source: https://github.com/zapping-vbi/zvbi (tag v0.2.45).",
+                summary: "DVB teletext and VBI decoding for Live TV, bundled with the FFmpeg build (libzvbi 0.2.46). The library is dynamically linked and used under the GNU Lesser General Public License, version 2.1 or later, whose full text is reproduced in the FFmpeg entry above. Copyright © the libzvbi authors. Two files in it, src/ure.c and src/ure.h, carry their own MIT license, reproduced here. Source: https://github.com/zapping-vbi/zvbi (tag v0.2.46).",
                 licenseText: libzvbiUreMIT
             ),
             Entry(

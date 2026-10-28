@@ -1142,7 +1142,7 @@ final class AetherPlayer: PlayerProtocol {
         if let heightLayout { options.objectAudioRendering = .render(heightLayout) }
         // Profile 7 FEL composes both layers (#345). The engine doesn't check the panel,
         // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
-        // FEL wins over heights: on a FEL title the soundtrack plays as 7.1 without them (#362).
+        // The FEL route renders heights too, so both settings apply to one title (#362).
         let panelDV = AetherEngine.displayCapabilities.supportsDolbyVision
         let felOn = UserDefaults.standard.bool(forKey: Self.dolbyVisionFELKey)
         options.preferDualLayerDolbyVision = panelDV && felOn

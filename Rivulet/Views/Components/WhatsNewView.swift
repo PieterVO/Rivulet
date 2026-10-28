@@ -154,6 +154,7 @@ struct WhatsNewView: View {
             "New Tvheadend support in Live TV, with channels, guide and recording.",
             "Add Source in Live TV lists Dispatcharr, Tvheadend and Threadfin by name.",
             "Fixed playback crashes on very large Plex libraries.",
+            "Height channels now also play with Dolby Vision FEL.",
             "Updated AetherEngine to 7.50.0.",
         ]),
         ("1.1.1 (115)", [

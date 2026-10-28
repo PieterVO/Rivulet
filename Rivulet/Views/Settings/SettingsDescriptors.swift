@@ -205,7 +205,7 @@ enum SettingsDescriptorStore {
         ),
         "dolbyVisionFEL": SettingDescriptor(
             icon: "4k.tv",
-            description: "Plays the full Dolby Vision Profile 7 layer on a Dolby Vision TV, without height channels, AirPlay or Picture in Picture. Off plays it as 8.1."
+            description: "Plays the full Dolby Vision Profile 7 layer on a Dolby Vision TV, without AirPlay or Picture in Picture. Off plays it as 8.1."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",

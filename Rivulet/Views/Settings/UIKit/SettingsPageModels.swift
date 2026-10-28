@@ -319,29 +319,10 @@ enum SettingsContent {
         ["", "5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"].map { layout in
             SettingsRowItem(id: "hs_\(layout.isEmpty ? "off" : layout)", title: layout.isEmpty ? "Off" : layout,
                             kind: .selectable(isSelected: { heightSpeakers == layout }, value: { nil }, handler: { vc in
-                let page = vc as? SettingsPageViewController
-                let firstHeights = heightSpeakers.isEmpty && !layout.isEmpty
                 SettingsStore.setString(AetherPlayer.heightSpeakersKey, layout)
-                guard firstHeights, dolbyVisionFEL,
-                      !SettingsStore.bool(heightsFELNoticeShownKey, default: false) else {
-                    page?.onPop?()
-                    return
-                }
-                SettingsStore.setBool(heightsFELNoticeShownKey, true)
-                vc.present(ConfirmationPopupViewController(
-                    title: "Height Speakers and FEL",
-                    message: "When a video has both Dolby Vision FEL and a soundtrack with height channels, Rivulet plays FEL, and the soundtrack plays without them. Turn off Dolby Vision FEL to keep heights instead.",
-                    confirmTitle: "Got It", cancelTitle: nil,
-                    onConfirm: { page?.onPop?() }, onCancel: { page?.onPop?() }), animated: true)
+                (vc as? SettingsPageViewController)?.onPop?()
             }))
         }
-    }
-
-    /// The one-time Height Speakers / FEL popup (#362).
-    private static let heightsFELNoticeShownKey = "heightsFELNoticeShown"
-
-    private static var dolbyVisionFEL: Bool {
-        SettingsStore.bool(AetherPlayer.dolbyVisionFELKey, default: false)
     }
 
     /// Read at play time by the player (`StreamingQuality.setting`).
