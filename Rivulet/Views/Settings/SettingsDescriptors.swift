@@ -201,7 +201,7 @@ enum SettingsDescriptorStore {
         ),
         "heightSpeakers": SettingDescriptor(
             icon: "hifispeaker.2",
-            description: "Keeps Atmos and DTS:X height channels, in a lossy format. Off plays lossless 7.1 without them. DTS:X needs 7.1.4 or 9.1.6."
+            description: "Keeps Atmos and DTS:X height channels, lossless over HDMI. Off plays 7.1 without them. DTS:X needs 7.1.4 or 9.1.6."
         ),
         "dolbyVisionFEL": SettingDescriptor(
             icon: "4k.tv",

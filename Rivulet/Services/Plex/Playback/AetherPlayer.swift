@@ -1125,10 +1125,10 @@ final class AetherPlayer: PlayerProtocol {
             // way whichever surface plays it (VOD recordings/rips included).
             teletextPage: Self.regionTeletextPage()
         )
-        // Settings → Playback → Height Speakers: TrueHD Atmos and DTS:X keep their heights as
-        // lossy APAC (sent to the receiver as Atmos) instead of lossless 7.1 without them.
+        // Settings → Playback → Height Speakers: TrueHD Atmos and DTS:X keep their heights as a
+        // rendered bed (lossless PCM, APAC on AirPlay) instead of 7.1 without them.
         let heightLayout = SpatialSpeakerLayout(rawValue: UserDefaults.standard.string(forKey: Self.heightSpeakersKey) ?? "")
-        if let heightLayout { options.objectAudioRendering = .apac(heightLayout) }
+        if let heightLayout { options.objectAudioRendering = .render(heightLayout) }
         // Profile 7 FEL composes both layers (#345). The engine doesn't check the panel,
         // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
         // FEL wins over heights: on a FEL title the soundtrack plays as 7.1 without them (#362).
