@@ -139,7 +139,7 @@ final class CaptionOverlayView: UIView {
 
         /// Edge distance for a top or bottom band cue with no fine position
         /// (teletext via engine demux). Near where proxied WebVTT lands (~10%).
-        /// Keep it off the 6% default floor, or a placed cue looks unplaced.
+        /// Keep it off the 5% default floor, or a placed cue looks unplaced.
         static let bandEdgeFraction: CGFloat = 0.10
 
         /// Anchor for a LEFT or RIGHT column that came with no fine position.
@@ -298,11 +298,16 @@ final class CaptionOverlayView: UIView {
     private func placementFloor(in size: CGSize) -> CGFloat {
         let rect = videoRect(in: size)
         let letterbox = max(0, size.height - rect.maxY)
-        var base = letterbox + rect.height * SubtitleAdjustments.bottomMarginFraction
+        var base = letterbox + rect.height * restingMarginFraction
         if controlsVisible {
             base = max(base, SubtitleAdjustments.controlsFloor(pictureHeight: rect.height))
         }
         return base
+    }
+
+    private var restingMarginFraction: CGFloat {
+        style.isSystemDefault ? SubtitleAdjustments.systemDefaultBottomMarginFraction
+                              : SubtitleAdjustments.bottomMarginFraction
     }
 
     /// Distance from the bottom of the CONTAINER to an UNPLACED cue: the shared
@@ -488,7 +493,7 @@ final class CaptionOverlayView: UIView {
     /// ponytail: the lift jumps on the next rendered frame instead of riding the rail's 0.25 s fade; interpolate linePosition in the display link if it reads as a snap on device.
     private func assLinePosition(in size: CGSize, rect: CGRect) -> Double {
         guard rect.height > 0 else { return 0 }
-        let resting = max(0, size.height - rect.maxY) + rect.height * SubtitleAdjustments.bottomMarginFraction
+        let resting = max(0, size.height - rect.maxY) + rect.height * restingMarginFraction
         let lift = bottomPadding(in: size) - resting
         return Double(min(max(lift / rect.height * 100, 0), 100))
     }
