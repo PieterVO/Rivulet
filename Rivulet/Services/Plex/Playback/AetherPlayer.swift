@@ -1275,7 +1275,11 @@ final class AetherPlayer: PlayerProtocol {
         userIntendsToPlay = false
         engine.pause()
     }
-    func stop() {
+    func stop() { stop(resetDisplayCriteria: true) }
+
+    /// `resetDisplayCriteria: false` keeps the TV's mode for a following load
+    /// on this player, so a same-format channel change makes no HDMI switch (#419).
+    func stop(resetDisplayCriteria: Bool) {
         foregroundReloadTask?.cancel()
         pendingReloadSince = nil
         userIntendsToPlay = false
@@ -1283,7 +1287,7 @@ final class AetherPlayer: PlayerProtocol {
         partIndex = 0
         finishAVCapture()
         dropFrameExtractor()
-        engine.stop()
+        engine.stop(resetDisplayCriteria: resetDisplayCriteria)
     }
 
     deinit {

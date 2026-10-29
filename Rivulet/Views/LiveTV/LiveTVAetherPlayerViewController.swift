@@ -361,8 +361,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
     /// Builds the player for `channel` and starts the join. Called on load and
     /// again for every in-place channel switch, so it must assume NOTHING is
-    /// left over from a previous session — `teardownPlaybackSession()` is the
-    /// matching half.
+    /// left over from a previous session except a kept, stopped player —
+    /// `teardownPlaybackSession()` is the matching half.
     private func startPlayback() {
         loadingSpinner.startAnimating()
         isUserPaused = false
@@ -375,13 +375,15 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         let adopted = pendingAdoption
         pendingAdoption = nil
-        let aether = adopted?.player ?? AetherPlayer()
+        let aether = adopted?.player ?? aetherPlayer ?? AetherPlayer()
         if let adopted {
             liveKeepalive = adopted.keepalive
             isNativeHLSRoute = adopted.isNativeHLSRoute
         }
-        aetherPlayer = aether
-        aether.bind(view: engineSurfaceView)
+        if aetherPlayer !== aether {
+            aetherPlayer = aether
+            aether.bind(view: engineSurfaceView)
+        }
         checkStreamChoices()
         bindAetherSubtitles(aether)
         captionsOnMute = CaptionsOnMuteLogic()
@@ -599,7 +601,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         guard retuneTask == nil else { retunePending = true; return }
         // Let the dead session go now: its tuner is free while this waits,
         // and its player can't start the fallback ladder alongside.
-        teardownPlaybackSession()
+        teardownPlaybackSession(keepingPlayer: true)
         guard let delay = retuneBudget.reserve(now: ProcessInfo.processInfo.systemUptime) else {
             streamLoadTask = Task { @MainActor in await self.endJoin(notice: Self.sourceLostNotice) }
             return
@@ -675,7 +677,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         watchCreditTask = LiveTVDataStore.shared.beganWatching(channel)
     }
 
-    private func teardownPlaybackSession() {
+    private func teardownPlaybackSession(keepingPlayer: Bool = false) {
         endScrub()
         streamLoadTask?.cancel()
         streamLoadTask = nil
@@ -709,9 +711,15 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         // Drop the outgoing channel's cues: on a switch the overlay would
         // otherwise keep painting them until the new session publishes.
         subtitleModel.update(cues: [])
-        aetherPlayer?.stop()
-        aetherPlayer?.unbind(view: engineSurfaceView)
-        aetherPlayer = nil
+        if keepingPlayer {
+            // The next join loads on this engine, which skips the display
+            // mode write when the format is unchanged (#419).
+            aetherPlayer?.stop(resetDisplayCriteria: false)
+        } else {
+            aetherPlayer?.stop()
+            aetherPlayer?.unbind(view: engineSurfaceView)
+            aetherPlayer = nil
+        }
         // Every subscription in this set is bound to the player built by
         // startPlayback(); a stale one would feed the next session's UI from
         // the dead player.
@@ -1694,7 +1702,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         guard newChannel.id != channel.id else { return }
         cancelRetune()
         retuneBudget = LiveRetuneBudget()
-        teardownPlaybackSession()
+        teardownPlaybackSession(keepingPlayer: true)
         channel = newChannel
         // Rail must not keep showing the old channel's programme while the
         // new one resolves.
