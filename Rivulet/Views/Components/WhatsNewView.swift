@@ -149,6 +149,11 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.1 (118)", [
+            "The Home hero now shows what's trending in your Jellyfin libraries.",
+            "Top Shelf now fills in when Jellyfin is your only server.",
+            "Fixed thin, broken subtitle letters with the Uniform text edge style.",
+        ]),
         ("1.1.1 (117)", [
             "The Home hero can show Trending, Continue Watching, Recently Added or Watchlist.",
             "New Skip Preview setting opens titles straight to their full details.",
