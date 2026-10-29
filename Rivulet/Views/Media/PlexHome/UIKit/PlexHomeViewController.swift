@@ -3357,6 +3357,7 @@ final class PlexHomeViewController: UIViewController {
             jellyfin.$homeRows.map { _ in () }
                 .merge(with: jellyfin.$sources.map { _ in () },
                        jellyfin.$isLoading.map { _ in () },
+                       jellyfin.$trending.dropFirst().map { _ in () },
                        ContinueWatchingRow.shared.$version.dropFirst().map { _ in () },
                        LibrarySettingsManager.shared.objectWillChange.map { _ in () },
                        NotificationCenter.default.publisher(for: HomeRowSettings.changedNotification).map { _ in () })
@@ -4349,9 +4350,9 @@ final class PlexHomeViewController: UIViewController {
         } else if showHomeHero, heroSource == .both, isPlexHeroPending {
             if heroState == .loading { sections.append(.hero(items: [])) }
         } else if showHomeHero {
-            // Without Plex, the Jellyfin rows' newest additions; with both
-            // servers, those mixed with Plex's hero (Jellyfin's alone when
-            // Plex's ends unavailable).
+            // Without Plex, Jellyfin's trending titles (its newest additions
+            // when too few match); with both servers, those mixed with Plex's
+            // hero (Jellyfin's alone when Plex's ends unavailable).
             let items = homeMediaHeroItems()
             if !items.isEmpty { sections.append(.discoverHero(items: items)) }
         }
@@ -4494,6 +4495,15 @@ final class PlexHomeViewController: UIViewController {
             .prefix(10))
     }
 
+    /// The other servers' Home hero: their trending titles, one library at a
+    /// time, when enough have a backdrop; their newest additions otherwise.
+    static func heroItems(trending: [[MediaItem]], rows: CachedHomeRail) -> [MediaItem] {
+        let picks = Array(roundRobin(trending)
+            .filter { ($0.grandparentArtwork?.backdrop ?? $0.artwork.backdrop) != nil }
+            .prefix(10))
+        return picks.count >= heroTMDBMinMatches ? picks : heroItems(from: rows)
+    }
+
     /// Which signed-in servers Home's hero draws from.
     enum HomeHeroSource { case plex, jellyfin, both, none }
 
@@ -4528,7 +4538,8 @@ final class PlexHomeViewController: UIViewController {
     /// mapped here, at render time; Jellyfin's alone when Plex's ends
     /// unavailable). Empty for a Plex-only Home, whose hero is `heroItems`.
     private func homeMediaHeroItems() -> [MediaItem] {
-        let jellyfin = Self.heroItems(from: ServerDataStore.shared.visibleHomeRows)
+        let store = ServerDataStore.shared
+        let jellyfin = Self.heroItems(trending: store.visibleTrending, rows: store.visibleHomeRows)
         switch homeHeroSource {
         case .plex: return []
         case .jellyfin, .none: return jellyfin

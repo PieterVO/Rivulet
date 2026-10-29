@@ -136,6 +136,28 @@ final class JellyfinBrowseSurfaceTests: XCTestCase {
         XCTAssertEqual(hero.count, 10)
     }
 
+    func test_heroItems_trendingFirst_fallsBackToRecentWhenTooFew() {
+        func art(_ id: String) -> MediaItem {
+            let base = JellyfinFixtures.mediaItem(id, kind: .movie)
+            return MediaItem(ref: base.ref, kind: .movie, title: id, sortTitle: nil, overview: nil, year: nil,
+                             runtime: nil, parentRef: nil, grandparentRef: nil, episodeNumber: nil,
+                             seasonNumber: nil, childProgress: nil, userState: base.userState,
+                             artwork: MediaArtwork(poster: nil, backdrop: URL(string: "http://x/\(id)"),
+                                                   thumbnail: nil, logo: nil),
+                             parentArtwork: nil, grandparentArtwork: nil)
+        }
+        let rows: CachedHomeRail = [
+            CachedHomeHub(id: "ra", title: "Recently Added in Movies", isContinueWatching: false, hubKey: nil,
+                          hubIdentifier: nil, totalSize: nil, items: [art("new")])
+        ]
+
+        let trending = PlexHomeViewController.heroItems(trending: [[art("m1"), art("m2")], [art("s1")]], rows: rows)
+        XCTAssertEqual(trending.map(\.ref.itemID), ["m1", "s1", "m2"], "one library at a time")
+
+        let few = PlexHomeViewController.heroItems(trending: [[art("m1")], [art("s1")]], rows: rows)
+        XCTAssertEqual(few.map(\.ref.itemID), ["new"], "two matches are too few for a hero, as on Plex")
+    }
+
     // MARK: - Home
 
     private func row(_ id: String, cw: Bool = false, pin: Bool = false) -> CachedHomeHub {
