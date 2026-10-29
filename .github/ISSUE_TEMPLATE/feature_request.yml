@@ -10,6 +10,18 @@ body:
         - label: I have searched for existing feature requests
           required: true
 
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Which app should get this feature?
+      options:
+        - tvOS (Apple TV)
+        - iOS / iPadOS
+        - Both
+    validations:
+      required: true
+
   - type: textarea
     id: description
     attributes:

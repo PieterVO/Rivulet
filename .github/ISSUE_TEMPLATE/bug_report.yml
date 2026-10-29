@@ -14,10 +14,11 @@ body:
     id: platform
     attributes:
       label: Platform
-      description: One platform per issue. If the same bug happens on both, open a separate issue for each so each fix is tracked.
+      description: Where does the bug happen?
       options:
         - tvOS (Apple TV)
         - iOS / iPadOS
+        - Both
     validations:
       required: true
 
