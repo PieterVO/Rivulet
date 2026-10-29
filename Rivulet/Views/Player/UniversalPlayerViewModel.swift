@@ -1272,6 +1272,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             // source itself and serves HLS-fMP4 to AVPlayer over loopback.
             streamURL = url
             streamHeaders = headers ?? rivuletDirectPlayHeaders()
+            if let ratingKey = metadata.ratingKey {
+                let mediaIndex = playingMediaServerIndex, server = plexServer
+                Task { await PlexProgressReporter.shared.beginDirectPlaySession(
+                    ratingKey: ratingKey, mediaIndex: mediaIndex, server: server) }
+            }
 
             // Prepare an HLS fallback so a load failure on Aether can
             // recover via the Plex HLS transcode path.
@@ -3053,6 +3058,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Aether session, and points the session at the new URL. The caller preflights.
     private func beginHLSSwitch(to hls: (url: URL, headers: [String: String], sessionId: String?)) {
         stopOutgoingTranscode()
+        if case .plex = source, let ratingKey = metadata.ratingKey {
+            let server = plexServer
+            Task { await PlexProgressReporter.shared.endDirectPlaySession(ratingKey: ratingKey, server: server) }
+        }
         cancelAetherStallWatchdog()
         // Left running, Aether keeps its audio under the AVPlayer and holds the
         // render surface (UniversalPlayerView switches surfaces on aetherPlayer == nil).

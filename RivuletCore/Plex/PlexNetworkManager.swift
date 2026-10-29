@@ -1999,48 +1999,29 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Get decision info from Plex about what playback method to use
-    /// This also initializes the transcode session on the server
-    func getPlaybackDecision(
-        serverURL: String,
-        authToken: String,
-        ratingKey: String
-    ) async throws -> PlaybackDecision {
-        guard var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/decision") else {
-            throw PlexAPIError.invalidURL
-        }
-
-        // Use parameters that request HLS with direct play/stream enabled
+    /// Opens a Plex play session for a direct-play file, so the dashboard and Tautulli show its
+    /// bandwidth (#423). Measured on PMS 1.43.5: a LAN direct play gets no `Session` (bandwidth 0)
+    /// until a direct-play decision has run under the `X-Plex-Session-Identifier` its timeline sends.
+    /// The wildcard profile makes the decision direct play whatever the file is; no transcoder starts.
+    func openDirectPlaySession(serverURL: String, authToken: String, ratingKey: String,
+                               mediaIndex: Int, sessionIdentifier: String) async {
+        guard var components = URLComponents(string: "\(serverURL)/video/:/transcode/universal/decision") else { return }
         components.queryItems = [
             URLQueryItem(name: "path", value: "/library/metadata/\(ratingKey)"),
-            URLQueryItem(name: "mediaIndex", value: "0"),
+            URLQueryItem(name: "mediaIndex", value: String(mediaIndex)),
             URLQueryItem(name: "partIndex", value: "0"),
-            URLQueryItem(name: "protocol", value: "hls"),
+            URLQueryItem(name: "protocol", value: "http"),
             URLQueryItem(name: "directPlay", value: "1"),
-            URLQueryItem(name: "directStream", value: "1"),
-            URLQueryItem(name: "directStreamAudio", value: "1"),
-            URLQueryItem(name: "videoCodec", value: "h264,hevc"),
-            URLQueryItem(name: "audioCodec", value: "aac,ac3,eac3,dca"),
-            URLQueryItem(name: "subtitles", value: "auto"),
-            URLQueryItem(name: "hasMDE", value: "1"),
+            URLQueryItem(name: "directStream", value: "0"),
             URLQueryItem(name: "X-Plex-Client-Profile-Name", value: "Generic"),
-            URLQueryItem(name: "X-Plex-Token", value: authToken),
-            URLQueryItem(name: "X-Plex-Client-Identifier", value: PlexAPI.clientIdentifier),
-            URLQueryItem(name: "X-Plex-Platform", value: PlexAPI.platform),
-            URLQueryItem(name: "X-Plex-Device", value: PlexAPI.deviceName),
-            URLQueryItem(name: "X-Plex-Product", value: PlexAPI.productName)
+            URLQueryItem(name: "X-Plex-Client-Profile-Extra",
+                         value: "add-direct-play-profile(type=videoProfile&protocol=http&container=*&videoCodec=*&audioCodec=*)"),
+            URLQueryItem(name: "X-Plex-Session-Identifier", value: sessionIdentifier)
         ]
-        
-        guard let url = components.url else {
-            throw PlexAPIError.invalidURL
-        }
-        
-        let container: PlaybackDecisionContainer = try await request(
-            url,
-            headers: plexHeaders(authToken: authToken)
-        )
-        
-        return container.MediaContainer
+        guard let url = components.url else { return }
+        var headers = plexHeaders(authToken: authToken)
+        headers["X-Plex-Session-Identifier"] = sessionIdentifier
+        _ = try? await requestData(url, method: "GET", headers: headers)
     }
 
     /// Build thumbnail URL
@@ -3293,32 +3274,3 @@ nonisolated struct PlexLiveTuneError: LocalizedError {
     var errorDescription: String? { "Tune failed: \(serverMessage)" }
 }
 
-// MARK: - Playback Decision Models
-
-nonisolated struct PlaybackDecisionContainer: Codable, Sendable {
-    let MediaContainer: PlaybackDecision
-}
-
-nonisolated struct PlaybackDecision: Codable, Sendable {
-    let size: Int?
-    let directPlayDecisionCode: Int?
-    let directPlayDecisionText: String?
-    let generalDecisionCode: Int?
-    let generalDecisionText: String?
-    let transcodeDecisionCode: Int?
-    let transcodeDecisionText: String?
-    // MDE (Media Decision Engine) fields - used when hasMDE=1
-    let mdeDecisionCode: Int?
-    let mdeDecisionText: String?
-
-    /// Check if direct play is available
-    var canDirectPlay: Bool {
-        // Code 1000 = "Direct play OK" (from either directPlay or MDE)
-        directPlayDecisionCode == 1000 || mdeDecisionCode == 1000
-    }
-
-    /// Check if transcoding is required/available
-    var requiresTranscode: Bool {
-        !canDirectPlay && transcodeDecisionCode != nil
-    }
-}
