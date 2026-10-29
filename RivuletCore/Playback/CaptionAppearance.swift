@@ -37,6 +37,10 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
     /// Applied on top of the size Apple bases on the presentation (view) height.
     var fontScale: CGFloat
 
+    /// True while Apple's built-in Default style is active, which AVKit draws
+    /// smaller than its reported size.
+    var isSystemDefault: Bool
+
     /// Video Override state for the character size — gates a cue's own
     /// `fontSize` (ASS `\fs`, SRT `<font size=>`).
     var allowsContentFontSize: Bool
@@ -76,6 +80,7 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
         backgroundColor: .black,
         backgroundOpacity: 0.75,
         fontScale: 1.0,
+        isSystemDefault: true,
         allowsContentFontSize: true,
         fontDescriptor: nil,
         allowsContentFont: true,
@@ -89,6 +94,7 @@ struct CaptionStyle: Equatable, @unchecked Sendable {
             && lhs.backgroundColor == rhs.backgroundColor
             && lhs.backgroundOpacity == rhs.backgroundOpacity
             && lhs.fontScale == rhs.fontScale
+            && lhs.isSystemDefault == rhs.isSystemDefault
             && lhs.allowsContentFontSize == rhs.allowsContentFontSize
             && lhs.allowsContentFont == rhs.allowsContentFont
             && lhs.edge == rhs.edge
@@ -111,12 +117,15 @@ enum CaptionAppearance {
     /// Clamps a MediaAccessibility relative-character-size value to a usable font scale.
     /// The API returns a scale (1.0 default, non-positive means unset), quantised on
     /// tvOS 26.5 to 0.35, 0.6, 1.0, 1.5, 2.0, so these bounds never bind. AVKit renders
-    /// from the same buckets, but not linearly: map through
-    /// `CaptionOverlayView.Metrics.sizeLadder`, never multiply by this (#299).
+    /// from the same buckets; `CaptionOverlayView.Metrics.pointSize` maps them (#299).
     static func fontScale(forRelativeSize relative: CGFloat) -> CGFloat {
         guard relative > 0 else { return 1.0 }
         return min(max(relative, 0.25), 4.0)
     }
+
+    /// Profile ID of Apple's built-in Default caption style. MediaAccessibility
+    /// marks it not editable, so an edited style is a profile of its own.
+    static let systemDefaultProfileID = "MACaptionProfile-Default"
 
     /// Reads the current system caption style from MediaAccessibility.
     ///
@@ -177,6 +186,7 @@ enum CaptionAppearance {
             backgroundColor: backgroundColor,
             backgroundOpacity: backgroundOpacity,
             fontScale: scale,
+            isSystemDefault: MACaptionAppearanceCopyActiveProfileID() as String == systemDefaultProfileID,
             allowsContentFontSize: allowsContentFontSize,
             fontDescriptor: fontDescriptor,
             allowsContentFont: allowsContentFont,

@@ -83,43 +83,25 @@ final class CaptionOverlayView: UIView {
 
     enum Metrics {
 
-        /// Caption size as a fraction of the presentation height, per value
-        /// `MACaptionAppearanceGetRelativeCharacterSize` reports. Measured against
-        /// AVKit (tvOS 26.5 sim); AVKit does not scale linearly with the reported value:
-        ///
-        ///     reported   AVKit @1080   ratio    a linear multiply would give
-        ///       0.35        18.5pt     0.40x                0.35x
-        ///       0.6         31.0pt     0.67x                0.6x
-        ///       1.0         46.2pt     1.00x                1.0x
-        ///       1.5         78.0pt     1.69x                1.5x
-        ///       2.0        104.1pt     2.25x                2.0x
+        /// Caption size as a fraction of the presentation height per unit of
+        /// `MACaptionAppearanceGetRelativeCharacterSize`. AVKit scales linearly
+        /// with the reported value for every style but one (measured, tvOS 27.0
+        /// sim, within 2% at 0.35, 0.6, 1.0, 1.5 and 2.0).
         ///
         /// Presentation height, not picture height: AVKit sizes captions from the
         /// view and only positions them against the picture (#299).
-        static let sizeLadder: [(reported: CGFloat, fraction: CGFloat)] = [
-            (0.35, 0.0172),
-            (0.60, 0.0287),
-            (1.00, 0.0428),
-            (1.50, 0.0722),
-            (2.00, 0.0964)
-        ]
+        static let fractionPerUnit: CGFloat = 0.0481
 
-        /// Caption point size for a presentation height and reported character
-        /// size, interpolated between the measured rungs.
-        static func pointSize(presentationHeight: CGFloat, fontScale: CGFloat) -> CGFloat {
+        /// The exception: Apple's built-in Default style draws about 11% smaller
+        /// than its reported 1.0. A copy of it, Classic, or any edited style
+        /// does not (#422).
+        static let systemDefaultFraction: CGFloat = 0.0428
+
+        /// Caption point size for a presentation height and reported character size.
+        static func pointSize(presentationHeight: CGFloat, fontScale: CGFloat,
+                              isSystemDefault: Bool = false) -> CGFloat {
             let height = presentationHeight > 0 ? presentationHeight : assumedVideoHeight
-            return height * fraction(forReported: fontScale)
-        }
-
-        static func fraction(forReported reported: CGFloat) -> CGFloat {
-            guard let first = sizeLadder.first, let last = sizeLadder.last else { return 0 }
-            if reported <= first.reported { return first.fraction }
-            if reported >= last.reported { return last.fraction }
-            for (low, high) in zip(sizeLadder, sizeLadder.dropFirst()) where reported <= high.reported {
-                let t = (reported - low.reported) / (high.reported - low.reported)
-                return low.fraction + t * (high.fraction - low.fraction)
-            }
-            return last.fraction
+            return height * (isSystemDefault ? systemDefaultFraction : fontScale * fractionPerUnit)
         }
 
         /// Fallback presentation height, for a degenerate zero-height layout pass.
@@ -332,7 +314,8 @@ final class CaptionOverlayView: UIView {
 
     /// Caption point size for this presentation, before per-cue styling.
     private func baseFontSize(in size: CGSize) -> CGFloat {
-        Metrics.pointSize(presentationHeight: size.height, fontScale: style.fontScale)
+        Metrics.pointSize(presentationHeight: size.height, fontScale: style.fontScale,
+                          isSystemDefault: style.isSystemDefault)
     }
 
     // MARK: Layout
