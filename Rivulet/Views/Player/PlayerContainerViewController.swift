@@ -32,6 +32,8 @@ class PlayerContainerViewController: UIViewController {
     private var cancellables = Set<AnyCancellable>()
     /// The one floating panel shared by CC, audio, info and Up Next.
     private var activeRailPanel: PlayerRailPanelView?
+    /// Closes an untouched info pane, as AVKit does after 8s, playing or paused (#411).
+    private var paneIdleTimer: Timer?
     /// The open subtitle menu, and the speech model's download shown on its generated row.
     private weak var subtitleList: CardTrackListView?
     private var generatedSubtitleProgress: AnyCancellable?
@@ -550,6 +552,7 @@ class PlayerContainerViewController: UIViewController {
     private var blockDismissResetWorkItem: DispatchWorkItem?
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        restartPaneIdleTimer()
         for press in presses {
             if press.type == .menu {
                 isHandlingMenuPress = true
@@ -1805,6 +1808,7 @@ class PlayerContainerViewController: UIViewController {
             self.setNeedsFocusUpdate(); self.updateFocusIfNeeded()
         }
         activeRailPanel = panel
+        restartPaneIdleTimer()
         // Disarm them for the panel that just came up (see above).
         applyChromeVisibility()
         // A rail panel is a full-screen-adjacent overlay the ambient-pause
@@ -2082,6 +2086,26 @@ class PlayerContainerViewController: UIViewController {
             }
             // A user's move (not a re-resolution) counts as input for the paused poster.
             if !context.focusHeading.isEmpty { vm.hidePausedPoster() }
+        }
+        restartPaneIdleTimer()
+    }
+
+    private func restartPaneIdleTimer() {
+        paneIdleTimer?.invalidate()
+        paneIdleTimer = nil
+        guard let pane = activeRailPanel, pane.isPane else { return }
+        // Measured in AVKit: 8s with focus on the pills, 20s inside the pane's content.
+        let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView
+        let delay: TimeInterval = focused?.isDescendant(of: pane) == true ? 20 : 8
+        paneIdleTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                // The full summary is its own screen; closing it moves focus and re-arms.
+                guard let self, let vm = self.viewModel, let pane = self.activeRailPanel, pane.isPane,
+                      self.descriptionOverlay == nil, !vm.isScrubbing else { return }
+                pane.dismissPanel()
+                // AVKit takes the chrome with the pane; paused keeps Rivulet's own rule.
+                if vm.playbackState == .playing { vm.showControls = false }
+            }
         }
     }
 

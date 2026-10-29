@@ -105,6 +105,10 @@ final class AVKitScrubProbe: NSObject {
         case "panemenu":
             await ScrubStatesProbe.runAVKitPaneMenu()
             return
+        case "panewatch":
+            await ScrubStatesProbe.runAVKitPaneWatch(paused: env["RIVULET_SCRUBPROBE_PAUSED"] == "1",
+                                                     opensPane: env["RIVULET_SCRUBPROBE_NOPANE"] != "1")
+            return
         case "barstates":
             await ScrubStatesProbe.runAVKitBarStates()
             return
@@ -919,6 +923,56 @@ enum ScrubStatesProbe {
                 setState("c\(n)")
             }
             try? await Task.sleep(for: .milliseconds(100))
+        }
+        setState("done")
+    }
+
+    /// Opens the Info pane (or waits for a real Down when `opensPane` is false)
+    /// and logs, with times, whether the pane and chrome stay up untouched.
+    static func runAVKitPaneWatch(paused: Bool, opensPane: Bool) async {
+        let playerVC = makeChromePlayer(skipIntro: false)
+        keep = [playerVC]
+        await present(playerVC)
+        playerVC.player?.play()
+        try? await Task.sleep(for: .seconds(6))
+        guard let window = playerVC.view.window else { return }
+        if paused { playerVC.player?.pause() }
+        let controls = playerVC.descendantsOfClass("AVNowPlayingPlaybackControlsViewController").first
+        if opensPane {
+            playerVC.call("_showPlaybackControlsViewIfNeededForUserInteraction")
+            try? await Task.sleep(for: .seconds(1))
+            _ = openInfoPane(0, controls: controls, in: window)
+            // RIVULET_SCRUBPROBE_DOWN=n: move focus down n times into the pane's card.
+            let downs = Int(ProcessInfo.processInfo.environment["RIVULET_SCRUBPROBE_DOWN"] ?? "0") ?? 0
+            for _ in 0..<downs {
+                try? await Task.sleep(for: .seconds(1))
+                _ = DebugFocusDriver.move(.down, in: window)
+            }
+        }
+        func visibility(_ v: UIView?) -> Float {
+            guard let v else { return 0 }
+            var o: Float = 1
+            var cur: UIView? = v
+            while let c = cur { o *= (c.layer.presentation() ?? c.layer).opacity * (c.isHidden ? 0 : 1); cur = c.superview }
+            return o
+        }
+        let start = Date()
+        var last = ""
+        var lines: [String] = ["paused=\(paused) opensPane=\(opensPane)"]
+        while Date().timeIntervalSince(start) < 240 {
+            let pills = collection(containing: "AVInfoMenuCell", in: window)
+            let pillY = pills.map { ($0.layer.presentation() ?? $0.layer).frame.minY }
+            let pillWinY = pills.map { $0.convert($0.bounds, to: window).minY }
+            let pane = ["isInfoPaneVisible", "infoPaneVisible", "isShowingInfoPane"]
+                .first { controls?.responds(to: NSSelectorFromString($0)) == true }
+                .flatMap { controls?.value(forKey: $0) as? Bool }
+            let state = "pane=\(pane.map(String.init) ?? "?") pills=\(String(format: "%.2f", visibility(pills))) pillsY=\(pillWinY.map { fmt($0) } ?? "-")/\(pillY.map { fmt($0) } ?? "-") bar=\(String(format: "%.2f", visibility(window.firstDescendant(named: "AVNowPlayingTransportBar")))) focus=\(DebugFocusDriver.describeFocus(in: window)) rate=\(playerVC.player?.rate ?? -1)"
+            if state != last {
+                last = state
+                lines.append(String(format: "+%.1fs ", Date().timeIntervalSince(start)) + state)
+                try? lines.joined(separator: "\n").write(to: caches.appendingPathComponent("scrubstate-panewatch.txt"), atomically: true, encoding: .utf8)
+            }
+            try? await Task.sleep(for: .milliseconds(250))
         }
         setState("done")
     }

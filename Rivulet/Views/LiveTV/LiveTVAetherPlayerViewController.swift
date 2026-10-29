@@ -971,12 +971,21 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
     /// Chrome auto-hides after a few idle seconds, same spirit as the VOD
     /// container. Any focus movement inside the rail restarts the clock; an
-    /// open panel suspends it.
+    /// open menu suspends it. An untouched info pane closes, as in AVKit (#411).
     private func restartAutoHide() {
         autoHideTimer?.invalidate()
-        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
+        // Measured in AVKit: a pane waits 20s while focus is inside its content.
+        let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView
+        let inPane = activePanel.map { $0.isPane && focused?.isDescendant(of: $0) == true } ?? false
+        autoHideTimer = Timer.scheduledTimer(withTimeInterval: inPane ? 20 : 8, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.activePanel == nil, self.descriptionOverlay == nil, !self.isUserPaused else { return }
+                guard let self, self.descriptionOverlay == nil else { return }
+                if let pane = self.activePanel, pane.isPane {
+                    pane.dismissPanel()
+                } else if self.activePanel != nil {
+                    return
+                }
+                guard !self.isUserPaused else { return }
                 self.hideRail()
             }
         }
@@ -1065,7 +1074,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         if let next = context.nextFocusedView {
             progressBar.setFocusDimmed(next !== scrubberProxy && next.isDescendant(of: railView), coordinator: coordinator)
         }
-        if railVisible, activePanel == nil,
+        if activePanel?.isPane == true {
+            restartAutoHide()
+        } else if railVisible, activePanel == nil,
            let next = context.nextFocusedView, next.isDescendant(of: railView) {
             restartAutoHide()
         }
@@ -1110,8 +1121,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private func presentPane(content: UIView, pill: PlayerInfoPillButton) {
         let openPane = activePanel?.isPane == true ? activePanel : nil
         guard openPane != nil || activePanel == nil else { return }
-        autoHideTimer?.invalidate()
-        autoHideTimer = nil
+        restartAutoHide()
         let panel = PlayerRailPanelView.presentPane(
             content: content, cardWidth: nil, in: view, rail: railView, pill: pill,
             riders: [progressBar, timeshiftBadge], replacing: openPane)
@@ -1885,6 +1895,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     // MARK: - Remote handling
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if activePanel?.isPane == true { restartAutoHide() }
         for press in presses {
             switch press.type {
             case .menu:
