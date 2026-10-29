@@ -132,8 +132,9 @@ final class CaptionOverlayView: UIView {
         static let paddingVRatio: CGFloat = 0.075
 
         /// Uniform-edge outline weight, a percentage of the point size for
-        /// `NSAttributedString.Key.strokeWidth` (negative means stroke and fill).
-        static let outlineStrokePercent: CGFloat = -4
+        /// `NSAttributedString.Key.strokeWidth` (positive: stroke only). The fill
+        /// covers the inner half, so the visible outline is half this.
+        static let outlineStrokePercent: CGFloat = 8
 
         /// Emboss offset for the raised and depressed edge styles, as a
         /// fraction of the point size. Proportional for the same reason the
@@ -527,12 +528,25 @@ final class CaptionOverlayView: UIView {
 
 // MARK: - CaptionBoxView
 
+/// Strokes its text with round joins; the default miter joins spike at sharp
+/// corners (the foot of an N) once the stroke is this wide.
+private final class OutlineLabel: UILabel {
+    override func drawText(in rect: CGRect) {
+        UIGraphicsGetCurrentContext()?.setLineJoin(.round)
+        super.drawText(in: rect)
+    }
+}
+
 /// One cue in ONE rounded box, sized to its longest line.
 ///
 /// Keeps the author's line breaks; shorter lines align to `alignment`.
 private final class CaptionBoxView: UIView {
 
     private let label = UILabel()
+    /// The uniform edge's stroke-only copy of the text, drawn under `label`.
+    /// Stroking the fill itself centres the stroke on the glyph edge, which
+    /// thins the letters and draws SF's overlapping contours inside them (#422).
+    private var outlineLabel: OutlineLabel?
     private let body: AetherSubtitleCue.Body
     private let style: CaptionStyle
 
@@ -565,6 +579,14 @@ private final class CaptionBoxView: UIView {
         label.numberOfLines = 0
         label.textAlignment = alignment
         label.backgroundColor = .clear
+        if style.edge == .uniform {
+            let outline = OutlineLabel()
+            outline.numberOfLines = 0
+            outline.textAlignment = alignment
+            outline.backgroundColor = .clear
+            addSubview(outline)
+            outlineLabel = outline
+        }
         addSubview(label)
     }
 
@@ -576,7 +598,9 @@ private final class CaptionBoxView: UIView {
         guard pointSize != appliedPointSize else { return }
         appliedPointSize = pointSize
 
-        label.attributedText = attributedText(pointSize: pointSize)
+        let text = attributedText(pointSize: pointSize)
+        label.attributedText = text
+        outlineLabel?.attributedText = Self.outlined(text)
         layer.cornerRadius = pointSize * CaptionOverlayView.Metrics.cornerRadiusRatio
 
         // The uniform edge is an outline INSTEAD of a box; every other edge
@@ -614,6 +638,18 @@ private final class CaptionBoxView: UIView {
         super.layoutSubviews()
         let pad = padding
         label.frame = bounds.insetBy(dx: pad.h, dy: pad.v)
+        outlineLabel?.frame = label.frame
+    }
+
+    /// The text as a black stroke with no fill. Stroke attributes leave glyph
+    /// metrics alone, so it lays out exactly under the fill.
+    private static func outlined(_ text: NSAttributedString) -> NSAttributedString {
+        let outline = NSMutableAttributedString(attributedString: text)
+        outline.addAttributes([
+            .strokeColor: UIColor.black,
+            .strokeWidth: CaptionOverlayView.Metrics.outlineStrokePercent
+        ], range: NSRange(location: 0, length: outline.length))
+        return outline
     }
 
     // MARK: Text
@@ -673,9 +709,9 @@ private final class CaptionBoxView: UIView {
         return result
     }
 
-    /// The system text-edge treatment. Every case is one draw: a negative
-    /// `strokeWidth` strokes AND fills, and `NSShadow` is drawn by the text
-    /// system rather than by a layer shadow (no offscreen pass, no shadowPath).
+    /// The system text-edge treatment, except uniform, which `outlineLabel`
+    /// draws. `NSShadow` is drawn by the text system rather than by a layer
+    /// shadow (no offscreen pass, no shadowPath).
     ///
     /// Raised and depressed are the same zero-blur offset in opposite directions.
     private func applyEdge(to text: NSMutableAttributedString, pointSize: CGFloat) {
@@ -695,12 +731,6 @@ private final class CaptionBoxView: UIView {
         }
 
         switch style.edge {
-        case .uniform:
-            text.addAttributes([
-                .strokeColor: UIColor.black,
-                .strokeWidth: CaptionOverlayView.Metrics.outlineStrokePercent
-            ], range: full)
-
         case .dropShadow:
             text.addAttribute(.shadow,
                               value: shadow(offset: CGSize(width: 0, height: 1),
@@ -722,7 +752,7 @@ private final class CaptionBoxView: UIView {
                                             alpha: 0.9),
                               range: full)
 
-        case .none:
+        case .uniform, .none:
             break
         }
     }
