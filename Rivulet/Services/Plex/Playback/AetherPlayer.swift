@@ -847,12 +847,13 @@ final class AetherPlayer: PlayerProtocol {
                 preferredDecodePath: (role == .fullscreen && !nativeRemoteHLS && Self.needsDeinterlacing(url))
                     ? .software : .automatic
             )
+            // Segments cut at every keyframe join in seconds instead of waiting
+            // out the standard ~18s holdback (loopback joins measured 8-34s, #415).
+            // Costs rewind depth on short-GOP channels: the playlist caps at 900 segments.
+            options.liveJoinProfile = .fastZap
             if role == .multiviewSlot {
-                // A tile never scrubs and zaps often: segments cut at every
-                // keyframe join in seconds rather than waiting out the
-                // standard ~18s holdback, and field-rate deinterlacing on a
-                // quarter-screen tile only doubles decoder output for nothing.
-                options.liveJoinProfile = .fastZap
+                // Field-rate deinterlacing on a quarter-screen tile only
+                // doubles decoder output for nothing.
                 options.deinterlaceFieldRate = .frame
             }
             if joinsWirelessAudio {

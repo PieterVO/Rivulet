@@ -153,6 +153,7 @@ struct WhatsNewView: View {
             "The Home hero now shows what's trending in your Jellyfin libraries.",
             "Top Shelf now fills in when Jellyfin is your only server.",
             "Fixed thin, broken subtitle letters with the Uniform text edge style.",
+            "Live channels from Tvheadend, HDHomeRun and Plex tuners now start in a few seconds.",
         ]),
         ("1.1.1 (117)", [
             "The Home hero can show Trending, Continue Watching, Recently Added or Watchlist.",
