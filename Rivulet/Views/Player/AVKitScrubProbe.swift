@@ -84,6 +84,12 @@ final class AVKitScrubProbe: NSObject {
         case "chrome":
             await ScrubStatesProbe.runAVKitFullChrome()
             return
+        case "captions":
+            await CaptionLayoutProbe.runAVKit(env: env)
+            return
+        case "rivulet-captions":
+            await CaptionLayoutProbe.runRivulet(env: env)
+            return
         case "focus":
             await ScrubStatesProbe.runAVKitFocus()
             return

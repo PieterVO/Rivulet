@@ -124,10 +124,15 @@ final class CaptionOverlayView: UIView {
         /// 57pt.
         static let embossDepthRatio: CGFloat = 0.04
 
-        /// Extra leading between the lines of one cue, on top of the font's own
-        /// line height. Zero matches Apple, whose caption lines sit on natural
-        /// leading inside a single background.
-        static let textLineSpacing: CGFloat = 0
+        /// Line pitch inside one cue as a multiple of the point size. AVKit spaces
+        /// lines wider than the font's own line height (measured, tvOS 27 sim:
+        /// 1.43-1.46 at Default, 1.0 and 1.5).
+        static let linePitchRatio: CGFloat = 1.444
+
+        /// Leading to add under each line so the pitch is `linePitchRatio`.
+        static func lineSpacing(for font: UIFont) -> CGFloat {
+            max(0, font.pointSize * linePitchRatio - font.lineHeight)
+        }
 
         /// Gap between separate simultaneous cues (two speakers), which SHOULD
         /// read as distinct blocks.
@@ -300,7 +305,7 @@ final class CaptionOverlayView: UIView {
         let letterbox = max(0, size.height - rect.maxY)
         var base = letterbox + rect.height * restingMarginFraction
         if controlsVisible {
-            base = max(base, SubtitleAdjustments.controlsFloor(pictureHeight: rect.height))
+            base = max(base, SubtitleAdjustments.controlsFloor(isSystemDefault: style.isSystemDefault))
         }
         return base
     }
@@ -656,7 +661,7 @@ private final class CaptionBoxView: UIView {
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
-        paragraph.lineSpacing = CaptionOverlayView.Metrics.textLineSpacing
+        paragraph.lineSpacing = CaptionOverlayView.Metrics.lineSpacing(for: baseFont)
 
         let result = NSMutableAttributedString()
 

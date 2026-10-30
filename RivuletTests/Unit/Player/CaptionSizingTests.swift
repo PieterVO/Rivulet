@@ -23,6 +23,14 @@ final class CaptionSizingTests: XCTestCase {
         (0.35, 18.3), (0.60, 31.2), (1.00, 51.9), (1.50, 78.0), (2.00, 104.0)
     ]
 
+    /// AVKit's two-line pitch at Default (46.2pt), 1.0 (51.9pt) and 1.5 (78pt): 66, 76 and 112pt.
+    func test_lineSpacing_givesAVKitsLinePitch() {
+        for (size, pitch) in [(CGFloat(46.2), CGFloat(66)), (51.9, 76), (78, 112)] {
+            let font = UIFont.systemFont(ofSize: size)
+            XCTAssertEqual(font.lineHeight + CaptionOverlayView.Metrics.lineSpacing(for: font), pitch, accuracy: 1.5)
+        }
+    }
+
     func test_pointSize_matchesAVKitAtEveryReportableSize() {
         for expected in avkitSizes {
             let size = CaptionOverlayView.Metrics.pointSize(

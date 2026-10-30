@@ -97,14 +97,18 @@ enum SubtitleAdjustments {
     static let bottomMarginFraction: CGFloat = 0.0493
     static let systemDefaultBottomMarginFraction: CGFloat = 0.0526
 
-    /// The margin a caption keeps off the rail top while the rail is up.
-    static let railMarginFraction: CGFloat = 0.06
+    /// The margin a caption keeps off the rail top while the rail is up. AVKit's
+    /// lift is a constant, the same for every picture shape and caption size;
+    /// the built-in Default style sits higher, as it does at rest (measured,
+    /// tvOS 27 sim, within 1pt at 1.0, 1.5 and Default; device agrees).
+    static let railMargin: CGFloat = 19
+    static let systemDefaultRailMargin: CGFloat = 26
 
     /// The lowest a caption may sit while the rail is showing. Lives here
     /// because BOTH overlays need it and they must agree: captions should not
     /// change height when a title falls back from the engine to the HLS route.
-    static func controlsFloor(pictureHeight: CGFloat) -> CGFloat {
-        railTopFromScreenBottom + pictureHeight * railMarginFraction
+    static func controlsFloor(isSystemDefault: Bool) -> CGFloat {
+        railTopFromScreenBottom + (isSystemDefault ? systemDefaultRailMargin : railMargin)
     }
 
     /// "0", "+3", "-2" — the stepper's centre label.

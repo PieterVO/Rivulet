@@ -91,7 +91,7 @@ final class CaptionOverlayPlacementTests: XCTestCase {
         XCTAssertEqual(frame.minX, 100, accuracy: 0.5)
         XCTAssertEqual(
             frame.maxY,
-            canvas.height - SubtitleAdjustments.controlsFloor(pictureHeight: canvas.height),
+            canvas.height - SubtitleAdjustments.controlsFloor(isSystemDefault: true),
             accuracy: 0.5)
     }
 
