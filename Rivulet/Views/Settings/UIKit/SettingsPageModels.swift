@@ -1209,6 +1209,7 @@ enum SettingsContent {
                                confirmTitle: "Clear Cache", destructive: true) {
                     Task {
                         await ImageCacheManager.shared.clearAll()
+                        ContinueWatchingCardCompositor.clearDisk()
                         await CacheManager.shared.clearAllCache()
                         await reloadFromServer()
                     }

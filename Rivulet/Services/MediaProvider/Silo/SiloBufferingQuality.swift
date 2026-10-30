@@ -109,10 +109,15 @@ nonisolated struct SiloBufferingQuality {
         stallStartMs = max(now, graceEndsAtMs ?? now)
     }
 
+    /// Schedule the continuing-stall check after both first-frame grace and six seconds of evidence.
+    var continuousStallDeadlineMs: Int? {
+        stallStartMs.map { $0 + 6_000 }
+    }
+
     /// Call during a continuing stall so a single long wait can trigger at six seconds.
     mutating func stallContinues(atMs now: Int, status: MediaNegotiatedStatus,
                                  deliveredKbps: Int?, observedThroughputKbps: Int? = nil) -> Decision {
-        guard let start = stallStartMs, now >= start + 6_000 else { return .none }
+        guard let deadline = continuousStallDeadlineMs, now >= deadline else { return .none }
         return evaluate(status: status, deliveredKbps: deliveredKbps, observedThroughputKbps: observedThroughputKbps)
     }
 

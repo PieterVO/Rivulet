@@ -131,9 +131,7 @@ final class SetupLandingViewController: UIViewController {
         flow.onExit = { [weak self, weak flow] in
             flow?.dismiss(animated: true) { self?.flowFinished() }
         }
-        // Over the landing, dimmed and blurred, so the glow stays behind the form. The landing
-        // is dark in both appearances, so the form is too.
-        flow.overrideUserInterfaceStyle = .dark
+        // Over the landing, dimmed and blurred, so the glow stays behind the form.
         flow.drawsBackdrop = false
         flow.modalPresentationStyle = .overFullScreen
         flow.transitioningDelegate = SetupFadeTransition.shared

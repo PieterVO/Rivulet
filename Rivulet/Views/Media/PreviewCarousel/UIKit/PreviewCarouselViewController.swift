@@ -315,14 +315,16 @@ final class PreviewCarouselViewController: UIViewController {
         }
         // Episode description Select → the episode's detail page.
         expandedDetail.onShowEpisodeDetails = { [weak self] episode in
+            self?.presentEpisodePage(episode)
+        }
+        // Held Select on an episode → Home's tile menu, less the Go to entries.
+        expandedDetail.onEpisodeMenu = { [weak self] episode, thumbFrame in
             guard let self else { return }
-            // No seriesTitle: the page reads the show from the episode's metadata,
-            // and the carousel's selected item is not reliably the show.
-            let page = MediaItemDetailPageViewController(
-                item: episode,
-                seriesTitle: nil,
-                onPlay: { [weak self] ep, sourceID in self?.playMediaItem(ep, sourceID: sourceID) })
-            self.present(page, animated: true)
+            EpisodeMenu.present(for: episode, from: self, sourceFrame: thumbFrame,
+                                play: { [weak self] sourceID, fromBeginning in
+                                    self?.playMediaItem(episode, sourceID: sourceID, fromBeginning: fromBeginning)
+                                },
+                                moreInfo: { [weak self] in self?.presentEpisodePage(episode) })
         }
 
         // Related poster Select → the item's full standalone detail, not the episode page.
@@ -335,13 +337,9 @@ final class PreviewCarouselViewController: UIViewController {
         expandedDetail.onOpenSeason = { [weak self] season in
             guard let self else { return }
             let show = self.items.indices.contains(self.selectedIndex) ? self.items[self.selectedIndex] : nil
-            let page = MediaItemDetailPageViewController(
-                item: season,
-                seriesTitle: show?.kind == .show ? show?.title : nil,
-                // playHeroItem, not playMediaItem: a season key has no media, so
-                // Play must resolve to its first unplayed episode.
-                onPlay: { [weak self] season, _ in self?.playHeroItem(season) })
-            self.present(page, animated: true)
+            self.present(SeasonDetailViewController(season: season,
+                                                    showTitle: show?.kind == .show ? show?.title : nil),
+                         animated: true)
         }
         // Cast / crew cell Select → person detail page (full-screen).
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
@@ -1044,15 +1042,27 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    private func playMediaItem(_ item: MediaItem, sourceID: String? = nil) {
+    private func playMediaItem(_ item: MediaItem, sourceID: String? = nil, fromBeginning: Bool = false) {
         // presentPlayer resolves a Plex ratingKey; any other item plays through
         // its own provider.
         if !item.ref.isPlex {
-            ProviderPlayer.play(item, fromBeginning: false, sourceID: sourceID, from: self, onDismiss: nil)
+            ProviderPlayer.play(item, fromBeginning: fromBeginning, sourceID: sourceID, from: self, onDismiss: nil)
             return
         }
+        // 0, not nil: nil means ask the server for its resume point.
         let offsetSec = item.userState.viewOffset
-        presentPlayer(ratingKey: item.ref.itemID, resumeOffset: offsetSec > 0 ? offsetSec : nil, mediaID: sourceID)
+        let resume: Double? = fromBeginning ? 0 : (offsetSec > 0 ? offsetSec : nil)
+        presentPlayer(ratingKey: item.ref.itemID, resumeOffset: resume, mediaID: sourceID)
+    }
+
+    private func presentEpisodePage(_ episode: MediaItem) {
+        // No seriesTitle: the page reads the show from the episode's metadata,
+        // and the carousel's selected item is not reliably the show.
+        let page = MediaItemDetailPageViewController(
+            item: episode,
+            seriesTitle: nil,
+            onPlay: { [weak self] ep, sourceID in self?.playMediaItem(ep, sourceID: sourceID) })
+        present(page, animated: true)
     }
 
     /// The Plex server the item on screen lives on, which may not be the selected one (#87).

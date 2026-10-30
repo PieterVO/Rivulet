@@ -27,9 +27,11 @@ class ContentProvider: TVTopShelfContentProvider {
         }
 
         if !TopShelfCache.shared.fullScreen {
-            let lead = TVTopShelfItemCollection(items: items.compactMap(posterItem))
-            lead.title = TopShelfCache.shared.sectionTitle
-            let recent = TVTopShelfItemCollection(items: TopShelfCache.shared.readRecentItems().compactMap(posterItem))
+            // Progress bars only on Continue Watching; a Recently Added tile's bar is noise.
+            let title = TopShelfCache.shared.sectionTitle
+            let lead = TVTopShelfItemCollection(items: items.compactMap { posterItem($0, showsProgress: title != "Recently Added") })
+            lead.title = title
+            let recent = TVTopShelfItemCollection(items: TopShelfCache.shared.readRecentItems().compactMap { posterItem($0, showsProgress: false) })
             recent.title = "Recently Added"
             let sections = [lead, recent].filter { !$0.items.isEmpty }
             returned = sections.reduce(0) { $0 + $1.items.count }
@@ -86,7 +88,7 @@ class ContentProvider: TVTopShelfContentProvider {
     }
 
     /// A poster tile for the default sectioned row, the way Plex's Top Shelf looks.
-    private func posterItem(_ item: TopShelfItem) -> TVTopShelfSectionedItem? {
+    private func posterItem(_ item: TopShelfItem, showsProgress: Bool) -> TVTopShelfSectionedItem? {
         guard let playURL = RivuletLink(.play, ratingKey: item.ratingKey, server: item.serverIdentifier).url,
               let detailURL = RivuletLink(.detail, ratingKey: item.ratingKey, server: item.serverIdentifier).url
         else { return nil }
@@ -94,7 +96,7 @@ class ContentProvider: TVTopShelfContentProvider {
         tile.imageShape = .poster
         // Episodes show the show's poster, so they carry its name.
         tile.title = item.subtitle ?? item.title
-        if item.progress > 0 { tile.playbackProgress = item.progress }
+        if showsProgress, item.progress > 0 { tile.playbackProgress = item.progress }
         if let url = URL(string: item.imageURL.isEmpty ? item.wideImageURL : item.imageURL) {
             tile.setImageURL(url, for: .screenScale1x)
             tile.setImageURL(url, for: .screenScale2x)

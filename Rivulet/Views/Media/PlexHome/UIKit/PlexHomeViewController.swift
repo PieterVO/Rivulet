@@ -4642,6 +4642,12 @@ final class PlexHomeViewController: UIViewController {
             presentDiscoverTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .searchGrid:
             guard itemIndex < section.items.count else { return }
+            // People have no title actions. Reuse Select's native person route,
+            // including its current provider and visible-library scope checks.
+            if sectionID == .searchGroup("people") {
+                handleShelfTap(sectionID: sectionID, itemIndex: itemIndex)
+                return
+            }
             // Music results (artist/album/track) route to the music surfaces;
             // the Plex watched/watchlist menu doesn't apply to them.
             if let meta = searchGroupMetas[sectionID]?[safe: itemIndex],
@@ -6079,16 +6085,15 @@ final class PlexHomeViewController: UIViewController {
     }
 
 
-    /// Detail for a MediaItem (tile-menu "More Info", "Go to"): the detail page for episodes and seasons,
+    /// Detail for a MediaItem (tile-menu "More Info", "Go to"): the season page, the episode page,
     /// the standalone expanded detail for everything else.
     private func selectMediaItem(_ item: MediaItem) {
-        if item.kind == .episode || item.kind == .season {
+        if item.kind == .season {
+            present(SeasonDetailViewController(season: item), animated: true)
+        } else if item.kind == .episode {
             let page = MediaItemDetailPageViewController(
                 item: item,
                 seriesTitle: nil,
-                // A season has no media of its own: resolve it to an episode
-                // first, as the carousel's season page does. An episode plays
-                // itself.
                 onPlay: { [weak self] target, sourceID in self?.playResolvingEpisode(target, sourceID: sourceID) })
             present(page, animated: true)
         } else {
@@ -7531,20 +7536,26 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         updateHomeState()
     }
 
-    /// Episode-only, in the menu's first group. Go to Episode opens the show's
-    /// page keyed to the EPISODE: episode chrome up top, its season pill
-    /// selected, the rail positioned at it. Go to Show opens the show's own
-    /// page, whose Watched button marks the whole show.
+    /// Episode-only, in the menu's first group. Go to Episode opens its season's
+    /// page with the episode focused. Go to Show opens the show's own page,
+    /// whose Watched button marks the whole show.
     private func goToEntries(for item: MediaItem) -> [TileMenuAction] {
         guard item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false else { return [] }
         return [
             TileMenuAction(title: "Go to Episode", systemImage: "list.and.film") { [weak self] in
-                self?.presentStandaloneExpandedDetail(item)
+                self?.goToEpisode(item)
             },
             TileMenuAction(title: "Go to Show", systemImage: "tv") { [weak self] in
                 self?.openShowDetail(of: item)
             },
         ]
+    }
+
+    /// The season page on the episode; the show page keyed to it when the season can't be read.
+    private func goToEpisode(_ episode: MediaItem) {
+        SeasonDetailViewController.open(focusing: episode, from: self) { [weak self] in
+            self?.presentStandaloneExpandedDetail(episode)
+        }
     }
 
     private func openShowDetail(of episode: MediaItem) {
@@ -7619,7 +7630,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 for: item, provider: provider, isContinueWatching: isContinueWatching,
                 onWatchFromBeginning: { [weak self] in self?.playItem(item, fromBeginning: true) },
                 onMoreInfo: { [weak self] in self?.selectMediaItem(item) },
-                onGoToEpisode: { [weak self] in self?.presentStandaloneExpandedDetail(item) },
+                onGoToEpisode: { [weak self] in self?.goToEpisode(item) },
                 onGoToShow: { [weak self] in self?.openShowDetail(of: item) },
                 onPlayVersion: { [weak self] in self?.presentVersionPicker(for: item, from: tileFrame) },
                 onAddToPlaylist: { [weak self] in
@@ -7774,11 +7785,14 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         isContinueWatching: Bool,
         onWatchFromBeginning: @escaping () -> Void,
         onMoreInfo: @escaping () -> Void,
-        onGoToEpisode: @escaping () -> Void,
-        onGoToShow: @escaping () -> Void,
+        onGoToEpisode: (() -> Void)? = nil,
+        onGoToShow: (() -> Void)? = nil,
         onPlayVersion: (() -> Void)? = nil,
         onAddToPlaylist: (() -> Void)? = nil
     ) -> [[TileMenuAction]] {
+        // Person identities are not catalog title IDs; even an unexpected caller
+        // must not offer playback or send watched/watchlist/favorite mutations.
+        guard item.kind != .person else { return [] }
         var savedActions: [TileMenuAction] = []
         if provider.supportsWatchlist {
             savedActions.append(TileMenuAction(title: "Toggle Watchlist", systemImage: "bookmark") {
@@ -7806,7 +7820,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             TileMenuAction(title: "More Info", systemImage: "info.circle", handler: onMoreInfo)
         ]
         if let version = playVersionAction(for: item, handler: onPlayVersion) { first.insert(version, at: 1) }
-        if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false {
+        // Unwired on the show's own page, where both lead back to it.
+        if item.kind == .episode, item.grandparentRef?.itemID.isEmpty == false,
+           let onGoToEpisode, let onGoToShow {
             first.append(TileMenuAction(title: "Go to Episode", systemImage: "list.and.film", handler: onGoToEpisode))
             first.append(TileMenuAction(title: "Go to Show", systemImage: "tv", handler: onGoToShow))
         }

@@ -1003,7 +1003,7 @@ final class MediaDetailChromeView: UIView {
         // Native source marks need room to wrap without pushing the title out
         // of the carousel. The synopsis keeps its independent reading-width cap.
         metadataMaxWidth?.constant = detail?.ratingPresentation == .allAvailable ? 1060 : Self.episodeDescriptionMaxWidth
-        ratingsView.configure(detail?.chromeRatings ?? [])
+        ratingsView.configure(detail?.ratingPresentation == .allAvailable ? detail?.chromeRatings ?? [] : [])
         capabilityBadges.configure(source: detail?.primarySource,
                                    style: detail?.showsTechnicalMetadata == true ? .technical : .summary)
 
@@ -1024,9 +1024,45 @@ final class MediaDetailChromeView: UIView {
             metadata.append(caption)
         }
 
+        // Native multi-source scores have their own compact row. Other providers
+        // keep the score chosen in Appearance beside the Common Sense age.
+        if item.kind != .episode {
+            metadata += Self.scoreAndAgeViews(
+                ratings: detail?.ratingPresentation == .allAvailable ? [] : detail?.ratings ?? [],
+                age: detail?.contentAdvisory?.ageRating, alpha: Self.qualityRowAlpha)
+        }
 
-        // The Common Sense age, on movies and shows but not episodes.
-        if item.kind != .episode, let age = detail?.contentAdvisory?.ageRating {
+        hasQualityMetadata = !metadata.isEmpty
+        metadata.append(descriptionIndicator)
+        qualityRow.setItems(metadata)
+        qualityRow.isHidden = !hasQualityMetadata && descriptionIndicator.isHidden
+    }
+
+    /// The score (glyph or source name, then value) and the Common Sense age with its green seal.
+    static func scoreAndAgeViews(ratings: [MediaRating], age: String?, alpha: CGFloat) -> [UIView] {
+        var views: [UIView] = []
+        if let rating = MediaRating.detailRating(in: ratings) {
+            let label = makeCaptionLabel(rating.badgeText, alpha: alpha)
+            let ratingStack: UIStackView
+            if rating.source == .rottenTomatoes || rating.source == .rottenTomatoesAudience {
+                let glyph = UIImageView(image: emojiGlyph(
+                    rating.source == .rottenTomatoes ? (rating.value >= 6 ? "🍅" : "🤢") : "🍿"))
+                glyph.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    glyph.widthAnchor.constraint(equalToConstant: 20),
+                    glyph.heightAnchor.constraint(equalToConstant: 20)
+                ])
+                ratingStack = UIStackView(arrangedSubviews: [glyph, label])
+                ratingStack.spacing = 2
+            } else {
+                ratingStack = UIStackView(arrangedSubviews: [makeCaptionLabel(rating.name, alpha: alpha), label])
+                ratingStack.spacing = 6
+            }
+            ratingStack.axis = .horizontal
+            ratingStack.alignment = .center
+            views.append(ratingStack)
+        }
+        if let age {
             let seal = UIImageView(image: UIImage(systemName: "checkmark.circle"))
             seal.tintColor = .systemGreen
             seal.contentMode = .scaleAspectFit
@@ -1035,19 +1071,24 @@ final class MediaDetailChromeView: UIView {
                 seal.widthAnchor.constraint(equalToConstant: 20),
                 seal.heightAnchor.constraint(equalToConstant: 20)
             ])
-            let ageStack = UIStackView(arrangedSubviews: [
-                seal, Self.makeCaptionLabel(age, alpha: Self.qualityRowAlpha)
-            ])
+            let ageStack = UIStackView(arrangedSubviews: [seal, makeCaptionLabel(age, alpha: alpha)])
             ageStack.axis = .horizontal
             ageStack.spacing = 2
             ageStack.alignment = .center
-            metadata.append(ageStack)
+            views.append(ageStack)
         }
+        return views
+    }
 
-        hasQualityMetadata = !metadata.isEmpty
-        metadata.append(descriptionIndicator)
-        qualityRow.setItems(metadata)
-        qualityRow.isHidden = !hasQualityMetadata && descriptionIndicator.isHidden
+    /// The system's score glyph: tomato when fresh at 60% and up, nauseated face
+    /// when rotten, and popcorn for the audience.
+    private static func emojiGlyph(_ emoji: String) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20)).image { _ in
+            let glyph = emoji as NSString
+            let font = UIFont.systemFont(ofSize: 17)
+            let size = glyph.size(withAttributes: [.font: font])
+            glyph.draw(at: CGPoint(x: (20 - size.width) / 2, y: (20 - size.height) / 2), withAttributes: [.font: font])
+        }
     }
 
 
@@ -1210,7 +1251,7 @@ final class MediaDetailChromeView: UIView {
         }
     }
 
-    private static func makeCaptionLabel(_ text: String, alpha: CGFloat) -> UILabel {
+    static func makeCaptionLabel(_ text: String, alpha: CGFloat) -> UILabel {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.text = text
@@ -1220,7 +1261,7 @@ final class MediaDetailChromeView: UIView {
     }
 
     /// Bordered rating / quality badge, 22pt tall in total (Apple's badge cap).
-    private static func makeBadge(_ text: String, alpha: CGFloat) -> UIView {
+    static func makeBadge(_ text: String, alpha: CGFloat) -> UIView {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
         label.text = text

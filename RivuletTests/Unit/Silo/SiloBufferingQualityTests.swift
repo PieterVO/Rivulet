@@ -106,6 +106,49 @@ final class SiloBufferingQualityTests: XCTestCase {
         XCTAssertEqual(policy.stallContinues(atMs: 50_000, status: status(), deliveredKbps: 8_000), .none)
     }
 
+    func testEarlyContinuousStallRecoversAtGraceAdjustedDeadline() throws {
+        var policy = SiloBufferingQuality(policy: .automatically)
+        policy.playing(atMs: 0)
+        policy.stallBegan(atMs: 2_000)
+        let deadline = try XCTUnwrap(policy.continuousStallDeadlineMs)
+        XCTAssertEqual(deadline, 16_000)
+        XCTAssertEqual(policy.stallContinues(atMs: 8_000, status: status(), deliveredKbps: 8_000), .none)
+        XCTAssertEqual(policy.stallContinues(atMs: deadline - 1, status: status(), deliveredKbps: 8_000), .none)
+        guard case .lower(let request) = policy.stallContinues(atMs: deadline, status: status(), deliveredKbps: 8_000) else {
+            return XCTFail("Expected recovery without another playback-state transition")
+        }
+        XCTAssertEqual(request.quality, .automatic)
+        XCTAssertEqual(request.bandwidthEstimateKbps, 5_600)
+        XCTAssertEqual(policy.stallContinues(atMs: deadline + 1, status: status(), deliveredKbps: 8_000), .none)
+    }
+
+    func testEarlyStallEndingBeforeGraceDoesNotRecoverAtCancelledDeadline() throws {
+        var policy = SiloBufferingQuality(policy: .automatically)
+        policy.playing(atMs: 0)
+        policy.stallBegan(atMs: 2_000)
+        let deadline = try XCTUnwrap(policy.continuousStallDeadlineMs)
+        XCTAssertEqual(policy.stallEnded(atMs: 8_000, status: status(), deliveredKbps: 8_000), .none)
+        XCTAssertNil(policy.continuousStallDeadlineMs)
+        XCTAssertEqual(policy.stallContinues(atMs: deadline, status: status(), deliveredKbps: 8_000), .none)
+    }
+
+    func testNewPlanCannotRecoverAtPreviousStallDeadline() throws {
+        var policy = SiloBufferingQuality(policy: .automatically)
+        policy.playing(atMs: 0)
+        policy.stallBegan(atMs: 2_000)
+        let previousDeadline = try XCTUnwrap(policy.continuousStallDeadlineMs)
+        policy.adopt(status: status())
+        XCTAssertNil(policy.continuousStallDeadlineMs)
+        policy.playing(atMs: 6_000)
+        policy.stallBegan(atMs: 7_000)
+        let deadline = try XCTUnwrap(policy.continuousStallDeadlineMs)
+        XCTAssertEqual(deadline, 22_000)
+        XCTAssertEqual(policy.stallContinues(atMs: previousDeadline, status: status(), deliveredKbps: 8_000), .none)
+        guard case .lower = policy.stallContinues(atMs: deadline, status: status(), deliveredKbps: 8_000) else {
+            return XCTFail("Expected recovery only after the new plan's grace and stall evidence")
+        }
+    }
+
     func testUnchangedOrUnavailableAdoptionDoesNotEnableRestore() {
         var policy = SiloBufferingQuality(policy: .automatically)
         policy.playing(atMs: 0)

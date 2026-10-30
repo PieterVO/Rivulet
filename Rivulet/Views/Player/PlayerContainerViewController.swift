@@ -1874,7 +1874,8 @@ class PlayerContainerViewController: UIViewController {
                 vm.aetherPlayer != nil ? { [weak vm] in vm?.aetherPlayer?.advancedStats() } : nil
             var media = PlayerDetailsPaneView.mediaSections(metadata: vm.metadata, modes: vm.streamingModeInfo,
                 dolbyVision: vm.aetherPlayer?.dolbyVisionPlayback,
-                enhancementLayer: vm.aetherPlayer?.dolbyVisionEnhancementLayer)
+                enhancementLayer: vm.aetherPlayer?.dolbyVisionEnhancementLayer,
+                enhanceDialogue: SystemAudioAdjustment.dialogueSummary)
             if let negotiated = vm.siloNegotiatedDetails { media.insert(negotiated, at: 0) }
             let details = PlayerDetailsPaneView(
                 media: media,

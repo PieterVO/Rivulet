@@ -50,6 +50,11 @@ final class SettingsContainerViewController: UIViewController {
     var drawsBackdrop = true
     private let ambientView = AmbientBackdropView()
 
+    /// The Settings tab follows the system appearance, as tvOS Settings does, though the app
+    /// window is pinned dark. A standalone flow keeps the dark of what it sits over.
+    var followsSystemAppearance = false
+    private var sceneStyleRegistration: UITraitChangeRegistration?
+
     init(rootPage: SettingsPage = .root) {
         self.rootPage = rootPage
         super.init(nibName: nil, bundle: nil)
@@ -79,6 +84,18 @@ final class SettingsContainerViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         if drawsBackdrop { ambientView.setAmbient(url: AmbientBackdropView.lastURL) }
+    }
+
+    override func viewIsAppearing(_ animated: Bool) {
+        super.viewIsAppearing(animated)
+        // The scene's traits are the system's; the window's dark override sits below it.
+        guard followsSystemAppearance, sceneStyleRegistration == nil,
+              let scene = view.window?.windowScene else { return }
+        overrideUserInterfaceStyle = scene.traitCollection.userInterfaceStyle
+        sceneStyleRegistration = scene.registerForTraitChanges([UITraitUserInterfaceStyle.self]) {
+            [weak self] (scene: UIWindowScene, _: UITraitCollection) in
+            self?.overrideUserInterfaceStyle = scene.traitCollection.userInterfaceStyle
+        }
     }
 
     /// Home's background, layer for layer: black, the artwork wash with its vignette, the adaptive material.

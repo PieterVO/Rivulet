@@ -205,11 +205,11 @@ enum SettingsDescriptorStore {
         ),
         "heightSpeakers": SettingDescriptor(
             icon: "hifispeaker.2",
-            description: "Keeps Atmos and DTS:X heights as lossless PCM over HDMI, including with Dolby Vision FEL. AirPlay uses lossy APAC. Off plays channel audio without object heights. DTS:X needs 7.1.4 or 9.1.6."
+            description: "Keeps the height channels of object-based soundtracks, lossless over HDMI. Off plays 7.1 without them. Some soundtracks need 7.1.4 or 9.1.6."
         ),
         "dolbyVisionFEL": SettingDescriptor(
             icon: "4k.tv",
-            description: "Plays the full Dolby Vision Profile 7 layer on a Dolby Vision TV. Height Speakers keeps Atmos and DTS:X heights. No AirPlay or Picture in Picture. Off plays it as 8.1."
+            description: "Plays the full Dolby Vision Profile 7 layer on a Dolby Vision TV, without AirPlay or Picture in Picture. Off plays it as 8.1."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",

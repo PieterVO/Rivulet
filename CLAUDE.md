@@ -822,12 +822,16 @@ protocol v3, never compatibility endpoints or Plex Discover substitutions.
   repopulate the screen.
 - `allEpisodes` traverses the returned season content ids: the catalog
   `items/{id}/episodes` endpoint accepts a **season**, not a show.
+- People results use native person navigation for Select and long-press; their
+  opaque identities must never enter catalog playback or watched-state actions.
 - Played sessions stop with a final observed sample; `discardStream` retires
   unplayed reservations without writing zero progress. Native `stop_id` values
   must be canonical lowercase UUIDs. Mutations are never automatically replayed.
 - `replaceStream` keeps the native session for track/quality changes. Explicit
   version and Up Next handoffs retire the old reservation before preparing a
   new one when `reservesPlaybackOnResolve` is true.
+  Continuous-stall recovery uses the grace-adjusted policy deadline, fenced to
+  the current item, source and session; cancelled waits cannot lower a new plan.
 - Native track menus use provider shim ids. Engine active-track publishers must
   not overwrite these picks with engine indices.
   Keep Silo actions in the shared On/Off, Language and Style subtitle menu;
@@ -1219,7 +1223,7 @@ VOD is served by AetherPlayer (`aether` route, the default) or AVPlayer (`hls` r
 
 ### HDR / DV
 - Aether drives `AVDisplayManager.preferredDisplayCriteria` itself (host `DisplayCriteriaManager` stands down on the aether route).
-- DV is engine-owned; the RPU stays in the samples and Apple's decoder applies it. P5 is a `dvh1` sample entry with `dvcC` and `CODECS="dvh1.05.LL"`. P8.1 / P8.4 are `hvc1` + `dvvC` with `SUPPLEMENTAL-CODECS="dvh1.08.LL/db1p"` (`/db4h` for 8.4), and the HDMI criteria request `dvh1`. The supplemental only rides the master playlist, which is served once the panel is in HDR, so real DV needs a DV TV plus Match Dynamic Range (or HDR/DV output locked). P7 FEL on a DV panel takes the engine's dual-layer route (#345): `AetherPlayer` sets `preferDualLayerDolbyVision` from `AetherEngine.displayCapabilities.supportsDolbyVision`, because the engine does not check the panel itself. AetherEngine 7.50.0 keeps E-AC-3 JOC compressed on that software host and renders TrueHD Atmos / DTS:X through the selected Height Speakers layout. Rivulet uses `.render(layout)`: lossless PCM over HDMI, APAC on AirPlay; this preserves the rendered bed, not the original TrueHD bitstream. FEL no longer excludes height channels. The AirPlay picture stays local, and the engine refuses FEL over its real-time budget (UHD 30 fps plus a 1080p EL). P7 MEL, and FEL over budget, is converted live to single-layer 8.1 (libdovi, EL dropped) on a DV panel. Without DV on the TV, P7 plays the HDR10 base. P8.2 plays its SDR base. Without DV on the TV, 8.x plays its base layer. Rivulet sets neither `dolbyVisionHandling` nor `forceDolbyVisionOnNonDVDisplay`, so the engine defaults apply. Both FEL and P5 stills exist only because of package traits (see Quick Reference), so a bump that drops them silently turns FEL off. Routing lives in the engine's `CodecRoutePolicy.swift`. Keep `ownsSoftwareNowPlaying` off: Rivulet already owns Now Playing and remote commands.
+- DV is engine-owned; the RPU stays in the samples and Apple's decoder applies it. P5 is a `dvh1` sample entry with `dvcC` and `CODECS="dvh1.05.LL"`. P8.1 / P8.4 are `hvc1` + `dvvC` with `SUPPLEMENTAL-CODECS="dvh1.08.LL/db1p"` (`/db4h` for 8.4), and the HDMI criteria request `dvh1`. The supplemental only rides the master playlist, which is served once the panel is in HDR, so real DV needs a DV TV plus Match Dynamic Range (or HDR/DV output locked). P7 FEL on a DV panel takes the engine's dual-layer route (#345): `AetherPlayer` sets `preferDualLayerDolbyVision` from `AetherEngine.displayCapabilities.supportsDolbyVision`, because the engine does not check the panel itself. That route is the software host: height channels still render there (Height Speakers), but it has no AirPlay picture, and the engine refuses it over its real-time budget (UHD 30 fps plus a 1080p EL). P7 MEL, and FEL over budget, is converted live to single-layer 8.1 (libdovi, EL dropped) on a DV panel. Without DV on the TV, P7 plays the HDR10 base. P8.2 plays its SDR base. Without DV on the TV, 8.x plays its base layer. Rivulet sets neither `dolbyVisionHandling` nor `forceDolbyVisionOnNonDVDisplay`, so the engine defaults apply. Both FEL and P5 stills exist only because of package traits (see Quick Reference), so a bump that drops them silently turns FEL off. Routing lives in the engine's `CodecRoutePolicy.swift`.
 
 ## Plex Discover API
 
@@ -1320,9 +1324,3 @@ which no-ops in DEBUG.
 **Never send stream URLs to Sentry.** Xtream-style IPTV paths embed credentials
 (`/live/user/pass/id.ts`) and Plex URLs carry tokens. Derive a category and send
 that (see `LiveJoinTelemetry`), or use `SensitiveDataRedactor.safeURLString`.
-
-## Date-sensitive verification
-
-- Camera-day assertions use an explicit Gregorian calendar in `TimeZone.current`, matching the photo mappers. Do not change `NSTimeZone.default` to simulate a device zone: it can diverge from `TimeZone.current` and affect other tests.
-- Build day-boundary fixtures with calendar arithmetic, not fixed 24-hour offsets. Derive expected weekday labels from the device's formatter instead of pinning English abbreviations.
-
