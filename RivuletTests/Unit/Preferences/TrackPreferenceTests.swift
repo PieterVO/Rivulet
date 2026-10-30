@@ -532,6 +532,52 @@ final class TrackPreferenceTests: XCTestCase {
         XCTAssertEqual(TrackIntentStore.audioIntent, intent)
     }
 
+    // MARK: - Per profile
+
+    private func selectProfile(_ id: Int?) {
+        if let id {
+            testDefaults.set(id, forKey: PlexProfileSession.savedUserIDKey)
+        } else {
+            testDefaults.removeObject(forKey: PlexProfileSession.savedUserIDKey)
+        }
+    }
+
+    /// Each Plex Home profile keeps its own choice (#432).
+    func testProfilesKeepSeparateIntents() {
+        selectProfile(1)
+        TrackIntentStore.subtitleIntent = .off
+        selectProfile(2)
+        let always = SubtitleIntent.track(language: "eng", forced: false, hearingImpaired: false, codec: nil)
+        TrackIntentStore.subtitleIntent = always
+
+        XCTAssertEqual(TrackIntentStore.subtitleIntent, always)
+        selectProfile(1)
+        XCTAssertEqual(TrackIntentStore.subtitleIntent, .off)
+    }
+
+    /// A profile that has saved nothing reads the device-wide value, which its picks never change.
+    func testProfileInheritsDeviceIntentUntilItPicks() {
+        let foreign = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        TrackIntentStore.subtitleIntent = foreign
+        selectProfile(1)
+        XCTAssertEqual(TrackIntentStore.subtitleIntent, foreign)
+
+        TrackIntentStore.subtitleIntent = .off
+        selectProfile(nil)
+        XCTAssertEqual(TrackIntentStore.subtitleIntent, foreign)
+    }
+
+    /// A profile's "follow the account" audio (nil) does not fall back to the device's language.
+    func testProfileNilAudioDoesNotInheritDevice() {
+        TrackIntentStore.audioIntent = AudioIntent(language: "jpn")
+        selectProfile(1)
+        TrackIntentStore.audioIntent = nil
+
+        XCTAssertNil(TrackIntentStore.audioIntent)
+        selectProfile(nil)
+        XCTAssertEqual(TrackIntentStore.audioIntent, AudioIntent(language: "jpn"))
+    }
+
     // MARK: - Migration
 
     func testMigratesLegacyAudioLanguageKey() {
