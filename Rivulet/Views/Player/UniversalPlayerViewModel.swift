@@ -4435,8 +4435,10 @@ final class UniversalPlayerViewModel: ObservableObject {
            TrackIntentResolver.resolveAudio(intent: TrackIntentStore.effectiveAudioIntent, in: audioTracks)?.id != id {
             TrackIntentStore.audioIntent = AudioIntent(from: track)
         }
-        // Foreign Audio follows the new language.
-        if case .foreignAudio = TrackIntentStore.effectiveSubtitleIntent { applyGlobalSubtitleIntent() }
+        // Foreign Audio follows the new language, unless subtitles were turned off for this title.
+        if case .foreignAudio = TrackIntentStore.effectiveSubtitleIntent, !subtitlesPickedOff {
+            applyGlobalSubtitleIntent()
+        }
     }
 
     /// Select audio track without saving preference (for auto-selection)
@@ -4461,6 +4463,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // then persist the user's explicit choice as the saved preference so
         // future playback sessions restore it.
         selectSubtitleTrackWithoutSaving(id: id)
+        // Off holds for this title even where the saved mode would show subtitles.
+        subtitlesPickedOff = id == nil
 
         // Generated subtitles save no preference; they carry on through this session's next items.
         guard id != Self.generatedSubtitleId else {
@@ -4558,7 +4562,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Whether we've already applied track preferences for this playback session
     private var hasAppliedSubtitlePreference = false
-    /// Off was picked before play, so the generated fallback stays away.
+    /// Off was picked for this title, before or during play: the generated
+    /// fallback and Foreign Audio's re-resolve stay away.
     private var subtitlesPickedOff = false
     private var hasAppliedAudioPreference = false
 
@@ -6391,6 +6396,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // signal), so bump this explicitly for anything that caches
         // per-item state and needs to reset across the swap.
         itemGeneration += 1
+        // An Off picked on the last title does not carry over (#432).
+        subtitlesPickedOff = false
         if let queueIndex { playQueue?.jump(to: queueIndex) } else { playQueue?.advance() }
         providerTargetSourceID = nil
         // Work queued for the outgoing item never runs, so nothing else clears this.
