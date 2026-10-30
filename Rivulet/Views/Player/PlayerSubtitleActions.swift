@@ -37,6 +37,18 @@ nonisolated enum PlayerSubtitleOperation: Sendable {
     case completed
     case failed(String)
 
+    var title: String {
+        switch self {
+        case .downloading: return "Download Subtitles"
+        case .starting: return "Start Generation"
+        case .job(let job): return job.menuTitle
+        case .activating: return "Select Subtitle"
+        case .completed: return "Subtitle Ready"
+        case .failed: return "Subtitle Operation Failed"
+        case .idle: return "Subtitles"
+        }
+    }
+
     var detail: String {
         switch self {
         case .idle: return "Choose a Silo subtitle action."
@@ -63,6 +75,48 @@ nonisolated enum PlayerSubtitleOperation: Sendable {
     }
 }
 
+extension SiloSubtitleAIJob {
+    nonisolated var menuTitle: String {
+        let language = targetLanguage.flatMap { $0.isEmpty ? nil : Locale.current.localizedString(forLanguageCode: $0) }
+        switch kind {
+        case "translate": return language.map { "Translate to \($0)" } ?? "Subtitle Translation"
+        case "transcribe_translate": return language.map { "Audio to \($0)" } ?? "Audio Translation"
+        default: return "Audio Transcription"
+        }
+    }
+}
+
+extension SiloSubtitleSyncJob {
+    nonisolated var statusText: String {
+        switch status {
+        case "pending": return "Queued on Silo"
+        case "running":
+            let activity = phase == "matching" ? "Aligning subtitles" : "Analyzing audio"
+            guard let progress, progress.isFinite else { return "\(activity)…" }
+            return "\(activity) · \(Int((min(1, max(0, progress)) * 100).rounded()))%"
+        case "synced": return "Subtitles synced"
+        case "already_synced": return "Already in sync"
+        case "no_match": return "No match. Try subtitles for another release."
+        case "failed":
+            switch failure {
+            case "subtitle_changed": return "The subtitle changed. Check its status before syncing again."
+            case "no_audio": return "Silo could not read this file's audio."
+            case "unavailable": return "Silo cannot analyze audio right now. Try again later."
+            default: return "Silo could not sync this subtitle."
+            }
+        default: return "Sync status unavailable"
+        }
+    }
+}
+
+extension SiloSubtitleTiming {
+    nonisolated var detail: String {
+        guard !isIdentity else { return "Original timing" }
+        let offset = String(format: "%+.2f s", Double(offsetMs) / 1_000)
+        return scale == 1 ? offset : "\(offset) · \(String(format: "%.4f", scale))× speed"
+    }
+}
+
 extension SiloSubtitleAIStatus {
     @MainActor
     func generationOptions(for source: MediaSource, targetLanguage: String) -> [SiloSubtitleGenerationOption] {
@@ -70,10 +124,10 @@ extension SiloSubtitleAIStatus {
         let target = Locale.current.localizedString(forLanguageCode: targetLanguage) ?? targetLanguage
         if canTranscribe, !source.audioTracks.isEmpty {
             let index = source.audioTracks.first(where: \.isSelected)?.index ?? -1
-            options.append(SiloSubtitleGenerationOption(title: "Transcribe Audio", detail: "Silo · original spoken language",
+            options.append(SiloSubtitleGenerationOption(title: "Original Language", detail: "Transcribe spoken dialogue on Silo",
                                                         kind: .transcribe, sourceIndex: index, targetLanguage: "", fileID: source.id))
             if canTranslate {
-                options.append(SiloSubtitleGenerationOption(title: "Generate \(target) from Audio", detail: "Silo · transcribe and translate",
+                options.append(SiloSubtitleGenerationOption(title: target, detail: "Transcribe and translate on Silo",
                                                             kind: .transcribeTranslate, sourceIndex: index, targetLanguage: targetLanguage, fileID: source.id))
             }
         }
@@ -82,7 +136,7 @@ extension SiloSubtitleAIStatus {
             for track in source.subtitleTracks where supported.contains(track.codec.lowercased()) {
                 if let language = track.language, TrackLanguage.normalize(language) == TrackLanguage.normalize(targetLanguage) { continue }
                 let language = track.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? track.language ?? "Auto-detect"
-                options.append(SiloSubtitleGenerationOption(title: "Translate \(language) to \(target)",
+                options.append(SiloSubtitleGenerationOption(title: language,
                     detail: [track.title, track.codec.uppercased(), track.isHearingImpaired ? "SDH" : nil]
                         .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                     kind: .translate, sourceIndex: track.index, targetLanguage: targetLanguage, fileID: source.id))

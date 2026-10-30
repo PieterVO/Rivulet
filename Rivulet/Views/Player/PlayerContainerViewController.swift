@@ -40,6 +40,7 @@ class PlayerContainerViewController: UIViewController {
     private var generatedSubtitleProgress: AnyCancellable?
     private var subtitleSearchTask: Task<Void, Never>?
     private var subtitleOperationProgress: AnyCancellable?
+    private var subtitleSyncProgress: AnyCancellable?
 
     /// Previous `railVisible`, so `applyChromeVisibility()` can spot the rail
     /// APPEARING and start every appearance on the scrubber.
@@ -1519,14 +1520,14 @@ class PlayerContainerViewController: UIViewController {
 
     private func presentSubtitleMenu(_ vm: UniversalPlayerViewModel) {
         var actions: [CardActionConfig] = []
-        if vm.canSearchSubtitles {
+        if vm.isSiloPlayback {
+            actions.append(CardActionConfig(title: "Silo Subtitles", subtitle: "Search, AI and audio sync",
+                                            showsChevron: true) { [weak self] _ in
+                self?.presentSiloSubtitleMenu()
+            })
+        } else if vm.canSearchSubtitles {
             actions.append(CardActionConfig(title: "Search for Subtitles") { [weak self] row in
                 self?.searchSubtitles(from: row)
-            })
-        }
-        if !vm.siloSubtitleGenerationOptions.isEmpty || !vm.siloSubtitleJobs.isEmpty {
-            actions.append(CardActionConfig(title: "Silo AI Subtitles") { [weak self] _ in
-                self?.presentSiloSubtitleOptions()
             })
         }
         let list = CardTrackListView.subtitleMenu(
@@ -1558,53 +1559,146 @@ class PlayerContainerViewController: UIViewController {
         presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
     }
 
-    private func presentSiloSubtitleOptions() {
-        guard let vm = viewModel else { return }
-        switch vm.subtitleOperation {
-        case .starting, .downloading, .activating:
-            presentSubtitleOperation()
-            return
-        case .job(let job) where job.isActive:
-            presentSubtitleOperation()
-            return
-        default: break
+    private func presentSiloSubtitleMenu() {
+        guard let vm = viewModel, vm.isSiloPlayback else { return }
+        var actions: [CardActionConfig] = []
+        if vm.canSearchSubtitles {
+            actions.append(CardActionConfig(title: "Search Subtitles", subtitle: vm.subtitleSearchLanguageName) {
+                [weak self] row in self?.searchSubtitles(from: row)
+            })
+        }
+        if vm.siloSubtitleSyncStatus?.isAvailable == true {
+            actions.append(CardActionConfig(title: "Sync with Audio",
+                subtitle: vm.siloSubtitleSyncState?.label ?? "Downloaded subtitles and sidecar files",
+                showsChevron: true) { [weak self] _ in self?.presentSiloSubtitleSync() })
         }
         let options = vm.siloSubtitleGenerationOptions
-        let jobs = vm.siloSubtitleJobs
-        var rows = options.enumerated().map {
-            CardTrackListView.Row(title: $0.element.title, subtitle: $0.element.detail, trackId: $0.offset, isSelected: false)
+        if options.contains(where: { $0.kind != .translate }) {
+            actions.append(CardActionConfig(title: "Generate from Audio", subtitle: "Silo AI transcription",
+                                            showsChevron: true) { [weak self] _ in
+                self?.presentSiloSubtitleGeneration(translation: false)
+            })
         }
-        rows += jobs.enumerated().map {
-            CardTrackListView.Row(title: $0.element.kind == "translate" ? "Silo Translation" : "Silo Transcription",
-                subtitle: [$0.element.targetLanguage, $0.element.statusText].compactMap { $0 }.joined(separator: " · "),
-                trackId: options.count + $0.offset, isSelected: false)
+        if options.contains(where: { $0.kind == .translate }) {
+            actions.append(CardActionConfig(title: "Translate a Subtitle",
+                subtitle: "To \(vm.subtitleSearchLanguageName) · Silo AI", showsChevron: true) { [weak self] _ in
+                self?.presentSiloSubtitleGeneration(translation: true)
+            })
         }
-        let list = CardTrackListView(header: "Silo AI Subtitles", rows: rows, onSelect: { [weak self, weak vm] index in
-            guard let self, let vm, let index else { return }
-            if options.indices.contains(index) { vm.generateSiloSubtitles(options[index]) }
-            else if jobs.indices.contains(index - options.count) { vm.followSiloSubtitleJob(jobs[index - options.count]) }
-            self.presentSubtitleOperation()
+        if !vm.siloSubtitleJobs.isEmpty || vm.subtitleOperation.isBusy {
+            actions.append(CardActionConfig(title: "Subtitle Jobs", subtitle: "Progress and results",
+                                            showsChevron: true) { [weak self] _ in self?.presentSiloSubtitleJobs() })
+        }
+        let rows = actions.isEmpty ? [
+            CardTrackListView.Row(title: "No Server Actions Available",
+                subtitle: "Check subtitle features and permissions on Silo.", trackId: nil,
+                isSelected: false, isEnabled: false, wrapsSubtitle: true)
+        ] : []
+        actions.append(CardActionConfig(title: "Refresh Availability") { [weak self, weak vm] row in
+            guard let self, let vm else { return }
+            let origin = self.activeRailPanel
+            row.setTitle("Checking Silo…")
+            Task { [weak self, weak vm] in
+                guard let vm else { return }
+                await vm.refreshSubtitleActions()
+                guard let self, self.viewModel === vm, self.activeRailPanel === origin else { return }
+                self.presentSiloSubtitleMenu()
+            }
         })
+        let list = CardTrackListView(header: "Silo Subtitles", rows: rows, actions: actions,
+            onBack: { [weak self] in
+                guard let self, let vm = self.viewModel else { return }
+                self.presentSubtitleMenu(vm)
+            }, onSelect: { _ in })
+        presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+    }
+
+    private func presentSiloSubtitleGeneration(translation: Bool) {
+        guard let vm = viewModel else { return }
+        if vm.subtitleOperation.isBusy { presentSubtitleOperation(); return }
+        let options = vm.siloSubtitleGenerationOptions.filter { ($0.kind == .translate) == translation }
+        let rows = options.enumerated().map {
+            CardTrackListView.Row(title: $0.element.title, subtitle: $0.element.detail,
+                                 trackId: $0.offset, isSelected: false)
+        }
+        let header = translation ? "Translate to \(vm.subtitleSearchLanguageName)" : "Generate from Audio"
+        let list = CardTrackListView(header: header, rows: rows,
+            onBack: { [weak self] in self?.presentSiloSubtitleMenu() },
+            onSelect: { [weak self, weak vm] index in
+                guard let index, options.indices.contains(index), let vm else { return }
+                vm.generateSiloSubtitles(options[index])
+                self?.presentSubtitleOperation()
+            })
+        presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+    }
+
+    private func presentSiloSubtitleJobs() {
+        guard let vm = viewModel else { return }
+        if vm.subtitleOperation.isBusy { presentSubtitleOperation(); return }
+        let jobs = vm.siloSubtitleJobs
+        let rows = jobs.enumerated().map {
+            CardTrackListView.Row(title: $0.element.menuTitle, subtitle: $0.element.statusText,
+                                 trackId: $0.offset, isSelected: false)
+        }
+        let list = CardTrackListView(header: "Subtitle Jobs", rows: rows,
+            onBack: { [weak self] in self?.presentSiloSubtitleMenu() },
+            onSelect: { [weak self, weak vm] index in
+                guard let index, jobs.indices.contains(index), let vm else { return }
+                vm.followSiloSubtitleJob(jobs[index])
+                self?.presentSubtitleOperation()
+            })
         presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
     }
 
     private func presentSubtitleOperation() {
         guard let vm = viewModel else { return }
-        let list = CardTrackListView(header: "Silo Subtitles", rows: [
-            CardTrackListView.Row(title: "Server Operation", subtitle: vm.subtitleOperation.detail,
-                                 trackId: 0, isSelected: false, isEnabled: false)
+        let list = CardTrackListView(header: "Silo Subtitle Job", rows: [
+            CardTrackListView.Row(title: vm.subtitleOperation.title, subtitle: vm.subtitleOperation.detail,
+                                 trackId: 0, isSelected: false, isEnabled: false, wrapsSubtitle: true)
         ], actions: [
-            CardActionConfig(title: "Cancel Silo Job", isEnabled: { [weak vm] in
+            CardActionConfig(title: "Cancel Job", isEnabled: { [weak vm] in
                 vm?.subtitleOperation.cancellableJobID != nil
-            }) { [weak vm] _ in
-                Task { await vm?.cancelSiloSubtitleJob() }
-            },
-            CardActionConfig(title: "Close") { [weak self] _ in self?.activeRailPanel?.dismissPanel() }
-        ], onSelect: { _ in })
+            }) { [weak vm] _ in Task { await vm?.cancelSiloSubtitleJob() } },
+            CardActionConfig(title: "Back to Silo Subtitles", showsChevron: true) { [weak self] _ in
+                self?.presentSiloSubtitleMenu()
+            }
+        ], onBack: { [weak self] in self?.presentSiloSubtitleMenu() }, onSelect: { _ in })
         subtitleOperationProgress = vm.$subtitleOperation.receive(on: DispatchQueue.main).sink { [weak list] state in
-            list?.updateTrack(0, subtitle: state.detail)
+            list?.updateTrack(0, title: state.title, subtitle: state.detail)
             list?.refreshActionAvailability()
         }
+        presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+    }
+
+    private func presentSiloSubtitleSync() {
+        guard let vm = viewModel else { return }
+        let list = CardTrackListView(header: "Sync with Audio", rows: [
+            CardTrackListView.Row(title: vm.siloSubtitleSyncState?.label ?? "Selected Subtitle",
+                subtitle: vm.siloSubtitleSyncDetail, trackId: 0, isSelected: false, isEnabled: false, wrapsSubtitle: true),
+            CardTrackListView.Row(title: "Automatic Sync",
+                subtitle: vm.siloSubtitleSyncStatus?.autoSync == true ? "Enabled on Silo" : "Manual sync only",
+                trackId: nil, isSelected: false, isEnabled: false)
+        ], actions: [
+            CardActionConfig(title: "Sync with Audio", subtitle: "Align this subtitle on Silo",
+                isEnabled: { [weak vm] in vm?.canStartSiloSubtitleSync == true }) { [weak vm] _ in
+                    vm?.startSiloSubtitleSync()
+                },
+            CardActionConfig(title: "Reset Server Timing", subtitle: "Keeps your local delay",
+                isEnabled: { [weak vm] in vm?.canResetSiloSubtitleTiming == true }) { [weak vm] _ in
+                    vm?.resetSiloSubtitleTiming()
+                },
+            CardActionConfig(title: "Check Status") { [weak vm] _ in
+                Task { await vm?.refreshSubtitleActions() }
+            }
+        ], onBack: { [weak self] in self?.presentSiloSubtitleMenu() }, onSelect: { _ in })
+        subtitleSyncProgress = vm.$siloSubtitleSyncState
+            .combineLatest(vm.$siloSubtitleSyncError, vm.$siloSubtitleSyncUpdating)
+            .receive(on: DispatchQueue.main).sink { [weak list, weak vm] _ in
+                guard let vm else { return }
+                list?.updateTrack(0, title: vm.siloSubtitleSyncState?.label ?? "Selected Subtitle",
+                                  subtitle: vm.siloSubtitleSyncDetail)
+                list?.refreshActionAvailability()
+            }
         presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
     }
 
@@ -1623,26 +1717,35 @@ class PlayerContainerViewController: UIViewController {
             catch { results = nil; failure = error.localizedDescription }
             guard let self else { return }
             self.subtitleSearchTask = nil
-            row?.setTitle("Search for Subtitles")
+            if let row { row.setTitle(row.row.title) }
             guard let vm, let origin, self.activeRailPanel === origin else { return }
             let found = results ?? []
-            let rows = found.isEmpty
+            var rows = found.isEmpty
                 ? [CardTrackListView.Row(title: results == nil ? "Search Failed" : "No Subtitles Found",
-                                         subtitle: failure, trackId: nil, isSelected: false)]
+                    subtitle: failure ?? vm.subtitleSearchLanguageName, trackId: nil,
+                    isSelected: false, isEnabled: false, wrapsSubtitle: true)]
                 : found.enumerated().map { index, result in
-                    CardTrackListView.Row(
-                        title: result.title,
-                        subtitle: result.detail,
-                        trackId: index, isSelected: false)
+                    CardTrackListView.Row(title: result.title, subtitle: result.detail,
+                                          trackId: index, isSelected: false)
                 }
+            if let warning = vm.subtitleSearchWarning {
+                rows.insert(CardTrackListView.Row(title: "Some Providers Unavailable", subtitle: warning,
+                    trackId: nil, isSelected: false, isEnabled: false, wrapsSubtitle: true), at: 0)
+            }
             _ = self.presentRailPanel(
-                content: CardTrackListView(header: vm.subtitleSearchWarning == nil ? "Search Results" : "Partial Search Results", rows: rows, onSelect: { [weak vm, weak self] index in
-                    self?.activeRailPanel?.dismissPanel()
-                    guard let index, let vm else { return }
-                    guard found.indices.contains(index) else { return }
-                    Task { await vm.installSubtitle(found[index]) }
-                    if case .silo = found[index] { self?.presentSubtitleOperation() }
-                }),
+                content: CardTrackListView(header: "Results · \(vm.subtitleSearchLanguageName)", rows: rows,
+                    actions: [CardActionConfig(title: "Search Again") { [weak self] row in
+                        self?.searchSubtitles(from: row)
+                    }], onBack: { [weak self, weak vm] in
+                        guard let self, let vm else { return }
+                        if vm.isSiloPlayback { self.presentSiloSubtitleMenu() }
+                        else { self.presentSubtitleMenu(vm) }
+                    }, onSelect: { [weak vm, weak self] index in
+                        guard let index, let vm, found.indices.contains(index) else { return }
+                        self?.activeRailPanel?.dismissPanel()
+                        Task { await vm.installSubtitle(found[index]) }
+                        if case .silo = found[index] { self?.presentSubtitleOperation() }
+                    }),
                 width: CardTrackListView.menuWidth, from: self.rail?.subtitlesButton ?? self.view)
         }
     }

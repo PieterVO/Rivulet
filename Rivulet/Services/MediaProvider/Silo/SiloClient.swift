@@ -52,6 +52,21 @@ nonisolated final class SiloClient: Sendable {
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? ""
     }
 
+    /// A guarded resource read retains its exact validator, not a synthesized revision.
+    nonisolated struct Resource<Value: Decodable & Sendable>: Sendable {
+        let value: Value
+        let entityTag: String?
+    }
+
+    func getResource<T: Decodable & Sendable>(_ path: String) async throws -> Resource<T> {
+        try await sendResource("GET", path, query: [], body: nil)
+    }
+
+    func putResource<T: Decodable & Sendable>(_ path: String, body: any Encodable & Sendable,
+                                             ifMatch: String) async throws -> Resource<T> {
+        try await sendResource("PUT", path, query: [], body: body, ifMatch: ifMatch)
+    }
+
     func get<T: Decodable & Sendable>(_ path: String, _ query: [URLQueryItem] = []) async throws -> T {
         try await send("GET", path, query: query, body: nil)
     }
@@ -159,10 +174,20 @@ nonisolated final class SiloClient: Sendable {
     private func send<T: Decodable & Sendable>(
         _ method: String, _ path: String, query: [URLQueryItem], body: (any Encodable & Sendable)?, expectedStatus: Int? = nil
     ) async throws -> T {
+        let response: Resource<T> = try await sendResource(method, path, query: query, body: body, expectedStatus: expectedStatus)
+        return response.value
+    }
+
+    @concurrent
+    private func sendResource<T: Decodable & Sendable>(
+        _ method: String, _ path: String, query: [URLQueryItem], body: (any Encodable & Sendable)?,
+        expectedStatus: Int? = nil, ifMatch: String? = nil
+    ) async throws -> Resource<T> {
         var request = URLRequest(url: url(path, query))
         request.httpMethod = method
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let ifMatch { request.setValue(ifMatch, forHTTPHeaderField: "If-Match") }
         for (key, value) in deviceHeaders { request.setValue(value, forHTTPHeaderField: key) }
         if let bearer = try await accessToken() { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
         if let profileID { request.setValue(profileID, forHTTPHeaderField: "X-Profile-Id") }
@@ -171,6 +196,7 @@ nonisolated final class SiloClient: Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try SiloJSON.encoder().encode(body)
         }
+        try Task.checkCancellation()
         var (data, response) = try await perform(request)
         // A rejected read is safe to repeat with a refreshed token. Never replay
         // a mutation: its outcome may be uncertain, even on an auth failure.
@@ -178,6 +204,7 @@ nonisolated final class SiloClient: Sendable {
             if let bearer = try await accessToken(true) {
                 request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
             }
+            try Task.checkCancellation()
             (data, response) = try await perform(request)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -186,8 +213,9 @@ nonisolated final class SiloClient: Sendable {
             throw MediaProviderError.backendSpecific(underlying: "Silo HTTP \(status)")
         }
         if let expectedStatus, status != expectedStatus { throw SiloSignInError.invalidResponse }
-        if T.self == Empty.self { return Empty() as! T }
-        do { return try SiloJSON.decoder().decode(T.self, from: data) }
+        let entityTag = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "ETag")
+        if T.self == Empty.self { return Resource(value: Empty() as! T, entityTag: entityTag) }
+        do { return Resource(value: try SiloJSON.decoder().decode(T.self, from: data), entityTag: entityTag) }
         catch { throw SiloSignInError.invalidResponse }
     }
 

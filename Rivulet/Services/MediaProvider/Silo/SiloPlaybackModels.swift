@@ -354,6 +354,23 @@ nonisolated struct SiloPlanSubtitleTrack: Decodable, Sendable {
     let hearingImpaired: Bool
     let delivery: String
     let url: String?
+    let syncKey: String?
+
+    /// Only the inventory may name a syncable target; embedded tracks are never syncable.
+    func syncTarget(fileID: String) -> SiloSubtitleSyncTarget? {
+        guard source == "external" || source == "downloaded",
+              let syncKey, !syncKey.isEmpty else { return nil }
+        return SiloSubtitleSyncTarget(fileID: fileID, key: syncKey)
+    }
+
+    /// This explicit server pin is a stored-row identity, not a sidecar sync key.
+    var storedSubtitleID: String? {
+        guard source == "downloaded", let url,
+              let query = URLComponents(string: url)?.queryItems else { return nil }
+        let pins = query.filter { $0.name == "downloaded_subtitle_id" }
+        guard pins.count == 1, let id = pins[0].value, !id.isEmpty else { return nil }
+        return id
+    }
 }
 
 nonisolated struct SiloPlanSource: Decodable, Sendable {

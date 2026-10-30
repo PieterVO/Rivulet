@@ -350,7 +350,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var generatedSubtitlesPickedOn: String?
     /// The subtitle menu: the title's tracks, plus generated ones on the aether route.
     var subtitleMenuTracks: [MediaTrack] {
-        let generated = MediaTrack(id: Self.generatedSubtitleId, name: "English", language: Self.generatedSubtitleStatus)
+        let generated = MediaTrack(id: Self.generatedSubtitleId, name: "English (On Device)", language: Self.generatedSubtitleStatus)
         return subtitleTracks + (offersGeneratedSubtitles ? [generated] : [])
     }
     var offersGeneratedSubtitles: Bool { aetherPlayer != nil }
@@ -366,8 +366,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// The generated row's second line: the model's download until it is on disk.
     static var generatedSubtitleStatus: String {
         switch SpeechModelStore.shared.state {
-        case .ready: return "Generated"
-        case .absent: return "Generated, downloads 230 MB"
+        case .ready: return "Generated on device"
+        case .absent: return "On device · downloads 230 MB"
         case .downloading(let fraction): return "Downloading \(Int(fraction * 100))%"
         case .failed: return "Download failed, select to retry"
         }
@@ -3390,6 +3390,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Callers move to HLS, whose track ids are Plex stream ids, so the engine-indexed lists go too.
     private func releaseAetherPlayer() {
         guard let ap = aetherPlayer else { return }
+        // A released engine no longer owns universal state. In particular its
+        // stop -> idle publication must not overwrite a terminal reload error.
+        aetherCancellables.removeAll()
         ap.stop()
         aetherPlayer = nil
         aetherSubtitleModel.update(cues: [])
@@ -4006,7 +4009,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     private func reloadTranscode(at time: TimeInterval, tracks: PlexTrackIDs) async throws {
         let hls: (url: URL, headers: [String: String], sessionId: String?)
-        if case .provider = source {
+        if case .provider(let previous) = source {
             guard let url = try await switchToProviderTranscode(
                 resumeTime: time, maxBitrate: activeStreamPlan.step.map { $0.kbps * 1000 },
                 tracks: tracks, forceTranscode: false) else {
@@ -4015,12 +4018,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             transcodeTrackIDs = tracks
             guard case .provider(let playback) = source else { throw MediaProviderError.notPlayable }
             if playback.stream.prefersAetherPlayback {
-                prepareProviderStream(playback)
-                guard let plan = playbackPlan else { throw MediaProviderError.notPlayable }
-                releaseAetherPlayer()
-                releaseAVPlayer()
-                try await startWithFallback(plan: plan, startTime: time)
-                updateTrackLists()
+                _ = try await applyProviderPlaybackReplacement(previous: previous.stream, at: time)
                 return
             }
             hls = (url, playback.stream.httpHeaders, nil)
@@ -4045,6 +4043,80 @@ final class UniversalPlayerViewModel: ObservableObject {
         audioTracks = []
         subtitleTracks = []
         updateTrackLists()
+    }
+
+    /// Adopt a negotiated plan without treating its rotating plan ID (or relay
+    /// URL) as a new video. The provider must explicitly prove continuity;
+    /// unsupported caption deliveries and actual transport changes still load.
+    /// False means caption preparation failed and the prior local pick was restored.
+    private func applyProviderPlaybackReplacement(previous: StreamInfo, at time: TimeInterval) async throws -> Bool {
+        guard case .provider(let playback) = source else { throw MediaProviderError.notPlayable }
+        try Task.checkCancellation()
+        prepareProviderStream(playback)
+        guard let plan = playbackPlan else { throw MediaProviderError.notPlayable }
+        let generation = itemGeneration
+        let stops = stopCount
+        let subtitleID = currentSubtitleTrackId
+        let transition = ProviderStreamTransition.between(previous, playback.stream)
+        if transition == .cuesOnly, let ap = aetherPlayer {
+            let ownsReplacement = { [weak self, weak ap] in
+                guard let self, let ap, self.aetherPlayer === ap,
+                      self.itemGeneration == generation, self.stopCount == stops,
+                      self.currentSubtitleTrackId == subtitleID,
+                      case .provider(let current) = self.source else { return false }
+                return current.item.ref == playback.item.ref &&
+                    current.stream.playSessionID == playback.stream.playSessionID &&
+                    current.stream.source.id == playback.stream.source.id
+            }
+            do {
+                if try await ap.replaceProviderSubtitle(
+                    playback.stream.source.subtitleTracks.first(where: \.isSelected),
+                    timelineOffset: playback.stream.timelineOffset, isCurrent: ownsReplacement) {
+                    hasAppliedNativeEngineSubtitleSelection = true
+                    updateTrackLists()
+                    return true
+                }
+            } catch {
+                guard ownsReplacement(), !isCancellationError(error), !Task.isCancelled else { throw CancellationError() }
+                // The caption commit failed; the identical video and old cues
+                // are still valid. Roll back the local pick, not the movie.
+                var restored = playback
+                restored.stream = previous
+                metadata = ProviderPlaybackMetadata.make(
+                    detail: restored.detail, source: previous.source, extras: restored.extras)
+                setProviderStream(restored, startPosition: time, preservingReporter: true)
+                prepareProviderStream(restored)
+                currentSubtitleTrackId = metadata.Media?.first?.Part?.first?.Stream?
+                    .first(where: { $0.isSubtitle && $0.selected == true })?.id
+                hasAppliedSubtitlePreference = true
+                hasAppliedNativeEngineSubtitleSelection = true
+                updateTrackLists()
+                subtitleOperation = .failed(error.localizedDescription)
+                showCompatibilityNotice("Couldn't Load Subtitles")
+                return false
+            }
+        }
+        let retainedPlayer = transition != .reload ? aetherPlayer : nil
+        if let retainedPlayer {
+            // The engine derives the new mode; only its non-final teardown
+            // retains display ownership during this proven-video replacement.
+            retainedPlayer.prepareForItemReplacement()
+        } else {
+            releaseAetherPlayer()
+        }
+        releaseAVPlayer()
+        do {
+            try await startWithFallback(plan: plan, startTime: time)
+            try Task.checkCancellation()
+            updateTrackLists()
+            return true
+        } catch {
+            if generation == itemGeneration, stops == stopCount,
+               retainedPlayer == nil || aetherPlayer === retainedPlayer {
+                releaseAetherPlayer()
+            }
+            throw error
+        }
     }
 
     /// Back to the untouched file at `time`, through the same start a fresh play uses.
@@ -5261,6 +5333,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var subtitleSearchWarning: String?
     @Published private(set) var subtitleOperation: PlayerSubtitleOperation = .idle
     @Published private(set) var siloSubtitleJobs: [SiloSubtitleAIJob] = []
+    @Published private(set) var siloSubtitleSyncStatus: SiloSubtitleSyncStatus?
+    @Published private(set) var siloSubtitleSyncState: SiloSubtitleSyncState?
+    @Published private(set) var siloSubtitleSyncError: String?
+    @Published private(set) var siloSubtitleSyncUpdating = false
+    private var siloSubtitleSyncTask: Task<Void, Never>?
+    private var siloSubtitleSyncMutation: Task<Void, Never>?
+    private var siloSubtitleSyncTarget: SiloSubtitleSyncTarget?
+    private var siloSubtitleSyncEpoch = 0
+    private var siloSubtitleAppliedTiming: SiloSubtitleTiming?
     private var siloSubtitleAIStatus: SiloSubtitleAIStatus?
     private var siloSubtitleTask: Task<Void, Never>?
     private static var serverAdminAnswers: [String: Bool] = [:]
@@ -5268,6 +5349,44 @@ final class UniversalPlayerViewModel: ObservableObject {
     var siloSubtitleGenerationOptions: [SiloSubtitleGenerationOption] {
         guard case .provider(let playback) = source, playback.provider is SiloProvider else { return [] }
         return siloSubtitleAIStatus?.generationOptions(for: playback.stream.source, targetLanguage: subtitleSearchLanguage) ?? []
+    }
+
+    var isSiloPlayback: Bool {
+        guard case .provider(let playback) = source else { return false }
+        return playback.provider is SiloProvider
+    }
+
+    var subtitleSearchLanguageName: String {
+        Locale.current.localizedString(forLanguageCode: subtitleSearchLanguage) ?? subtitleSearchLanguage
+    }
+
+    private var selectedSiloSubtitleTrack: SubtitleTrack? {
+        guard isSiloPlayback, case .provider(let playback) = source, let id = currentSubtitleTrackId,
+              let ordinal = plexSubtitleTracksFromMetadata().firstIndex(where: { $0.id == id }),
+              playback.stream.source.subtitleTracks.indices.contains(ordinal) else { return nil }
+        return playback.stream.source.subtitleTracks[ordinal]
+    }
+
+    var canStartSiloSubtitleSync: Bool {
+        guard let state = siloSubtitleSyncState,
+              siloSubtitleSyncStatus?.canSync(state) == true else { return false }
+        return state.target == selectedSiloSubtitleTrack?.siloSyncTarget &&
+            !siloSubtitleSyncUpdating && state.sync?.isActive != true
+    }
+
+    var canResetSiloSubtitleTiming: Bool {
+        canStartSiloSubtitleSync && siloSubtitleSyncState?.timing.isIdentity == false
+    }
+
+    var siloSubtitleSyncDetail: String {
+        if let error = siloSubtitleSyncError { return error }
+        if siloSubtitleSyncUpdating { return "Updating on Silo…" }
+        guard let state = siloSubtitleSyncState else {
+            return selectedSiloSubtitleTrack?.siloSyncTarget == nil
+                ? "Choose a downloaded subtitle or sidecar in Language." : "Checking timing on Silo…"
+        }
+        let result = state.sync?.statusText ?? "Ready to align with this file's audio"
+        return state.timing.isIdentity ? result : "\(result) · \(state.timing.detail)"
     }
 
     func refreshSubtitleActions() async { await resolveSubtitleSearchAccess() }
@@ -5279,10 +5398,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             let fileID = playback.stream.source.id
             async let providers = try? provider.subtitleProviderStatus()
             async let ai = try? provider.subtitleAIStatus()
-            let (providerStatus, aiStatus) = await (providers, ai)
+            async let sync = try? provider.subtitleSyncStatus()
+            let (providerStatus, aiStatus, syncStatus) = await (providers, ai, sync)
             guard isCurrentSiloFile(fileID, generation: generation), stopCount == 0 else { return }
             canSearchSubtitles = providerStatus?.canSearch == true
             siloSubtitleAIStatus = aiStatus
+            siloSubtitleSyncStatus = syncStatus
+            refreshSiloSubtitleSyncSelection(force: true)
             if aiStatus?.canTranslate == true || aiStatus?.canTranscribe == true {
                 let jobs = try? await provider.subtitleJobs(fileID: fileID)
                 guard isCurrentSiloFile(fileID, generation: generation) else { return }
@@ -5493,12 +5615,163 @@ final class UniversalPlayerViewModel: ObservableObject {
         return playback.stream.source.id == fileID
     }
 
+    /// Follow only the selected canonical target. Reads also observe Silo's
+    /// automatic sync; mutation requests are never retried by the poller.
+    private func refreshSiloSubtitleSyncSelection(force: Bool = false) {
+        let target = siloSubtitleSyncStatus?.isAvailable == true ? selectedSiloSubtitleTrack?.siloSyncTarget : nil
+        let changed = target != siloSubtitleSyncTarget
+        guard changed || force else { return }
+        if !changed, siloSubtitleSyncMutation != nil { return }
+        siloSubtitleSyncEpoch += 1
+        siloSubtitleSyncTask?.cancel()
+        siloSubtitleSyncTask = nil
+        if changed {
+            siloSubtitleSyncMutation?.cancel()
+            siloSubtitleSyncMutation = nil
+            siloSubtitleSyncUpdating = false
+            siloSubtitleSyncTarget = target
+            siloSubtitleSyncState = nil
+            siloSubtitleSyncError = nil
+            siloSubtitleAppliedTiming = nil
+        }
+        guard let target, siloSubtitleSyncMutation == nil, case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider else { return }
+        startSiloSubtitleSyncPolling(provider: provider, target: target,
+                                    generation: itemGeneration, epoch: siloSubtitleSyncEpoch)
+    }
+
+    private func ownsSiloSubtitleSync(_ target: SiloSubtitleSyncTarget, generation: Int, epoch: Int) -> Bool {
+        isCurrentSiloFile(target.fileID, generation: generation) &&
+            epoch == siloSubtitleSyncEpoch && target == siloSubtitleSyncTarget &&
+            target == selectedSiloSubtitleTrack?.siloSyncTarget
+    }
+
+    private func startSiloSubtitleSyncPolling(provider: SiloProvider, target: SiloSubtitleSyncTarget,
+                                            generation: Int, epoch: Int) {
+        siloSubtitleSyncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let active = await self?.readSiloSubtitleSync(
+                    provider: provider, target: target, generation: generation, epoch: epoch) else { return }
+                do { try await Task.sleep(for: .seconds(active ? 2 : 10)) }
+                catch { return }
+            }
+        }
+    }
+
+    private func readSiloSubtitleSync(provider: SiloProvider, target: SiloSubtitleSyncTarget,
+                                     generation: Int, epoch: Int) async -> Bool? {
+        guard ownsSiloSubtitleSync(target, generation: generation, epoch: epoch), !Task.isCancelled else { return nil }
+        do {
+            let read = try await provider.subtitleSyncState(target: target)
+            guard ownsSiloSubtitleSync(target, generation: generation, epoch: epoch), !Task.isCancelled else { return nil }
+            guard siloSubtitleSyncStatus?.canSync(read.subtitle) == true else {
+                siloSubtitleSyncState = nil
+                return nil
+            }
+            siloSubtitleSyncError = nil
+            await acceptSiloSubtitleSync(read.subtitle, generation: generation, epoch: epoch)
+            return read.subtitle.sync?.isActive == true
+        } catch {
+            guard ownsSiloSubtitleSync(target, generation: generation, epoch: epoch), !isCancellationError(error),
+                  !Task.isCancelled else { return nil }
+            siloSubtitleSyncError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func acceptSiloSubtitleSync(_ state: SiloSubtitleSyncState, generation: Int, epoch: Int) async {
+        guard ownsSiloSubtitleSync(state.target, generation: generation, epoch: epoch), !Task.isCancelled else { return }
+        let needsReload = siloSubtitleAppliedTiming.map { $0 != state.timing } ?? !state.timing.isIdentity
+        if needsReload, aetherLoadReturned, let player = aetherPlayer,
+           case .provider(let playback) = source,
+           let selected = playback.stream.source.subtitleTracks.first(where: \.isSelected),
+           selected.siloSyncTarget == state.target {
+            do {
+                // Prepare before committing corrected bytes. No video restart,
+                // clock change or acknowledgement of a failed artifact fetch.
+                let replaced = try await player.replaceProviderSubtitle(selected,
+                    timelineOffset: playback.stream.timelineOffset,
+                    isCurrent: { [weak self, weak player] in
+                        guard let self, let player else { return false }
+                        return self.aetherPlayer === player && self.aetherLoadReturned &&
+                            self.ownsSiloSubtitleSync(state.target, generation: generation, epoch: epoch)
+                    })
+                guard ownsSiloSubtitleSync(state.target, generation: generation, epoch: epoch),
+                      !Task.isCancelled else { return }
+                if replaced {
+                    hasAppliedNativeEngineSubtitleSelection = true
+                    siloSubtitleAppliedTiming = state.timing
+                } else {
+                    siloSubtitleSyncError = "Timing is saved on Silo, but this caption delivery cannot refresh during playback."
+                }
+            } catch {
+                guard ownsSiloSubtitleSync(state.target, generation: generation, epoch: epoch),
+                      !isCancellationError(error), !Task.isCancelled else { return }
+                siloSubtitleSyncError = "Timing is saved on Silo, but subtitles could not refresh: \(error.localizedDescription)"
+            }
+        } else if !needsReload {
+            siloSubtitleAppliedTiming = state.timing
+        }
+        guard ownsSiloSubtitleSync(state.target, generation: generation, epoch: epoch), !Task.isCancelled else { return }
+        siloSubtitleSyncState = state
+    }
+
+    func startSiloSubtitleSync() { mutateSiloSubtitleSync(reset: false) }
+
+    func resetSiloSubtitleTiming() { mutateSiloSubtitleSync(reset: true) }
+
+    private func mutateSiloSubtitleSync(reset: Bool) {
+        guard reset ? canResetSiloSubtitleTiming : canStartSiloSubtitleSync,
+              let target = siloSubtitleSyncTarget, siloSubtitleSyncMutation == nil,
+              case .provider(let playback) = source, let provider = playback.provider as? SiloProvider else { return }
+        let generation = itemGeneration
+        let epoch = siloSubtitleSyncEpoch
+        siloSubtitleSyncTask?.cancel()
+        siloSubtitleSyncTask = nil
+        siloSubtitleSyncUpdating = true
+        siloSubtitleSyncError = nil
+        siloSubtitleSyncMutation = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.ownsSiloSubtitleSync(target, generation: generation, epoch: epoch) {
+                    self.siloSubtitleSyncMutation = nil
+                    self.siloSubtitleSyncUpdating = false
+                    self.startSiloSubtitleSyncPolling(provider: provider, target: target, generation: generation, epoch: epoch)
+                }
+            }
+            do {
+                try Task.checkCancellation()
+                let state: SiloSubtitleSyncState
+                if reset { state = try await provider.resetSubtitleTiming(target: target).subtitle }
+                else { state = try await provider.startSubtitleSync(target: target) }
+                guard self.ownsSiloSubtitleSync(target, generation: generation, epoch: epoch),
+                      !Task.isCancelled else { return }
+                await self.acceptSiloSubtitleSync(state, generation: generation, epoch: epoch)
+            } catch {
+                guard self.ownsSiloSubtitleSync(target, generation: generation, epoch: epoch),
+                      !isCancellationError(error), !Task.isCancelled else { return }
+                self.siloSubtitleSyncError = error.localizedDescription
+            }
+        }
+    }
+
     private func resetSiloSubtitleActions() {
         siloSubtitleTask?.cancel()
         siloSubtitleTask = nil
         siloSubtitleAIStatus = nil
         siloSubtitleJobs = []
         subtitleOperation = .idle
+        siloSubtitleSyncEpoch += 1
+        siloSubtitleSyncTask?.cancel()
+        siloSubtitleSyncMutation?.cancel()
+        siloSubtitleSyncTask = nil
+        siloSubtitleSyncMutation = nil
+        siloSubtitleSyncTarget = nil
+        siloSubtitleAppliedTiming = nil
+        siloSubtitleSyncStatus = nil
+        siloSubtitleSyncState = nil
+        siloSubtitleSyncError = nil
+        siloSubtitleSyncUpdating = false
         subtitleSearchWarning = nil
         canSearchSubtitles = false
     }
@@ -5513,18 +5786,19 @@ final class UniversalPlayerViewModel: ObservableObject {
             vm.pendingProviderPlaybackIntent = resume
             defer { vm.pendingProviderPlaybackIntent = nil }
             do {
-                let previousSession = playback.stream.playSessionID
+                let previous = playback.stream
                 playback.stream = try await provider.streamSelectingStoredSubtitle(storedID, current: playback.stream, position: position)
                 guard vm.isCurrentSiloFile(fileID, generation: generation), !Task.isCancelled else { return }
                 vm.metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: playback.stream.source, extras: playback.extras)
-                vm.setProviderStream(playback, startPosition: position, preservingReporter: previousSession == playback.stream.playSessionID)
-                vm.prepareProviderStream(playback)
-                guard let plan = vm.playbackPlan else { throw MediaProviderError.notPlayable }
-                vm.releaseAetherPlayer()
-                vm.releaseAVPlayer()
-                try await vm.startWithFallback(plan: plan, startTime: position)
-                vm.updateTrackLists()
-                if resume { vm.activePlayer_play() } else { vm.activePlayer_pause(); vm.updatePlaybackState(.paused) }
+                vm.setProviderStream(playback, startPosition: position,
+                                     preservingReporter: previous.playSessionID == playback.stream.playSessionID)
+                guard try await vm.applyProviderPlaybackReplacement(previous: previous, at: position) else { return }
+                if vm.pendingProviderPlaybackIntent ?? resume {
+                    vm.activePlayer_play()
+                } else {
+                    vm.activePlayer_pause()
+                    vm.updatePlaybackState(.paused)
+                }
                 if let selected = vm.subtitleTracks.first(where: { $0.id == vm.currentSubtitleTrackId }) {
                     TrackIntentStore.subtitleIntent = .afterPick(selected, replacing: TrackIntentStore.effectiveSubtitleIntent,
                                                                audioLanguage: vm.playingAudioLanguage)
@@ -5587,6 +5861,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 hasAppliedSubtitlePreference = !subtitleTracks.isEmpty
             }
             applyNativeEngineTrackSelection()
+            refreshSiloSubtitleSyncSelection()
             return
         }
         if let ap = aetherPlayer {
@@ -5773,6 +6048,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         let generated = id == Self.generatedSubtitleId
         let wasGenerated = showsGeneratedSubtitles
         let changed = id != currentSubtitleTrackId
+        if changed { aetherPlayer?.invalidateProviderSubtitlePreparation() }
         if providerTracksRequireReplan {
             currentSubtitleTrackId = id
             if changed, reloadsTranscode {
@@ -5787,6 +6063,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             aetherPlayer?.selectSubtitleTrack(id: id)
         }
         currentSubtitleTrackId = id
+        refreshSiloSubtitleSyncSelection()
         if generated {
             SpeechModelStore.shared.prepare()
             aetherSubtitleModel.update(cues: generatedCues())
@@ -7820,6 +8097,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         skipCountdownTimer?.invalidate()
         aetherStallWatchdogTask?.cancel()
         insightsRecheckTask?.cancel()
+        siloSubtitleSyncTask?.cancel()
+        siloSubtitleSyncMutation?.cancel()
         if let observer = appBackgroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }

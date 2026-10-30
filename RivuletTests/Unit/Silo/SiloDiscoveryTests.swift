@@ -2,6 +2,7 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 import XCTest
+import UIKit
 @testable import Rivulet
 
 @MainActor
@@ -101,6 +102,106 @@ final class SiloDiscoveryTests: XCTestCase {
         XCTAssertEqual(model.nativeHubs.flatMap(\.items).map(\.ref.itemID), ["movie:voyage"])
         XCTAssertTrue(model.sectionItems.isEmpty, "A Silo-only feed must not depend on Plex's curated sections.")
         XCTAssertFalse(model.loading)
+    }
+
+    func testNativeDiscoverPromotesLeadingRowWithoutDuplicatingCardsOrChangingCuration() {
+        let rows = [
+            discoverRow("for-you", title: "For You", itemIDs: ["movie:one", "series:two"]),
+            discoverRow("adventure", title: "Because you enjoy Adventure", itemIDs: ["movie:three"])
+        ]
+
+        let presented = PlexHomeViewController.nativeDiscoverRows(rows)
+
+        XCTAssertEqual(presented.map(\.id), rows.map(\.id))
+        XCTAssertEqual(presented.map(\.title), rows.map(\.title))
+        XCTAssertEqual(presented.map(\.style), [.hero, .shelf])
+        XCTAssertEqual(presented.flatMap(\.items).map(\.ref), rows.flatMap(\.items).map(\.ref))
+        XCTAssertEqual(presented.map(\.canBrowse), [false, false])
+        XCTAssertTrue(presented.allSatisfy { $0.nextPage == nil })
+    }
+
+    func testNativeDiscoverPreservesExplicitHeroAndItsPosition() {
+        let rows = [
+            discoverRow("for-you", title: "For You", itemIDs: ["movie:one"]),
+            discoverRow("featured", title: "Featured", style: .hero, itemIDs: ["movie:two"]),
+            discoverRow("clips", title: "Clips", style: .clip, itemIDs: ["movie:three"])
+        ]
+
+        let presented = PlexHomeViewController.nativeDiscoverRows(rows)
+
+        XCTAssertEqual(presented.map(\.id), rows.map(\.id))
+        XCTAssertEqual(presented.map(\.style), [.shelf, .hero, .clip])
+        XCTAssertEqual(presented.flatMap(\.items), rows.flatMap(\.items))
+    }
+
+    func testNativeDiscoverOmitsEmptyRowsBeforeChoosingItsLeadingHero() {
+        let rows = [
+            discoverRow("empty", title: "Empty", itemIDs: []),
+            discoverRow("for-you", title: "For You", itemIDs: ["movie:one"])
+        ]
+
+        let presented = PlexHomeViewController.nativeDiscoverRows(rows)
+
+        XCTAssertEqual(presented.map(\.id), ["for-you"])
+        XCTAssertEqual(presented.map(\.style), [.hero])
+        XCTAssertTrue(PlexHomeViewController.nativeDiscoverRows([rows[0]]).isEmpty)
+    }
+
+    func testNativeDiscoverDoesNotInventHeroArtworkOrOverrideLeadingClipStyle() {
+        let noArtwork = discoverRow("for-you", title: "For You", itemIDs: ["movie:one"], hasBackdrop: false)
+        let laterArtwork = discoverRow("popular", title: "Popular", itemIDs: ["movie:two"])
+        let clip = discoverRow("clips", title: "Clips", style: .clip, itemIDs: ["movie:three"])
+
+        XCTAssertEqual(PlexHomeViewController.nativeDiscoverRows([noArtwork, laterArtwork]).map(\.style), [.shelf, .shelf])
+        XCTAssertEqual(PlexHomeViewController.nativeDiscoverRows([clip, laterArtwork]).map(\.style), [.clip, .shelf])
+    }
+
+    func testNativeHeroWithTMDBIdentityRendersItsOwnTitleImmediately() throws {
+        let card = try SiloJSON.decoder().decode(SiloItem.self, from: Data("""
+        {"content_id":"movie:voyage","type":"movie","title":"The Voyage",
+         "overview":"A journey beyond the familiar.","tmdb_id":"123"}
+        """.utf8))
+        let item = SiloMediaMapper.item(card, providerID: "silo:discovery-server",
+                                        baseURL: URL(string: "https://silo.invalid")!)
+        XCTAssertEqual(item.identity, ["m:tmdb:123"])
+        XCTAssertNil(item.tmdbID, "A native identity must not enter the external TMDB logo-resolution path.")
+        let overlay = MediaItemHeroOverlayView(frame: CGRect(x: 0, y: 0, width: 1920, height: 880))
+        overlay.configure(items: [item], initialIndex: 0, onIndexChanged: { _, _ in },
+                          onPlay: { _ in }, onInfo: { _ in })
+        overlay.layoutIfNeeded()
+
+        func labels(in view: UIView) -> [UILabel] {
+            (view as? UILabel).map { [$0] } ?? view.subviews.flatMap { labels(in: $0) }
+        }
+        let title = try XCTUnwrap(labels(in: overlay).first { $0.text == "The Voyage" })
+        XCTAssertGreaterThan(title.bounds.width, 0)
+        XCTAssertGreaterThan(title.bounds.height, 0)
+        XCTAssertTrue(labels(in: overlay).contains { $0.text == "A journey beyond the familiar." })
+        var ancestor: UIView? = title
+        while let view = ancestor {
+            XCTAssertFalse(view.isHidden)
+            XCTAssertGreaterThan(view.alpha, 0, "Native fallback metadata must not wait for an external logo lookup.")
+            ancestor = view.superview
+        }
+    }
+
+    private func discoverRow(_ id: String, title: String, style: MediaHub.HubStyle = .shelf,
+                             itemIDs: [String], hasBackdrop: Bool = true) -> CachedHomeHub {
+        let items = itemIDs.map { itemID in
+            MediaItem(
+                ref: MediaItemRef(providerID: "silo:discovery-server", itemID: itemID),
+                kind: .movie, title: itemID, sortTitle: nil, overview: nil,
+                year: nil, runtime: nil, parentRef: nil, grandparentRef: nil,
+                episodeNumber: nil, seasonNumber: nil, childProgress: nil,
+                userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+                artwork: MediaArtwork(poster: nil, backdrop: hasBackdrop ? URL(string: "https://silo.invalid/backdrop.jpg") : nil,
+                                      thumbnail: nil, logo: nil),
+                parentArtwork: nil, grandparentArtwork: nil)
+        }
+        return CachedHomeHub(id: id, title: title, isContinueWatching: false, hubKey: nil,
+                             hubIdentifier: id, totalSize: items.count, items: items,
+                             nativeProviderID: "silo:discovery-server", providerHubID: id,
+                             style: style, canBrowse: false)
     }
 
     private func provider(_ server: SiloAuthTestServer, serverID: String = "discovery-server") -> SiloProvider {

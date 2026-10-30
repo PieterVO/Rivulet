@@ -414,15 +414,7 @@ extension SiloProvider {
     private func storedSubtitleTrack(_ storedID: String, in plan: SiloPlaybackPlan) throws -> SiloPlanSubtitleTrack {
         var match: SiloPlanSubtitleTrack?
         for track in plan.subtitle.inventory where track.source == "downloaded" {
-            guard let value = track.url, let url = client.mediaURL(value),
-                  let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { continue }
-            var pin: String?
-            var pinCount = 0
-            for item in query where item.name == "downloaded_subtitle_id" {
-                pin = item.value
-                pinCount += 1
-            }
-            guard pinCount == 1, pin == storedID else { continue }
+            guard track.storedSubtitleID == storedID else { continue }
             guard match == nil else {
                 throw MediaProviderError.backendSpecific(underlying: "Silo published an ambiguous stored subtitle identity.")
             }
@@ -582,7 +574,19 @@ extension SiloProvider {
         info.canSeekAnywhere = plan.timeline.canSeekAnywhere
         info.prefersAetherPlayback = true
         info.canSelectTracksLocally = false
-        info.negotiatedStatus = plan.negotiatedStatus
+        let status = plan.negotiatedStatus
+        info.negotiatedStatus = status
+        info.videoTransport = ProviderVideoTransport(
+            url: url, headers: plan.stream.headers, delivery: status.delivery,
+            container: plan.stream.container, recipe: status.effectiveRecipe,
+            qualityID: plan.activeQuality, audioID: plan.selectedTracks.audio?.id)
+        info.subtitleDelivery = switch plan.subtitle.mode {
+        case "off": .off
+        case "burn_in": .video
+        default:
+            plan.subtitle.embedded != nil ? .embedded
+                : plan.subtitle.artifact != nil ? .sidecar : .hlsRendition
+        }
         if let selected = plan.selectedTracks.subtitle {
             guard let track = plan.subtitle.inventory.first(where: { $0.trackId == selected.id }) else {
                 throw MediaProviderError.backendSpecific(underlying: "Silo's selected subtitle is absent from its plan inventory.")
@@ -650,6 +654,7 @@ extension SiloProvider {
                                        isDefault: track.default, isForced: track.forced, isHearingImpaired: track.hearingImpaired,
                                        isEmbedded: native != nil, externalURL: isSelected ? artifactURL : nil, isSelected: isSelected)
             mapped.nativeStreamIndex = native?.streamIndex
+            mapped.siloSyncTarget = track.syncTarget(fileID: plan.effectiveMediaFileId)
             // The session relay obtains current, origin-scoped credentials for
             // each fetch; neither account headers nor node grants reach players.
             mapped.externalHTTPHeaders = [:]

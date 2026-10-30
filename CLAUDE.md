@@ -820,6 +820,10 @@ protocol v3, never compatibility endpoints or Plex Discover substitutions.
   Collect native provider results directly on `DiscoverViewModel`'s actor before
   publication; keep its generation/cancellation guard so obsolete profiles cannot
   repopulate the screen.
+  Use the shared Discover hero for the leading artwork-backed native shelf only
+  when no explicit hero exists; replace, never duplicate, that shelf. Discover
+  heroes do not append a second section title beneath their controls. A feed
+  without hero artwork uses normal shelf clearance and clears the old backdrop.
 - `allEpisodes` traverses the returned season content ids: the catalog
   `items/{id}/episodes` endpoint accepts a **season**, not a show.
 - People results use native person navigation for Select and long-press; their
@@ -837,6 +841,29 @@ protocol v3, never compatibility endpoints or Plex Discover substitutions.
   Keep Silo actions in the shared On/Off, Language and Style subtitle menu;
   refresh capabilities before presentation and preserve disabled operation rows,
   selection and progress when submenus rebuild.
+  Keep on-device generation distinct from Silo search, audio transcription,
+  subtitle translation and jobs; nested menus return to their parent with Menu.
+  Operation and sync outcomes wrap instead of truncating recovery instructions.
+- Subtitle sync uses the canonical inventory `sync_key`, never a display label,
+  engine index or a reconstructed sidecar key. Probe native capability and
+  permissions; only the selected syncable track is observed. Poll active jobs
+  every two seconds and idle state every ten seconds, fenced to item, file and
+  selection. There is no playback realtime subscription.
+  Timing reset reads that exact target's strong ETag and sends it in `If-Match`;
+  cancellation, stale preconditions and uncertain mutations never trigger replay.
+  Silo applies scale/offset to delivered bytes; the local Delay stacks separately.
+- A subtitle replan is not automatically a new video. Compare provider-stamped
+  canonical transport/session/source/recipe facts, not rotating relay or plan ids.
+  Proven caption-only changes prepare and atomically commit fresh text cues while
+  retaining video, audio, pause state and display ownership. On preparation failure,
+  retain old cues and restore the local subtitle pick without failing the movie.
+  Deselect a native HLS legible rendition only after successful commit.
+  Actual video changes retain the normal reload and final display cleanup paths.
+  Timing-only refresh waits for initial engine readiness and never reloads video.
+- Requests uses shared UIKit margins, focus platters and action controls. Keep
+  scroll rows clipped below its fixed header. Pagination and retry use the
+  submitted query, not an edited search field; uncertain writes reconcile through
+  reads without replay, and profile changes invalidate both content and actions.
 - The native HLS delivery advertises `containers: ["hls"]`, not its MP4/TS
   segment packaging; the server compares this with the plan's stream container.
 - Map HLS player time through `StreamInfo.timelineOffset` and `playerStartTime`;

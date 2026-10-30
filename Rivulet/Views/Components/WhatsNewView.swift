@@ -151,6 +151,11 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.1 (118)", [
             "Updated AetherEngine to 7.52.0.",
+            "Silo Discover uses the same hero, artwork shelves and focus styling as the rest of Rivulet.",
+            "Silo Requests has clearer status rows, search, retry and request controls.",
+            "Silo subtitles separate search, AI generation, translation and server jobs.",
+            "Follow Silo subtitle-sync progress, align subtitles to audio or reset server timing.",
+            "Matching Silo subtitle changes keep the video playing without a player restart.",
             "The Home hero now shows what's trending in your Jellyfin libraries.",
             "Top Shelf now fills in when Jellyfin is your only server.",
             "Subtitles menu matches more closely to Apple.",

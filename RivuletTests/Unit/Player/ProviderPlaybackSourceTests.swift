@@ -62,6 +62,89 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         return ProviderPlayback(provider: provider, item: item, detail: detail, stream: stream, extras: PlaybackExtras())
     }
 
+    private func nativeTransitionStream(session: String = "session", file: String = "src",
+                                        relayURL: URL? = nil, origin: URL? = nil,
+                                        headers: [String: String] = [:], audio: String = "audio:0",
+                                        delivery: MediaDelivery = .original,
+                                        subtitle: ProviderSubtitleDelivery = .sidecar,
+                                        recipe: MediaEffectiveRecipe? = nil, quality: String? = nil) -> StreamInfo {
+        let nativeSource = MediaSource(id: file, container: "mkv", duration: 100,
+            bitrate: nil, fileSize: nil, fileName: nil, videoResolution: nil,
+            videoTracks: [], audioTracks: [], subtitleTracks: [], streamKind: .directPlay,
+            streamURL: relayURL ?? directURL)
+        var result = StreamInfo(source: nativeSource, playSessionID: session, trackInfoAvailable: true)
+        result.prefersAetherPlayback = true
+        result.canSelectTracksLocally = false
+        result.videoTransport = ProviderVideoTransport(
+            url: origin ?? directURL, headers: headers, delivery: delivery, container: "mkv",
+            recipe: recipe, qualityID: quality, audioID: audio)
+        result.subtitleDelivery = subtitle
+        return result
+    }
+
+    func test_nativeSubtitleSwitchRetainsVideoAcrossSidecarEmbeddedAndOff() {
+        let playing = nativeTransitionStream()
+        for subtitle in [ProviderSubtitleDelivery.sidecar, .embedded, .off] {
+            let next = nativeTransitionStream(subtitle: subtitle)
+            XCTAssertEqual(ProviderStreamTransition.between(playing, next), .cuesOnly)
+        }
+        // Relay addresses and initial player-start recommendations can rotate
+        // on a new plan without changing the already playing canonical stream.
+        var next = nativeTransitionStream(relayURL: URL(string: "http://127.0.0.1:9001/new-relay")!)
+        next.playerStartTime = 72
+        XCTAssertEqual(ProviderStreamTransition.between(playing, next), .cuesOnly)
+    }
+
+    func test_nativeTransportAuthorizationAudioAndTimelineChangesRequireOwnedReload() {
+        let playing = nativeTransitionStream()
+        let changes = [
+            nativeTransitionStream(origin: hlsURL),
+            nativeTransitionStream(headers: ["Authorization": "Bearer replacement"]),
+            nativeTransitionStream(audio: "audio:1"),
+            nativeTransitionStream(subtitle: .hlsRendition)
+        ]
+        for next in changes {
+            XCTAssertEqual(ProviderStreamTransition.between(playing, next), .reloadPreservingDisplay)
+        }
+        var reanchored = playing
+        reanchored.timelineOffset = 60
+        reanchored.canSeekAnywhere = false
+        XCTAssertEqual(ProviderStreamTransition.between(playing, reanchored), .reloadPreservingDisplay)
+    }
+
+    func test_nativeNewSourceSessionAndBurnInCannotInheritDisplayOwnership() {
+        let playing = nativeTransitionStream()
+        for next in [
+            nativeTransitionStream(session: "another-session"),
+            nativeTransitionStream(file: "another-file"),
+            nativeTransitionStream(delivery: .hlsRemux),
+            nativeTransitionStream(subtitle: .video),
+            nativeTransitionStream(quality: "720p")
+        ] {
+            XCTAssertEqual(ProviderStreamTransition.between(playing, next), .reload)
+        }
+        let burnedIn = nativeTransitionStream(subtitle: .video)
+        XCTAssertEqual(ProviderStreamTransition.between(burnedIn, playing), .reload)
+    }
+
+    private func recipe(dynamicRange: String) -> MediaEffectiveRecipe {
+        MediaEffectiveRecipe(videoCodec: "hevc", videoSampleEntry: "hvc1", segmentContainer: "fmp4",
+            audioCodec: "aac", width: 3840, height: 2160, frameRate: 24, bitrateKbps: 20_000,
+            dynamicRange: dynamicRange, audioChannels: 2, audioLayout: "stereo")
+    }
+
+    func test_nativeTranscodeRequiresKnownUnchangedVideoRecipeToKeepDisplay() {
+        let dv = nativeTransitionStream(delivery: .hlsTranscode, recipe: recipe(dynamicRange: "dolby_vision"))
+        let sameVideo = nativeTransitionStream(origin: hlsURL, delivery: .hlsTranscode,
+                                              recipe: recipe(dynamicRange: "dolby_vision"))
+        XCTAssertEqual(ProviderStreamTransition.between(dv, sameVideo), .reloadPreservingDisplay)
+        XCTAssertEqual(ProviderStreamTransition.between(dv, dv), .cuesOnly)
+        let sdr = nativeTransitionStream(delivery: .hlsTranscode, recipe: recipe(dynamicRange: "sdr"))
+        XCTAssertEqual(ProviderStreamTransition.between(dv, sdr), .reload)
+        let unknown = nativeTransitionStream(delivery: .hlsTranscode)
+        XCTAssertEqual(ProviderStreamTransition.between(unknown, unknown), .reload)
+    }
+
     func test_nativePlanSeedsSubtitleAndRejectsUnadvertisedQuality() {
         let provider = SiloProvider(serverID: "server", displayName: "Silo", profileID: "profile",
             client: SiloClient(baseURL: URL(string: "https://media.invalid")!, profileID: "profile"))

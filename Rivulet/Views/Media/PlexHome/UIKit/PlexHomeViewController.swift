@@ -43,9 +43,8 @@ enum HomeMode {
     case home
     /// A single Plex library (`key` = section id, `title` for headers).
     case library(key: String, title: String)
-    /// The Discover surface: identical hero + shelf layout, but every row is
-    /// a TMDB curated list (plus "For You") mapped to MediaItem via
-    /// TMDBMediaMapper. No Plex hubs, grid, or recommendations.
+    /// The Discover surface: native recommendations, plus TMDB curated lists
+    /// when Plex is signed in, using the shared hero and shelf layout.
     case discover
     /// The Search surface: no hero — a prompt/recents state when the query is
     /// empty, inline searching/error/no-results states, and grouped poster
@@ -675,12 +674,14 @@ final class PlexHomeViewController: UIViewController {
     private var isLoadingRecommendations = false
     private var recommendationsError: String?
 
-    /// Empty-state copy for the current surface; Discover is TMDB-fed, so it never blames the library.
+    /// Empty-state copy for the current surface, without blaming another backend's library.
     private var emptyStateMessage: String {
         if nativeHubSource != nil || loadedFeedItems != nil { return "This list is empty." }
         switch mode {
         case .discover:
-            return "Recommendations aren't available right now."
+            return discoverModel.nativeSupportedProviders.isEmpty
+                ? "Recommendations aren't available right now."
+                : "Your server hasn't returned any recommendations yet."
         case .watchlist:
             return "Nothing in your Watchlist yet."
         case .collection:
@@ -709,7 +710,7 @@ final class PlexHomeViewController: UIViewController {
         case .library:
             return (UserDefaults.standard.object(forKey: "showLibraryHero") as? Bool) ?? true
         case .discover:
-            return true  // Discover always leads with the hero carousel
+            return sectionsSnapshot.contains { $0.kind == .hero }
         case .search:
             return false  // Search has no hero — keyboard + results only
         case .watchlist:
@@ -866,7 +867,7 @@ final class PlexHomeViewController: UIViewController {
             }
             loadAlphabetIndex()
         case .discover:
-            // Discover page: the 8 TMDB curated sections, For You and the hero.
+            // Native recommendations work independently of Plex's curated lists.
             Task { @MainActor in
                 isLoadingDiscover = true
                 updateHomeState()
@@ -941,7 +942,7 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Discover mode
 
-    /// Data source for `.discover` mode: TMDB curated sections, For You, hero picks, in-library ids.
+    /// Native recommendations and, with Plex, curated lists and library matches.
     private let discoverModel = DiscoverViewModel()
     private var isLoadingDiscover = false
     /// Watchlist mode only: true while the first fetch of a cold (uncached)
@@ -1273,19 +1274,35 @@ final class PlexHomeViewController: UIViewController {
     /// TMDB originals (watchlist guid construction, library matching).
     private var discoverListItems: [HomeSectionID: [TMDBListItem]] = [:]
 
+    /// Give the first native recommendation row the same hero treatment as
+    /// Discover's curated feed, without adding a second copy of its cards.
+    /// Explicit server styles and the remaining curation order stay intact.
+    static func nativeDiscoverRows(_ rows: CachedHomeRail) -> CachedHomeRail {
+        var rows = rows.filter { !$0.items.isEmpty }
+        if !rows.contains(where: { $0.style == .hero }),
+           let first = rows.first, first.style == .shelf,
+           first.items.contains(where: { $0.artwork.backdrop != nil }) {
+            rows[0].style = .hero
+        }
+        return rows
+    }
+
     private func computeDiscoverSections() -> [HomeSectionData] {
         var sections: [HomeSectionData] = []
-        let nativeHubs = discoverModel.nativeHubs.filter {
-            LibrarySettingsManager.shared.areServerLibrariesVisible($0.providerID)
-        }
-        for hub in nativeHubs {
-            let row = ServerDataStore.row(hub)
+        let nativeRows = Self.nativeDiscoverRows(discoverModel.nativeHubs
+            .filter { LibrarySettingsManager.shared.areServerLibrariesVisible($0.providerID) }
+            .map { hub in
+                var row = ServerDataStore.row(hub)
+                row.items = visibleNativeItems(row.items)
+                return row
+            })
+        for row in nativeRows {
             sections.append(nativeSection(row))
         }
         discoverListItems = [:]
 
         let heroTMDB = discoverModel.heroItems
-        if !heroTMDB.isEmpty, !nativeHubs.contains(where: { $0.style == .hero }) {
+        if !heroTMDB.isEmpty, !nativeRows.contains(where: { $0.style == .hero }) {
             sections.append(.discoverHero(items: heroTMDB.map { TMDBMediaMapper.item($0) }))
             discoverListItems[.hero] = heroTMDB
         }
@@ -2792,10 +2809,12 @@ final class PlexHomeViewController: UIViewController {
         cell?.overlay.setMediaItemPrimaryAction(matchedInLibrary: item.isAvailable != false, isOnWatchlist: likelyOnList,
                                                 canWatchlist: canWatchlist)
         guard canWatchlist, let provider else { return }
+        let generation = nativeFeedGeneration
         Task { @MainActor [weak self, weak cell] in
             let onList = await provider.isOnWatchlist(item.ref)
             // The slide may have moved on while the provider looked it up.
-            guard let self, self.heroWatchlistRef == item.ref else { return }
+            guard let self, self.nativeFeedGeneration == generation,
+                  self.heroWatchlistRef == item.ref else { return }
             cell?.overlay.setMediaItemPrimaryAction(matchedInLibrary: item.isAvailable != false, isOnWatchlist: onList,
                                                     canWatchlist: true)
         }
@@ -2810,13 +2829,18 @@ final class PlexHomeViewController: UIViewController {
     private func toggleProviderWatchlist(for item: MediaItem, on cell: HeroOverlayCell?) {
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
               provider.supportsWatchlist else { return }
+        let generation = nativeFeedGeneration
         Task { @MainActor [weak self, weak cell] in
-            if await provider.isOnWatchlist(item.ref) {
+            let onList = await provider.isOnWatchlist(item.ref)
+            guard let self, self.nativeFeedGeneration == generation else { return }
+            if onList {
                 try? await provider.removeFromWatchlist(item.ref)
             } else {
                 try? await provider.addToWatchlist(item.ref)
             }
-            self?.applyMediaItemHeroState(for: item, on: cell)
+            guard self.nativeFeedGeneration == generation, self.heroWatchlistRef == item.ref,
+                  let cell else { return }
+            self.applyMediaItemHeroState(for: item, on: cell)
         }
     }
 
@@ -3069,18 +3093,17 @@ final class PlexHomeViewController: UIViewController {
             }
         case .discover:
             isLoadingHubs = isLoadingDiscover || discoverModel.loading || ServerDataStore.shared.isResolvingVisibility
-            // TMDBDiscoverService returns [] on failure rather than throwing, so
-            // there is no error to surface here and a total failure presents as
-            // empty. Giving Discover a real error state means teaching the
-            // service to report one.
+            // Native failures retain their error semantics. Plex's TMDB service
+            // returns [] on failure, so only that source settles as empty.
             hubsError = discoverModel.nativeErrors.values.sorted().first
                 ?? ServerDataStore.shared.visibilityErrors.values.sorted().first
-            // Empty means nothing to show, not "no hero": hero picks and curated lists are independent TMDB
-            // fetches, and the empty state hides the collection.
+            // Only visible content counts; error rows are not recommendations.
             hubsEmpty = discoverModel.heroItems.isEmpty
                 && discoverModel.forYou.isEmpty
                 && TMDBDiscoverSection.allCases.allSatisfy { discoverModel.items(for: $0).isEmpty }
-                && discoverModel.nativeHubs.allSatisfy { visibleNativeItems($0.items).isEmpty }
+                && discoverModel.nativeHubs
+                    .filter { LibrarySettingsManager.shared.areServerLibrariesVisible($0.providerID) }
+                    .allSatisfy { visibleNativeItems($0.items).isEmpty }
         case .search:
             // Search renders its own inline prompt/searching/error states as
             // sections — the only full-screen state is notConnected.
@@ -3323,6 +3346,10 @@ final class PlexHomeViewController: UIViewController {
         switch section.kind {
         case .hero:
             let layout = makeHeroSectionLayout()
+            // Discover's leading row is the showcase itself, like its TMDB
+            // hero, not a shelf title below the artwork competing with the
+            // next recommendation header.
+            if case .discover = mode { return layout }
             if nativeRows[section.id] != nil {
                 let header = NSCollectionLayoutBoundarySupplementaryItem(
                     layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(64)),
@@ -3656,7 +3683,7 @@ final class PlexHomeViewController: UIViewController {
                         if isDiscover { self?.discoverHeroInfo(item) } else { self?.presentStandaloneExpandedDetail(item) }
                     },
                     onToggleWatchlist: { [weak self, weak cell] item in
-                        guard isDiscover || item.ref.providerID == TMDBMediaMapper.providerID else {
+                        guard item.ref.providerID == TMDBMediaMapper.providerID else {
                             self?.toggleProviderWatchlist(for: item, on: cell)
                             return
                         }
@@ -4330,7 +4357,14 @@ final class PlexHomeViewController: UIViewController {
         let sections = computeSections()
         let computeMs = Int((ProcessInfo.processInfo.systemUptime - computeStart) * 1000)
         if computeMs > 200 { StartupTimer.mark("  computeSections \(computeMs)ms") }
+        let oldHero = sectionsSnapshot.first { $0.kind == .hero }
+        let newHero = sections.first { $0.kind == .hero }
+        let isDiscover = if case .discover = mode { true } else { false }
+        if isDiscover, oldHero?.heroMediaItems.map(\.ref) != newHero?.heroMediaItems.map(\.ref) {
+            heroCurrentIndex = 0
+        }
         sectionsSnapshot = sections
+        updateContentTopInset()
 
         let applyStart = ProcessInfo.processInfo.systemUptime
         defer {
@@ -4387,6 +4421,14 @@ final class PlexHomeViewController: UIViewController {
         }
         dataSource.apply(snapshot, animatingDifferences: animated)
         revendHomeMediaHeroIfChanged(sections)
+        if isDiscover {
+            // The hero keeps its diffable identity on a native feed refresh.
+            // Re-vend changed slides and update (or clear) the matching backdrop.
+            if oldHero?.id == newHero?.id, oldHero?.heroMediaItems != newHero?.heroMediaItems {
+                reconfigureHeroCell()
+            }
+            updateBackdropForCurrentHeroItem()
+        }
         // Shelf rows keep a single diffable identity, so content growth /
         // refresh inside a row must be pushed to the visible cells by hand.
         updateVisibleShelfRows()

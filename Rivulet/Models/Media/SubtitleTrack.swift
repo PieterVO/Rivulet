@@ -29,4 +29,6 @@ struct SubtitleTrack: Hashable, Sendable, Identifiable {
     /// Exact native demuxer identity, distinct from the provider's selection ordinal.
     /// Only populated when the playback plan explicitly selects an embedded stream.
     var nativeStreamIndex: Int? = nil
+    /// Silo's canonical sync identity survives host-side delivery projection.
+    var siloSyncTarget: SiloSubtitleSyncTarget? = nil
 }
