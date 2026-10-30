@@ -2009,8 +2009,9 @@ class PlayerContainerViewController: UIViewController {
         })
         // Captions lift on the same animation block as the rail. Set before the
         // guard so the state stays correct on the early-out path.
-        let captionLiftChanged = captionOverlay.map { $0.controlsVisible != chromeVisible } ?? false
+        let captionLiftChanged = captionOverlay.map { $0.controlsVisible != chromeVisible || $0.paneOpen != paneOpen } ?? false
         captionOverlay?.controlsVisible = chromeVisible
+        captionOverlay?.paneOpen = paneOpen
         guard targetsChanged || railAmbientChanged || ownershipChanged
                 || captionLiftChanged else {
             if anchorNeedsFocusUpdate {

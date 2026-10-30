@@ -1153,12 +1153,14 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 self.progressBar.alpha = barVisible ? 1 : 0
                 self.timeshiftBadge.alpha = barVisible ? 1 : 0
             }
+            self.syncSubtitleOverlay(animated: true)
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
             self.restartAutoHide()
         }
         panel.onMenuHandled = { [weak self] in self?.armDismissEchoBlock() }
         activePanel = panel
+        syncSubtitleOverlay(animated: true)
         updateScrubberFocus()
         UIView.animate(withDuration: 0.167) {
             self.progressBar.alpha = 0
@@ -2366,6 +2368,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         overlay.videoSize = aetherPlayer?.videoSize ?? .zero
         // Height is sticky per channel, like the delay stepper.
         overlay.heightUnits = subtitleHeightUnits
+        let pane = activePanel?.isPane == true
+        if overlay.paneOpen != pane {
+            overlay.paneOpen = pane
+            if animated { UIView.animate(withDuration: 0.25) { overlay.layoutIfNeeded() } }
+        }
         overlay.setControlsVisible(railVisible || timelineVisible, animated: animated)
     }
 

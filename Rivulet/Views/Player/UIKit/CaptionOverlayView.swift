@@ -55,6 +55,14 @@ final class CaptionOverlayView: UIView {
         }
     }
 
+    /// True while an info pane is open: captions sit above its risen pills.
+    var paneOpen = false {
+        didSet {
+            guard paneOpen != oldValue else { return }
+            setNeedsLayout()
+        }
+    }
+
     /// The video's presentation size (`AetherPlayer.videoSize`). `.zero` means
     /// "unknown" — the overlay then measures against its full bounds, which is
     /// correct for a 16:9 picture filling the screen.
@@ -304,8 +312,9 @@ final class CaptionOverlayView: UIView {
         let rect = videoRect(in: size)
         let letterbox = max(0, size.height - rect.maxY)
         var base = letterbox + rect.height * restingMarginFraction
-        if controlsVisible {
-            base = max(base, SubtitleAdjustments.controlsFloor(isSystemDefault: style.isSystemDefault))
+        if controlsVisible || paneOpen {
+            base = max(base, SubtitleAdjustments.controlsFloor(isSystemDefault: style.isSystemDefault)
+                + (paneOpen ? SubtitleAdjustments.paneLift : 0))
         }
         return base
     }
