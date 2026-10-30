@@ -1748,7 +1748,8 @@ class PlayerContainerViewController: UIViewController {
             let details = PlayerDetailsPaneView(
                 media: PlayerDetailsPaneView.mediaSections(metadata: vm.metadata, modes: vm.streamingModeInfo,
                                                            dolbyVision: vm.aetherPlayer?.dolbyVisionPlayback,
-                                                           enhancementLayer: vm.aetherPlayer?.dolbyVisionEnhancementLayer),
+                                                           enhancementLayer: vm.aetherPlayer?.dolbyVisionEnhancementLayer,
+                                                           enhanceDialogue: SystemAudioAdjustment.dialogueSummary),
                 statsProvider: statsProvider)
             return (details, nil)
         }

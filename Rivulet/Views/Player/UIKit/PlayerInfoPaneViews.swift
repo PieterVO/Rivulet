@@ -905,7 +905,8 @@ final class PlayerDetailsPaneView: UIView {
 
     static func mediaSections(metadata: PlexMetadata, modes: StreamingModeInfo,
                               dolbyVision: DolbyVisionPlayback? = nil,
-                              enhancementLayer: DolbyVisionEnhancementLayer? = nil) -> [Section] {
+                              enhancementLayer: DolbyVisionEnhancementLayer? = nil,
+                              enhanceDialogue: String? = nil) -> [Section] {
         let media = metadata.Media?.first
         let streams = media?.Part?.first?.Stream ?? []
         var sections: [Section] = []
@@ -945,6 +946,7 @@ final class PlayerDetailsPaneView: UIView {
         let audio = streams.filter { $0.isAudio }
         if !audio.isEmpty {
             var rows = [Row(label: "Mode", value: modes.audio.rawValue)]
+            if let enhanceDialogue { rows.append(Row(label: "Enhance Dialogue", value: enhanceDialogue)) }
             for (index, stream) in audio.enumerated() { rows.append(audioRow(stream, index: index)) }
             sections.append(Section(title: "AUDIO", rows: rows))
         }
