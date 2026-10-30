@@ -1991,6 +1991,8 @@ class PlayerContainerViewController: UIViewController {
             (rail, railAlpha),
             (skipPill, skipVisible ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
+            // The pause backdrop replaces the frame the captions belong to (#428).
+            (captionOverlay, ambient ? 0 : 1),
         ]
         // `setAmbient` drives the rail's sub-view alphas, which `targets` cannot see.
         let railAmbientChanged = rail.map { $0.ambientState != (ambient, keepRailTitle) } ?? false
