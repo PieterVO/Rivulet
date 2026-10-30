@@ -147,6 +147,36 @@ extension SiloPlaybackPreferencesTests {
         XCTAssertEqual(schema.definitions[.subtitleMode]?.introducedIn, 1)
     }
 
+    /// The contract's own language tags drive the picker, whatever spelling the
+    /// snake-case key strategy gives the option set's name.
+    func testSchemaPublishesContractLanguageTagsAtItsRevision() async throws {
+        let server = SiloAuthTestServer()
+        await capability(server)
+        await server.respond("GET", "/api/v2/settings/contract", [.init(body: """
+        {"revision":23,"option_sets":{"playback_subtitle_languages":{"type":"language_tag","options":[
+           {"value":"nl","introduced_in":1},{"value":"en","introduced_in":1},
+           {"value":"zh-Hans","introduced_in":8},{"value":"xx","introduced_in":24}]}},
+         "definitions":[{"key":"playback.subtitle_language","introduced_in":1,
+           "allowed_scopes":["profile"],"resolution_order":["profile","default"],
+           "value_schema":{"type":"language_tag","nullable":true},"default_value":null}]}
+        """)])
+        let fetched = try await service(server).schema()
+        let schema = try XCTUnwrap(fetched)
+        XCTAssertEqual(schema.subtitleLanguages, ["nl", "en", "zh-Hans"])
+
+        // An older contract must not offer tags it does not know yet.
+        let older = SiloAuthTestServer()
+        await capability(older, revision: 1)
+        await older.respond("GET", "/api/v2/settings/contract", [.init(body: """
+        {"revision":1,"option_sets":{"playback_subtitle_languages":{"type":"language_tag","options":[
+           {"value":"nl","introduced_in":1},{"value":"zh-Hans","introduced_in":8}]}},
+         "definitions":[]}
+        """)])
+        let fetchedOld = try await service(older).schema()
+        let oldSchema = try XCTUnwrap(fetchedOld)
+        XCTAssertEqual(oldSchema.subtitleLanguages, ["nl"])
+    }
+
     func testMalformedSupportedScopeDoesNotClaimPlaybackSchema() async throws {
         let server = SiloAuthTestServer()
         await capability(server)

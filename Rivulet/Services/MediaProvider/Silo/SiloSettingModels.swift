@@ -178,8 +178,12 @@ nonisolated struct SiloPlaybackSettingDefinition: Decodable, Sendable {
 nonisolated struct SiloSettingsContractWire: Decodable, Sendable {
     let revision: Int
     let definitions: [SiloPlaybackSettingDefinition]
+    /// Keys this build offers as language tags. A server that does not publish
+    /// option sets leaves this empty and the picker falls back to Rivulet's own
+    /// language list.
+    let subtitleLanguages: [String]
 
-    private enum CodingKeys: String, CodingKey { case revision, definitions }
+    private enum CodingKeys: String, CodingKey { case revision, definitions, optionSets }
 
     private struct PlaybackDefinition: Decodable {
         let value: SiloPlaybackSettingDefinition?
@@ -201,10 +205,45 @@ nonisolated struct SiloSettingsContractWire: Decodable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         revision = try values.decode(Int.self, forKey: .revision)
         definitions = try values.decode([PlaybackDefinition].self, forKey: .definitions).compactMap(\.value)
+        let sets = try values.decodeIfPresent(SiloSettingOptionSets.self, forKey: .optionSets)
+        subtitleLanguages = sets?.values(named: "playback_subtitle_languages", upTo: revision) ?? []
+    }
+}
+
+/// One server-published choice, in contract order.
+nonisolated struct SiloSettingOption: Decodable, Sendable {
+    let value: String
+    let introducedIn: Int
+}
+
+nonisolated struct SiloSettingOptionSet: Decodable, Sendable {
+    let options: [SiloSettingOption]
+}
+
+/// `option_sets` is a dictionary, so the snake-case key strategy rewrites the
+/// set's own name too ("playback_subtitle_languages" becomes
+/// "playbackSubtitleLanguages"). Compare names with separators removed.
+nonisolated struct SiloSettingOptionSets: Decodable, Sendable {
+    private let sets: [String: SiloSettingOptionSet]
+
+    init(from decoder: Decoder) throws {
+        sets = try [String: SiloSettingOptionSet](from: decoder)
+    }
+
+    func values(named name: String, upTo revision: Int) -> [String] {
+        let wanted = Self.comparable(name)
+        guard let set = sets.first(where: { Self.comparable($0.key) == wanted })?.value else { return [] }
+        return set.options.filter { $0.introducedIn <= revision }.map(\.value)
+    }
+
+    private static func comparable(_ name: String) -> String {
+        name.replacingOccurrences(of: "_", with: "").lowercased()
     }
 }
 
 nonisolated struct SiloPlaybackSettingsSchema: Sendable {
     let revision: Int
     let definitions: [SiloPlaybackSettingKey: SiloPlaybackSettingDefinition]
+    /// The contract's own language tags, empty when the server publishes none.
+    let subtitleLanguages: [String]
 }

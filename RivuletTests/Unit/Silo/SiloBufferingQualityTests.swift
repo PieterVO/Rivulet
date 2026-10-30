@@ -70,25 +70,51 @@ final class SiloBufferingQualityTests: XCTestCase {
         XCTAssertEqual(policy.restore(status: status(limit: 5_000)), .init(quality: .automatic, clearLearnedLimit: true))
     }
 
-    func testStoreDefaultsToLocalAndIsolatesAuthority() async {
+    func testStoreFollowsTheProfileByDefaultAndHonorsAnOptOut() async {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         let store = SiloPlaybackPolicyStore(defaults: defaults)
         let first = SiloPlaybackAuthority(providerID: "silo:server-a", accountID: "account-a", profileID: "profile-a")
         let second = SiloPlaybackAuthority(providerID: "silo:server-a", accountID: "account-a", profileID: "profile-b")
         let context = SiloPlaybackOverrideContext(authority: first, libraryID: "library-a", seriesID: "series-a")
-        var override = SiloLocalPlaybackOverrides()
-        override.quality = .value(.offered(id: "high"))
-        await store.setOverrides(override, for: context)
-        let resolved = await store.resolve(context: context, server: nil, manualQuality: .offered(id: "low"))
-        XCTAssertFalse(resolved.followsSilo)
-        XCTAssertEqual(resolved.quality, .value(.offered(id: "low")))
-        let foreign = await store.resolve(context: .init(authority: second, libraryID: "library-a", seriesID: "series-a"), server: nil)
+        // What the profile stores on Silo: preferred subtitle language.
+        let language = SiloResolvedSetting<String>(value: "nl", rawValue: .string("nl"), source: .profile,
+            scope: .profile, profileId: "profile-a", libraryId: nil, seriesId: nil, deviceId: nil,
+            clientFamily: nil, storedValue: nil, constrained: false)
+        let server = SiloEffectivePlaybackPreferences(preferredQuality: .unavailable,
+            maxBitrateKbps: .unavailable, subtitleLanguage: .resolved(language), subtitleMode: .unavailable,
+            showForcedSubtitles: .unavailable, audioLanguage: .unavailable, bufferingQualityMode: .unavailable)
+        // A profile that saved nothing follows the profile's Silo settings.
+        let defaultFollows = await store.followsSilo(for: first)
+        XCTAssertTrue(defaultFollows)
+        let resolved = await store.resolve(context: context, server: server)
+        XCTAssertTrue(resolved.followsSilo)
+        XCTAssertEqual(resolved.subtitleLanguage, .value("nl"))
+        let foreign = await store.resolve(context: .init(authority: second, libraryID: "library-a", seriesID: "series-a"), server: server)
         XCTAssertEqual(foreign.quality, .unavailable)
-        await store.setFollowsSilo(true, for: first)
-        let firstFollows = await store.followsSilo(for: first)
+        // An opt-out is remembered for that authority alone.
+        await store.setFollowsSilo(false, for: first)
+        let optedOut = await store.resolve(context: context, server: server)
+        XCTAssertFalse(optedOut.followsSilo)
+        XCTAssertEqual(optedOut.subtitleLanguage, .unavailable)
         let secondFollows = await store.followsSilo(for: second)
-        XCTAssertTrue(firstFollows)
-        XCTAssertFalse(secondFollows)
+        XCTAssertTrue(secondFollows)
+    }
+
+    /// Data written before following was the default must still load, and it
+    /// reads as following so an untouched install adopts the profile.
+    func testStoredRecordWithoutFollowFlagFollowsAndKeepsItsData() async {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let payload = #"[{"authority":{"providerID":"silo:server-a","accountID":"account-a","profileID":"profile-a"},"# +
+                      #""record":{"overrides":[]}}]"#
+        defaults.set(Data(payload.utf8), forKey: "silo.localPlaybackPolicy.v2")
+        let store = SiloPlaybackPolicyStore(defaults: defaults)
+        let authority = SiloPlaybackAuthority(providerID: "silo:server-a", accountID: "account-a", profileID: "profile-a")
+        let follows = await store.followsSilo(for: authority)
+        XCTAssertTrue(follows)
+        // Its record survives a write and a fresh read.
+        await store.setFollowsSilo(false, for: authority)
+        let optOut = await SiloPlaybackPolicyStore(defaults: defaults).followsSilo(for: authority)
+        XCTAssertFalse(optOut)
     }
     func testWarmUpDoesNotCountUntilFirstFrameAndGraceEnds() {
         var policy = SiloBufferingQuality(policy: .automatically)

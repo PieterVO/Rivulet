@@ -32,6 +32,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("sq_") { return descriptors["streamingQualityOption"] }
         if id.hasPrefix("al_") { return descriptors["audioLanguage"] }
         if id.hasPrefix("sl_") { return descriptors["subtitleLanguage"] }
+        if id.hasPrefix("siloSL_") { return descriptors["siloSubtitleLanguageOption"] }
         if id.hasPrefix("hs_") { return descriptors["heightSpeakers"] }
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
         if id.hasPrefix("ai_") { return descriptors["appIcon"] }
@@ -360,13 +361,14 @@ enum SettingsDescriptorStore {
         ),
         "siloSignIn": SettingDescriptor(icon: "link", description: "Check the Silo server and sign in, then choose a profile."),
         "siloDeviceSignIn": SettingDescriptor(icon: "qrcode", description: "Sign in on your phone using Silo's device code, then choose a profile."),
-        "siloFollowPlayback": SettingDescriptor(icon: "play.rectangle", description: "Use Silo's effective playback preferences for this profile. Local choices below take precedence."),
+        "siloFollowPlayback": SettingDescriptor(icon: "play.rectangle", description: "Use Silo's own playback preferences for this profile, subtitles included. On by default; local choices on this page still take precedence."),
         "siloBufferingPolicy": SettingDescriptor(icon: "wifi", description: "Choose whether buffering may lower quality: never, ask first, or automatically."),
         "siloQualityOverride": SettingDescriptor(icon: "slider.horizontal.3", description: "Use Auto or an exact quality ID offered by Silo. Clear stops inherited quality; empty inherits."),
         "siloBitrateOverride": SettingDescriptor(icon: "speedometer", description: "Set a local maximum bitrate in kbps. This is a bitrate limit, not a guaranteed resolution."),
         "siloAudioLanguageOverride": SettingDescriptor(icon: "waveform", description: "Prefer an audio language for Silo playback on this profile."),
-        "siloSubtitleLanguageOverride": SettingDescriptor(icon: "captions.bubble", description: "Prefer a subtitle language for Silo playback on this profile."),
-        "siloSubtitleModeOverride": SettingDescriptor(icon: "captions.bubble", description: "Choose automatic, always, or off for Silo subtitles. A title's explicit choice still wins."),
+        "siloSubtitleLanguageOverride": SettingDescriptor(icon: "globe", description: "The language Silo's profile prefers for subtitles. Pick another to override it on this Apple TV only."),
+        "siloSubtitleLanguageOption": SettingDescriptor(icon: "globe", description: "Which subtitle language Silo should prefer. Follow Silo uses the language set on the profile; None leaves it unset."),
+        "siloSubtitleModeOverride": SettingDescriptor(icon: "captions.bubble", description: "Silo's own behavior for this profile: Auto shows subtitles when you need them, Always on shows them on every title, Off turns them off. A title's explicit choice still wins."),
         "siloForcedSubtitleOverride": SettingDescriptor(icon: "captions.bubble", description: "Choose whether forced subtitles are shown when Silo selects subtitles."),
         "siloThemeMusicEnabled": SettingDescriptor(icon: "music.note", description: "Play a selected Silo title's theme music when its page is visible. Off by default."),
         "siloThemeMusicLoop": SettingDescriptor(icon: "repeat", description: "Repeat optional Silo title theme music while its page remains active."),
@@ -596,6 +598,7 @@ enum SettingsDescriptorStore {
         case .silo: return ("externaldrive.fill", .systemTeal)
         case .siloProfiles: return ("person.2.fill", .systemTeal)
         case .siloProfilePIN: return ("lock.fill", .systemTeal)
+        case .siloSubtitleLanguagePicker: return ("captions.bubble", .systemTeal)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)

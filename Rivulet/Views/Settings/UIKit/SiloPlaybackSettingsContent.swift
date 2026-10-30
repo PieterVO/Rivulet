@@ -8,7 +8,7 @@ import UIKit
 enum SiloPlaybackSettingsContent {
     private static var authority: SiloPlaybackAuthority?
     private static var revision: UInt64 = 0
-    private static var follows = false
+    private static var follows = true
     private static var overrides = SiloLocalPlaybackOverrides()
     private static var effective: SiloEffectivePlaybackPreferences?
     private static var schema: SiloPlaybackSettingsSchema?
@@ -66,7 +66,7 @@ enum SiloPlaybackSettingsContent {
                                             kind: .info(value: { "" })))
             }
         }
-        // Local policy applies independently of the read-only server opt-in.
+        // Local policy applies whether or not the profile's preferences are followed.
         rows.append(cycle("siloBufferingPolicy", "Buffering Quality", value: overrides.bufferingPolicy,
                           options: [(.inherit, "Ask First"), (.value(.never), "Never"),
                                     (.value(.ask), "Ask First"), (.value(.automatically), "Automatically"), (.clear, "Clear")],
@@ -95,24 +95,98 @@ enum SiloPlaybackSettingsContent {
             rows.append(language("siloAudioLanguageOverride", "Audio Language", provider: provider, account: account,
                                  get: { overrides.audioLanguage }, set: { overrides.audioLanguage = $0 }))
         }
+        // The profile's own subtitle settings, in Silo's names. Following the
+        // profile is the default; a local choice overrides this Apple TV only.
         if schema?.definitions[.subtitleLanguage] != nil {
-            rows.append(language("siloSubtitleLanguageOverride", "Subtitle Language", provider: provider, account: account,
-                                 get: { overrides.subtitleLanguage }, set: { overrides.subtitleLanguage = $0 }))
+            rows.append(SettingsRowItem(id: "siloSubtitleLanguageOverride", title: "Subtitle Language",
+                kind: .navigationValue(.siloSubtitleLanguagePicker, value: {
+                    SiloSubtitlePreferenceLabels.languageValue(override: overrides.subtitleLanguage,
+                                                              resolved: resolvedSubtitleLanguage)
+                })))
         }
         if schema?.definitions[.subtitleMode] != nil {
-            rows.append(cycle("siloSubtitleModeOverride", "Subtitle Mode", value: overrides.subtitleMode,
-                              options: [(.inherit, "Inherit"), (.value(.auto), "Auto"), (.value(.always), "Always"),
-                                        (.value(.off), "Off"), (.clear, "Clear")], provider: provider, account: account) {
+            rows.append(cycle("siloSubtitleModeOverride", "Subtitles", value: overrides.subtitleMode,
+                              options: SiloSubtitlePreferenceLabels.modeOptions(resolved: resolvedSubtitleMode),
+                              provider: provider, account: account) {
                 overrides.subtitleMode = $0
             })
         }
         if schema?.definitions[.showForcedSubtitles] != nil {
             rows.append(cycle("siloForcedSubtitleOverride", "Forced Subtitles", value: overrides.showForcedSubtitles,
-                              options: [(.inherit, "Inherit"), (.value(true), "On"), (.value(false), "Off"), (.clear, "Clear")],
-                              provider: provider, account: account) { overrides.showForcedSubtitles = $0 })
+                              options: SiloSubtitlePreferenceLabels.forcedOptions(resolved: resolvedForcedSubtitles),
+                              provider: provider, account: account) {
+                overrides.showForcedSubtitles = $0
+            })
         }
         rows += SettingsContent.siloThemeMusicRows(provider: provider)
         return rows
+    }
+
+    // MARK: Profile resolution
+
+    /// What Silo's profile resolves to for this client, or nil when the server
+    /// answered nothing for that axis.
+    private static var resolvedSubtitleLanguage: String? {
+        guard case .resolved(let row) = effective?.subtitleLanguage else { return nil }
+        return row.value
+    }
+
+    private static var resolvedSubtitleMode: SiloSubtitleMode? {
+        guard case .resolved(let row) = effective?.subtitleMode else { return nil }
+        return row.value
+    }
+
+    private static var resolvedForcedSubtitles: Bool? {
+        guard case .resolved(let row) = effective?.showForcedSubtitles else { return nil }
+        return row.value
+    }
+
+    /// The picker pushed from the Silo page. Values are the contract's own
+    /// language tags when the server publishes them.
+    static var siloSubtitleLanguagePicker: [SettingsRowItem] {
+        guard let provider = SiloSession.storedProvider(), let account = SiloSession.account,
+              owner(provider, account) else { return [] }
+        func choose(_ value: SiloLocalPolicyValue<String>) {
+            overrides.subtitleLanguage = value
+            save(provider: provider, account: account)
+        }
+        var rows = [
+            SettingsRowItem(id: "siloSL_inherit", title: "Follow Silo",
+                            kind: .option(isSelected: { overrides.subtitleLanguage == .inherit },
+                                          select: { choose(.inherit) })),
+            SettingsRowItem(id: "siloSL_clear", title: "None",
+                            kind: .option(isSelected: { overrides.subtitleLanguage == .clear },
+                                          select: { choose(.clear) }))
+        ]
+        rows += subtitleLanguageOptions.map { tag in
+            SettingsRowItem(id: "siloSL_\(tag)", title: SiloSubtitlePreferenceLabels.languageName(tag),
+                            kind: .option(isSelected: { sameLanguage(selectedSubtitleLanguage, tag) },
+                                          select: { choose(.value(tag)) }))
+        }
+        return rows
+    }
+
+    private static var selectedSubtitleLanguage: String? {
+        if case .value(let tag) = overrides.subtitleLanguage { return tag }
+        return nil
+    }
+
+    /// The server's own tags, or Rivulet's codes when it publishes none, plus
+    /// an out-of-contract override so the current choice stays visible.
+    private static var subtitleLanguageOptions: [String] {
+        let published = schema?.subtitleLanguages ?? []
+        var options = published.isEmpty ? TrackLanguage.choices : published
+        if let current = selectedSubtitleLanguage,
+           !options.contains(where: { sameLanguage($0, current) }) {
+            options.append(current)
+        }
+        return options
+    }
+
+    private static func sameLanguage(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        let left = TrackLanguage.normalize(lhs), right = TrackLanguage.normalize(rhs)
+        return !left.isEmpty && left == right
     }
 
     private static func save(provider: SiloProvider, account: SiloSession.Account) {

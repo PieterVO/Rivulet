@@ -46,7 +46,8 @@ actor SiloPlaybackPreferences {
             guard let key = SiloPlaybackSettingKey(rawValue: definition.key) else { continue }
             definitions[key] = definition
         }
-        return SiloPlaybackSettingsSchema(revision: contract.revision, definitions: definitions)
+        return SiloPlaybackSettingsSchema(revision: contract.revision, definitions: definitions,
+                                          subtitleLanguages: contract.subtitleLanguages)
     }
 
     /// Optional library and series context lets Silo resolve their precedence itself.

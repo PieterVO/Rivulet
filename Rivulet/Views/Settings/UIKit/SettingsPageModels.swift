@@ -198,6 +198,7 @@ enum SettingsContent {
         case .silo:        return silo
         case .siloProfiles: return siloProfiles
         case .siloProfilePIN: return siloProfilePIN
+        case .siloSubtitleLanguagePicker: return SiloPlaybackSettingsContent.siloSubtitleLanguagePicker
         case .libraries:   return libraries
         case .homeRows:    return homeRows
         case .cache:       return cache

@@ -63,9 +63,23 @@ nonisolated struct SiloResolvedPlaybackPolicy: Equatable, Sendable {
 actor SiloPlaybackPolicyStore {
     static let shared = SiloPlaybackPolicyStore()
 
+    /// A profile's Silo preferences apply until the viewer opts out, which is
+    /// what Silo's own clients do. A record stored before this default existed
+    /// keeps whatever it holds, and a record missing the flag reads as true.
     private struct Record: Codable {
-        var followsSilo = false
+        var followsSilo = true
         var overrides: [OverrideEntry] = []
+
+        init(followsSilo: Bool = true, overrides: [OverrideEntry] = []) {
+            self.followsSilo = followsSilo
+            self.overrides = overrides
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            followsSilo = try values.decodeIfPresent(Bool.self, forKey: .followsSilo) ?? true
+            overrides = try values.decodeIfPresent([OverrideEntry].self, forKey: .overrides) ?? []
+        }
     }
     private struct OverrideEntry: Codable {
         let context: SiloPlaybackOverrideContext
@@ -84,7 +98,7 @@ actor SiloPlaybackPolicyStore {
         records = Dictionary(entries.map { ($0.authority, $0.record) }, uniquingKeysWith: { _, latest in latest })
     }
 
-    func followsSilo(for authority: SiloPlaybackAuthority) -> Bool { records[authority]?.followsSilo ?? false }
+    func followsSilo(for authority: SiloPlaybackAuthority) -> Bool { records[authority]?.followsSilo ?? true }
 
     func setFollowsSilo(_ enabled: Bool, for authority: SiloPlaybackAuthority) {
         var record = records[authority] ?? Record()
