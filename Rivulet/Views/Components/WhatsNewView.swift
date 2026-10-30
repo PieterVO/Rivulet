@@ -149,6 +149,17 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.1.1 (119)", [
+            "Subtitle and audio language settings are now saved for each Plex profile.",
+            "New season page lists the episodes beside the season poster.",
+            "Hold Select on an episode on a show's page to open its menu.",
+            "Menus and popups stay dark in Light mode.",
+            "The player stops and shows the reason when Plex ends your session.",
+            "Continue Watching cards are kept between launches instead of being rebuilt.",
+            "The player's Details panel shows your Enhance Dialogue setting under Audio.",
+            "Top Shelf now leaves out rows you've hidden from Home.",
+            "Recently Added items in Top Shelf no longer show progress bars.",
+        ]),
         ("1.1.1 (118)", [
             "The Home hero now shows what's trending in your Jellyfin libraries.",
             "Top Shelf now fills in when Jellyfin is your only server.",
