@@ -32,6 +32,20 @@ final class TransportControlButton: UIControl {
     private let backgroundEffectView: UIVisualEffectView
 
     var onPress: (() -> Void)?
+    /// Set: a held Select runs this instead, and `onPress` waits for the release (AVKit's
+    /// hold on Subtitles). Unset buttons act on the press, as before.
+    var onLongPress: (() -> Void)? {
+        didSet {
+            guard holdRecognizer == nil, onLongPress != nil else { return }
+            let hold = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+            hold.allowedPressTypes = [NSNumber(value: UIPress.PressType.select.rawValue)]
+            hold.minimumPressDuration = InputConfig.holdThreshold
+            addGestureRecognizer(hold)
+            holdRecognizer = hold
+        }
+    }
+    private var holdRecognizer: UILongPressGestureRecognizer?
+    private var holdFired = false
     /// While this button's menu is up AVKit greys it (100/255 over black, measured on device).
     var showsMenu = false {
         didSet { if !isFocused { backgroundEffectView.backgroundColor = restingColor } }
@@ -97,14 +111,24 @@ final class TransportControlButton: UIControl {
     // on tvOS; handle the press directly.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         if presses.contains(where: { $0.type == .select }) {
-            onPress?()
+            holdFired = false
+            if onLongPress == nil { onPress?() }
             return
         }
         super.pressesBegan(presses, with: event)
     }
 
+    @objc private func held(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        holdFired = true
+        onLongPress?()
+    }
+
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        if presses.contains(where: { $0.type == .select }) { return }
+        if presses.contains(where: { $0.type == .select }) {
+            if onLongPress != nil, !holdFired { onPress?() }
+            return
+        }
         super.pressesEnded(presses, with: event)
     }
 

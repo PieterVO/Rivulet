@@ -819,6 +819,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         ])
 
         railView.onSubtitles = { [weak self] in self?.presentSubtitlePanel() }
+        railView.onSubtitlesHold = { [weak self] in self?.toggleSubtitles() }
         railView.onAudio = { [weak self] in self?.presentAudioPanel() }
         railView.onQuality = { [weak self] in self?.presentStreamPanel() }
         railView.onInfo = { [weak self] in self?.presentInfoPanel() }
@@ -1239,6 +1240,19 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 self?.activePanel?.dismissPanel()
             }
             self.presentPanel(content: list, width: 520)
+        }
+    }
+
+    /// AVKit's hold on Subtitles: off if showing, else the first full track. Engine-demuxed channels only.
+    private func toggleSubtitles() {
+        guard let aether = aetherPlayer, !aether.subtitleTracks.isEmpty else { return }
+        if systemCaptionsOnMute.isActive { captionsOnMute.userPicked() }
+        if aether.currentSubtitleTrackId != nil {
+            aether.selectSubtitleTrack(id: nil)
+            railView.showNote("Subtitles off")
+        } else if let track = aether.subtitleTracks.first(where: { !$0.isForced }) ?? aether.subtitleTracks.first {
+            aether.selectSubtitleTrack(id: track.id)
+            railView.showNote("Subtitles on")
         }
     }
 

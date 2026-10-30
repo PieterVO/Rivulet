@@ -1389,6 +1389,18 @@ class PlayerContainerViewController: UIViewController {
                 }
             self.presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail.subtitlesButton)
         }
+        rail.onSubtitlesHold = { [weak self] in
+            guard let self, let vm = self.viewModel else { return }
+            if vm.currentSubtitleTrackId != nil {
+                vm.selectSubtitleTrack(id: nil)
+                self.rail?.showNote("Subtitles off")
+            } else if let id = vm.subtitleOnTrackId,
+                      // A hold never starts the generated model's download.
+                      id != UniversalPlayerViewModel.generatedSubtitleId || SpeechModelStore.shared.state == .ready {
+                vm.selectSubtitleTrack(id: id)
+                self.rail?.showNote("Subtitles on")
+            }
+        }
         rail.onAudio = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             self.presentRailPanel(
