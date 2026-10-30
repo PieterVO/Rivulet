@@ -2,8 +2,8 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 //
-//  Global audio and subtitle track memory (UserDefaults, last write wins, shared
-//  across profiles). Forced and regular subtitles are different intents: a regular
+//  Audio and subtitle track memory (UserDefaults, last write wins, per Plex Home
+//  profile). Forced and regular subtitles are different intents: a regular
 //  intent falls back to a forced track, a forced intent never takes a regular one.
 //
 
@@ -436,7 +436,8 @@ enum TrackIntentResolver {
 
 // MARK: - Persistence
 
-/// Global, last-write-wins track memory. Shared across profiles by design.
+/// Last-write-wins track memory, per Plex Home profile. A profile that has
+/// saved nothing reads the device-wide value (no profile, or from before #432).
 enum TrackIntentStore {
 
     // Current keys
@@ -459,32 +460,45 @@ enum TrackIntentStore {
     // Defaults injectable for tests.
     nonisolated(unsafe) static var defaults: UserDefaults = .standard
 
+    // MARK: Profile scoping
+
+    /// Keyed off `selectedPlexUserId`, as `HomeRowSettings` is.
+    private static func profileKey(_ base: String) -> String {
+        guard let userId = defaults.object(forKey: PlexProfileSession.savedUserIDKey) as? Int else { return base }
+        return "\(base)_user_\(userId)"
+    }
+
+    /// The profile's value, else the device-wide one. Empty data is a profile's
+    /// saved "nothing", so it never falls through.
+    private static func storedData(_ base: String) -> Data? {
+        migrateLegacyIfNeeded()
+        return defaults.data(forKey: profileKey(base)) ?? defaults.data(forKey: base)
+    }
+
+    private static func store(_ value: (some Encodable)?, _ base: String) {
+        migrateLegacyIfNeeded()
+        let key = profileKey(base)
+        if let value {
+            if let data = try? JSONEncoder().encode(value) { defaults.set(data, forKey: key) }
+        } else if key == base {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(Data(), forKey: key)
+        }
+    }
+
     // MARK: Subtitle
 
     /// The stored subtitle intent, or `nil` if the user has never picked one.
     /// `.off` means the user explicitly turned subtitles off.
     static var subtitleIntent: SubtitleIntent? {
-        get {
-            migrateLegacyIfNeeded()
-            guard let data = defaults.data(forKey: subtitleKey) else { return nil }
-            return try? JSONDecoder().decode(SubtitleIntent.self, from: data)
-        }
-        set {
-            migrateLegacyIfNeeded()
-            guard let newValue else {
-                defaults.removeObject(forKey: subtitleKey)
-                return
-            }
-            if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: subtitleKey)
-            }
-        }
+        get { storedData(subtitleKey).flatMap { try? JSONDecoder().decode(SubtitleIntent.self, from: $0) } }
+        set { store(newValue, subtitleKey) }
     }
 
     /// Whether the user has ever explicitly expressed a subtitle intent.
     static var hasSubtitleIntent: Bool {
-        migrateLegacyIfNeeded()
-        return defaults.data(forKey: subtitleKey) != nil
+        storedData(subtitleKey)?.isEmpty == false
     }
 
     /// What playback resolves against: Foreign Audio in the device's
@@ -496,21 +510,8 @@ enum TrackIntentStore {
     // MARK: Audio
 
     static var audioIntent: AudioIntent? {
-        get {
-            migrateLegacyIfNeeded()
-            guard let data = defaults.data(forKey: audioKey) else { return nil }
-            return try? JSONDecoder().decode(AudioIntent.self, from: data)
-        }
-        set {
-            migrateLegacyIfNeeded()
-            guard let newValue else {
-                defaults.removeObject(forKey: audioKey)
-                return
-            }
-            if let data = try? JSONEncoder().encode(newValue) {
-                defaults.set(data, forKey: audioKey)
-            }
-        }
+        get { storedData(audioKey).flatMap { try? JSONDecoder().decode(AudioIntent.self, from: $0) } }
+        set { store(newValue, audioKey) }
     }
 
     /// The audio intent to resolve against, defaulting to English when the
