@@ -522,6 +522,9 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     private let reportingInterval: TimeInterval = 10
     private var lastReportedTime: TimeInterval = 0
+    /// Paused timelines every `reportingInterval`, as Plex clients send, so the
+    /// server can end a paused session (#403).
+    private var pausedTimelineTask: Task<Void, Never>?
     /// `.provider` only: the play session's reporter. Recreated when the
     /// stream (and with it the play session) changes; nil once stopped.
     private var providerReporter: (any ProgressReporter)?
@@ -1929,7 +1932,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 return .runtimeFatal
             case .invalidURL:
                 return .demuxInit
-            case .unknown:
+            case .unknown, .serverTerminated:
                 return .unknown
             case .engineFailure(let kind, _):
                 // The engine already classified this. Everything below is the
@@ -3804,6 +3807,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func stopPlayback() {
         stopCount += 1
+        pausedTimelineTask?.cancel()
+        pausedTimelineTask = nil
         streamPreparationTask?.cancel()
         streamPreparationTask = nil
         streamWorkTask?.cancel()
@@ -6563,15 +6568,33 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
+        sendTimeline(time: time, state: isPlaying ? "playing" : "paused", force: false)
+    }
+
+    /// One Plex timeline; ends playback if the reply says the server ended the session.
+    private func sendTimeline(time: TimeInterval, state: String, force: Bool) {
+        let stops = stopCount
         Task {
-            await PlexProgressReporter.shared.reportProgress(
+            let terminated = await PlexProgressReporter.shared.reportProgress(
                 ratingKey: self.metadata.ratingKey ?? "",
                 time: time,
                 duration: self.duration,
-                state: self.isPlaying ? "playing" : "paused",
+                state: state,
+                forceReport: force,
                 server: plexServer
             )
+            guard let terminated, stops == self.stopCount else { return }
+            self.endForServerTermination(terminated)
         }
+    }
+
+    /// The server stopped this stream (dashboard Stop, paused too long): stop and show its reason (#403).
+    private func endForServerTermination(_ reason: String) {
+        if case .failed = playbackState { return }
+        DiagLog.notice(.playback, "Plex server terminated the session")
+        stopPlayback()
+        errorMessage = reason
+        updatePlaybackState(.failed(.serverTerminated(reason)))
     }
 
     /// Report a playback state change immediately.
@@ -6594,17 +6617,20 @@ final class UniversalPlayerViewModel: ObservableObject {
             plexState = nil
         }
 
+        pausedTimelineTask?.cancel()
+        pausedTimelineTask = nil
         guard let state = plexState else { return }
 
-        Task {
-            await PlexProgressReporter.shared.reportProgress(
-                ratingKey: self.metadata.ratingKey ?? "",
-                time: self.currentTime,
-                duration: self.duration,
-                state: state,
-                forceReport: true,
-                server: plexServer
-            )
+        sendTimeline(time: currentTime, state: state, force: true)
+        if state == "paused" {
+            let interval = reportingInterval
+            pausedTimelineTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(interval))
+                    guard let self, !Task.isCancelled else { return }
+                    self.sendTimeline(time: self.currentTime, state: "paused", force: true)
+                }
+            }
         }
     }
 

@@ -345,44 +345,17 @@ final class MediaItemDetailPageViewController: UIViewController {
         // route — the primary action is the Watchlist toggle, and the
         // watched/watchlist circles are dropped (no provider state).
         if item.isMetadataOnly { return makeMetadataOnlyActionRow() }
-        let pill = FocusableActionButton()
-        pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.layer.cornerRadius = HeroPillButton.buttonHeight / 2
-        pill.setContentHuggingPriority(.required, for: .horizontal)
-        pill.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        let icon = UIImageView(image: UIImage(systemName: "play.fill"))
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.tintColor = .white
-        icon.contentMode = .scaleAspectFit
-        let title = UILabel()
-        title.translatesAutoresizingMaskIntoConstraints = false
-        title.font = HeroPillButton.titleFont
-        title.textColor = .white
-        title.text = playPillTitle
-        pill.addSubview(icon)
-        pill.addSubview(title)
-        NSLayoutConstraint.activate([
-            pill.heightAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
-            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: HeroPillButton.sidePadding),
-            icon.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 24),
-            icon.heightAnchor.constraint(equalToConstant: 24),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HeroPillButton.iconGap),
-            title.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -HeroPillButton.sidePadding),
-            title.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-        ])
-        pill.invertOnFocus = [icon, title]
+        let (pill, title, _) = FocusableActionButton.pill(title: playPillTitle, systemImage: "play.fill")
         pill.onPrimaryAction = { [weak self] in guard let self else { return }; self.onPlay(self.item, nil) }
         playButton = pill
         playTitleLabel = title
 
         // Match the carousel chrome: Watched = checkmark, Watchlist = plus.
-        let watched = circleButton(systemImage: isWatched ? "checkmark.circle.fill" : "checkmark")
+        let watched = FocusableActionButton.circle(systemImage: isWatched ? "checkmark.circle.fill" : "checkmark")
         watchedButton = watched
         watched.onPrimaryAction = { [weak self] in self?.toggleWatched() }
 
-        let watchlist = circleButton(systemImage: "plus")
+        let watchlist = FocusableActionButton.circle(systemImage: "plus")
         watchlistButton = watchlist
         watchlist.onPrimaryAction = { [weak self] in self?.toggleWatchlist() }
         let ref = item.ref
@@ -397,7 +370,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         // An episode's Watched acts on the episode alone; the whole show is
         // marked from the show's own page, which this opens.
         if item.kind == .episode, let showRef, !showRef.itemID.isEmpty {
-            let goToShow = circleButton(systemImage: "tv")
+            let goToShow = FocusableActionButton.circle(systemImage: "tv")
             goToShow.onPrimaryAction = { [weak self] in
                 guard let self else { return }
                 PreviewCarouselViewController.openShowDetail(showRef, show: self.show, from: self)
@@ -411,34 +384,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     }
 
     private func makeMetadataOnlyActionRow() -> UIView {
-        let pill = FocusableActionButton()
-        pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.layer.cornerRadius = HeroPillButton.buttonHeight / 2
-        pill.setContentHuggingPriority(.required, for: .horizontal)
-        pill.setContentCompressionResistancePriority(.required, for: .horizontal)
-
-        let icon = UIImageView()
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.tintColor = .white
-        icon.contentMode = .scaleAspectFit
-        let title = UILabel()
-        title.translatesAutoresizingMaskIntoConstraints = false
-        title.font = HeroPillButton.titleFont
-        title.textColor = .white
-        title.text = "Watchlist"
-        pill.addSubview(icon)
-        pill.addSubview(title)
-        NSLayoutConstraint.activate([
-            pill.heightAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
-            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: HeroPillButton.sidePadding),
-            icon.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 24),
-            icon.heightAnchor.constraint(equalToConstant: 24),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HeroPillButton.iconGap),
-            title.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -HeroPillButton.sidePadding),
-            title.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-        ])
-        pill.invertOnFocus = [icon, title]
+        let (pill, _, icon) = FocusableActionButton.pill(title: "Watchlist", systemImage: nil)
 
         if let tmdbID = item.tmdbID {
             let guid = "tmdb://\(tmdbID)"
@@ -478,27 +424,6 @@ final class MediaItemDetailPageViewController: UIViewController {
         row.spacing = HeroPillButton.rowGap
         row.alignment = .center
         return row
-    }
-
-    private func circleButton(systemImage: String) -> FocusableActionButton {
-        let b = FocusableActionButton()
-        b.translatesAutoresizingMaskIntoConstraints = false
-        b.layer.cornerRadius = HeroPillButton.buttonHeight / 2
-        let icon = UIImageView(image: UIImage(systemName: systemImage))
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.tintColor = .white
-        icon.contentMode = .scaleAspectFit
-        b.addSubview(icon)
-        NSLayoutConstraint.activate([
-            b.widthAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
-            b.heightAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
-            icon.centerXAnchor.constraint(equalTo: b.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: b.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 30),
-            icon.heightAnchor.constraint(equalToConstant: 30),
-        ])
-        b.invertOnFocus = [icon]
-        return b
     }
 
     // MARK: - Data
@@ -586,7 +511,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         let versions = VersionPicker.versions(in: detail)
         guard !versions.isEmpty, versionsButton == nil, let row = actionRow, let watchlist = watchlistButton,
               let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
-        let button = circleButton(systemImage: "square.stack")
+        let button = FocusableActionButton.circle(systemImage: "square.stack")
         button.onPrimaryAction = { [weak self, weak button] in
             guard let self, let button else { return }
             VersionPicker.present(versions, from: self, sourceFrame: button.convert(button.bounds, to: nil)) {
@@ -625,7 +550,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         item = refreshed
         isWatched = refreshed.isWatched
         resumeOffset = refreshed.userState.viewOffset
-        setCircleIcon(watchedButton, isWatched ? "checkmark.circle.fill" : "checkmark")
+        watchedButton?.setIcon(isWatched ? "checkmark.circle.fill" : "checkmark")
         playTitleLabel?.text = playPillTitle
     }
 
@@ -644,7 +569,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
     private func toggleWatched() {
         isWatched.toggle()
-        setCircleIcon(watchedButton, isWatched ? "checkmark.circle.fill" : "checkmark")
+        watchedButton?.setIcon(isWatched ? "checkmark.circle.fill" : "checkmark")
         // Plex drops the resume point on scrobble and unscrobble (#270).
         resumeOffset = 0
         playTitleLabel?.text = playPillTitle
@@ -678,10 +603,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
     // Distinct active glyphs: watched = filled check, watchlist = saved bookmark.
     private func updateWatchlistIcon() {
-        setCircleIcon(watchlistButton, onWatchlist ? "bookmark.fill" : "plus")
-    }
-    private func setCircleIcon(_ button: FocusableActionButton?, _ name: String) {
-        (button?.subviews.compactMap { $0 as? UIImageView }.first)?.image = UIImage(systemName: name)
+        watchlistButton?.setIcon(onWatchlist ? "bookmark.fill" : "plus")
     }
 
     /// The show above an episode (grandparent) or a season (parent).

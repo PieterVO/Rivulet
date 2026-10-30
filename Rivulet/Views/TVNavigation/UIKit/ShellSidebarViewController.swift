@@ -520,8 +520,6 @@ final class ShellSidebarViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        // Its colors are all white; light glass under them is unreadable over a light page.
-        view.overrideUserInterfaceStyle = .dark
         sections = Self.liveSections()
         buildViews()
         configurePill()

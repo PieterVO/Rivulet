@@ -1006,6 +1006,8 @@ struct UniversalPlayerView: View {
             return "link.badge.plus"
         case .unknown:
             return "exclamationmark.triangle.fill"
+        case .serverTerminated:
+            return "stop.circle.fill"
         case .engineFailure(let kind, _):
             // Reuse the one engine-kind taxonomy instead of opening a third
             // switch over the same strings. "Is this a network thing or a
@@ -1041,6 +1043,8 @@ struct UniversalPlayerView: View {
             return "Invalid Stream"
         case .unknown:
             return "Playback Error"
+        case .serverTerminated:
+            return "Playback Stopped"
         case .engineFailure(let kind, _):
             switch DirectPlayFailureKind(engineKind: kind) {
             case .network: return "Connection Problem"

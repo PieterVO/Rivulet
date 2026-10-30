@@ -38,6 +38,9 @@ actor PlexProgressReporter {
                              lastState: String?,
                              lastTime: TimeInterval?,
                              force: Bool) -> Bool {
+        // A session must open with "playing": a "paused" first (the engine
+        // holds paused while loading) makes Plex fire media.pause and never media.play (#433).
+        if state == "paused" && (lastState == nil || lastState == "stopped") { return false }
         if force { return true }
         if lastState != state { return true }
         guard let lastTime else { return true }
@@ -53,6 +56,8 @@ actor PlexProgressReporter {
     ///   - duration: Total duration in seconds
     ///   - state: Playback state ("playing", "paused", "stopped")
     ///   - forceReport: If true, bypasses throttle to report immediately (for state changes)
+    /// - Returns: The server's reason when it has ended this play session (#403), else nil.
+    @discardableResult
     func reportProgress(
         ratingKey: String,
         time: TimeInterval,
@@ -60,9 +65,9 @@ actor PlexProgressReporter {
         state: String,
         forceReport: Bool = false,
         server explicit: PlexServerAddress? = nil
-    ) async {
-        guard !ratingKey.isEmpty else { return }
-        guard let server = await server(explicit) else { return }
+    ) async -> String? {
+        guard !ratingKey.isEmpty else { return nil }
+        guard let server = await server(explicit) else { return nil }
         // Keyed by server too: two servers can share a ratingKey.
         let key = server.address + "|" + ratingKey
 
@@ -70,7 +75,7 @@ actor PlexProgressReporter {
                                 time: time,
                                 lastState: lastReportedStates[key],
                                 lastTime: lastReportedTimes[key],
-                                force: forceReport) else { return }
+                                force: forceReport) else { return nil }
         lastReportedTimes[key] = time
         lastReportedStates[key] = state
 
@@ -105,17 +110,28 @@ actor PlexProgressReporter {
             if state == "stopped" { directPlaySessions[key] = nil }
         }
 
-        guard let url = components?.url else { return }
+        guard let url = components?.url else { return nil }
 
         do {
-            _ = try await PlexNetworkManager.shared.requestData(
+            let data = try await PlexNetworkManager.shared.requestData(
                 url,
                 method: "GET",
-                headers: ["X-Plex-Token": server.token]
+                headers: ["X-Plex-Token": server.token, "Accept": "application/json"]
             )
+            return Self.terminationText(in: data)
         } catch {
             playerDebugLog("📊 PlexProgress: Failed to report progress: \(error)")
+            return nil
         }
+    }
+
+    /// The timeline reply carries `terminationCode` / `terminationText` once the
+    /// server has ended the session (dashboard Stop, paused too long).
+    static func terminationText(in data: Data) -> String? {
+        guard let container = try? JSONDecoder().decode(TimelineReply.self, from: data).MediaContainer,
+              container.terminationCode != nil || container.terminationText != nil else { return nil }
+        let text = container.terminationText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? "Your Plex server stopped this stream." : text
     }
 
     /// Opens a Plex play session for a file the engine plays directly, so the
@@ -191,6 +207,14 @@ actor PlexProgressReporter {
             return PlexServerAddress(address: address, token: token)
         }
     }
+}
+
+nonisolated private struct TimelineReply: Decodable {
+    nonisolated struct Container: Decodable {
+        let terminationCode: Int?
+        let terminationText: String?
+    }
+    let MediaContainer: Container
 }
 
 /// A Plex server's base URL and the token for it.
