@@ -12,6 +12,13 @@
 
 import Foundation
 
+/// A provider plan has already decided the subtitle choice, including Off.
+/// Player preference code must not replace it with a device-wide default.
+enum AuthoritativeSubtitleSelection: Sendable, Equatable {
+    case off
+    case track(id: String, index: Int)
+}
+
 struct StreamInfo: Sendable {
     let source: MediaSource
     let playSessionID: String?
@@ -31,4 +38,8 @@ struct StreamInfo: Sendable {
     var prefersAetherPlayback: Bool = false
     /// False when track changes must negotiate the server's desired-track state.
     var canSelectTracksLocally: Bool = true
+    /// Native plan facts; nil for older servers and providers without negotiation.
+    var negotiatedStatus: MediaNegotiatedStatus? = nil
+    /// Non-nil for a provider that owns the initial subtitle decision.
+    var authoritativeSubtitleSelection: AuthoritativeSubtitleSelection? = nil
 }

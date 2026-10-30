@@ -11,8 +11,8 @@ final class BackdropPlaneArtworkTests: XCTestCase {
 
     private func item(profile: String = "one", backdrop: URL?, poster: URL? = nil) -> MediaItem {
         MediaItem(
-            ref: MediaItemRef(providerID: "silo:server:\(profile)", itemID: "movie:sample-journey"),
-            kind: .movie, title: "A Sample Journey", sortTitle: nil, overview: nil, year: 2020,
+            ref: MediaItemRef(providerID: "silo:server:\(profile)", itemID: "movie:project-hail-mary"),
+            kind: .movie, title: "Project Hail Mary", sortTitle: nil, overview: nil, year: 2026,
             runtime: 9000, parentRef: nil, grandparentRef: nil, episodeNumber: nil, seasonNumber: nil,
             childProgress: nil,
             userState: MediaUserState(isPlayed: false, viewOffset: 123, isFavorite: true, lastViewedAt: nil),

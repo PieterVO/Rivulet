@@ -60,6 +60,8 @@ struct MediaItemDetail: Sendable {
 
     /// External ids keyed lowercase: "tmdb", "imdb", "tvdb".
     var externalIDs: [String: String] = [:]
+    /// Optional native theme audio metadata, scoped to this title and profile.
+    var themeMusicURL: URL? = nil
 
     struct Extra: Sendable, Identifiable, Hashable {
         let id: String

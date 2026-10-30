@@ -34,42 +34,59 @@ extension SiloProvider {
 
     func hubItems(_ hubID: String, page: Page) async throws -> PagedResult<MediaItem> {
         let route = try SiloHubRoute.decode(hubID)
-        if route.scope == "recommendations", let kind = route.kind {
-            // Recommendation sections are bounded by their contract (60 cards),
-            // not cursor paged. Fetch their dedicated section rather than
-            // substituting another catalog order or a TMDB feed.
-            guard page.offset == 0 else { return PagedResult(items: [], total: 0, nextPage: nil) }
-            var query = [URLQueryItem(name: "limit", value: "60")]
-            if let key = route.key { query.append(URLQueryItem(name: "key", value: key)) }
-            let result: SiloList<SiloItem> = try await getArtwork("recommendations/section/\(Self.pathComponent(kind))", query)
-            let items = map(result.items)
-            return PagedResult(items: items, total: items.count, nextPage: nil)
-        }
         guard let sectionID = route.sectionId else { throw MediaProviderError.notFound }
         var query = [URLQueryItem(name: "source", value: "section"),
                      URLQueryItem(name: "scope", value: route.scope),
                      URLQueryItem(name: "section_id", value: sectionID)]
         if let libraryID = route.libraryId { query.append(URLQueryItem(name: "library_id", value: libraryID)) }
-        return try await catalog(query, page: page)
+        // Decode native cards with their exact action anchors in rail context.
+        guard route.scope == "home" || route.scope == "library" else {
+            return try await catalog(query, page: page)
+        }
+        let layoutPath = route.libraryId.map { "library/\(Self.pathComponent($0))/layout" } ?? "home/layout"
+        let layout: SiloSectionLayout = try await client.get(layoutPath)
+        guard let section = layout.sections.first(where: { $0.id == sectionID }),
+              let rail = Self.dismissalRail(section.sectionType) else {
+            return try await catalog(query, page: page)
+        }
+        let raw: SiloCatalogPage = try await getArtwork("catalog", query + [
+            URLQueryItem(name: "limit", value: String(min(max(page.limit, 1), 200)))
+        ] + (page.cursor.map { [URLQueryItem(name: "cursor", value: $0)] } ??
+             (page.offset > 0 ? [URLQueryItem(name: "seek", value: String(page.offset))] : [])))
+        let owner = await MainActor.run { SiloSession.storedProvider() }
+        guard owner?.id == id, owner?.authorityRevision == authorityRevision,
+              client.profileID == profileID else { throw MediaProviderError.unauthorized }
+        let items = raw.items.map { card -> MediaItem in
+            var item = SiloMediaMapper.item(card, providerID: id, baseURL: client.baseURL, libraryID: route.libraryId)
+            item.dismissalMetadata = dismissalMetadata(for: card, rail: rail)
+            return item
+        }
+        return PagedResult(items: items, total: raw.total,
+                           nextPage: try nextPage(raw.page, offset: page.offset + items.count, limit: page.limit))
     }
 
     func discoveryHubs() async throws -> [MediaHub]? {
         let result: SiloList<SiloRecommendationRow> = try await getArtwork("recommendations/discover")
+        guard result.page?.hasMore != true, result.page?.nextCursor?.isEmpty != false else {
+            throw MediaProviderError.backendSpecific(underlying: "Silo returned an incomplete recommendations feed.")
+        }
+        // Match the native For You feed: its inline cards are authoritative.
+        // Separate section reads are browse operations, not feed dependencies.
         var hubs: [MediaHub] = []
-        for (index, row) in result.items.enumerated() {
-            let route = SiloHubRoute(scope: "recommendations", kind: row.kind, key: row.key)
-            let identifier = try route.identifier(suffix: "\(index).\(row.type)")
-            var items = map(row.items)
-            // Dedicated rows can hold more than their preview. Load their
-            // complete bounded section up front, so the grid never advertises
-            // a fabricated cursor or loses cards after the preview.
-            if row.kind != nil {
-                items = try await hubItems(identifier, page: Page(offset: 0, limit: 60)).items
-            }
+        hubs.reserveCapacity(result.items.count)
+        var personalizedCount = 0
+        for (index, row) in result.items.enumerated() where !row.items.isEmpty {
+            let identifier = try SiloHubRoute(scope: "recommendations").identifier(suffix: "\(index).\(row.type)")
+            let items = map(row.items)
             var hub = MediaHub(id: identifier, providerID: id, title: row.title, style: .shelf, items: items)
             hub.total = items.count
-            hub.canBrowse = row.kind != nil
-            hubs.append(hub)
+            hub.canBrowse = false
+            if row.title.caseInsensitiveCompare("For You") == .orderedSame {
+                hubs.insert(hub, at: personalizedCount)
+                personalizedCount += 1
+            } else {
+                hubs.append(hub)
+            }
         }
         return hubs
     }

@@ -38,6 +38,13 @@ protocol MediaProvider: Sendable, Identifiable {
     func search(_ query: String) async throws -> [MediaItem]
     /// Search limited to these libraries' ids. Default: all libraries.
     func search(_ query: String, inLibraries libraryIDs: [String]) async throws -> [MediaItem]
+    /// Native people results retain the source provider's identity.
+    func searchPeople(_ query: String, inLibraries libraryIDs: [String]) async throws -> [MediaPersonResult]
+    func personDetail(_ person: MediaPersonResult, inLibraries libraryIDs: [String]) async throws -> PersonDetail
+    /// The returned choices are the only values authorized for this library and profile.
+    func catalogFacets(in library: MediaLibrary) async throws -> [MediaCatalogFacet]?
+    func catalogItems(in library: MediaLibrary, filter: MediaCatalogFilter, sort: SortOption,
+                      page: Page) async throws -> PagedResult<MediaItem>
 
     /// Provider-curated "related/recommended like this" items, and the
     /// collection the item belongs to when the provider picks one. `kind` is
@@ -53,6 +60,7 @@ protocol MediaProvider: Sendable, Identifiable {
 
     // MARK: - Home rails
     func continueWatching(limit: Int) async throws -> [MediaItem]
+    func dismiss(_ dismissal: MediaDismissal) async throws
     func recentlyAdded(limit: Int) async throws -> [MediaItem]
     /// Plex-native curated hubs. Other providers may return [] and rely on
     /// `HomeComposer` to synthesize from primitives.
@@ -75,6 +83,9 @@ protocol MediaProvider: Sendable, Identifiable {
     /// nil when it has none. Home asks for this per library on every reload,
     /// so a provider whose `hubs(in:)` costs more than one request overrides it.
     func recentlyAddedHub(in library: MediaLibrary) async throws -> MediaHub?
+    /// The library's titles on `trending`, in its order, at most `limit`.
+    /// Home's hero on a server with no TMDB index of its own. Default: none.
+    func trending(in library: MediaLibrary, from trending: [TMDBListItem], limit: Int) async throws -> [MediaItem]
     /// The library's collections (Plex collections, Jellyfin box sets), in
     /// the server's order. Default: none.
     func collections(in library: MediaLibrary) async throws -> [MediaItem]
@@ -97,6 +108,9 @@ protocol MediaProvider: Sendable, Identifiable {
     func replaceStream(for itemRef: MediaItemRef, current: StreamInfo, sourceID: String?,
                        position: TimeInterval, maxBitrate: Int?, audioStreamIndex: Int?,
                        subtitleStreamIndex: Int?, forceTranscode: Bool) async throws -> StreamInfo?
+    /// Native quality uses an opaque offered ID; unsupported providers throw.
+    func replaceStream(for itemRef: MediaItemRef, current: StreamInfo, sourceID: String?,
+                       position: TimeInterval, quality: MediaQualityPreference) async throws -> StreamInfo
 
     /// A server-side transcode starting at `startTime`, played with AVPlayer.
     /// For when the client cannot play the direct-play stream, or a quality cap.
@@ -173,6 +187,24 @@ protocol MediaProvider: Sendable, Identifiable {
 }
 
 extension MediaProvider {
+    func searchPeople(_ query: String, inLibraries libraryIDs: [String]) async throws -> [MediaPersonResult] {
+        throw MediaProviderError.backendSpecific(underlying: "native people search not supported")
+    }
+    func personDetail(_ person: MediaPersonResult, inLibraries libraryIDs: [String]) async throws -> PersonDetail {
+        throw MediaProviderError.backendSpecific(underlying: "native person detail not supported")
+    }
+    func catalogFacets(in library: MediaLibrary) async throws -> [MediaCatalogFacet]? { nil }
+    func catalogItems(in library: MediaLibrary, filter: MediaCatalogFilter, sort: SortOption,
+                      page: Page) async throws -> PagedResult<MediaItem> {
+        throw MediaProviderError.backendSpecific(underlying: "catalog filters not supported")
+    }
+    func dismiss(_ dismissal: MediaDismissal) async throws {
+        throw MediaProviderError.backendSpecific(underlying: "native rail dismissal not supported")
+    }
+    func replaceStream(for itemRef: MediaItemRef, current: StreamInfo, sourceID: String?,
+                       position: TimeInterval, quality: MediaQualityPreference) async throws -> StreamInfo {
+        throw MediaProviderError.backendSpecific(underlying: "native quality not supported")
+    }
     var authorityRevision: UInt64 { 0 }
     var reservesPlaybackOnResolve: Bool { false }
     var showsHubBrowseAll: Bool { true }
@@ -218,6 +250,7 @@ extension MediaProvider {
     func recentlyAddedHub(in library: MediaLibrary) async throws -> MediaHub? {
         try await hubs(in: library).first { $0.id == "\(library.id).recentlyAdded" }
     }
+    func trending(in library: MediaLibrary, from trending: [TMDBListItem], limit: Int) async throws -> [MediaItem] { [] }
     func letterCounts(in library: MediaLibrary) async throws -> [PlexFirstCharacter] { [] }
     func refreshMetadata(_ itemRef: MediaItemRef) async throws {
         throw MediaProviderError.backendSpecific(underlying: "refresh not supported")

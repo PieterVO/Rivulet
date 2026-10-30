@@ -13,6 +13,16 @@
 
 import Foundation
 
+/// Native Home action anchor. The timestamp remains the server's exact string.
+nonisolated struct MediaItemDismissalMetadata: Hashable, Sendable, Codable {
+    let rail: MediaDismissalRail
+    let contentID: String
+    let progressUpdatedAt: String?
+    let seriesID: String?
+    let providerIdentity: String
+    let authorityRevision: UInt64
+}
+
 nonisolated struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     var id: MediaItemRef { ref }
     let ref: MediaItemRef
@@ -63,6 +73,8 @@ nonisolated struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     let isAvailable: Bool?
     /// Owning library where the server supplies one; external catalog titles have none.
     let libraryID: String?
+    /// Only populated from an authorized native Home row.
+    var dismissalMetadata: MediaItemDismissalMetadata? = nil
 
     init(
         ref: MediaItemRef,
@@ -90,7 +102,8 @@ nonisolated struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         editionTitle: String? = nil,
         identity: [String]? = nil,
         isAvailable: Bool? = nil,
-        libraryID: String? = nil
+        libraryID: String? = nil,
+        dismissalMetadata: MediaItemDismissalMetadata? = nil
     ) {
         self.ref = ref
         self.kind = kind
@@ -118,10 +131,25 @@ nonisolated struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         self.identity = identity
         self.isAvailable = isAvailable
         self.libraryID = libraryID
+        self.dismissalMetadata = dismissalMetadata
     }
 }
 
 extension MediaItem {
+    /// Only a card from a native Home rail can supply a versioned action.
+    func dismissalAction() -> MediaDismissal? {
+        guard let anchor = dismissalMetadata, anchor.providerIdentity == ref.providerID,
+              anchor.contentID == ref.itemID else { return nil }
+        switch anchor.rail {
+        case .continueWatching where anchor.progressUpdatedAt?.isEmpty != false: return nil
+        case .nextUp where anchor.seriesID?.isEmpty != false: return nil
+        default: break
+        }
+        return MediaDismissal(item: ref, rail: anchor.rail, providerIdentity: anchor.providerIdentity,
+                              progressUpdatedAt: anchor.progressUpdatedAt, seriesID: anchor.seriesID,
+                              authorityRevision: anchor.authorityRevision)
+    }
+
     /// Stand-in for a library-grid slot whose page has not loaded. The empty
     /// itemID is the marker: cells draw a blank card for it and tap / menu /
     /// play paths ignore it.
@@ -197,7 +225,8 @@ extension MediaItem {
             editionTitle: editionTitle,
             identity: identity,
             isAvailable: isAvailable,
-            libraryID: libraryID
+            libraryID: libraryID,
+            dismissalMetadata: dismissalMetadata
         )
     }
 }

@@ -20,10 +20,44 @@ extension ProviderPlayback {
     /// pick; nil follows the Home or Away setting.
     static func prepare(item: MediaItem, provider: any MediaProvider,
                         version: VersionChoice = .best, quality: StreamingQuality? = nil,
-                        throughput: (kbps: Int, at: Date)? = nil) async throws -> ProviderPlayback {
+                        throughput: (kbps: Int, at: Date)? = nil,
+                        nativeQuality: MediaQualityPreference? = nil) async throws -> ProviderPlayback {
         guard item.isAvailable != false else { throw MediaProviderError.notPlayable }
         var reserved: StreamInfo?
         do {
+            if let silo = provider as? SiloProvider {
+                let detail = try await provider.fullDetail(for: item.ref)
+                let sourceID = VersionRanking.choose(version, from: detail.mediaSources)?.id
+                let account = await MainActor.run { SiloSession.account }
+                let authority = SiloPlaybackAuthority(providerID: silo.id,
+                    accountID: account?.userID ?? silo.profileID, profileID: silo.profileID)
+                let seriesID = detail.item.grandparentRef?.itemID ?? item.grandparentRef?.itemID
+                    ?? item.dismissalMetadata?.seriesID
+                let libraryID = detail.item.libraryID ?? item.libraryID
+                let context = SiloPlaybackOverrideContext(authority: authority,
+                    libraryID: libraryID, seriesID: seriesID)
+                let preferences = SiloPlaybackPreferences(provider: silo)
+                let schema = try? await preferences.schema()
+                let effective = schema == nil ? nil : try? await preferences.effective(
+                    libraryID: libraryID.flatMap(Int.init), seriesID: seriesID)
+                let policy = await SiloPlaybackPolicyStore.shared.resolve(context: context, server: effective,
+                    manualQuality: nativeQuality)
+                let stream = try await silo.resolveStream(for: item.ref, sourceID: sourceID, policy: policy)
+                reserved = stream
+                try Task.checkCancellation()
+                let extras = await provider.playbackExtras(for: item.ref, sourceID: stream.source.id)
+                try Task.checkCancellation()
+                var settled = ProviderQuality()
+                settled.choice = .auto
+                settled.plan = .original
+                var playback = ProviderPlayback(provider: provider, item: item, detail: detail, stream: stream,
+                                                extras: extras, quality: settled)
+                if case .value(let quality) = policy.quality { playback.nativeRequestedQuality = quality }
+                else { playback.nativeRequestedQuality = .automatic }
+                if case .value(let choice) = policy.bufferingPolicy { playback.nativeBufferingPolicy = choice }
+                else { playback.nativeBufferingPolicy = .ask }
+                return playback
+            }
             let detail: MediaItemDetail
             var stream: StreamInfo
             if case .matchingTier = version {
@@ -176,6 +210,7 @@ enum ProviderPlayer {
             // The loading screen's art, fetched while the stream is resolved.
             async let loadingImages = HeroBackdropResolver.shared.playerLoadingImages(
                 for: target.heroBackdropRequest())
+            SiloThemeMusicController.shared.suspend()
             // Another Plex server's item takes the full Plex player with its own
             // server: markers, transcode fallback, content filter, BIF (#87).
             if let plex = provider as? PlexProvider {
@@ -183,14 +218,20 @@ enum ProviderPlayer {
                     let metadata = try await PlexNetworkManager.shared.getFullMetadata(
                         serverURL: plex.serverURL, authToken: plex.authToken, ratingKey: target.ref.itemID)
                     let (art, thumb) = await loadingImages
-                    guard MediaProviderRegistry.shared.isCurrentAuthority(provider), !Task.isCancelled else { return }
+                    guard MediaProviderRegistry.shared.isCurrentAuthority(provider), !Task.isCancelled else {
+                        SiloThemeMusicController.shared.resume()
+                        return
+                    }
                     let viewModel = UniversalPlayerViewModel(
                         metadata: metadata, serverURL: plex.serverURL, authToken: plex.authToken,
                         startOffset: plexStartOffset(metadata, fromBeginning: fromBeginning),
                         playQueue: playQueue,
                         loadingArtImage: art, loadingThumbImage: thumb, preferredMediaID: sourceID)
-                    PlayerPresenter.present(viewModel: viewModel, from: presenter, onDismiss: onDismiss)
+                    if !PlayerPresenter.present(viewModel: viewModel, from: presenter, onDismiss: onDismiss) {
+                        SiloThemeMusicController.shared.resume()
+                    }
                 } catch {
+                    SiloThemeMusicController.shared.resume()
                     presentError(MediaProviderError.mapping(error), from: presenter)
                 }
                 return
@@ -201,6 +242,7 @@ enum ProviderPlayer {
                 let (art, thumb) = await loadingImages
                 guard MediaProviderRegistry.shared.isCurrentAuthority(provider), !Task.isCancelled else {
                     await ProviderPlayback.discardUnplayedStream(playback.stream, provider: provider)
+                    SiloThemeMusicController.shared.resume()
                     return
                 }
                 let viewModel = UniversalPlayerViewModel(
@@ -213,6 +255,7 @@ enum ProviderPlayer {
                     preferredMediaID: sourceID)
                 PlayerPresenter.present(viewModel: viewModel, from: presenter, onDismiss: onDismiss)
             } catch {
+                SiloThemeMusicController.shared.resume()
                 presentError(error, from: presenter)
             }
         }

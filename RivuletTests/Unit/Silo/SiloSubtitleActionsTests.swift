@@ -27,11 +27,11 @@ final class SiloSubtitleActionsTests: XCTestCase {
 
     func testTranslationEligibilityAndRequestIdentityUseTheActualTextSource() {
         func track(_ index: Int, codec: String, language: String) -> SubtitleTrack {
-            SubtitleTrack(id: "file:file-a:subtitle:\(index)", index: index, codec: codec, language: language,
+            SubtitleTrack(id: "file:158:subtitle:\(index)", index: index, codec: codec, language: language,
                           title: nil, extendedTitle: nil, isDefault: false, isForced: false, isHearingImpaired: false,
                           isEmbedded: true, externalURL: nil, isSelected: false, nativeStreamIndex: index + 14)
         }
-        let source = MediaSource(id: "file-a", container: "mkv", duration: 600, bitrate: nil, fileSize: nil,
+        let source = MediaSource(id: "158", container: "mkv", duration: 600, bitrate: nil, fileSize: nil,
                                  fileName: nil, videoResolution: nil, videoTracks: [], audioTracks: [], subtitleTracks: [
                                     track(16, codec: "subrip", language: "eng"),
                                     track(17, codec: "hdmv_pgs_subtitle", language: "eng"),
@@ -50,7 +50,7 @@ final class SiloSubtitleActionsTests: XCTestCase {
     func testOnlyPendingAndRunningJobsContinuePollingOrOfferCancellation() throws {
         for status in ["pending", "running", "completed", "failed", "cancelled", "unrecognized"] {
             let json = """
-            {"id":"90071992547409931234","media_file_id":"file-a","kind":"translate","status":"\(status)",
+            {"id":"90071992547409931234","media_file_id":"158","kind":"translate","status":"\(status)",
              "progress":0.5,"progress_message":null,"result_subtitle_id":null,"error_message":null,
              "source_language":"en","target_language":"nl"}
             """

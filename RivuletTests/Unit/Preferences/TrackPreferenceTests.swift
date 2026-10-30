@@ -128,19 +128,19 @@ final class TrackPreferenceTests: XCTestCase {
         XCTAssertFalse(result?.isForced ?? true)
     }
 
-    /// Stored ENG regular + title has ENG forced only → Off (never demoted).
-    func testSubtitleRegularIntentWithOnlyForcedTrackResolvesOff() {
+    /// Stored ENG regular + title has ENG forced only → the forced track (#425), intent kept.
+    func testSubtitleRegularIntentWithOnlyForcedTrackFallsBackToForced() {
         TrackIntentStore.subtitleIntent = .track(
             language: "eng", forced: false, hearingImpaired: false, codec: "srt"
         )
 
-        let tracks = [sub(1, lang: "eng", forced: true)]
+        let tracks = [sub(1, lang: "eng", forced: true), sub(2, lang: "fra", forced: false)]
 
         let result = TrackIntentResolver.resolveSubtitle(
             intent: TrackIntentStore.subtitleIntent!, in: tracks
         )
 
-        XCTAssertNil(result)
+        XCTAssertEqual(result?.id, 1)
         XCTAssertEqual(
             TrackIntentStore.subtitleIntent,
             .track(language: "eng", forced: false, hearingImpaired: false, codec: "srt")
@@ -653,7 +653,27 @@ final class TrackPreferenceTests: XCTestCase {
         let current = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
         XCTAssertEqual(SubtitleIntent.afterPick(sub(1, lang: "eng"), replacing: current, audioLanguage: "eng"),
                        .track(language: "eng", forced: false, hearingImpaired: false, codec: "srt"))
-        XCTAssertEqual(SubtitleIntent.afterPick(nil, replacing: current, audioLanguage: "jpn"), .off)
+    }
+
+    /// Off under Foreign Audio covers the title, not the mode (#432).
+    func testOffPickKeepsForeignAudio() {
+        let current = SubtitleIntent.foreignAudio(language: "eng", hearingImpaired: false)
+        XCTAssertEqual(SubtitleIntent.afterPick(nil, replacing: current, audioLanguage: "jpn"), current)
+        let always = SubtitleIntent.track(language: "eng", forced: false, hearingImpaired: false, codec: nil)
+        XCTAssertEqual(SubtitleIntent.afterPick(nil, replacing: always, audioLanguage: "jpn"), .off)
+    }
+
+    /// A forced pick turns subtitles on in its language; it never switches Always to Forced Only (#425).
+    func testForcedPickNeverStoresForcedUnlessAlreadyForcedOnly() {
+        let forcedTrack = sub(1, lang: "eng", forced: true)
+        let always = SubtitleIntent.track(language: "eng", forced: false, hearingImpaired: false, codec: nil)
+        XCTAssertEqual(SubtitleIntent.afterPick(forcedTrack, replacing: always, audioLanguage: "jpn"),
+                       .track(language: "eng", forced: false, hearingImpaired: false, codec: "srt"))
+        XCTAssertEqual(SubtitleIntent.afterPick(forcedTrack, replacing: .off, audioLanguage: "eng"),
+                       .track(language: "eng", forced: false, hearingImpaired: false, codec: "srt"))
+        let forcedOnly = SubtitleIntent.track(language: "eng", forced: true, hearingImpaired: false, codec: nil)
+        XCTAssertEqual(SubtitleIntent.afterPick(forcedTrack, replacing: forcedOnly, audioLanguage: "eng"),
+                       .track(language: "eng", forced: true, hearingImpaired: false, codec: "srt"))
     }
 
     func testOldStoredIntentsStillDecode() throws {

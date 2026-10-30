@@ -20,6 +20,10 @@ final class PosterCell: UICollectionViewCell {
 
     private let watchedBadge = PosterWatchedBadge()
     private let sourceBadge = SourceBadgeView(style: .onArtwork)
+    /// Plex edition ("Director's Cut"), so two editions sharing a poster tell apart.
+    private let editionBadge = SourceBadgeView(style: .onArtwork)
+    /// Top-leading column: server badge, then edition badge.
+    private let topBadges = UIStackView()
     private let failureIcon = UIImageView()
     /// The title on the failure card, so an item with no artwork is still named.
     private let failureTitle = UILabel()
@@ -135,9 +139,14 @@ final class PosterCell: UICollectionViewCell {
         watchedBadge.isHidden = true
         overlayContainer.addSubview(watchedBadge)
 
-        // Server badge: top-leading, 10pt inset. Set by the caller after configure.
-        sourceBadge.translatesAutoresizingMaskIntoConstraints = false
-        overlayContainer.addSubview(sourceBadge)
+        // Server badge then edition badge: top-leading, 10pt inset. Hidden badges collapse.
+        topBadges.translatesAutoresizingMaskIntoConstraints = false
+        topBadges.axis = .vertical
+        topBadges.alignment = .leading
+        topBadges.spacing = 6
+        topBadges.addArrangedSubview(sourceBadge)
+        topBadges.addArrangedSubview(editionBadge)
+        overlayContainer.addSubview(topBadges)
 
         // Failure icon: centred. Hidden by default; visible only when the
         // image load fails or the source URL is missing.
@@ -185,8 +194,9 @@ final class PosterCell: UICollectionViewCell {
 
             watchedBadge.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: 10),
             watchedBadge.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -10),
-            sourceBadge.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: 10),
-            sourceBadge.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 10),
+            topBadges.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: 10),
+            topBadges.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 10),
+            topBadges.trailingAnchor.constraint(lessThanOrEqualTo: overlayContainer.trailingAnchor, constant: -10),
 
             failureIcon.centerXAnchor.constraint(equalTo: overlayContainer.centerXAnchor),
             failureIcon.centerYAnchor.constraint(equalTo: overlayContainer.centerYAnchor),
@@ -259,6 +269,7 @@ final class PosterCell: UICollectionViewCell {
         setSquare(["artist", "album", "track"].contains(item.type ?? ""))
         let url = posterURL(for: item)
         failureTitleText = item.title
+        setEdition(item.editionTitle)
         loadImage(from: url, item: item)
         configureProgressBar(item: item)
         configureWatchedBadge(item: item)
@@ -272,6 +283,7 @@ final class PosterCell: UICollectionViewCell {
         // show art instead of letterboxed episode stills, matching the Plex path.
         let url = item.grandparentArtwork?.poster ?? item.artwork.poster
         failureTitleText = item.title
+        setEdition(item.editionTitle)
         loadImage(from: url, failureKind: item.kind)
         configureProgressBar(item: item)
         configureWatchedBadge(item: item)
@@ -282,6 +294,13 @@ final class PosterCell: UICollectionViewCell {
 
     /// The badge's text while it shows (tests).
     var sourceBadgeText: String? { sourceBadge.isHidden ? nil : sourceBadge.text }
+
+    private func setEdition(_ edition: String?) {
+        editionBadge.text = edition?.isEmpty == false ? edition : nil
+    }
+
+    /// The edition badge's text while it shows (tests).
+    var editionBadgeText: String? { editionBadge.isHidden ? nil : editionBadge.text }
 
     /// Music tiles are 1:1 square; everything else keeps the 2:3 poster ratio.
     private func setSquare(_ square: Bool) {
@@ -320,6 +339,7 @@ final class PosterCell: UICollectionViewCell {
         progressInfoBar.reset()
         watchedBadge.isHidden = true
         sourceBadge.text = nil
+        editionBadge.text = nil
         watchedGlyph.isHidden = true
         failureIcon.isHidden = true
         failureIcon.image = nil

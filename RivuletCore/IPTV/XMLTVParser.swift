@@ -51,13 +51,29 @@ actor XMLTVParser {
         let programs: [String: [ParsedProgram]]      // channelId -> programs
     }
 
+    /// Which programmes to keep while parsing. A country-wide feed carries thousands of
+    /// channels the playlist doesn't have, and often days of past listings; keeping only the
+    /// playlist's channels from `notBefore` on bounds the parse by the playlist, not the feed.
+    struct GuideFilter: Sendable {
+        /// Each playlist channel's guide candidates (tvg-id, tvg-name, name), as `guideIds` takes.
+        let candidates: [String: [String]]
+        let notBefore: Date
+
+        /// Built once the `<channel>` list is read; XMLTV puts every channel before any programme.
+        func keeps(channels: [String: ParsedXMLTVChannel]) -> @Sendable (String) -> Bool {
+            let matched = Set(ParseResult(channels: channels, programs: [:]).guideIds(for: candidates).values)
+            let names = Set(candidates.values.joined().map { $0.lowercased() })
+            return { matched.contains($0) || names.contains($0.lowercased()) }
+        }
+    }
+
     // MARK: - Public Methods
 
     /// Parse XMLTV data from a URL
-    func parse(from url: URL) async throws -> ParseResult {
+    func parse(from url: URL, filter: GuideFilter? = nil) async throws -> ParseResult {
         // Fetch the URL exactly as supplied — http stays http (no https rewrite).
         let (data, _) = try await fetchData(from: url)
-        return try parse(data: data)
+        return try parse(data: data, filter: filter)
     }
 
     // MARK: - Private Networking
@@ -82,9 +98,9 @@ actor XMLTVParser {
     }
 
     /// Parse XMLTV data from raw data
-    func parse(data: Data) throws -> ParseResult {
+    func parse(data: Data, filter: GuideFilter? = nil) throws -> ParseResult {
         // XMLParser does NOT require main thread - actor isolation handles thread safety
-        let parser = XMLTVInternalParser()
+        let parser = XMLTVInternalParser(filter: filter)
         return try parser.parse(data: data.starts(with: [0x1f, 0x8b]) ? Self.gunzip(data) : data)
     }
 
@@ -148,6 +164,12 @@ actor XMLTVParser {
 private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate {
     private var channels: [String: XMLTVParser.ParsedXMLTVChannel] = [:]
     private var programs: [String: [XMLTVParser.ParsedProgram]] = [:]
+    private let filter: XMLTVParser.GuideFilter?
+    private var keeps: ((String) -> Bool)?
+
+    init(filter: XMLTVParser.GuideFilter?) {
+        self.filter = filter
+    }
 
     // Current parsing state
     /// Raw character data of the element being read. XMLParser delivers text in
@@ -241,7 +263,7 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
                                             h: attributeDict["height"].flatMap { Int($0) }))
             }
 
-        case "new":
+        case "new", "premiere":
             currentIsNew = true
 
         case "episode-num":
@@ -302,7 +324,8 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         case "programme":
             if let channelId = currentProgramChannelId,
                let start = currentProgramStart,
-               !currentTitle.isEmpty {
+               !currentTitle.isEmpty,
+               isWanted(channelId) {
                 let stop = currentProgramStop ?? .distantFuture
                 let program = XMLTVParser.ParsedProgram(
                     channelId: channelId,
@@ -329,6 +352,13 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
         default:
             break
         }
+    }
+
+    private func isWanted(_ channelId: String) -> Bool {
+        guard let filter else { return true }
+        if let stop = currentProgramStop, stop < filter.notBefore { return false }
+        if keeps == nil { keeps = filter.keeps(channels: channels) }
+        return keeps?(channelId) ?? true
     }
 
     func parser(_ parser: XMLParser, parseErrorOccurred parseError: Error) {

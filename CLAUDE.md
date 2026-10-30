@@ -37,16 +37,20 @@ Silo's negotiated file and server-HLS deliveries stay on the **Aether host**, in
 - **Language**: Swift 6
 - **UI Framework**: UIKit for the primary surfaces (see above); SwiftUI for the rest
 - **Video Player**: AetherPlayer for VOD and Live TV; AVPlayer only for the `hls` route (server transcode, primary-when-no-direct-URL or Aether fallback). See `Docs/RIVULET_PLAYER.md`.
-- **AetherEngine**: consumed as an **upstream** SwiftPM dependency (`superuser404notfound/AetherEngine`), pinned `exactVersion` (7.48.0), with the `DualLayerDolbyVision` (P7 FEL), `DolbyVisionStillReshaping` (P5 stills), `TrueHDObjectAudio` and `DTSXObjectAudio` package traits set in `project.pbxproj`; object audio stays off until Settings → Playback → Height Speakers names a layout. A bump must keep the traits. **There is no fork** — engine fixes need an upstream release or a host-side workaround; do not propose editing engine sources. Bumping it has a procedure: use the `aether-update` skill. Every bump gets a changelog line. FFmpeg + libdovi arrive **only transitively through Aether**; there is no app-level FFmpeg layer and no direct FFmpegBuild dependency. Since FFmpegBuild 2.0.0 the FFmpeg libs ship as **embedded dynamic frameworks** in `Rivulet.app/Frameworks/` — their `MinimumOSVersion` (26.0) must stay >= `TVOS_DEPLOYMENT_TARGET` (26.0), so do not raise the deployment target.
+- **AetherEngine**: consumed as an **upstream** SwiftPM dependency (`superuser404notfound/AetherEngine`), pinned `exactVersion` (7.52.0), with the `DualLayerDolbyVision` (P7 FEL), `DolbyVisionStillReshaping` (P5 stills), `TrueHDObjectAudio` and `DTSXObjectAudio` package traits set in `project.pbxproj`; object audio stays off until Settings → Playback → Height Speakers names a layout. A bump must keep the traits. **There is no fork** — engine fixes need an upstream release or a host-side workaround; do not propose editing engine sources. Bumping it has a procedure: use the `aether-update` skill. Every bump gets a changelog line. FFmpeg + libdovi arrive **only transitively through Aether**; there is no app-level FFmpeg layer and no direct FFmpegBuild dependency. Since FFmpegBuild 2.0.0 the FFmpeg libs ship as **embedded dynamic frameworks** in `Rivulet.app/Frameworks/` — their `MinimumOSVersion` (26.0) must stay >= `TVOS_DEPLOYMENT_TARGET` (26.0), so do not raise the deployment target.
 - **Design Guide**: See `Docs/DESIGN_GUIDE.md` for UI/UX patterns
 - **Repo is public**: keep commit messages short and plain; no internal detail.
 
 ## Project Structure
 
-Four code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
+Five code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
 targets (not a module: `internal` spans each target); `Rivulet/` is the tvOS
-app, `RivuletiOS/` the iOS app, `TopShelfExtension/` the tvOS Top Shelf. See
-"Platform Boundary" below for what goes where.
+app, `RivuletiOS/` the iOS app, `TopShelfExtension/` the tvOS Top Shelf, and
+`AssetPackExtension/` the tvOS Background Assets downloader that fetches the
+speech model as an Apple-hosted asset pack (`SpeechModelStore`; Debug builds,
+which can't reach Apple hosting, fall back to Hugging Face into Caches; repack
+with `Scripts/speech-model-pack.json`). See "Platform Boundary" below for what
+goes where.
 
 ```
 RivuletCore/            # Shared tvOS + iOS. The ONE Plex client (PlexNetworkManager,
@@ -786,8 +790,9 @@ which never names a backend.
 - Jellyfin's server floor is 10.10 (`JellyfinSession.minimumVersion`), tested on 12.1. No
   per-version code paths.
 
-**Silo's native contract.** Uses API v2 and negotiated playback protocol v3,
-never compatibility endpoints or Plex Discover substitutions.
+**Silo's native contract.** Implemented against Silo server commit
+`6de6d5e5e285a9b423e95a1122cb39e5bb9ca93b`: API v2 and negotiated playback
+protocol v3, never compatibility endpoints or Plex Discover substitutions.
 
 - `SiloSession` stages login/profile/PIN before atomically committing the account.
   Keychain holds token pairs and profile proofs, not passwords/PINs. Providers
@@ -806,6 +811,15 @@ never compatibility endpoints or Plex Discover substitutions.
 - Home rows retain server order, presentation, source ids and cursors. Use
   `hubItems`/`discoveryItems`; respect `MediaHub.canBrowse` when no native
   continuation exists. Native-only Continue Watching keeps its layout position.
+  Native featured rows stay authoritative; Jellyfin's cached TMDB matches must
+  not trigger Silo-only fetches or create a second hero over native featured rows.
+- Discover renders `recommendations/discover` inline rows, as Silo Apple's
+  For You → Recommendations does. Pin the case-insensitive For You row, omit
+  empty rows, and reject incomplete collection continuations. Do not refetch
+  separate section endpoints or add All/See All controls to this feed.
+  Collect native provider results directly on `DiscoverViewModel`'s actor before
+  publication; keep its generation/cancellation guard so obsolete profiles cannot
+  repopulate the screen.
 - `allEpisodes` traverses the returned season content ids: the catalog
   `items/{id}/episodes` endpoint accepts a **season**, not a show.
 - Played sessions stop with a final observed sample; `discardStream` retires
@@ -816,6 +830,9 @@ never compatibility endpoints or Plex Discover substitutions.
   new one when `reservesPlaybackOnResolve` is true.
 - Native track menus use provider shim ids. Engine active-track publishers must
   not overwrite these picks with engine indices.
+  Keep Silo actions in the shared On/Off, Language and Style subtitle menu;
+  refresh capabilities before presentation and preserve disabled operation rows,
+  selection and progress when submenus rebuild.
 - The native HLS delivery advertises `containers: ["hls"]`, not its MP4/TS
   segment packaging; the server compares this with the plan's stream container.
 - Map HLS player time through `StreamInfo.timelineOffset` and `playerStartTime`;
@@ -826,7 +843,8 @@ never compatibility endpoints or Plex Discover substitutions.
   redirect checks, opaque resource grants and HLS variable substitution. Player
   headers are explicitly empty, never inherited from Plex. Playlist input/output
   is bounded at 32 MiB and retained expansion state at 128 MiB per relay.
-- Both catalog and `/watch` bitrates are normalized from **kbps** at the DTO boundary.
+- Both catalog and `/watch` bitrates in this pinned server are **kbps**, despite
+  the watch schema's bps description; normalize once at the DTO boundary.
 - Native editable playlists, multipart-only sources and dynamic transport-header
   renewal plans are unsupported; do not fabricate fallback playback.
 
@@ -1201,7 +1219,7 @@ VOD is served by AetherPlayer (`aether` route, the default) or AVPlayer (`hls` r
 
 ### HDR / DV
 - Aether drives `AVDisplayManager.preferredDisplayCriteria` itself (host `DisplayCriteriaManager` stands down on the aether route).
-- DV is engine-owned; the RPU stays in the samples and Apple's decoder applies it. P5 is a `dvh1` sample entry with `dvcC` and `CODECS="dvh1.05.LL"`. P8.1 / P8.4 are `hvc1` + `dvvC` with `SUPPLEMENTAL-CODECS="dvh1.08.LL/db1p"` (`/db4h` for 8.4), and the HDMI criteria request `dvh1`. The supplemental only rides the master playlist, which is served once the panel is in HDR, so real DV needs a DV TV plus Match Dynamic Range (or HDR/DV output locked). P7 FEL on a DV panel takes the engine's dual-layer route (#345): `AetherPlayer` sets `preferDualLayerDolbyVision` from `AetherEngine.displayCapabilities.supportsDolbyVision`, because the engine does not check the panel itself. That route is the software host, so it loses E-AC-3 Atmos objects and the AirPlay picture, and the engine refuses it over its real-time budget (UHD 30 fps plus a 1080p EL). P7 MEL, and FEL over budget, is converted live to single-layer 8.1 (libdovi, EL dropped) on a DV panel. Without DV on the TV, P7 plays the HDR10 base. P8.2 plays its SDR base. Without DV on the TV, 8.x plays its base layer. Rivulet sets neither `dolbyVisionHandling` nor `forceDolbyVisionOnNonDVDisplay`, so the engine defaults apply. Both FEL and P5 stills exist only because of package traits (see Quick Reference), so a bump that drops them silently turns FEL off. Routing lives in the engine's `CodecRoutePolicy.swift`.
+- DV is engine-owned; the RPU stays in the samples and Apple's decoder applies it. P5 is a `dvh1` sample entry with `dvcC` and `CODECS="dvh1.05.LL"`. P8.1 / P8.4 are `hvc1` + `dvvC` with `SUPPLEMENTAL-CODECS="dvh1.08.LL/db1p"` (`/db4h` for 8.4), and the HDMI criteria request `dvh1`. The supplemental only rides the master playlist, which is served once the panel is in HDR, so real DV needs a DV TV plus Match Dynamic Range (or HDR/DV output locked). P7 FEL on a DV panel takes the engine's dual-layer route (#345): `AetherPlayer` sets `preferDualLayerDolbyVision` from `AetherEngine.displayCapabilities.supportsDolbyVision`, because the engine does not check the panel itself. AetherEngine 7.50.0 keeps E-AC-3 JOC compressed on that software host and renders TrueHD Atmos / DTS:X through the selected Height Speakers layout. Rivulet uses `.render(layout)`: lossless PCM over HDMI, APAC on AirPlay; this preserves the rendered bed, not the original TrueHD bitstream. FEL no longer excludes height channels. The AirPlay picture stays local, and the engine refuses FEL over its real-time budget (UHD 30 fps plus a 1080p EL). P7 MEL, and FEL over budget, is converted live to single-layer 8.1 (libdovi, EL dropped) on a DV panel. Without DV on the TV, P7 plays the HDR10 base. P8.2 plays its SDR base. Without DV on the TV, 8.x plays its base layer. Rivulet sets neither `dolbyVisionHandling` nor `forceDolbyVisionOnNonDVDisplay`, so the engine defaults apply. Both FEL and P5 stills exist only because of package traits (see Quick Reference), so a bump that drops them silently turns FEL off. Routing lives in the engine's `CodecRoutePolicy.swift`. Keep `ownsSoftwareNowPlaying` off: Rivulet already owns Now Playing and remote commands.
 
 ## Plex Discover API
 
@@ -1302,3 +1320,9 @@ which no-ops in DEBUG.
 **Never send stream URLs to Sentry.** Xtream-style IPTV paths embed credentials
 (`/live/user/pass/id.ts`) and Plex URLs carry tokens. Derive a category and send
 that (see `LiveJoinTelemetry`), or use `SensitiveDataRedactor.safeURLString`.
+
+## Date-sensitive verification
+
+- Camera-day assertions use an explicit Gregorian calendar in `TimeZone.current`, matching the photo mappers. Do not change `NSTimeZone.default` to simulate a device zone: it can diverge from `TimeZone.current` and affect other tests.
+- Build day-boundary fixtures with calendar arithmetic, not fixed 24-hour offsets. Derive expected weekday labels from the device's formatter instead of pinning English abbreviations.
+

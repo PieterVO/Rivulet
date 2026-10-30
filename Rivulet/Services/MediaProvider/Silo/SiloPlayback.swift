@@ -5,23 +5,58 @@ import Foundation
 import AVFoundation
 import VideoToolbox
 import UIKit
+import AetherEngine
 import os
 
 extension SiloProvider {
+    /// Starts one native reservation with independent resolved playback axes.
+    func resolveStream(for itemRef: MediaItemRef, sourceID: String?, policy: SiloResolvedPlaybackPolicy,
+                       subtitleIndex: Int? = nil) async throws -> StreamInfo {
+        let application = try SiloPlaybackPolicyApplication(policy: policy)
+        return try await startPlayback(itemRef, sourceID: sourceID, startTime: 0,
+            maxBitrate: application.maxBitrate, audioIndex: nil, subtitleIndex: subtitleIndex,
+            transcodeOnly: false, quality: application.quality, policy: application)
+    }
+
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?, maxBitrate: Int?) async throws -> StreamInfo {
         try await startPlayback(itemRef, sourceID: sourceID, startTime: 0, maxBitrate: maxBitrate,
-                                audioIndex: nil, subtitleIndex: nil, transcodeOnly: false)
+                                audioIndex: nil, subtitleIndex: nil, transcodeOnly: false, quality: .automatic)
+    }
+
+    func resolveStream(for itemRef: MediaItemRef, sourceID: String?, quality: MediaQualityPreference) async throws -> StreamInfo {
+        try await startPlayback(itemRef, sourceID: sourceID, startTime: 0, maxBitrate: nil,
+                                audioIndex: nil, subtitleIndex: nil, transcodeOnly: false, quality: quality)
+    }
+
+    /// An explicit local title pick. Nil follows Silo's effective profile,
+    /// library and series choice; -1 is an explicit Off for this playback.
+    func resolveStream(for itemRef: MediaItemRef, sourceID: String?, quality: MediaQualityPreference,
+                       subtitleIndex: Int?) async throws -> StreamInfo {
+        try await startPlayback(itemRef, sourceID: sourceID, startTime: 0, maxBitrate: nil,
+                                audioIndex: nil, subtitleIndex: subtitleIndex,
+                                transcodeOnly: false, quality: quality)
+    }
+
+    func resolveStream(for itemRef: MediaItemRef, sourceID: String?, quality: MediaQualityPreference,
+                       observation: SiloBufferingObservation) async throws -> StreamInfo {
+        try await startPlayback(itemRef, sourceID: sourceID, startTime: 0, maxBitrate: nil,
+                                audioIndex: nil, subtitleIndex: nil, transcodeOnly: false,
+                                quality: quality, observation: observation)
     }
 
     func transcodeStream(for itemRef: MediaItemRef, sourceID: String?, startTime: TimeInterval,
                          maxBitrate: Int?, audioStreamIndex: Int?, subtitleStreamIndex: Int?) async throws -> StreamInfo {
         try await startPlayback(itemRef, sourceID: sourceID, startTime: startTime, maxBitrate: maxBitrate,
                                 audioIndex: audioStreamIndex, subtitleIndex: subtitleStreamIndex,
-                                transcodeOnly: audioStreamIndex == nil && subtitleStreamIndex == nil)
+                                transcodeOnly: audioStreamIndex == nil && subtitleStreamIndex == nil, quality: .automatic)
     }
 
-    private func startPlayback(_ ref: MediaItemRef, sourceID: String?, startTime: Double, maxBitrate: Int?,
-                               audioIndex: Int?, subtitleIndex: Int?, transcodeOnly: Bool) async throws -> StreamInfo {
+    func startPlayback(_ ref: MediaItemRef, sourceID: String?, startTime: Double, maxBitrate: Int?,
+                               audioIndex: Int?, subtitleIndex: Int?, transcodeOnly: Bool,
+                               quality: MediaQualityPreference,
+                               observation: SiloBufferingObservation? = nil,
+                               policy: SiloPlaybackPolicyApplication? = nil,
+                               ignoreLearnedLimit: Bool = false) async throws -> StreamInfo {
         guard ref.providerID == id, client.profileID == profileID else { throw MediaProviderError.unauthorized }
         guard !ref.itemID.hasPrefix("external:"), !ref.itemID.hasPrefix("siloCollection|") else { throw MediaProviderError.notPlayable }
         guard startTime.isFinite, startTime >= 0, maxBitrate.map({ $0 > 0 }) ?? true else {
@@ -60,7 +95,8 @@ extension SiloProvider {
                                                   capKbps: maxBitrate.map { $0 / 1000 }) else { throw MediaProviderError.notPlayable }
             chosen = versions[index]
         }
-        if let audioIndex, !(chosen.audioTracks ?? []).indices.contains(audioIndex) {
+        let selectedAudioIndex = audioIndex ?? policy?.audioIndex(in: chosen)
+        if let selectedAudioIndex, !(chosen.audioTracks ?? []).indices.contains(selectedAudioIndex) {
             throw MediaProviderError.backendSpecific(underlying: "The chosen Silo audio track is no longer available.")
         }
         let device = await Self.playbackCapabilities(transcodeOnly: transcodeOnly, serverDeliveries: capability.deliveries,
@@ -68,55 +104,80 @@ extension SiloProvider {
         guard !device.1.deliveries.isEmpty else {
             throw MediaProviderError.backendSpecific(underlying: "The Silo server does not offer a transport supported by this player.")
         }
-        let body = SiloPlaybackStart(installationId: installation, fileId: chosen.fileId, profileId: profileID,
+        var body = SiloPlaybackStart(installationId: installation, fileId: chosen.fileId, profileId: profileID,
                                      playbackAttemptId: UUID().uuidString, clientCapabilities: device.0, clientPlaybackContext: device.1,
-                                     allowAlternateVersions: sourceID == nil && audioIndex == nil && subtitleIndex == nil, startPosition: startTime,
+                                     allowAlternateVersions: sourceID == nil && selectedAudioIndex == nil && subtitleIndex == nil, startPosition: startTime,
                                      bandwidthCapKbps: maxBitrate.map { $0 / 1000 },
-                                     audioTrackId: audioIndex.map { "file:\(chosen.fileId):audio:\($0)" }, audioTrackIndex: audioIndex,
-                                     subtitleTrackId: nil, subtitleTrackIndex: nil)
+                                     audioTrackId: selectedAudioIndex.map { "file:\(chosen.fileId):audio:\($0)" }, audioTrackIndex: selectedAudioIndex,
+                                     subtitleTrackId: nil, subtitleTrackIndex: nil, qualityPreference: quality)
+        if capability.features.contains("buffering_quality_v1") { body.clientFeatures.append("buffering_quality_v1") }
+        if (policy?.ignoreLearnedLimit == true || ignoreLearnedLimit), capability.features.contains("buffering_quality_v1") {
+            body.learnedLimit = "ignore"
+        }
+        if let observation, capability.features.contains("buffering_quality_v1"),
+           quality == .automatic, body.learnedLimit != "ignore" {
+            body.bandwidthEstimateKbps = observation.estimateKbps
+            body.bandwidthEstimateSource = observation.source.rawValue
+            body.observedThroughputKbps = observation.observedThroughputKbps
+        }
+        if capability.features.contains("playback_plan_summary_v1") { body.clientFeatures.append("playback_plan_summary_v1") }
+        if capability.features.contains("header_authenticated_media_v1") { body.clientFeatures.append("header_authenticated_media_v1") }
         let decision: SiloPlaybackDecision = try await client.post("playback/start", body: body)
         guard decision.protocolVersion == 3, decision.outcome == "playable", let plan = decision.playbackPlan,
               let sessionID = decision.sessionId ?? decision.playbackPlan?.sessionId else {
             throw MediaProviderError.backendSpecific(underlying: decision.terminal?.message ?? "Silo did not return a playable native plan (\(decision.outcome)).")
         }
-        var sessionToRetire = sessionID
         do {
             var selectedPlan = plan
-            var selectedSession = sessionID
-            if let subtitleIndex {
-                let subtitle: SiloTrackIdentity?
-                if subtitleIndex < 0 {
-                    subtitle = nil
-                } else {
-                    guard let track = plan.subtitle.inventory.first(where: { $0.combinedIndex == subtitleIndex }) else {
-                        throw MediaProviderError.backendSpecific(underlying: "The chosen subtitle is absent from Silo's authoritative plan inventory.")
-                    }
-                    subtitle = SiloTrackIdentity(id: track.trackId, index: track.combinedIndex)
+            var selectedFeatures = decision.serverFeatures ?? []
+            let initialVersion: SiloVersion
+            if let known = watch.versions?.first(where: { $0.fileId == plan.effectiveMediaFileId }) {
+                initialVersion = known
+            } else {
+                let effectiveWatch: SiloItem = try await client.get("watch/\(Self.pathComponent(ref.itemID))",
+                    [URLQueryItem(name: "file_id", value: plan.effectiveMediaFileId)])
+                guard let known = effectiveWatch.versions?.first(where: { $0.fileId == plan.effectiveMediaFileId }) else {
+                    throw MediaProviderError.backendSpecific(underlying: "Silo's effective source has no subtitle inventory.")
                 }
-                // Off is an explicit empty selected-tracks subtitle in a
-                // track_change, never the invalid start index -1.
+                initialVersion = known
+            }
+            let subtitleChoice = try SiloInitialSubtitleSelection.resolve(
+                watch: watch, version: initialVersion, plan: plan, explicitIndex: subtitleIndex, policy: policy)
+            if subtitleChoice.differs(from: plan) {
                 let replan = SiloPlaybackReplan(installationId: installation, playbackAttemptId: body.playbackAttemptId,
-                                                replanRequestId: UUID().uuidString, failedPlanId: plan.planId,
-                                                planAttemptId: UUID().uuidString, planAttemptKey: plan.planAttemptKey,
-                                                positionSeconds: startTime,
-                                                selectedTracks: SiloSelectedTracks(audio: plan.selectedTracks.audio, subtitle: subtitle),
-                                                clientCapabilities: body.clientCapabilities, clientPlaybackContext: body.clientPlaybackContext,
-                                                bandwidthCapKbps: body.bandwidthCapKbps, operation: "track_change")
-                let changed: SiloPlaybackDecision = try await client.post("playback/\(Self.pathComponent(sessionID))/replan", body: replan)
-                guard changed.outcome == "playable", changed.protocolVersion == 3, let next = changed.playbackPlan else {
-                    throw MediaProviderError.backendSpecific(underlying: changed.terminal?.message ?? "Silo could not apply the subtitle selection.")
+                    replanRequestId: UUID().uuidString, failedPlanId: plan.planId,
+                    planAttemptId: UUID().uuidString, planAttemptKey: plan.planAttemptKey,
+                    positionSeconds: startTime,
+                    selectedTracks: SiloSelectedTracks(audio: plan.selectedTracks.audio,
+                                                        subtitle: subtitleChoice.selectedTrack),
+                    clientCapabilities: body.clientCapabilities, clientPlaybackContext: body.clientPlaybackContext,
+                    bandwidthCapKbps: body.bandwidthCapKbps, operation: "track_change",
+                    qualityPreference: body.qualityIntent)
+                var request = replan
+                request.clientFeatures = body.clientFeatures
+                request.bandwidthEstimateKbps = body.bandwidthEstimateKbps
+                request.learnedLimit = body.learnedLimit
+                let changed: SiloPlaybackDecision = try await client.post("playback/\(Self.pathComponent(sessionID))/replan", body: request)
+                guard changed.outcome == "playable", changed.protocolVersion == 3,
+                      let next = changed.playbackPlan,
+                      (changed.sessionId ?? next.sessionId) == sessionID,
+                      next.effectiveMediaFileId == plan.effectiveMediaFileId,
+                      next.selectedTracks.audio?.id == plan.selectedTracks.audio?.id,
+                      next.selectedTracks.subtitle?.id == subtitleChoice.selectedTrack?.id,
+                      (subtitleChoice.selectedTrack == nil ? next.subtitle.mode == "off" : next.subtitle.mode != "off") else {
+                    throw MediaProviderError.backendSpecific(underlying: changed.terminal?.message
+                        ?? "Silo did not preserve the requested initial subtitle selection.")
                 }
                 selectedPlan = next
-                selectedSession = changed.sessionId ?? next.sessionId ?? sessionID
-                sessionToRetire = selectedSession
+                selectedFeatures = changed.serverFeatures ?? selectedFeatures
             }
-            return try await materialize(selectedPlan, sessionID: selectedSession, ref: ref, request: body, watch: watch)
+            return try await materialize(selectedPlan, sessionID: sessionID, ref: ref, request: body, watch: watch,
+                                         serverFeatures: selectedFeatures)
         } catch {
             // A real session exists even when its transport cannot be consumed.
             // Retire it instead of leaving a phantom stream on the server.
             do {
-                try await retire(sessionID: sessionToRetire, installationID: installation)
-                if sessionToRetire != sessionID { try await retire(sessionID: sessionID, installationID: installation) }
+                try await retire(sessionID: sessionID, installationID: installation)
             } catch {
                 Logger(subsystem: "Rivulet", category: "SiloPlayback").error("Failed to retire rejected Silo playback session")
             }
@@ -148,8 +209,13 @@ extension SiloProvider {
             try await retire(sessionID: sessionID, installationID: context.installationID, position: position)
             do {
                 return try await startPlayback(itemRef, sourceID: sourceID, startTime: position,
-                                               maxBitrate: maxBitrate, audioIndex: audioStreamIndex,
-                                               subtitleIndex: subtitleStreamIndex, transcodeOnly: forceTranscode)
+                                               maxBitrate: maxBitrate ?? context.request.bandwidthCapKbps.flatMap { cap in
+                                                   let value = cap.multipliedReportingOverflow(by: 1_000)
+                                                   return value.overflow ? nil : value.partialValue
+                                               }, audioIndex: audioStreamIndex,
+                                               subtitleIndex: subtitleStreamIndex, transcodeOnly: forceTranscode,
+                                               quality: context.request.qualityIntent,
+                                               ignoreLearnedLimit: context.request.learnedLimit == "ignore")
             } catch {
                 throw MediaProviderError.backendSpecific(underlying:
                     "Silo could not open the selected source after ending the previous session: \(error.localizedDescription)")
@@ -177,14 +243,14 @@ extension SiloProvider {
             throw MediaProviderError.backendSpecific(underlying: "Silo's playback installation or authorization changed during this session.")
         }
         var request = context.request
-        request.bandwidthCapKbps = maxBitrate.map { $0 / 1000 }
+        if let maxBitrate { request.bandwidthCapKbps = maxBitrate / 1_000 }
         request.clientPlaybackContext = await Self.playbackCapabilities(
             transcodeOnly: forceTranscode, serverDeliveries: capability.deliveries,
             hlsVariableSubstitution: context.request.clientPlaybackContext.deliveries["hls"]?
                 .features.contains("hls_variable_substitution_v1") == true
         ).1
         let changingTracks = audioStreamIndex != nil || subtitleStreamIndex != nil
-        let body = SiloPlaybackReplan(installationId: context.installationID,
+        var body = SiloPlaybackReplan(installationId: context.installationID,
                                       playbackAttemptId: request.playbackAttemptId, replanRequestId: UUID().uuidString,
                                       failedPlanId: context.plan.planId, planAttemptId: UUID().uuidString,
                                       planAttemptKey: context.plan.planAttemptKey, positionSeconds: position,
@@ -192,7 +258,11 @@ extension SiloProvider {
                                       clientCapabilities: request.clientCapabilities,
                                       clientPlaybackContext: request.clientPlaybackContext,
                                       bandwidthCapKbps: request.bandwidthCapKbps,
-                                      operation: changingTracks ? "track_change" : "quality_change")
+                                      operation: changingTracks ? "track_change" : "quality_change",
+                                      qualityPreference: request.qualityIntent)
+        body.clientFeatures = context.request.clientFeatures
+        body.bandwidthEstimateKbps = context.request.bandwidthEstimateKbps
+        body.learnedLimit = context.request.learnedLimit
         let decision: SiloPlaybackDecision = try await client.post("playback/\(Self.pathComponent(sessionID))/replan", body: body)
         guard decision.protocolVersion == 3, decision.outcome == "playable", let plan = decision.playbackPlan,
               let nextSession = decision.sessionId ?? decision.playbackPlan?.sessionId else {
@@ -202,12 +272,64 @@ extension SiloProvider {
             let watch: SiloItem = try await client.get("watch/\(Self.pathComponent(itemRef.itemID))",
                                                      [URLQueryItem(name: "file_id", value: plan.effectiveMediaFileId)])
             return try await materialize(plan, sessionID: nextSession, ref: itemRef, request: request, watch: watch,
-                                         expectedLifetime: context.lifetime)
+                                         expectedLifetime: context.lifetime, serverFeatures: decision.serverFeatures ?? context.serverFeatures)
         } catch {
             do { try await retire(sessionID: nextSession, installationID: context.installationID) }
             catch { Logger(subsystem: "Rivulet", category: "SiloPlayback").error("Failed to retire rejected Silo replacement") }
             throw error
         }
+    }
+
+    /// Replan only against the exact quality labels offered by the active plan.
+    func replaceStream(for itemRef: MediaItemRef, current: StreamInfo, sourceID: String?,
+                       position: TimeInterval, quality: MediaQualityPreference) async throws -> StreamInfo {
+        guard position.isFinite, position >= 0, let sessionID = current.playSessionID,
+              client.profileID == profileID else { throw MediaProviderError.notPlayable }
+        let context = try playbackSessions.withLock { sessions -> SiloPlaybackSession in
+            guard var context = sessions[sessionID], context.ref == itemRef,
+                  context.fileID == current.source.id, context.lifetime.isActive,
+                  sourceID == nil || sourceID == context.fileID else { throw MediaProviderError.notFound }
+            guard !context.isReplanning else {
+                throw MediaProviderError.backendSpecific(underlying: "A Silo playback replacement is already in flight.")
+            }
+            if case .offered(let id) = quality {
+                guard id != "auto", context.plan.availableQualities?.contains(where: { $0.label == id }) == true else {
+                    throw MediaProviderError.backendSpecific(underlying: "The selected Silo quality is no longer offered.")
+                }
+            }
+            context.isReplanning = true
+            sessions[sessionID] = context
+            return context
+        }
+        defer { playbackSessions.withLock { $0[sessionID]?.isReplanning = false } }
+        var body = SiloPlaybackReplan(installationId: context.installationID,
+                                      playbackAttemptId: context.request.playbackAttemptId,
+                                      replanRequestId: UUID().uuidString, failedPlanId: context.plan.planId,
+                                      planAttemptId: UUID().uuidString, planAttemptKey: context.plan.planAttemptKey,
+                                      positionSeconds: position, selectedTracks: context.plan.selectedTracks,
+                                      clientCapabilities: context.request.clientCapabilities,
+                                      clientPlaybackContext: context.request.clientPlaybackContext,
+                                      bandwidthCapKbps: context.request.bandwidthCapKbps,
+                                      operation: "quality_change", qualityPreference: quality)
+        body.clientFeatures = context.request.clientFeatures
+        body.bandwidthEstimateKbps = context.request.bandwidthEstimateKbps
+        body.learnedLimit = context.request.learnedLimit
+        let decision: SiloPlaybackDecision = try await client.post("playback/\(Self.pathComponent(sessionID))/replan", body: body)
+        guard decision.protocolVersion == 3, decision.outcome == "playable", let plan = decision.playbackPlan,
+              (decision.sessionId ?? plan.sessionId) == sessionID else {
+            throw MediaProviderError.backendSpecific(underlying: decision.terminal?.message ?? "Silo could not change quality.")
+        }
+        guard context.lifetime.isActive, client.profileID == profileID,
+              playbackSessions.withLock({ $0[sessionID]?.lifetime === context.lifetime }) else {
+            throw MediaProviderError.notFound
+        }
+        let watch: SiloItem = try await client.get("watch/\(Self.pathComponent(itemRef.itemID))",
+                                                 [URLQueryItem(name: "file_id", value: plan.effectiveMediaFileId)])
+        var request = context.request
+        request.qualityPreference = quality.serverValue
+        return try await materialize(plan, sessionID: sessionID, ref: itemRef, request: request,
+                                     watch: watch, expectedLifetime: context.lifetime,
+                                     serverFeatures: decision.serverFeatures ?? context.serverFeatures)
     }
 
     /// A stored-row ID is not a playback ordinal. Refresh the exact reservation,
@@ -231,14 +353,18 @@ extension SiloProvider {
         defer { playbackSessions.withLock { $0[sessionID]?.isReplanning = false } }
         func replan(from previous: SiloPlaybackPlan, tracks: SiloSelectedTracks) async throws -> SiloPlaybackPlan {
             guard context.lifetime.isActive else { throw MediaProviderError.notFound }
-            let body = SiloPlaybackReplan(installationId: context.installationID,
+            var body = SiloPlaybackReplan(installationId: context.installationID,
                                           playbackAttemptId: context.request.playbackAttemptId,
                                           replanRequestId: UUID().uuidString, failedPlanId: previous.planId,
                                           planAttemptId: UUID().uuidString, planAttemptKey: previous.planAttemptKey,
                                           positionSeconds: position, selectedTracks: tracks,
                                           clientCapabilities: context.request.clientCapabilities,
                                           clientPlaybackContext: context.request.clientPlaybackContext,
-                                          bandwidthCapKbps: context.request.bandwidthCapKbps, operation: "track_change")
+                                          bandwidthCapKbps: context.request.bandwidthCapKbps, operation: "track_change",
+                                          qualityPreference: context.request.qualityIntent)
+            body.clientFeatures = context.request.clientFeatures
+            body.bandwidthEstimateKbps = context.request.bandwidthEstimateKbps
+            body.learnedLimit = context.request.learnedLimit
             let decision: SiloPlaybackDecision = try await client.post("playback/\(Self.pathComponent(sessionID))/replan", body: body)
             guard decision.protocolVersion == 3, decision.outcome == "playable", let plan = decision.playbackPlan else {
                 throw MediaProviderError.backendSpecific(underlying: decision.terminal?.message ?? "Silo could not activate the stored subtitle.")
@@ -261,7 +387,8 @@ extension SiloProvider {
             sessions[sessionID] = SiloPlaybackSession(installationID: context.installationID, sessionID: sessionID,
                                                        fileID: context.fileID, timelineOffset: refreshed.timeline.timelineOffsetSeconds,
                                                        ref: context.ref, request: context.request, plan: refreshed,
-                                                       lifetime: context.lifetime, relay: context.relay, isReplanning: true)
+                                                       lifetime: context.lifetime, relay: context.relay,
+                                                       serverFeatures: context.serverFeatures, isReplanning: true)
         }
         let track = try storedSubtitleTrack(storedID, in: refreshed)
         let selected = SiloSelectedTracks(audio: context.plan.selectedTracks.audio,
@@ -275,7 +402,8 @@ extension SiloProvider {
             let watch: SiloItem = try await client.get("watch/\(Self.pathComponent(context.ref.itemID))",
                                                      [URLQueryItem(name: "file_id", value: context.fileID)])
             return try await materialize(plan, sessionID: sessionID, ref: context.ref, request: context.request,
-                                         watch: watch, expectedLifetime: context.lifetime)
+                                         watch: watch, expectedLifetime: context.lifetime,
+                                         serverFeatures: context.serverFeatures)
         } catch {
             do { try await retire(sessionID: sessionID, installationID: context.installationID) }
             catch { Logger(subsystem: "Rivulet", category: "SiloPlayback").error("Failed to retire rejected Silo subtitle selection") }
@@ -322,14 +450,18 @@ extension SiloProvider {
         defer { playbackSessions.withLock { $0[sessionID]?.isReplanning = false } }
         if context.plan.timeline.canSeekAnywhere { return nil }
         if let sourceID, sourceID != context.fileID { throw MediaProviderError.notFound }
-        let body = SiloPlaybackReplan(installationId: context.installationID,
+        var body = SiloPlaybackReplan(installationId: context.installationID,
                                       playbackAttemptId: context.request.playbackAttemptId,
                                       replanRequestId: UUID().uuidString, failedPlanId: context.plan.planId,
                                       planAttemptId: UUID().uuidString, planAttemptKey: context.plan.planAttemptKey,
                                       positionSeconds: position, selectedTracks: context.plan.selectedTracks,
                                       clientCapabilities: context.request.clientCapabilities,
                                       clientPlaybackContext: context.request.clientPlaybackContext,
-                                      bandwidthCapKbps: context.request.bandwidthCapKbps, operation: "seek_reanchor")
+                                      bandwidthCapKbps: context.request.bandwidthCapKbps, operation: "seek_reanchor",
+                                      qualityPreference: context.request.qualityIntent)
+        body.clientFeatures = context.request.clientFeatures
+        body.bandwidthEstimateKbps = context.request.bandwidthEstimateKbps
+        body.learnedLimit = context.request.learnedLimit
         let decision: SiloPlaybackDecision = try await client.post("playback/\(Self.pathComponent(sessionID))/replan", body: body)
         guard decision.protocolVersion == 3, decision.outcome == "playable", let plan = decision.playbackPlan,
               let nextSession = decision.sessionId ?? decision.playbackPlan?.sessionId else {
@@ -339,7 +471,8 @@ extension SiloProvider {
             let watch: SiloItem = try await client.get("watch/\(Self.pathComponent(itemRef.itemID))",
                                                      [URLQueryItem(name: "file_id", value: plan.effectiveMediaFileId)])
             return try await materialize(plan, sessionID: nextSession, ref: itemRef, request: context.request, watch: watch,
-                                         expectedLifetime: context.lifetime)
+                                         expectedLifetime: context.lifetime,
+                                         serverFeatures: decision.serverFeatures ?? context.serverFeatures)
         } catch {
             do { try await retire(sessionID: nextSession, installationID: context.installationID) }
             catch { Logger(subsystem: "Rivulet", category: "SiloPlayback").error("Failed to retire rejected Silo replan") }
@@ -377,9 +510,10 @@ extension SiloProvider {
         }
     }
 
-    private func materialize(_ plan: SiloPlaybackPlan, sessionID: String, ref: MediaItemRef,
+    func materialize(_ plan: SiloPlaybackPlan, sessionID: String, ref: MediaItemRef,
                              request: SiloPlaybackStart, watch initialWatch: SiloItem,
-                             expectedLifetime: SiloPlaybackLifetime? = nil) async throws -> StreamInfo {
+                             expectedLifetime: SiloPlaybackLifetime? = nil,
+                             serverFeatures: [String] = []) async throws -> StreamInfo {
         guard plan.protocolVersion == 3, plan.stream.headerRefresh == "none" else {
             throw MediaProviderError.backendSpecific(underlying: "The Silo plan requires a transport header refresh this player cannot perform.")
         }
@@ -394,11 +528,12 @@ extension SiloProvider {
         }
         let streamKind: MediaSource.StreamKind
         switch (plan.delivery, plan.stream.protocol) {
-        case ("original_http", "http_progressive"): streamKind = .directPlay
+        case ("original_http", "http_progressive"), ("server_remux_progressive", "http_progressive"): streamKind = .directPlay
         case ("server_transcode_hls", "hls"), ("server_remux_hls", "hls"): streamKind = .hlsTranscode
         default: throw MediaProviderError.backendSpecific(underlying: "Silo returned an unsupported playback delivery: \(plan.delivery)/\(plan.stream.protocol).")
         }
-        let deliveryClass = plan.delivery == "original_http" ? "original_http" : "hls"
+        let deliveryClass = plan.delivery == "original_http" ? "original_http"
+            : plan.delivery == "server_remux_progressive" ? "server_remux_progressive" : "hls"
         guard request.clientPlaybackContext.deliveries[deliveryClass] != nil else {
             throw MediaProviderError.backendSpecific(underlying: "Silo returned a transport the client did not negotiate.")
         }
@@ -413,15 +548,17 @@ extension SiloProvider {
         let original = SiloMediaMapper.source(effective, baseURL: client.baseURL, streamURL: url, streamKind: streamKind,
                                               selectedAudio: plan.selectedTracks.audio?.index)
         let existing = playbackSessions.withLock { $0[sessionID] }
-        guard expectedLifetime?.isActive != false, existing?.lifetime.isActive != false else { throw MediaProviderError.notFound }
+        guard expectedLifetime?.isActive != false, existing?.lifetime.isActive != false,
+              expectedLifetime == nil || existing?.lifetime === expectedLifetime else { throw MediaProviderError.notFound }
         let relay: SiloMediaRelay
         if let existing { relay = existing.relay }
         else { relay = try await SiloMediaRelay.start(client: client) }
         var installed = false
         defer { if !installed && existing == nil { relay.stop() } }
-        let localURL = try relay.localURL(for: url, headers: plan.stream.headers)
+        let localURL = try relay.localURL(for: url, headers: plan.stream.headers, reportsSessionFaults: true)
         let subtitles = try planSubtitles(plan, relay: relay)
         let lifetime = existing?.lifetime ?? SiloPlaybackLifetime()
+        relay.onSessionProblem = { [weak lifetime] problem in lifetime?.receive(problem) }
         let source = MediaSource(id: effective.fileId, container: plan.stream.container ?? original.container,
                                  duration: plan.source.durationSeconds ?? original.duration, bitrate: original.bitrate,
                                  fileSize: streamKind == .directPlay ? original.fileSize : nil, fileName: original.fileName,
@@ -433,6 +570,7 @@ extension SiloProvider {
             $0[sessionID] = SiloPlaybackSession(installationID: request.installationId, sessionID: sessionID,
                                                fileID: effective.fileId, timelineOffset: plan.timeline.timelineOffsetSeconds,
                                                ref: ref, request: request, plan: plan, lifetime: lifetime, relay: relay,
+                                               serverFeatures: serverFeatures.isEmpty ? (existing?.serverFeatures ?? []) : serverFeatures,
                                                isReplanning: existing?.isReplanning ?? false)
         }
         installed = true
@@ -444,6 +582,15 @@ extension SiloProvider {
         info.canSeekAnywhere = plan.timeline.canSeekAnywhere
         info.prefersAetherPlayback = true
         info.canSelectTracksLocally = false
+        info.negotiatedStatus = plan.negotiatedStatus
+        if let selected = plan.selectedTracks.subtitle {
+            guard let track = plan.subtitle.inventory.first(where: { $0.trackId == selected.id }) else {
+                throw MediaProviderError.backendSpecific(underlying: "Silo's selected subtitle is absent from its plan inventory.")
+            }
+            info.authoritativeSubtitleSelection = .track(id: selected.id, index: track.combinedIndex)
+        } else {
+            info.authoritativeSubtitleSelection = .off
+        }
         return info
     }
 
@@ -520,7 +667,7 @@ extension SiloProvider {
         if VTIsHardwareDecodeSupported(kCMVideoCodecType_H264) { hardware.append("h264") }
         if VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC) { hardware.append("hevc") }
         let modes = AVPlayer.availableHDRModes
-        let dv = AetherPlayer.displaySupportsDolbyVision
+        let dv = AetherEngine.displayCapabilities.supportsDolbyVision
         let fel = UserDefaults.standard.object(forKey: AetherPlayer.dolbyVisionFELKey) as? Bool ?? true
         let hdr = SiloHDRCapabilities(hdr10: modes.contains(.hdr10), hdr10Plus: false, hlg: modes.contains(.hlg),
                                        dolbyVisionProfiles: dv ? (fel ? [5, 7, 8] : [5, 8]) : [])
@@ -545,6 +692,11 @@ extension SiloProvider {
                                                                     audioDecodeCodecs: audio, subtitles: subtitles,
                                                                     validatedClaims: ["client_managed_dynamic_range_v1",
                                                                                       "client_selected_audio_track_v1"], hdrDetails: hdr)
+        }
+        if !transcodeOnly, serverDeliveries.contains("server_remux_progressive") {
+            deliveries["server_remux_progressive"] = SiloDeliveryCapabilities(
+                containers: ["mp4", "mov", "m4v", "mpegts", "ts"], videoCodecs: video,
+                audioDecodeCodecs: audio, subtitles: subtitles, hdrDetails: hdr)
         }
         if serverDeliveries.contains("server_transcode_hls") || serverDeliveries.contains("server_remux_hls") {
             // The native delivery container is HLS, not its segment packaging.
@@ -644,8 +796,27 @@ nonisolated final class SiloPlaybackLifetime: Sendable {
     private struct State: Sendable {
         var active = true
         weak var reporter: SiloProgressReporter?
+        var suspended = false
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
+    let events = SiloPlaybackSessionEvents()
+
+    var isSuspended: Bool { state.withLock { $0.suspended } }
+    var isEnded: Bool {
+        if case .some(.ended) = events.pending { return true }
+        return false
+    }
+    func receive(_ problem: SiloAPIError) {
+        guard let event = SiloPlaybackSessionFault.classify(problem) else { return }
+        let accepted = state.withLock { value -> Bool in
+            guard value.active, (!value.suspended || problem.status == 410) else { return false }
+            value.suspended = true
+            return true
+        }
+        guard accepted else { return }
+        events.publish(event)
+        Task { [weak self] in await self?.reporter?.suspendForServerFault() }
+    }
 
     var isActive: Bool { state.withLock { $0.active } }
     var reporter: SiloProgressReporter? { state.withLock { $0.reporter } }
@@ -658,7 +829,7 @@ nonisolated final class SiloPlaybackLifetime: Sendable {
         }
     }
 
-    func deactivate() { state.withLock { $0.active = false } }
+    func deactivate() { state.withLock { $0.active = false }; events.finish() }
 }
 
 nonisolated struct SiloReportContext: Sendable {
@@ -677,6 +848,7 @@ actor SiloProgressReporter: ProgressReporter {
     private var sequence = 0
     private var stopped = false
     private var hasStarted = false
+    var hasPlayed: Bool { hasStarted && !stopped }
     private var latestPosition: Double = 0
     private var lastPaused = false
     private var previous: Task<Result<Void, any Error>, Never>?
@@ -721,6 +893,7 @@ actor SiloProgressReporter: ProgressReporter {
 
     private func record(position: Double, paused: Bool) async {
         guard !stopped, position.isFinite, context?.lifetime.isActive != false else { return }
+        if context?.lifetime.isSuspended == true { latestPosition = max(0, position); return }
         hasStarted = true
         latestPosition = max(0, position)
         lastPaused = paused
@@ -741,7 +914,7 @@ actor SiloProgressReporter: ProgressReporter {
     }
 
     private func heartbeatTick() async {
-        guard !stopped, context?.lifetime.isActive == true else {
+        guard !stopped, context?.lifetime.isActive == true, context?.lifetime.isSuspended == false else {
             heartbeat?.cancel()
             heartbeat = nil
             return
@@ -751,8 +924,7 @@ actor SiloProgressReporter: ProgressReporter {
         _ = await enqueue(stop: false, includeSample: true)
     }
 
-    private func endedByServer() {
-        stopped = true
+    func suspendForServerFault() {
         heartbeat?.cancel()
         heartbeat = nil
     }
@@ -773,7 +945,7 @@ actor SiloProgressReporter: ProgressReporter {
         // the session gate again, so none can be sent after explicit retirement.
         let task = Task<Result<Void, any Error>, Never> {
             _ = await prior?.value
-            if !stop, context?.lifetime.isActive == false { return .success(()) }
+            if !stop, (context?.lifetime.isActive == false || context?.lifetime.isSuspended == true) { return .success(()) }
             defer {
                 if stop, let context {
                     context.relay.stop()
@@ -809,11 +981,8 @@ actor SiloProgressReporter: ProgressReporter {
                 }
                 return .success(())
             } catch {
-                if let context, let problem = error as? SiloAPIError, [404, 410].contains(problem.status) {
-                    context.lifetime.deactivate()
-                    context.relay.stop()
-                    await context.lifetime.reporter?.endedByServer()
-                    provider.playbackSessions.withLock { _ = $0.removeValue(forKey: context.sessionID) }
+                if !stop, let context, let problem = error as? SiloAPIError {
+                    context.lifetime.receive(problem)
                 }
                 // Public ProgressReporter cannot throw; internal retirement does,
                 // and uncertain writes are never automatically replayed.

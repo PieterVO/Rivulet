@@ -4,6 +4,10 @@
 import Foundation
 import Security
 
+extension Notification.Name {
+    static let siloAuthorityDidChange = Notification.Name("siloAuthorityDidChange")
+}
+
 @MainActor
 enum SiloSession {
     struct Account: Codable, Equatable, Sendable {
@@ -35,6 +39,7 @@ enum SiloSession {
     private static var activeAuthority: SiloTokenAuthority?
     private static var activeCredentialID: UUID?
     private static var operation = UUID()
+    private static var deviceAttempt: (url: URL, code: String, canCancel: Bool, transport: SiloClient.Transport)?
 
     static var account: Account? {
         guard let data = UserDefaults.standard.data(forKey: accountKey) else { return nil }
@@ -96,6 +101,7 @@ enum SiloSession {
                 }
                 if invalid {
                     authorityRevision &+= 1
+                    NotificationCenter.default.post(name: .siloAuthorityDidChange, object: nil)
                     onChanged?()
                 }
             }
@@ -135,6 +141,118 @@ enum SiloSession {
             revoke(serverURL: serverURL, token: tokens.accessToken, transport: transport)
             throw CancellationError()
         }
+        return try await stage(tokens: tokens, serverURL: serverURL, serverID: serverID,
+                               serverName: serverName, requestID: requestID, transport: transport)
+    }
+
+    /// An anonymous device request is bound to this operation and server identity.
+    static func startDeviceSignIn(
+        serverURL input: URL,
+        transport: @escaping SiloClient.Transport = { try await SiloHTTP.data(for: $0) }
+    ) async throws -> SiloDeviceStart {
+        cancelPendingSignIn()
+        let requestID = operation
+        let serverURL = try validatedURL(input)
+        let serverID = try await probe(serverURL, transport: transport)
+        try check(requestID)
+        let client = SiloClient(baseURL: serverURL, transport: transport, deviceHeaders: deviceHeaders)
+        let capability: SiloDeviceCapability
+        do { capability = try await client.get("auth/device/capability") }
+        catch let error as SiloAPIError where [403, 404].contains(error.status) { throw SiloDeviceSignInError.unsupported }
+        guard capability.available else { throw SiloDeviceSignInError.unsupported }
+        try check(requestID)
+        let started: SiloDeviceStart
+        do {
+            started = try await client.post("auth/device/start", body: SiloDeviceStartBody(
+                deviceName: PlexAPI.deviceName, devicePlatform: "tvos"))
+        } catch let error as SiloAPIError where [403, 404].contains(error.status) {
+            throw SiloDeviceSignInError.unsupported
+        }
+        guard operation == requestID else {
+            withdrawDevice(url: serverURL, code: started.deviceCode, transport: transport)
+            throw CancellationError()
+        }
+        guard !started.deviceCode.isEmpty, !started.userCode.isEmpty, started.expiresIn > 0,
+              started.interval > 0, let verification = URL(string: started.verificationUri),
+              let complete = URL(string: started.verificationUriComplete),
+              ["https", "http"].contains(verification.scheme?.lowercased() ?? ""),
+              SiloClient.origin(verification) == SiloClient.origin(serverURL),
+              SiloClient.origin(complete) == SiloClient.origin(serverURL) else {
+            withdrawDevice(url: serverURL, code: started.deviceCode, transport: transport)
+            throw SiloDeviceSignInError.invalidCode
+        }
+        deviceAttempt = (serverURL, started.deviceCode, capability.cancel == true, transport)
+        // Retain the probed identity for the eventual token response.
+        deviceServerID = serverID
+        return started
+    }
+
+    private static var deviceServerID: String?
+
+    static func awaitDeviceSignIn(
+        _ started: SiloDeviceStart,
+        onPending: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) async throws -> [SiloProfile] {
+        let requestID = operation
+        guard let attempt = deviceAttempt, attempt.code == started.deviceCode,
+              let serverID = deviceServerID else { throw CancellationError() }
+        let deadline = Date().addingTimeInterval(TimeInterval(started.expiresIn))
+        let client = SiloClient(baseURL: attempt.url, transport: attempt.transport, deviceHeaders: deviceHeaders)
+        var interval = max(1, started.interval)
+        while Date() < deadline {
+            try check(requestID)
+            let poll: SiloDevicePoll
+            do { poll = try await client.post("auth/device/poll", body: SiloDeviceCodeBody(deviceCode: started.deviceCode)) }
+            catch let error as SiloAPIError where error.status == 404 { throw SiloDeviceSignInError.expired }
+            catch let error as SiloAPIError where [408, 429].contains(error.status) || error.status >= 500 {
+                try await Task.sleep(for: .seconds(interval))
+                continue
+            }
+            catch MediaProviderError.unreachable {
+                try await Task.sleep(for: .seconds(interval))
+                continue
+            }
+            try check(requestID)
+            guard deviceAttempt?.code == started.deviceCode else { throw CancellationError() }
+            guard Date() < deadline else { throw SiloDeviceSignInError.expired }
+            switch poll.status {
+            case "pending":
+                guard poll.tokens == nil else { throw SiloSignInError.invalidResponse }
+                onPending(true)
+                interval = max(interval, poll.pollAfter, 1)
+                try await Task.sleep(for: .seconds(interval))
+            case "approved":
+                guard let tokens = poll.tokens, poll.temporary != true else { throw SiloSignInError.invalidResponse }
+                let serverName = try await configuredServerName(attempt.url, transport: attempt.transport)
+                try check(requestID)
+                guard deviceAttempt?.code == started.deviceCode else {
+                    revoke(serverURL: attempt.url, token: tokens.accessToken, transport: attempt.transport)
+                    throw CancellationError()
+                }
+                guard try await probe(attempt.url, transport: attempt.transport) == serverID else {
+                    revoke(serverURL: attempt.url, token: tokens.accessToken, transport: attempt.transport)
+                    throw SiloSignInError.serverChanged
+                }
+                guard operation == requestID, deviceAttempt?.code == started.deviceCode else {
+                    revoke(serverURL: attempt.url, token: tokens.accessToken, transport: attempt.transport)
+                    throw CancellationError()
+                }
+                deviceAttempt = nil
+                deviceServerID = nil
+                return try await stage(tokens: tokens, serverURL: attempt.url, serverID: serverID,
+                                       serverName: serverName, requestID: requestID, transport: attempt.transport)
+            case "denied": throw SiloDeviceSignInError.denied
+            case "expired", "canceled": throw SiloDeviceSignInError.expired
+            case "consumed": throw SiloDeviceSignInError.consumed
+            default: throw SiloSignInError.invalidResponse
+            }
+        }
+        throw SiloDeviceSignInError.expired
+    }
+
+    private static func stage(tokens: SiloTokenPair, serverURL: URL, serverID: String,
+                              serverName: String, requestID: UUID,
+                              transport: @escaping SiloClient.Transport) async throws -> [SiloProfile] {
         guard !tokens.accessToken.isEmpty, !tokens.refreshToken.isEmpty, !tokens.user.id.isEmpty,
               tokens.expiresIn > 0 else {
             revoke(serverURL: serverURL, token: tokens.accessToken, transport: transport)
@@ -245,6 +363,7 @@ enum SiloSession {
         activeCredentialID = id
         pending = nil
         authorityRevision &+= 1
+        NotificationCenter.default.post(name: .siloAuthorityDidChange, object: nil)
         if let current, current.credentialID != id {
             if let old = forgetSecrets(current) {
                 revoke(serverURL: current.serverURL, token: old, transport: transport)
@@ -259,12 +378,24 @@ enum SiloSession {
     /// unaffected when the user cancels a new sign-in or leaves settings.
     static func cancelPendingSignIn() {
         operation = UUID()
+        if let attempt = deviceAttempt {
+            deviceAttempt = nil
+            deviceServerID = nil
+            if attempt.canCancel { withdrawDevice(url: attempt.url, code: attempt.code, transport: attempt.transport) }
+        }
         guard let old = pending else { return }
         pending = nil
         Task {
             if let token = await old.authority.cachedAccessToken() {
                 revoke(serverURL: old.serverURL, token: token, transport: old.transport)
             }
+        }
+    }
+
+    private static func withdrawDevice(url: URL, code: String, transport: @escaping SiloClient.Transport) {
+        Task {
+            try? await SiloClient(baseURL: url, transport: transport).post(
+                "auth/device/cancel", body: SiloDeviceCodeBody(deviceCode: code))
         }
     }
 
@@ -281,6 +412,7 @@ enum SiloSession {
         activeAuthority = nil
         activeCredentialID = nil
         authorityRevision &+= 1
+        NotificationCenter.default.post(name: .siloAuthorityDidChange, object: nil)
         if let saved { _ = forgetSecrets(saved) }
         onChanged?()
         let cachedToken = await authority?.cachedAccessToken()

@@ -232,14 +232,14 @@ nonisolated enum SiloMediaMapper {
         return local + remote
     }
 
-    static func detail(_ dto: SiloItem, providerID: String, baseURL: URL, parentID: String? = nil,
+    static func detail(_ dto: SiloItem, providerID: String, baseURL: URL, authorityRevision: UInt64 = 0, parentID: String? = nil,
                        nextEpisode: SiloItem? = nil, ratingSources: [SiloRatingsCapability.Source] = []) -> MediaItemDetail {
         let item = item(dto, providerID: providerID, baseURL: baseURL, parentID: parentID)
         func person(_ credit: SiloCredit) -> MediaPerson {
-            MediaPerson(id: credit.personId ?? credit.tmdbId ?? credit.imdbId ?? credit.name,
+            MediaPerson(id: credit.personId.map { SiloPersonContext.identity($0, providerID: providerID, authorityRevision: authorityRevision) } ?? "",
                         name: credit.name, role: credit.character ?? credit.job,
                         imageURL: url(credit.photoUrl, baseURL: baseURL),
-                        titleTmdbId: dto.tmdbId.flatMap(Int.init), titleIsMovie: dto.type == "movie", backdropURL: item.artwork.backdrop)
+                        backdropURL: item.artwork.backdrop)
         }
         let versions = dto.versions ?? []
         let chapters = versions.first.map { self.chapters($0, baseURL: baseURL) } ?? []

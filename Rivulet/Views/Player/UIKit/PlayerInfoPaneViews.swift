@@ -740,6 +740,7 @@ enum DolbyVisionEnhancementLayer: String, Equatable {
 
 struct StreamingModeInfo {
     enum Mode: String {
+        case unknown = "Unknown"
         case directPlay = "Direct Play"
         case directStream = "Direct Stream"
         case transcode = "Transcode"
@@ -881,7 +882,10 @@ final class PlayerDetailsPaneView: UIView {
             y = 0
         }
         func height(of view: UIView) -> CGFloat {
-            view.systemLayoutSizeFitting(CGSize(width: Metrics.columnWidth, height: 0),
+            if let label = view as? UILabel {
+                return ceil(label.sizeThatFits(CGSize(width: Metrics.columnWidth, height: .greatestFiniteMagnitude)).height)
+            }
+            return view.systemLayoutSizeFitting(CGSize(width: Metrics.columnWidth, height: 0),
                                          withHorizontalFittingPriority: .required,
                                          verticalFittingPriority: .fittingSizeLevel).height
         }

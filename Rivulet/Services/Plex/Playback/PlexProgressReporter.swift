@@ -16,6 +16,8 @@ actor PlexProgressReporter {
 
     private var lastReportedTimes: [String: TimeInterval] = [:]
     private var lastReportedStates: [String: String] = [:]
+    /// Play session per server|ratingKey for a direct-play item; its timeline carries the id.
+    private var directPlaySessions: [String: String] = [:]
 
     private init() {}
 
@@ -98,6 +100,10 @@ actor PlexProgressReporter {
             URLQueryItem(name: "X-Plex-Device", value: clientInfo.device),
             URLQueryItem(name: "X-Plex-Product", value: clientInfo.product)
         ]
+        if let session = directPlaySessions[key] {
+            components?.queryItems?.append(URLQueryItem(name: "X-Plex-Session-Identifier", value: session))
+            if state == "stopped" { directPlaySessions[key] = nil }
+        }
 
         guard let url = components?.url else { return }
 
@@ -110,6 +116,23 @@ actor PlexProgressReporter {
         } catch {
             playerDebugLog("📊 PlexProgress: Failed to report progress: \(error)")
         }
+    }
+
+    /// Opens a Plex play session for a file the engine plays directly, so the
+    /// server dashboard shows its bandwidth (#423). The item's next "stopped" report ends it.
+    func beginDirectPlaySession(ratingKey: String, mediaIndex: Int, server explicit: PlexServerAddress? = nil) async {
+        guard !ratingKey.isEmpty, let server = await server(explicit) else { return }
+        let session = UUID().uuidString
+        directPlaySessions[server.address + "|" + ratingKey] = session
+        await PlexNetworkManager.shared.openDirectPlaySession(
+            serverURL: server.address, authToken: server.token, ratingKey: ratingKey,
+            mediaIndex: mediaIndex, sessionIdentifier: session)
+    }
+
+    /// Drops the direct-play session when the item moves onto a server transcode.
+    func endDirectPlaySession(ratingKey: String, server explicit: PlexServerAddress? = nil) async {
+        guard let server = await server(explicit) else { return }
+        directPlaySessions[server.address + "|" + ratingKey] = nil
     }
 
     /// Marks an item as fully watched (scrobble)

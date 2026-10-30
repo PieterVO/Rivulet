@@ -589,7 +589,7 @@ private final class TrailerScrimView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-private final class PaddingLabel: UILabel {
+final class PaddingLabel: UILabel {
     var insets: UIEdgeInsets = .zero { didSet { invalidateIntrinsicContentSize() } }
 
     override func drawText(in rect: CGRect) {

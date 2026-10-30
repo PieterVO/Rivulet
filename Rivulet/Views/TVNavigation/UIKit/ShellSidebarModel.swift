@@ -114,7 +114,8 @@ enum ShellSidebarModel {
         profileAvatar: URL? = nil,
         canSwitchProfile: Bool = false,
         hasMediaServer: Bool = true,
-        playlistServers: [PlaylistServer] = []
+        playlistServers: [PlaylistServer] = [],
+        requestsServer: PlaylistServer? = nil
     ) -> [ShellSidebarSection] {
         var sections: [ShellSidebarSection] = []
 
@@ -169,6 +170,12 @@ enum ShellSidebarModel {
             let namesServer = labelsServers || !section.keys.contains(where: libraryKeys.contains)
             let title = !namesServer || section.server == nil ? nil : section.keys.first.flatMap { byKey[$0]?.serverName }
             sections.append(ShellSidebarSection(title: title, items: items))
+        }
+        if let requestsServer {
+            var item = ShellSidebarItem(tab: .requests(providerID: requestsServer.providerID),
+                                        title: "Requests", icon: "tray.full.fill")
+            item.badge = requestsServer.name
+            sections.append(ShellSidebarSection(title: nil, items: [item]))
         }
         sections.append(ShellSidebarSection(
             title: nil,

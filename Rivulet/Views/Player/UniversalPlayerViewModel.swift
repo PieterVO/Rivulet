@@ -86,7 +86,17 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published var controlsFocusActive = false
     /// The scrub bar itself holds focus (a subset of `controlsFocusActive`).
     var scrubberOwnsFocus = false
-    @Published var isScrubbing = false
+    @Published var isScrubbing = false {
+        didSet {
+            guard isScrubbing != oldValue else { return }
+            if isScrubbing {
+                // Some entry paths hide the poster before setting this flag.
+                cancelPausedPosterTimer()
+            } else if playbackState == .paused {
+                startPausedPosterTimer()
+            }
+        }
+    }
 
     /// True while iPod-style circular clickpad rotation is actively
     /// driving the scrub (see `handleWheelScrub(by:)`). Distinct from
@@ -171,6 +181,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Seek Indicator State
     /// Shows a brief indicator when user taps left/right to skip 10 seconds
     @Published var seekIndicator: SeekIndicator?
+    /// A skip with the controls hidden shows AVKit's bar alone, for as long as its skip glyph.
+    @Published private(set) var showsSkipBar = false
 
     // MARK: - Chapter Thumbnails
     private var chapterThumbnails: [Int: Data] = [:]  // index → image data
@@ -342,6 +354,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         return subtitleTracks + (offersGeneratedSubtitles ? [generated] : [])
     }
     var offersGeneratedSubtitles: Bool { aetherPlayer != nil }
+    /// What the menu's On turns on: the showing track, else the saved language's full track.
+    var subtitleOnTrackId: Int? {
+        if let currentSubtitleTrackId { return currentSubtitleTrackId }
+        let language = TrackIntentStore.effectiveSubtitleIntent.language ?? TrackLanguage.device
+        let full = SubtitleIntent.track(language: language, forced: false, hearingImpaired: false, codec: nil)
+        return TrackIntentResolver.resolveSubtitle(intent: full, in: subtitleTracks)?.id
+            ?? subtitleTracks.first { !$0.isForced }?.id
+            ?? subtitleMenuTracks.first?.id
+    }
     /// The generated row's second line: the model's download until it is on disk.
     static var generatedSubtitleStatus: String {
         switch SpeechModelStore.shared.state {
@@ -597,6 +618,61 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// The quality picked in the player; nil follows the Home or Away setting. Lives for this player session.
     private var sessionQuality: StreamingQuality?
+    private var siloRequestedQuality: MediaQualityPreference = .automatic
+    private var siloManualQuality: MediaQualityPreference?
+    private var siloBuffering = SiloBufferingQuality(policy: .ask)
+    private var siloStallTask: Task<Void, Never>?
+    private var siloSessionEventTask: Task<Void, Never>?
+    var onSiloBufferingOffer: ((@escaping (Bool) -> Void) -> Void)?
+    var onSiloBufferingCancel: (() -> Void)?
+    var siloQualityChoices: [MediaQuality]? {
+        guard case .provider(let playback) = source, playback.provider is SiloProvider else { return nil }
+        return playback.stream.negotiatedStatus?.availableQualities
+    }
+    var siloActiveQualityID: String? {
+        guard case .provider(let playback) = source else { return nil }
+        return playback.stream.negotiatedStatus?.activeQualityID
+    }
+    var siloSelectedQuality: MediaQualityPreference { siloRequestedQuality }
+    var canRestoreSiloQuality: Bool {
+        guard case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider,
+              let status = playback.stream.negotiatedStatus else { return false }
+        return provider.supportsBufferingQuality(for: playback.stream)
+            && siloBuffering.restore(status: status) != nil
+    }
+    var siloNegotiatedDetails: PlayerDetailsPaneView.Section? {
+        guard case .provider(let playback) = source,
+              let status = playback.stream.negotiatedStatus else { return nil }
+        let delivery: String
+        switch status.delivery {
+        case .original: delivery = "Original"
+        case .progressiveRemux: delivery = "Progressive remux"
+        case .hlsRemux: delivery = "HLS remux"
+        case .hlsTranscode: delivery = "HLS transcode"
+        case .other(let name): delivery = name
+        }
+        var rows = [PlayerDetailsPaneView.Row(label: "Delivery", value: delivery)]
+        let requested = siloRequestedQuality.serverValue
+        if let active = status.activeQualityID, active != requested {
+            rows.append(.init(label: "Requested", value: requested))
+            rows.append(.init(label: "Playing", value: active))
+        }
+        if let recipe = status.effectiveRecipe {
+            if let width = recipe.width, let height = recipe.height {
+                rows.append(.init(label: "Output", value: "\(width) × \(height)"))
+            }
+            if let codec = recipe.videoCodec { rows.append(.init(label: "Video codec", value: codec)) }
+            if let codec = recipe.audioCodec { rows.append(.init(label: "Audio codec", value: codec)) }
+            if let range = recipe.dynamicRange { rows.append(.init(label: "Output range", value: range)) }
+        }
+        if let reason = status.decisionReason { rows.append(.init(label: "Decision", value: reason)) }
+        for warning in status.degradationWarnings { rows.append(.init(label: "Adjustment", value: warning.message)) }
+        if let limit = status.bandwidthLimit {
+            rows.append(.init(label: "Connection limit", value: "\(limit.kbps) kbps (\(limit.source))"))
+        }
+        return .init(title: "SILO OUTPUT", rows: rows)
+    }
     /// The quality in effect: the session pick, else the Home or Away setting.
     @Published private(set) var qualityChoice: StreamingQuality = .original
     /// What is playing: the untouched file, or a transcode at a step.
@@ -749,12 +825,50 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// session. A new stream is a new play session, so the reporter follows it.
     private func setProviderStream(_ playback: ProviderPlayback, startPosition: TimeInterval? = nil,
                                    preservingReporter: Bool = false) {
+        siloSessionEventTask?.cancel()
+        siloSessionEventTask = nil
+        siloStallTask?.cancel()
+        siloStallTask = nil
+        onSiloBufferingCancel?()
+        if siloBuffering.pendingOffer != nil { siloBuffering.cancelOffer() }
+        if case .provider(let old) = source, old.item.ref != playback.item.ref {
+            siloBuffering = SiloBufferingQuality(policy: playback.nativeBufferingPolicy ?? .ask,
+                requestedQuality: playback.nativeRequestedQuality ?? .automatic)
+        }
         if case .provider(let previous) = source,
            previous.item.ref != playback.item.ref || previous.stream.source.id != playback.stream.source.id {
             resetSiloSubtitleActions()
             Task { [weak self] in await self?.resolveSubtitleSearchAccess() }
         }
         source = .provider(playback)
+        if let provider = playback.provider as? SiloProvider,
+           playback.stream.playSessionID != nil {
+            let stream = playback.stream
+            let item = playback.item.ref
+            let generation = itemGeneration
+            let stops = stopCount
+            siloSessionEventTask = Task { @MainActor [weak self] in
+                let events = await provider.playbackSessionEvents(for: stream)
+                for await event in events {
+                    guard let self, !Task.isCancelled, self.stopCount == stops,
+                          self.itemGeneration == generation,
+                          case .provider(let current) = self.source,
+                          current.item.ref == item,
+                          current.stream.playSessionID == stream.playSessionID else { return }
+                    self.handleSiloSessionEvent(event, provider: provider, stream: stream, item: item)
+                }
+            }
+        }
+        if let requested = playback.nativeRequestedQuality { siloRequestedQuality = requested }
+        if playback.provider is SiloProvider, let status = playback.stream.negotiatedStatus {
+            if siloBuffering.requestedQuality != siloRequestedQuality {
+                siloBuffering.manualQualityChanged(to: siloRequestedQuality)
+            }
+            if let policy = playback.nativeBufferingPolicy {
+                siloBuffering.setPolicy(policy)
+            }
+            siloBuffering.adopt(status: status)
+        }
         if !preservingReporter || !providerReporterStarted {
             providerInitialPosition = startPosition ?? playback.stream.playerStartTime.map { $0 + playback.stream.timelineOffset }
         }
@@ -765,6 +879,18 @@ final class UniversalPlayerViewModel: ObservableObject {
             hasAppliedSubtitlePreference = false
             currentAudioTrackId = nil
             currentSubtitleTrackId = nil
+        }
+        if playback.provider is SiloProvider, let selection = playback.stream.authoritativeSubtitleSelection {
+            switch selection {
+            case .off:
+                currentSubtitleTrackId = nil
+                subtitlesPickedOff = true
+            case .track(let id, _):
+                let ordinal = playback.stream.source.subtitleTracks.firstIndex { $0.id == id }
+                currentSubtitleTrackId = ordinal.flatMap { plexSubtitleTracksFromMetadata()[safe: $0]?.id }
+                subtitlesPickedOff = false
+            }
+            hasAppliedSubtitlePreference = true
         }
         if !preservingReporter {
             providerReporter = playback.provider.progressReporter(
@@ -827,7 +953,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     static func initialRoutes(for stream: StreamInfo) -> (primary: PlaybackRoute, hasTranscodeFallback: Bool)? {
         guard let url = stream.source.streamURL else { return nil }
         if stream.prefersAetherPlayback {
-            return (.aether(url: url, headers: stream.httpHeaders), stream.source.streamKind != .hlsTranscode)
+            return (.aether(url: url, headers: stream.httpHeaders),
+                    stream.negotiatedStatus == nil && stream.source.streamKind != .hlsTranscode)
         }
         switch stream.source.streamKind {
         case .hlsTranscode:
@@ -1155,6 +1282,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// On an item after the one they were picked on, generated subtitles give way to real English ones.
     private func preferRealSubtitlesOverGenerated() {
+        if case .provider(let playback) = source,
+           playback.stream.authoritativeSubtitleSelection != nil { return }
         guard showsGeneratedSubtitles, metadata.ratingKey != generatedSubtitlesPickedOn,
               let real = subtitleTracks.first(where: {
                   !$0.isForced && TrackLanguage.normalize($0.languageCode ?? $0.language) == "eng"
@@ -1381,6 +1510,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             // source itself and serves HLS-fMP4 to AVPlayer over loopback.
             streamURL = url
             streamHeaders = headers ?? rivuletDirectPlayHeaders()
+            if let ratingKey = metadata.ratingKey {
+                let mediaIndex = playingMediaServerIndex, server = plexServer
+                Task { await PlexProgressReporter.shared.beginDirectPlaySession(
+                    ratingKey: ratingKey, mediaIndex: mediaIndex, server: server) }
+            }
 
             // Prepare an HLS fallback so a load failure on Aether can
             // recover via the Plex HLS transcode path.
@@ -1502,6 +1636,20 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// On aether nothing is Transcode; TrueHD and DTS-HD MA are Direct Stream
     /// because the engine re-encodes them to FLAC on device.
     var streamingModeInfo: StreamingModeInfo {
+        if case .provider(let playback) = source, let status = playback.stream.negotiatedStatus {
+            let video: StreamingModeInfo.Mode
+            switch status.delivery {
+            case .original: video = .directPlay
+            case .progressiveRemux, .hlsRemux: video = .directStream
+            case .hlsTranscode: video = .transcode
+            case .other: video = .unknown
+            }
+            let audioCodec = metadata.Media?.first?.Part?.first?.Stream?.first(where: { $0.isAudio })?.codec
+            let audio: StreamingModeInfo.Mode = video == .unknown ? .unknown : video == .transcode ? .transcode
+                : AetherAudioDelivery.isReencoded(codec: audioCodec) ? .directStream : .directPlay
+            return StreamingModeInfo(video: video, audio: audio,
+                                     subtitles: .directPlay)
+        }
         if case .aether = activeRoute {
             let audioCodec = metadata.Media?.first?.Part?.first?
                 .Stream?.first(where: { $0.isAudio })?.codec
@@ -1722,6 +1870,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var bufferingStartedAt: Date?
 
     private func updatePlaybackState(_ state: UniversalPlaybackState) {
+        updateSiloBuffering(from: playbackState, to: state)
         recordStallTransition(from: playbackState, to: state)
         trackQualityStall(from: playbackState, to: state)
         playbackState = state
@@ -2657,7 +2806,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // Ignore engine nil: the engine clears it transiently while it
                 // rebuilds the pipeline. A user turn-off does not come through here.
                 // A track read unseen for the content filter is not the user's pick.
-                guard let self, !self.providerTracksRequireReplan, let id, self.silentSubtitleTrackId == nil else { return }
+                guard let self, let id, self.silentSubtitleTrackId == nil else { return }
+                // Generated subtitles are not an engine track: an engine re-activation (after a reload) is undone, not adopted.
+                if self.showsGeneratedSubtitles {
+                    self.aetherPlayer?.selectSubtitleTrack(id: nil)
+                    return
+                }
+                // Provider tracks are server-authoritative and require a new stream plan.
+                guard !self.providerTracksRequireReplan else { return }
                 // Track ids ARE engine indices on this route (see TrackMerge) —
                 // the engine's active index needs no translation.
                 self.currentSubtitleTrackId = id
@@ -3200,6 +3356,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Aether session, and points the session at the new URL. The caller preflights.
     private func beginHLSSwitch(to hls: (url: URL, headers: [String: String], sessionId: String?)) {
         stopOutgoingTranscode()
+        if case .plex = source, let ratingKey = metadata.ratingKey {
+            let server = plexServer
+            Task { await PlexProgressReporter.shared.endDirectPlaySession(ratingKey: ratingKey, server: server) }
+        }
         cancelAetherStallWatchdog()
         // Left running, Aether keeps its audio under the AVPlayer and holds the
         // render surface (UniversalPlayerView switches surfaces on aetherPlayer == nil).
@@ -3355,8 +3515,143 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Streaming Quality
 
+    private func handleSiloSessionEvent(_ event: SiloPlaybackSessionEvent, provider: SiloProvider,
+                                        stream: StreamInfo, item: MediaItemRef) {
+        switch event {
+        case .ended(let problem):
+            stopPlayback()
+            errorMessage = problem.localizedDescription
+            updatePlaybackState(.failed(.loadFailed(problem.localizedDescription)))
+        case .renewalRequired(let problem):
+            enqueueStreamWork { vm in
+                guard case .provider(var playback) = vm.source,
+                      playback.item.ref == item,
+                      playback.stream.playSessionID == stream.playSessionID else { return }
+                let position = vm.playheadForReload
+                let resume = vm.playbackState != .paused
+                do {
+                    let replacement = try await provider.renewPlaybackSession(for: item,
+                        current: stream, position: position, after: problem)
+                    guard !Task.isCancelled, case .provider(let current) = vm.source,
+                          current.item.ref == item,
+                          current.stream.playSessionID == stream.playSessionID else {
+                        await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                        return
+                    }
+                    playback.stream = replacement
+                    vm.metadata = ProviderPlaybackMetadata.make(detail: playback.detail,
+                        source: replacement.source, extras: playback.extras)
+                    vm.setProviderStream(playback)
+                    vm.prepareProviderStream(playback)
+                    guard let plan = vm.playbackPlan else { throw MediaProviderError.notPlayable }
+                    vm.releaseAetherPlayer()
+                    vm.releaseAVPlayer()
+                    try await vm.startWithFallback(plan: plan, startTime: position)
+                    vm.updateTrackLists()
+                    if resume { vm.activePlayer_play() }
+                    else { vm.activePlayer_pause(); vm.updatePlaybackState(.paused) }
+                } catch {
+                    guard !isCancellationError(error) else { return }
+                    vm.errorMessage = PlayerError.loadFailed(error.localizedDescription).userFacingDescription
+                    vm.updatePlaybackState(.failed(.loadFailed(error.localizedDescription)))
+                }
+            }
+        }
+    }
+
     /// The in-player Quality menu. Holds for the rest of this player session, Up Next included.
+    func selectSiloQuality(_ quality: MediaQualityPreference) {
+        guard case .provider(let playback) = source, let provider = playback.provider as? SiloProvider,
+              let status = playback.stream.negotiatedStatus else { return }
+        if case .offered(let id) = quality,
+           !status.availableQualities.contains(where: { $0.id == id }) { return }
+        siloStallTask?.cancel()
+        enqueueStreamWork { vm in
+            guard case .provider(var active) = vm.source, active.item.ref == playback.item.ref,
+                  active.stream.playSessionID == playback.stream.playSessionID else { return }
+            let position = vm.playheadForReload
+            let resume = vm.playbackState != .paused
+            do {
+                let replacement = try await provider.replaceStream(for: active.item.ref, current: active.stream,
+                    sourceID: nil, position: position, quality: quality)
+                guard !Task.isCancelled, case .provider(let current) = vm.source,
+                      current.stream.playSessionID == active.stream.playSessionID else {
+                    await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                    return
+                }
+                active.stream = replacement
+                active.nativeRequestedQuality = quality
+                vm.siloManualQuality = quality
+                vm.siloRequestedQuality = quality
+                vm.siloBuffering.manualQualityChanged(to: quality)
+                let sameSession = replacement.playSessionID == current.stream.playSessionID
+                if !sameSession { await vm.stopProviderReporter(at: position) }
+                guard !Task.isCancelled else {
+                    await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                    return
+                }
+                vm.metadata = ProviderPlaybackMetadata.make(detail: active.detail, source: replacement.source,
+                    extras: active.extras)
+                vm.setProviderStream(active, preservingReporter: sameSession)
+                vm.prepareProviderStream(active)
+                guard let plan = vm.playbackPlan else { throw MediaProviderError.notPlayable }
+                vm.releaseAetherPlayer()
+                vm.releaseAVPlayer()
+                try await vm.startWithFallback(plan: plan, startTime: position)
+                vm.updateTrackLists()
+                if resume { vm.activePlayer_play() }
+                else { vm.activePlayer_pause(); vm.updatePlaybackState(.paused) }
+            } catch {
+                guard !isCancellationError(error) else { return }
+                vm.errorMessage = PlayerError.loadFailed(error.localizedDescription).userFacingDescription
+            }
+        }
+    }
+
+    func restoreSiloQuality() {
+        guard canRestoreSiloQuality, case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider else { return }
+        enqueueStreamWork { vm in
+            guard case .provider(var active) = vm.source,
+                  active.stream.playSessionID == playback.stream.playSessionID else { return }
+            let position = vm.playheadForReload
+            let resume = vm.playbackState != .paused
+            do {
+                let replacement = try await provider.restoreQuality(for: active.item.ref,
+                    current: active.stream, position: position, quality: vm.siloRequestedQuality)
+                guard !Task.isCancelled, case .provider(let current) = vm.source,
+                      current.stream.playSessionID == active.stream.playSessionID else {
+                    await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                    return
+                }
+                active.stream = replacement
+                let sameSession = replacement.playSessionID == current.stream.playSessionID
+                if !sameSession { await vm.stopProviderReporter(at: position) }
+                guard !Task.isCancelled else {
+                    await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                    return
+                }
+                vm.metadata = ProviderPlaybackMetadata.make(detail: active.detail, source: replacement.source,
+                    extras: active.extras)
+                vm.setProviderStream(active, preservingReporter: sameSession)
+                vm.siloBuffering.didRequestRestore()
+                vm.prepareProviderStream(active)
+                guard let plan = vm.playbackPlan else { throw MediaProviderError.notPlayable }
+                vm.releaseAetherPlayer()
+                vm.releaseAVPlayer()
+                try await vm.startWithFallback(plan: plan, startTime: position)
+                vm.updateTrackLists()
+                if resume { vm.activePlayer_play() }
+                else { vm.activePlayer_pause(); vm.updatePlaybackState(.paused) }
+            } catch {
+                guard !isCancellationError(error) else { return }
+                vm.errorMessage = PlayerError.loadFailed(error.localizedDescription).userFacingDescription
+            }
+        }
+    }
+
     func selectQuality(_ quality: StreamingQuality) {
+        guard !(source.isSilo) else { return }
         sessionQuality = quality
         enqueueStreamWork { vm in
             let before = vm.planSnapshot
@@ -3456,6 +3751,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Auto's step-down: two stalls within a minute, or one lasting 10 s. Seeks and loads never count.
     private func trackQualityStall(from previous: UniversalPlaybackState, to next: UniversalPlaybackState) {
+        if source.isSilo { return }
         guard next == .buffering else {
             if previous == .buffering {
                 longStallTask?.cancel()
@@ -3475,6 +3771,101 @@ final class UniversalPlayerViewModel: ObservableObject {
                 try? await Task.sleep(for: .seconds(StallTracker.longStall))
                 guard let self, !Task.isCancelled, self.playbackState == .buffering else { return }
                 self.stepDownQuality(reason: "long_stall")
+            }
+        }
+    }
+
+    private func updateSiloBuffering(from previous: UniversalPlaybackState, to next: UniversalPlaybackState) {
+        guard case .provider(let playback) = source,
+              let provider = playback.provider as? SiloProvider,
+              let status = playback.stream.negotiatedStatus,
+              provider.supportsBufferingQuality(for: playback.stream) else { return }
+        let now = Int(ProcessInfo.processInfo.systemUptime * 1_000)
+        if next == .playing, previous != .playing { siloBuffering.playing(atMs: now) }
+        if next == .buffering, previous == .playing, !isReloadingStream, !isSwappingItem {
+            siloBuffering.stallBegan(atMs: now)
+            siloStallTask?.cancel()
+            siloStallTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(6))
+                guard let self, !Task.isCancelled, self.playbackState == .buffering else { return }
+                let decision = self.siloBuffering.stallContinues(
+                    atMs: Int(ProcessInfo.processInfo.systemUptime * 1_000), status: status,
+                    deliveredKbps: status.effectiveRecipe?.bitrateKbps)
+                self.handleSiloBufferingDecision(decision, sessionID: playback.stream.playSessionID)
+            }
+        } else if previous == .buffering, next != .buffering {
+            siloStallTask?.cancel()
+            siloStallTask = nil
+            let decision = siloBuffering.stallEnded(atMs: now, status: status,
+                deliveredKbps: status.effectiveRecipe?.bitrateKbps)
+            handleSiloBufferingDecision(decision, sessionID: playback.stream.playSessionID)
+        }
+    }
+
+    private func handleSiloBufferingDecision(_ decision: SiloBufferingQuality.Decision, sessionID: String?) {
+        switch decision {
+        case .none: break
+        case .lower(let request): applySiloBufferingReduction(request, sessionID: sessionID)
+        case .ask:
+            guard onSiloBufferingOffer != nil else { siloBuffering.cancelOffer(); return }
+            let generation = itemGeneration
+            onSiloBufferingOffer? { [weak self] accepted in
+                guard let self, case .provider(let playback) = self.source,
+                      playback.stream.playSessionID == sessionID,
+                      self.itemGeneration == generation else { return }
+                if case .lower(let request) = self.siloBuffering.answer(accept: accepted) {
+                    self.applySiloBufferingReduction(request, sessionID: sessionID)
+                }
+            }
+        }
+    }
+
+    private func applySiloBufferingReduction(_ request: SiloBufferingQuality.Lowering, sessionID: String?) {
+        enqueueStreamWork { vm in
+            guard case .provider(var playback) = vm.source,
+                  let provider = playback.provider as? SiloProvider,
+                  playback.stream.playSessionID == sessionID else { return }
+            let position = vm.playheadForReload
+            do {
+                let replacement: StreamInfo
+                switch request.quality {
+                case .automatic:
+                    guard let estimate = request.bandwidthEstimateKbps else { return }
+                    let observation = try SiloBufferingObservation(estimateKbps: estimate,
+                        source: .observedRebuffer, observedThroughputKbps: request.observedThroughputKbps)
+                    replacement = try await provider.replanBufferingQuality(for: playback.item.ref,
+                        current: playback.stream, position: position, observation: observation)
+                case .offered:
+                    replacement = try await provider.replaceStream(for: playback.item.ref,
+                        current: playback.stream, sourceID: nil, position: position, quality: request.quality)
+                }
+                guard !Task.isCancelled, case .provider(let current) = vm.source,
+                      current.stream.playSessionID == sessionID else {
+                    await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                    return
+                }
+                playback.stream = replacement
+                let sameSession = replacement.playSessionID == current.stream.playSessionID
+                if !sameSession { await vm.stopProviderReporter(at: position) }
+                guard !Task.isCancelled else {
+                    await ProviderPlayback.discardUnplayedStream(replacement, provider: provider)
+                    return
+                }
+                vm.metadata = ProviderPlaybackMetadata.make(detail: playback.detail, source: replacement.source,
+                    extras: playback.extras)
+                vm.setProviderStream(playback, preservingReporter: sameSession)
+                vm.prepareProviderStream(playback)
+                guard let plan = vm.playbackPlan else { throw MediaProviderError.notPlayable }
+                vm.releaseAetherPlayer()
+                vm.releaseAVPlayer()
+                try await vm.startWithFallback(plan: plan, startTime: position)
+                vm.updateTrackLists()
+                vm.activePlayer_play()
+            } catch {
+                vm.siloBuffering.reductionFailed()
+                if !isCancellationError(error) {
+                    vm.errorMessage = PlayerError.loadFailed(error.localizedDescription).userFacingDescription
+                }
             }
         }
     }
@@ -4066,6 +4457,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     func stopPlayback() {
         stopCount += 1
+        siloSessionEventTask?.cancel()
+        siloSessionEventTask = nil
+        siloStallTask?.cancel()
+        siloStallTask = nil
+        onSiloBufferingCancel?()
+        siloBuffering.cancelOffer()
         resetSiloSubtitleActions()
         endDescriptionTranslation()
         let finalPosition = currentTime
@@ -4125,6 +4522,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Re-enable screensaver
         UIApplication.shared.isIdleTimerDisabled = false
+        SiloThemeMusicController.shared.resume()
     }
 
     func togglePlayPause() {
@@ -4453,17 +4851,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         replayWindow = nil
     }
 
-    /// Show seek indicator briefly (1.5 seconds)
+    /// Publishes the skip for the bar's glyph; with the controls hidden the bar shows alone (AVKit, 3.3s).
     private func showSeekIndicator(_ indicator: SeekIndicator) {
         seekIndicatorTimer?.invalidate()
-        withAnimation(.easeOut(duration: 0.15)) {
-            seekIndicator = indicator
-        }
-        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+        if !showControls { showsSkipBar = true }
+        seekIndicator = indicator
+        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 3.3, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                withAnimation(.easeOut(duration: 0.25)) {
-                    self?.seekIndicator = nil
-                }
+                self?.seekIndicator = nil
+                self?.showsSkipBar = false
             }
         }
     }
@@ -4799,8 +5195,10 @@ final class UniversalPlayerViewModel: ObservableObject {
            TrackIntentResolver.resolveAudio(intent: TrackIntentStore.effectiveAudioIntent, in: audioTracks)?.id != id {
             TrackIntentStore.audioIntent = AudioIntent(from: track)
         }
-        // Foreign Audio follows the new language.
-        if case .foreignAudio = TrackIntentStore.effectiveSubtitleIntent { applyGlobalSubtitleIntent() }
+        // Foreign Audio follows the new language, unless subtitles were turned off for this title.
+        if case .foreignAudio = TrackIntentStore.effectiveSubtitleIntent, !subtitlesPickedOff {
+            applyGlobalSubtitleIntent()
+        }
     }
 
     /// Select audio track without saving preference (for auto-selection)
@@ -4825,6 +5223,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // User picked a track manually: their choice wins over any active
         // replay window (no later revert-to-prior-track).
         clearReplayWindow()
+        // Off holds for this title even where the saved mode would show subtitles.
+        subtitlesPickedOff = id == nil
         if aetherPlayer != nil, systemCaptionsOnMute.isActive { captionsOnMute.userPicked() }
 
         // Delegate the actual pipeline switch to the auto-selection helper,
@@ -5134,7 +5534,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Whether we've already applied track preferences for this playback session
     private var hasAppliedSubtitlePreference = false
-    /// Off was picked before play, so the generated fallback stays away.
+    /// Off was picked for this title, before or during play: the generated
+    /// fallback and Foreign Audio's re-resolve stay away.
     private var subtitlesPickedOff = false
     private var hasAppliedAudioPreference = false
 
@@ -5187,7 +5588,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             // Re-read every call: the engine renumbers its tracks mid-session
             // (an audio switch rebuilds them), so its active index is authoritative.
-            if silentSubtitleTrackId == nil, let active = ap.activeSubtitleTrackId {
+            if silentSubtitleTrackId == nil, !showsGeneratedSubtitles, let active = ap.activeSubtitleTrackId {
                 currentSubtitleTrackId = active
             }
             if let active = ap.activeAudioTrackId {
@@ -5280,6 +5681,22 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Apply saved subtitle preference
     private func applySubtitlePreference() {
+        if case .provider(let playback) = source,
+           let selection = playback.stream.authoritativeSubtitleSelection {
+            switch initialSubtitleSelection {
+            case .off: initialSubtitleSelection = .auto; selectSubtitleTrackWithoutSaving(id: nil)
+            case .track(let id): initialSubtitleSelection = .auto; selectSubtitleTrackWithoutSaving(id: id)
+            case .auto:
+                switch selection {
+                case .off: selectSubtitleTrackWithoutSaving(id: nil)
+                case .track(let selectedID, _):
+                    let ordinal = playback.stream.source.subtitleTracks.firstIndex { $0.id == selectedID }
+                    let id = ordinal.flatMap { plexSubtitleTracksFromMetadata()[safe: $0]?.id }
+                    selectSubtitleTrackWithoutSaving(id: id)
+                }
+            }
+            return
+        }
         // 1. Pre-play picker selection (this session); `.auto` falls through.
         switch initialSubtitleSelection {
         case .off:
@@ -5482,15 +5899,14 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Start timers for the ambient pause presentation: `.ambient` after
     /// `pausedPosterDelay` seconds paused, `.dimmed` after
-    /// `pausedPosterDimDelay` seconds paused. No-ops while a rail panel is
-    /// open (`isRailPanelOpen`) — the ambient backdrop is a full-screen
-    /// visual that would otherwise show through/around the panel.
+    /// `pausedPosterDimDelay` seconds paused. Scrubbing and open rail panels
+    /// suspend both tiers so the backdrop cannot cover the transport controls.
     private func startPausedPosterTimer() {
-        guard !isRailPanelOpen else { return }
+        guard !isScrubbing, !isRailPanelOpen else { return }
         pausedPosterTimer?.invalidate()
         pausedPosterTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
+                guard let self, self.playbackState == .paused, !self.isScrubbing, !self.isRailPanelOpen else { return }
                 withAnimation(.easeIn(duration: 1.0)) {
                     self.pausePresentation = .ambient
                 }
@@ -5503,7 +5919,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         pausedPosterDimTimer?.invalidate()
         pausedPosterDimTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDimDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
+                guard let self, self.playbackState == .paused, !self.isScrubbing, !self.isRailPanelOpen else { return }
                 withAnimation(.easeInOut(duration: 1.0)) {
                     self.pausePresentation = .dimmed
                 }
@@ -5524,7 +5940,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Any control input drops the paused poster; while paused, its timer restarts from now.
+    /// Any control input drops the paused poster; its timers restart unless scrubbing.
     func hidePausedPoster() {
         cancelPausedPosterTimer()
         if playbackState == .paused { startPausedPosterTimer() }
@@ -6849,11 +7265,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             let provider = playback.provider
             let version = upNextVersionChoice()
             let quality = sessionQuality
+            let nativeQuality = siloManualQuality
             let throughput = lastThroughput
             task = Task {
                 do {
                     return try await ProviderPlayback.prepare(item: item, provider: provider, version: version,
-                                                              quality: quality, throughput: throughput)
+                                                              quality: quality, throughput: throughput,
+                                                              nativeQuality: nativeQuality)
                 } catch {
                     print("🎬 [PostVideo] Next provider episode failed to prepare: \(error)")
                     return nil
@@ -7021,6 +7439,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // per-item state and needs to reset across the swap.
         itemGeneration += 1
         resetSiloSubtitleActions()
+        // An Off picked on the last title does not carry over (#432).
+        subtitlesPickedOff = false
         if let queueIndex { playQueue?.jump(to: queueIndex) } else { playQueue?.advance() }
         providerTargetSourceID = nil
         // Work queued for the outgoing item never runs, so nothing else clears this.

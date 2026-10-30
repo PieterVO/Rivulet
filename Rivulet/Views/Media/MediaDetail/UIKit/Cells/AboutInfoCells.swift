@@ -77,7 +77,8 @@ final class AboutCollectionCell: UICollectionViewCell {
         synopsisLabel.translatesAutoresizingMaskIntoConstraints = false
         synopsisLabel.font = .systemFont(ofSize: 25, weight: .semibold)
         synopsisLabel.textColor = UIColor.white.withAlphaComponent(0.85)
-        synopsisLabel.numberOfLines = 6
+        synopsisLabel.numberOfLines = 3
+        synopsisLabel.lineBreakMode = .byTruncatingTail
         leftCard.addSubview(synopsisLabel)
         descriptionAttribution.translatesAutoresizingMaskIntoConstraints = false
         leftCard.addSubview(descriptionAttribution)

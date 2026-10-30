@@ -329,6 +329,31 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
                                        title: "Recently Added in \(library.title)", style: .shelf, items: map(added))
     }
 
+    /// Two requests: the library's TMDB ids, then the matches. 12.1 ignores
+    /// `anyProviderIdEquals` (measured: every title comes back), so the ids are listed.
+    func trending(in library: MediaLibrary, from trending: [TMDBListItem], limit: Int) async throws -> [MediaItem] {
+        let index: JFQueryResult = try await client.get("Items", [
+            URLQueryItem(name: "parentId", value: library.id),
+            URLQueryItem(name: "recursive", value: "true"),
+            URLQueryItem(name: "includeItemTypes", value: "Movie,Series"),
+            URLQueryItem(name: "fields", value: "ProviderIds"),
+            URLQueryItem(name: "enableImages", value: "false"),
+            URLQueryItem(name: "enableUserData", value: "false")
+        ])
+        var owned: [String: String] = [:]
+        for dto in index.items ?? [] {
+            guard let itemID = dto.id, let tmdb = dto.providerIds?["Tmdb"] else { continue }
+            owned[TrendingMatch.key(tmdbID: tmdb, type: dto.type == "Series" ? .tv : .movie)] = itemID
+        }
+        let ids = TrendingMatch.ownedIDs(trending, owned: owned, limit: limit)
+        guard !ids.isEmpty else { return [] }
+        let result: JFQueryResult = try await client.get("Items", [
+            URLQueryItem(name: "ids", value: ids.joined(separator: ",")), Self.listFields
+        ])
+        let byID = Dictionary(map(result.items).map { ($0.ref.itemID, $0) }, uniquingKeysWith: { a, _ in a })
+        return ids.compactMap { byID[$0] }
+    }
+
     /// Box sets with a member in this library (measured: `parentId` on a
     /// movie library returns them).
     func collections(in library: MediaLibrary) async throws -> [MediaItem] {

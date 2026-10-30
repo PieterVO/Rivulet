@@ -62,6 +62,40 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         return ProviderPlayback(provider: provider, item: item, detail: detail, stream: stream, extras: PlaybackExtras())
     }
 
+    func test_nativePlanSeedsSubtitleAndRejectsUnadvertisedQuality() {
+        let provider = SiloProvider(serverID: "server", displayName: "Silo", profileID: "profile",
+            client: SiloClient(baseURL: URL(string: "https://media.invalid")!, profileID: "profile"))
+        let nativeSource = MediaSource(id: "file-1", container: "mkv", duration: 100,
+            bitrate: nil, fileSize: nil, fileName: "Sample.mkv", videoResolution: "1080",
+            videoTracks: [], audioTracks: [], subtitleTracks: [
+                subtitle("11", index: 5, codec: "srt", language: "eng", title: "English", external: nil)
+            ], streamKind: .directPlay, streamURL: URL(string: "https://media.invalid/video"))
+        var planned = StreamInfo(source: nativeSource, playSessionID: "session-1", trackInfoAvailable: true)
+        planned.authoritativeSubtitleSelection = .track(id: "11", index: 5)
+        planned.negotiatedStatus = MediaNegotiatedStatus(delivery: .original,
+            availableQualities: [MediaQuality(id: "safe", displayName: "Safe", height: nil,
+                bitrateKbps: 1_200, preservesSource: false)], activeQualityID: "safe",
+            effectiveRecipe: nil, decisionReason: nil, degradationWarnings: [],
+            bandwidthLimit: nil, headerRefreshURL: nil)
+        let fixture = JellyfinFixtures.mediaItem("m1")
+        let item = MediaItem(ref: MediaItemRef(providerID: provider.id, itemID: "m1"),
+            kind: fixture.kind, title: fixture.title, sortTitle: fixture.sortTitle,
+            overview: fixture.overview, year: fixture.year, contentRating: fixture.contentRating,
+            runtime: fixture.runtime, parentRef: nil, grandparentRef: nil,
+            episodeNumber: nil, seasonNumber: nil, childProgress: nil,
+            userState: fixture.userState, artwork: fixture.artwork,
+            parentArtwork: nil, grandparentArtwork: nil)
+        let detail = MediaItemDetail(item: item, tagline: nil, genres: [], studios: [], cast: [],
+            directors: [], writers: [], chapters: [], mediaSources: [planned.source], trailerURL: nil,
+            contentRating: nil, nextEpisode: nil, collections: [])
+        let playback = ProviderPlayback(provider: provider, item: item, detail: detail,
+            stream: planned, extras: PlaybackExtras())
+        let vm = UniversalPlayerViewModel(providerPlayback: playback, startOffset: nil)
+        XCTAssertEqual(vm.currentSubtitleTrackId, 11)
+        vm.selectSiloQuality(.offered(id: "not-offered"))
+        XCTAssertEqual(vm.siloSelectedQuality, .automatic)
+    }
+
     func test_plexSource_isDefault() {
         let metadata = ProviderPlaybackMetadata.make(
             detail: playback(provider: StubMediaProvider(), stream: stream()).detail,

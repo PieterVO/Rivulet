@@ -857,12 +857,13 @@ final class AetherPlayer: PlayerProtocol {
                 preferredDecodePath: (role == .fullscreen && !nativeRemoteHLS && Self.needsDeinterlacing(url))
                     ? .software : .automatic
             )
+            // Segments cut at every keyframe join in seconds instead of waiting
+            // out the standard ~18s holdback (loopback joins measured 8-34s, #415).
+            // Costs rewind depth on short-GOP channels: the playlist caps at 900 segments.
+            options.liveJoinProfile = .fastZap
             if role == .multiviewSlot {
-                // A tile never scrubs and zaps often: segments cut at every
-                // keyframe join in seconds rather than waiting out the
-                // standard ~18s holdback, and field-rate deinterlacing on a
-                // quarter-screen tile only doubles decoder output for nothing.
-                options.liveJoinProfile = .fastZap
+                // Field-rate deinterlacing on a quarter-screen tile only
+                // doubles decoder output for nothing.
                 options.deinterlaceFieldRate = .frame
             }
             if joinsWirelessAudio {
@@ -988,12 +989,18 @@ final class AetherPlayer: PlayerProtocol {
     /// Speaker layout ("7.1.4"…) object audio renders into; absent = off.
     static let heightSpeakersKey = "heightSpeakers"
 
-    /// Profile 7 FEL composition; absent = on.
+    /// Profile 7 FEL composition; absent = off.
     static let dolbyVisionFELKey = "dolbyVisionFEL"
+    private static let felDefaultSettledKey = "dolbyVisionFELDefaultSettled"
 
-    /// Host-facing display capability for provider playback negotiation.
-    static var displaySupportsDolbyVision: Bool {
-        AetherEngine.displayCapabilities.supportsDolbyVision
+    /// FEL used to default on. Once, pin it on for an install that already had a server,
+    /// so only new installs get the off default.
+    static func settleFELDefault(existingInstall: Bool, defaults: UserDefaults = .standard) {
+        guard !defaults.bool(forKey: felDefaultSettledKey) else { return }
+        defaults.set(true, forKey: felDefaultSettledKey)
+        if existingInstall, defaults.object(forKey: dolbyVisionFELKey) == nil {
+            defaults.set(true, forKey: dolbyVisionFELKey)
+        }
     }
 
     /// DVB teletext caption page, applied to BOTH live and VOD loads. A
@@ -1141,15 +1148,15 @@ final class AetherPlayer: PlayerProtocol {
             // way whichever surface plays it (VOD recordings/rips included).
             teletextPage: Self.regionTeletextPage()
         )
-        // Settings → Playback → Height Speakers: TrueHD Atmos and DTS:X keep their heights as
-        // lossy APAC (sent to the receiver as Atmos) instead of lossless 7.1 without them.
+        // Settings → Playback → Height Speakers: TrueHD Atmos and DTS:X keep their heights as a
+        // rendered bed (lossless PCM, APAC on AirPlay) instead of 7.1 without them.
         let heightLayout = SpatialSpeakerLayout(rawValue: UserDefaults.standard.string(forKey: Self.heightSpeakersKey) ?? "")
-        if let heightLayout { options.objectAudioRendering = .apac(heightLayout) }
+        if let heightLayout { options.objectAudioRendering = .render(heightLayout) }
         // Profile 7 FEL composes both layers (#345). The engine doesn't check the panel,
         // so keep the native route (HDR10 base) where the TV can't show Dolby Vision.
-        // FEL wins over heights: on a FEL title the soundtrack plays as 7.1 without them (#362).
+        // The FEL route renders heights too, so both settings apply to one title (#362).
         let panelDV = AetherEngine.displayCapabilities.supportsDolbyVision
-        let felOn = UserDefaults.standard.object(forKey: Self.dolbyVisionFELKey) as? Bool ?? true
+        let felOn = UserDefaults.standard.bool(forKey: Self.dolbyVisionFELKey)
         options.preferDualLayerDolbyVision = panelDV && felOn
         // #362: catch the engine's one Profile 7 route line for Sentry. Live TV's capture owns the
         // handler while it runs, and VOD never loads then.
@@ -1282,7 +1289,11 @@ final class AetherPlayer: PlayerProtocol {
         userIntendsToPlay = false
         engine.pause()
     }
-    func stop() {
+    func stop() { stop(resetDisplayCriteria: true) }
+
+    /// `resetDisplayCriteria: false` keeps the TV's mode for a following load
+    /// on this player, so a same-format channel change makes no HDMI switch (#419).
+    func stop(resetDisplayCriteria: Bool) {
         foregroundReloadTask?.cancel()
         pendingReloadSince = nil
         userIntendsToPlay = false
@@ -1290,7 +1301,7 @@ final class AetherPlayer: PlayerProtocol {
         partIndex = 0
         finishAVCapture()
         dropFrameExtractor()
-        engine.stop()
+        engine.stop(resetDisplayCriteria: resetDisplayCriteria)
     }
 
     deinit {
@@ -1359,16 +1370,20 @@ final class AetherPlayer: PlayerProtocol {
         currentAVPlayer?.isMuted = muted
     }
 
+    /// Bumped per `playbackAudio()` stream, so an ended stream can tell it no longer owns the tap.
+    private var audioTapOwner = 0
+
     /// Decoded playback audio for on-device speech (the engine's audio tap):
     /// mono 48 kHz on the source axis, up to ~10 s ahead of the playhead on the
-    /// loopback route. The tap ends on every load or reload, so it is
-    /// re-installed until the stream is cancelled.
+    /// loopback route. Surround sources deliver the centre (dialogue) channel
+    /// alone; stereo falls back to the downmix. The tap ends on every load or
+    /// reload, so it is re-installed until the stream is cancelled.
     func playbackAudio() -> AsyncStream<PlaybackAudioChunk> {
         let (stream, continuation) = AsyncStream<PlaybackAudioChunk>.makeStream(bufferingPolicy: .bufferingNewest(256))
         let task = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let engine = self?.engine else { break }
-                let tap = engine.installAudioTap()
+                let tap = engine.installAudioTap(channels: .dialogue)
                 if engine.audioTapHasDeliverySource {
                     var first = true
                     for await buffer in tap {
@@ -1382,10 +1397,15 @@ final class AetherPlayer: PlayerProtocol {
             }
             continuation.finish()
         }
-        let engine = engine
+        audioTapOwner += 1
+        let owner = audioTapOwner
         continuation.onTermination = { _ in
             task.cancel()
-            Task { @MainActor in engine.removeAudioTap() }
+            // A newer stream may already own the engine's one tap; only the latest removes it.
+            Task { @MainActor [weak self] in
+                guard let self, self.audioTapOwner == owner else { return }
+                self.engine.removeAudioTap()
+            }
         }
         return stream
     }

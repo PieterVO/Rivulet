@@ -62,6 +62,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let ratingsView = RatingsGridView()
     private var preferredTextColumnWidth: NSLayoutConstraint?
     private weak var infoButton: FocusableActionButton?
+    private var themeTask: Task<Void, Never>?
     private var playButton: FocusableActionButton?
     /// The Play pill's own label, held so a post-playback refresh can flip
     /// Play ↔ Resume without rebuilding (and re-focusing) the action row.
@@ -170,6 +171,15 @@ final class MediaItemDetailPageViewController: UIViewController {
         loadBackdrop()
         loadDetail()
 
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, self.view.window != nil, self.presentedViewController == nil else { return }
+                SiloThemeMusicController.shared.resume()
+                self.activateThemeForVisiblePage()
+            }
+            .store(in: &refreshObservers)
+
         // Issue #228: this page is seeded from an immutable snapshot, so
         // playing the episode and coming back left it showing the old state.
         NotificationCenter.default.publisher(for: .plexDataNeedsRefresh)
@@ -218,13 +228,33 @@ final class MediaItemDetailPageViewController: UIViewController {
         super.viewDidAppear(animated)
         allowsAutomaticDescriptionTranslation = true
         configureDescriptionTranslation()
+        activateThemeForVisiblePage()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+    }
+
+    private func activateThemeForVisiblePage() {
+        if let silo = provider as? SiloProvider,
+           SiloSession.account?.providerID == silo.id,
+           SiloSession.authorityRevision == silo.authorityRevision {
+            themeTask?.cancel()
+            themeTask = Task { [weak self] in
+                await SiloThemeMusicController.shared.refresh(provider: silo)
+                guard let self, !Task.isCancelled, self.view.window != nil,
+                      self.presentedViewController == nil,
+                      SiloSession.account?.providerID == silo.id,
+                      SiloSession.authorityRevision == silo.authorityRevision else { return }
+                await SiloThemeMusicController.shared.activate(ownerID: self.item.ref.itemID, provider: silo)
+            }
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         allowsAutomaticDescriptionTranslation = false
+        themeTask?.cancel()
+        themeTask = nil
+        SiloThemeMusicController.shared.stop()
         descriptionTranslation.stop()
     }
 
@@ -270,7 +300,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         // 4. Synopsis with a bold "S2, E1:" prefix.
         style(synopsisLabel, size: 23, weight: .medium, alpha: 0.9)
-        synopsisLabel.numberOfLines = 6
+        synopsisLabel.numberOfLines = 3
         synopsisLabel.lineBreakMode = .byTruncatingTail
         synopsisLabel.setContentHuggingPriority(.required, for: .vertical)
         synopsisLabel.setContentCompressionResistancePriority(.init(749), for: .vertical)
@@ -521,6 +551,26 @@ final class MediaItemDetailPageViewController: UIViewController {
         playButton = pill
 
         let row = UIStackView(arrangedSubviews: [pill])
+        if let silo = provider as? SiloProvider, item.kind == .movie || item.kind == .show {
+            let request = circleButton(systemImage: "plus.app")
+            request.accessibilityLabel = "Request"
+            request.isHidden = true
+            request.onPrimaryAction = { [weak self] in
+                guard let self, self.view.window != nil,
+                      SiloSession.account?.providerID == silo.id,
+                      SiloSession.authorityRevision == silo.authorityRevision else { return }
+                self.present(SiloRequestsViewController(provider: silo, context: .search(self.item.title)), animated: true)
+            }
+            row.addArrangedSubview(request)
+            Task { [weak self, weak request] in
+                let status = try? await SiloRequests(provider: silo).status()
+                let allowed = status?.isAvailable == true
+                guard let self, let request, self.view.window != nil,
+                      SiloSession.account?.providerID == silo.id,
+                      SiloSession.authorityRevision == silo.authorityRevision else { return }
+                request.isHidden = !allowed
+            }
+        }
         row.axis = .horizontal
         row.spacing = HeroPillButton.rowGap
         row.alignment = .center

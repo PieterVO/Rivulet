@@ -45,6 +45,7 @@ extension SettingsContent {
 
     static var silo: [SettingsRowItem] {
         if let account = SiloSession.account {
+            let provider = SiloSession.storedProvider()
             return [
                 SettingsRowItem(id: "siloServerInfo", title: "Server", kind: .info(value: { account.serverName })),
                 SettingsRowItem(id: "siloAddressInfo", title: "Address", kind: .info(value: { account.serverURL.absoluteString })),
@@ -56,13 +57,16 @@ extension SettingsContent {
                 }), isEnabled: { !siloBusy }, isBusy: { siloBusy }),
                 SettingsRowItem(id: "siloProfileInfo", title: "Selected Profile", kind: .info(value: { account.profileName })),
                 siloSignOutRow
-            ]
+            ] + (provider.map { SiloPlaybackSettingsContent.rows(provider: $0, account: account) } ?? [])
         }
         if SiloSession.hasPendingSignIn {
             return [SettingsRowItem(id: "siloProfiles", title: "Choose Profile", kind: .navigation(.siloProfiles)), siloSignOutRow]
         }
         guard let draft = siloDraft else { return [] }
         return siloSteps(draft).map(\.row) + [
+            SettingsRowItem(id: "siloDeviceSignIn", title: "Sign In with Phone",
+                            kind: .action(destructive: false, handler: { vc in startSiloDeviceSignIn(draft, on: vc) }),
+                            isEnabled: { !siloBusy }),
             SettingsRowItem(id: "siloSignIn", title: siloBusy ? "Signing In…" : "Sign In",
                             kind: .action(destructive: false, handler: { vc in signInSilo(draft, on: vc) }),
                             isEnabled: { !siloBusy }, isBusy: { siloBusy })
@@ -192,6 +196,29 @@ extension SettingsContent {
                 siloFailure(on: vc, title: "Couldn't Sign In", error: error)
             }
         }
+    }
+
+    private static func startSiloDeviceSignIn(_ draft: AddSourceDraft, on vc: UIViewController) {
+        guard !siloBusy else { return }
+        var address = draft.serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !address.contains("://") { address = "http://" + address }
+        guard let url = URL(string: address), let host = url.host, !host.isEmpty else {
+            siloFailure(on: vc, title: "Couldn't Start Phone Sign In", message: "Enter your Silo web address first.")
+            return
+        }
+        draft.password = ""
+        let flow = siloFlowID
+        let signIn = SiloDeviceSignInViewController(serverURL: url)
+        signIn.onApproved = { profiles in
+            guard flow == siloFlowID, siloDraft === draft else {
+                SiloSession.cancelPendingSignIn()
+                return
+            }
+            siloProfileList = profiles
+            siloLoadedProfiles = true
+            (vc as? SettingsPageViewController)?.onPush?(.siloProfiles)
+        }
+        vc.present(signIn, animated: true)
     }
 
     private static func loadSiloProfiles(on vc: UIViewController, push: Bool) {

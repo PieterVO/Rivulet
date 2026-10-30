@@ -35,6 +35,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("hs_") { return descriptors["heightSpeakers"] }
         if id.hasPrefix("sm_") { return descriptors["subtitleMode"] }
         if id.hasPrefix("ai_") { return descriptors["appIcon"] }
+        if id.hasPrefix("hh_") { return descriptors["homeHero"] }
         if id.hasPrefix("dr_") { return descriptors["detailRating"] }
         if id.hasPrefix("alim_") { return descriptors["autoplayLimit"] }
         if id.hasPrefix("plexServer_") { return descriptors["plexServerOption"] }
@@ -111,11 +112,15 @@ enum SettingsDescriptorStore {
         ),
         "homeHero": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
-            description: "Shows a large featured content banner at the top of the Home screen with artwork and quick actions."
+            description: "The large banner at the top of the Home screen. Trending features popular titles from your library. Or pick one of your Home lists: Continue Watching, Recently Added or your Watchlist."
         ),
         "topShelfStyle": SettingDescriptor(
             icon: "tv",
             description: "The top row of the Apple TV Home Screen. Posters shows a row of posters. Full Screen fills it with artwork from what you are watching."
+        ),
+        "skipPreview": SettingDescriptor(
+            icon: "rectangle.expand.vertical",
+            description: "Selecting a movie or show opens its full details at once, skipping the preview card. Off keeps the preview, where you can browse the row."
         ),
         "detailRating": SettingDescriptor(
             icon: "star.leadinghalf.filled",
@@ -200,11 +205,11 @@ enum SettingsDescriptorStore {
         ),
         "heightSpeakers": SettingDescriptor(
             icon: "hifispeaker.2",
-            description: "Keeps Atmos and DTS:X height channels, in a lossy format. Off plays lossless 7.1 without them. DTS:X needs 7.1.4 or 9.1.6."
+            description: "Keeps Atmos and DTS:X heights as lossless PCM over HDMI, including with Dolby Vision FEL. AirPlay uses lossy APAC. Off plays channel audio without object heights. DTS:X needs 7.1.4 or 9.1.6."
         ),
         "dolbyVisionFEL": SettingDescriptor(
             icon: "4k.tv",
-            description: "Plays the full Dolby Vision Profile 7 layer on a Dolby Vision TV, without Atmos heights, AirPlay or Picture in Picture. Off plays it as 8.1."
+            description: "Plays the full Dolby Vision Profile 7 layer on a Dolby Vision TV. Height Speakers keeps Atmos and DTS:X heights. No AirPlay or Picture in Picture. Off plays it as 8.1."
         ),
         "autoplayCountdown": SettingDescriptor(
             icon: "forward.end.alt",
@@ -354,6 +359,17 @@ enum SettingsDescriptorStore {
             description: "Used only to sign in. Rivulet saves the server's session credentials securely, not your password."
         ),
         "siloSignIn": SettingDescriptor(icon: "link", description: "Check the Silo server and sign in, then choose a profile."),
+        "siloDeviceSignIn": SettingDescriptor(icon: "qrcode", description: "Sign in on your phone using Silo's device code, then choose a profile."),
+        "siloFollowPlayback": SettingDescriptor(icon: "play.rectangle", description: "Use Silo's effective playback preferences for this profile. Local choices below take precedence."),
+        "siloBufferingPolicy": SettingDescriptor(icon: "wifi", description: "Choose whether buffering may lower quality: never, ask first, or automatically."),
+        "siloQualityOverride": SettingDescriptor(icon: "slider.horizontal.3", description: "Use Auto or an exact quality ID offered by Silo. Clear stops inherited quality; empty inherits."),
+        "siloBitrateOverride": SettingDescriptor(icon: "speedometer", description: "Set a local maximum bitrate in kbps. This is a bitrate limit, not a guaranteed resolution."),
+        "siloAudioLanguageOverride": SettingDescriptor(icon: "waveform", description: "Prefer an audio language for Silo playback on this profile."),
+        "siloSubtitleLanguageOverride": SettingDescriptor(icon: "captions.bubble", description: "Prefer a subtitle language for Silo playback on this profile."),
+        "siloSubtitleModeOverride": SettingDescriptor(icon: "captions.bubble", description: "Choose automatic, always, or off for Silo subtitles. A title's explicit choice still wins."),
+        "siloForcedSubtitleOverride": SettingDescriptor(icon: "captions.bubble", description: "Choose whether forced subtitles are shown when Silo selects subtitles."),
+        "siloThemeMusicEnabled": SettingDescriptor(icon: "music.note", description: "Play a selected Silo title's theme music when its page is visible. Off by default."),
+        "siloThemeMusicLoop": SettingDescriptor(icon: "repeat", description: "Repeat optional Silo title theme music while its page remains active."),
         "siloSignOut": SettingDescriptor(
             icon: "rectangle.portrait.and.arrow.right",
             description: "Sign out of Silo and remove this account's saved credentials from Rivulet."
@@ -412,9 +428,33 @@ enum SettingsDescriptorStore {
             icon: "key",
             description: "The password your provider gave you. Rivulet keeps it in the Keychain."
         ),
-        "addOwnServer": SettingDescriptor(
+        "addDispatcharr": SettingDescriptor(
+            icon: "antenna.radiowaves.left.and.right",
+            description: "Your Dispatcharr server. Rivulet loads its channels and guide, and records through it if you sign in."
+        ),
+        "addTvheadend": SettingDescriptor(
+            icon: "tv",
+            description: "Your Tvheadend server. Rivulet loads its channels and guide, and records through it if you sign in."
+        ),
+        "addThreadfin": SettingDescriptor(
             icon: "server.rack",
-            description: "A server you run that serves a playlist and guide, such as Dispatcharr, Threadfin, xTeVe or ErsatzTV. Give Rivulet the address."
+            description: "Your Threadfin server. Rivulet loads its playlist and guide from the address."
+        ),
+        "tvhServerField": SettingDescriptor(
+            icon: "globe",
+            description: "Your Tvheadend server's address on your network, with its port. Tvheadend uses 9981 unless you changed it."
+        ),
+        "tvhUsernameField": SettingDescriptor(
+            icon: "person",
+            description: "A Tvheadend user. Needed if your server asks for a login, and to record. Leave it empty to watch without one."
+        ),
+        "tvhPasswordField": SettingDescriptor(
+            icon: "key",
+            description: "That user's password. Rivulet keeps it in the Keychain."
+        ),
+        "threadfinServerField": SettingDescriptor(
+            icon: "globe",
+            description: "Your Threadfin server's address on your network, with its port. Threadfin uses 34400 unless you changed it."
         ),
         "addPlaylistURL": SettingDescriptor(
             icon: "list.bullet.rectangle",
@@ -422,7 +462,7 @@ enum SettingsDescriptorStore {
         ),
         "serverURL": SettingDescriptor(
             icon: "globe",
-            description: "The address of your server on your network, including the port. Pick your app from the suggestions to fill in the usual one."
+            description: "Your Dispatcharr server's address on your network, with its port. Dispatcharr uses 9191 unless you changed it."
         ),
         "displayNameField": SettingDescriptor(
             icon: "textformat",
@@ -561,6 +601,7 @@ enum SettingsDescriptorStore {
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)
         case .cache: return ("internaldrive", .systemGray)
         case .appIconPicker: return ("app.badge", .systemPurple)
+        case .homeHeroPicker: return ("sparkles.rectangle.stack", .systemPurple)
         case .detailRatingPicker: return ("star.leadinghalf.filled", .systemYellow)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)
@@ -579,7 +620,9 @@ enum SettingsDescriptorStore {
         case .liveTVFavorites: return ("star.fill", .systemYellow)
         case .addLiveTVSource: return ("plus.circle.fill", .systemBlue)
         case .addXtream: return ("person.badge.key.fill", .systemIndigo)
-        case .addOwnServer: return ("server.rack", .systemBlue)
+        case .addDispatcharr: return ("antenna.radiowaves.left.and.right", .systemBlue)
+        case .addTvheadend: return ("tv", .systemBlue)
+        case .addThreadfin: return ("server.rack", .systemBlue)
         case .addPlaylistURL: return ("list.bullet.rectangle", .systemGreen)
         }
     }

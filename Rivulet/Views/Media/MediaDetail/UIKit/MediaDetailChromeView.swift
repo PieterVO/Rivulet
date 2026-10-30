@@ -178,14 +178,14 @@ final class MediaDetailChromeView: UIView {
         return s
     }()
 
-    /// Four-line carousel preview; expanded details truncate after six lines.
+    /// Synopsis previews truncate after three lines in both layout modes.
     /// Reading width stays capped at 677pt (860pt for an episode).
     private let descriptionLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.font = MediaDetailChromeView.descriptionFont
         l.textColor = UIColor.white.withAlphaComponent(0.85)
-        l.numberOfLines = 4
+        l.numberOfLines = 3
         l.lineBreakMode = .byTruncatingTail
         l.setContentHuggingPriority(.required, for: .vertical)
         l.setContentCompressionResistancePriority(.init(749), for: .vertical)
@@ -371,7 +371,6 @@ final class MediaDetailChromeView: UIView {
     // MARK: - Mode
 
     private func applyMode() {
-        descriptionLabel.numberOfLines = mode == .expandedDetail ? 6 : 4
         metadataSpacer.isHidden = mode != .expandedDetail
         metadataBlock.setCustomSpacing(mode == .expandedDetail ? 0 : 18, after: qualityRow)
         switch mode {
@@ -806,6 +805,28 @@ final class MediaDetailChromeView: UIView {
 
         actionButtonsStack.addArrangedSubview(pill)
         actionButtonsStack.addArrangedSubview(info)
+        if let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) as? SiloProvider,
+           item.kind == .movie || item.kind == .show {
+            let request = makeCircleButton(systemImage: "plus.app")
+            request.accessibilityLabel = "Request"
+            request.isHidden = true
+            request.onPrimaryAction = { [weak self] in
+                guard let self, self.item?.ref == item.ref, self.window != nil,
+                      SiloSession.account?.providerID == provider.id,
+                      SiloSession.authorityRevision == provider.authorityRevision,
+                      let host = self.hostViewController else { return }
+                host.present(SiloRequestsViewController(provider: provider, context: .search(item.title)), animated: true)
+            }
+            actionButtonsStack.addArrangedSubview(request)
+            Task { [weak self, weak request] in
+                let status = try? await SiloRequests(provider: provider).status()
+                let allowed = status?.isAvailable == true
+                guard let self, let request, self.item?.ref == item.ref, self.window != nil,
+                      SiloSession.account?.providerID == provider.id,
+                      SiloSession.authorityRevision == provider.authorityRevision else { return }
+                request.isHidden = !allowed
+            }
+        }
         // The pill is the row's primary focus target (playFocusable feeds
         // the carousel's land-on-primary routing).
         playButton = pill

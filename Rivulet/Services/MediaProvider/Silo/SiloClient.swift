@@ -72,8 +72,8 @@ nonisolated final class SiloClient: Sendable {
         let _: Empty = try await send("POST", path, query: [], body: body)
     }
 
-    func put(_ path: String, body: (any Encodable & Sendable)? = nil) async throws {
-        let _: Empty = try await send("PUT", path, query: [], body: body)
+    func put(_ path: String, body: (any Encodable & Sendable)? = nil, expectedStatus: Int? = nil) async throws {
+        let _: Empty = try await send("PUT", path, query: [], body: body, expectedStatus: expectedStatus)
     }
 
     func patch(_ path: String, body: (any Encodable & Sendable)? = nil) async throws {
@@ -157,7 +157,7 @@ nonisolated final class SiloClient: Sendable {
 
     @concurrent
     private func send<T: Decodable & Sendable>(
-        _ method: String, _ path: String, query: [URLQueryItem], body: (any Encodable & Sendable)?
+        _ method: String, _ path: String, query: [URLQueryItem], body: (any Encodable & Sendable)?, expectedStatus: Int? = nil
     ) async throws -> T {
         var request = URLRequest(url: url(path, query))
         request.httpMethod = method
@@ -185,6 +185,7 @@ nonisolated final class SiloClient: Sendable {
             if let problem = try? SiloJSON.decoder().decode(SiloAPIError.self, from: data) { throw problem }
             throw MediaProviderError.backendSpecific(underlying: "Silo HTTP \(status)")
         }
+        if let expectedStatus, status != expectedStatus { throw SiloSignInError.invalidResponse }
         if T.self == Empty.self { return Empty() as! T }
         do { return try SiloJSON.decoder().decode(T.self, from: data) }
         catch { throw SiloSignInError.invalidResponse }

@@ -361,8 +361,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
     /// Builds the player for `channel` and starts the join. Called on load and
     /// again for every in-place channel switch, so it must assume NOTHING is
-    /// left over from a previous session — `teardownPlaybackSession()` is the
-    /// matching half.
+    /// left over from a previous session except a kept, stopped player —
+    /// `teardownPlaybackSession()` is the matching half.
     private func startPlayback() {
         loadingSpinner.startAnimating()
         isUserPaused = false
@@ -375,13 +375,15 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         let adopted = pendingAdoption
         pendingAdoption = nil
-        let aether = adopted?.player ?? AetherPlayer()
+        let aether = adopted?.player ?? aetherPlayer ?? AetherPlayer()
         if let adopted {
             liveKeepalive = adopted.keepalive
             isNativeHLSRoute = adopted.isNativeHLSRoute
         }
-        aetherPlayer = aether
-        aether.bind(view: engineSurfaceView)
+        if aetherPlayer !== aether {
+            aetherPlayer = aether
+            aether.bind(view: engineSurfaceView)
+        }
         checkStreamChoices()
         bindAetherSubtitles(aether)
         captionsOnMute = CaptionsOnMuteLogic()
@@ -599,7 +601,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         guard retuneTask == nil else { retunePending = true; return }
         // Let the dead session go now: its tuner is free while this waits,
         // and its player can't start the fallback ladder alongside.
-        teardownPlaybackSession()
+        teardownPlaybackSession(keepingPlayer: true)
         guard let delay = retuneBudget.reserve(now: ProcessInfo.processInfo.systemUptime) else {
             streamLoadTask = Task { @MainActor in await self.endJoin(notice: Self.sourceLostNotice) }
             return
@@ -675,7 +677,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         watchCreditTask = LiveTVDataStore.shared.beganWatching(channel)
     }
 
-    private func teardownPlaybackSession() {
+    private func teardownPlaybackSession(keepingPlayer: Bool = false) {
         endScrub()
         streamLoadTask?.cancel()
         streamLoadTask = nil
@@ -709,9 +711,15 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         // Drop the outgoing channel's cues: on a switch the overlay would
         // otherwise keep painting them until the new session publishes.
         subtitleModel.update(cues: [])
-        aetherPlayer?.stop()
-        aetherPlayer?.unbind(view: engineSurfaceView)
-        aetherPlayer = nil
+        if keepingPlayer {
+            // The next join loads on this engine, which skips the display
+            // mode write when the format is unchanged (#419).
+            aetherPlayer?.stop(resetDisplayCriteria: false)
+        } else {
+            aetherPlayer?.stop()
+            aetherPlayer?.unbind(view: engineSurfaceView)
+            aetherPlayer = nil
+        }
         // Every subscription in this set is bound to the player built by
         // startPlayback(); a stale one would feed the next session's UI from
         // the dead player.
@@ -811,6 +819,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         ])
 
         railView.onSubtitles = { [weak self] in self?.presentSubtitlePanel() }
+        railView.onSubtitlesHold = { [weak self] in self?.toggleSubtitles() }
         railView.onAudio = { [weak self] in self?.presentAudioPanel() }
         railView.onQuality = { [weak self] in self?.presentStreamPanel() }
         railView.onInfo = { [weak self] in self?.presentInfoPanel() }
@@ -971,12 +980,21 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
     /// Chrome auto-hides after a few idle seconds, same spirit as the VOD
     /// container. Any focus movement inside the rail restarts the clock; an
-    /// open panel suspends it.
+    /// open menu suspends it. An untouched info pane closes, as in AVKit (#411).
     private func restartAutoHide() {
         autoHideTimer?.invalidate()
-        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
+        // Measured in AVKit: a pane waits 20s while focus is inside its content.
+        let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView
+        let inPane = activePanel.map { $0.isPane && focused?.isDescendant(of: $0) == true } ?? false
+        autoHideTimer = Timer.scheduledTimer(withTimeInterval: inPane ? 20 : 8, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.activePanel == nil, self.descriptionOverlay == nil, !self.isUserPaused else { return }
+                guard let self, self.descriptionOverlay == nil else { return }
+                if let pane = self.activePanel, pane.isPane {
+                    pane.dismissPanel()
+                } else if self.activePanel != nil {
+                    return
+                }
+                guard !self.isUserPaused else { return }
                 self.hideRail()
             }
         }
@@ -1065,7 +1083,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         if let next = context.nextFocusedView {
             progressBar.setFocusDimmed(next !== scrubberProxy && next.isDescendant(of: railView), coordinator: coordinator)
         }
-        if railVisible, activePanel == nil,
+        if activePanel?.isPane == true {
+            restartAutoHide()
+        } else if railVisible, activePanel == nil,
            let next = context.nextFocusedView, next.isDescendant(of: railView) {
             restartAutoHide()
         }
@@ -1110,8 +1130,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private func presentPane(content: UIView, pill: PlayerInfoPillButton) {
         let openPane = activePanel?.isPane == true ? activePanel : nil
         guard openPane != nil || activePanel == nil else { return }
-        autoHideTimer?.invalidate()
-        autoHideTimer = nil
+        restartAutoHide()
         let panel = PlayerRailPanelView.presentPane(
             content: content, cardWidth: nil, in: view, rail: railView, pill: pill,
             riders: [progressBar, timeshiftBadge], replacing: openPane)
@@ -1135,12 +1154,14 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                 self.progressBar.alpha = barVisible ? 1 : 0
                 self.timeshiftBadge.alpha = barVisible ? 1 : 0
             }
+            self.syncSubtitleOverlay(animated: true)
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
             self.restartAutoHide()
         }
         panel.onMenuHandled = { [weak self] in self?.armDismissEchoBlock() }
         activePanel = panel
+        syncSubtitleOverlay(animated: true)
         updateScrubberFocus()
         UIView.animate(withDuration: 0.167) {
             self.progressBar.alpha = 0
@@ -1173,11 +1194,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             if aether.subtitleTracks.contains(where: { ($0.codec ?? "").lowercased().contains("teletext") }) {
                 steppers.append(teletextPageStepper())
             }
-            let list = CardTrackListView(
-                header: "Subtitles",
-                tracks: aether.subtitleTracks,
+            let tracks = aether.subtitleTracks
+            let list = CardTrackListView.subtitleMenu(
+                tracks: tracks,
                 selectedTrackId: aether.currentSubtitleTrackId,
-                showsOffRow: true,
+                onTrackId: aether.currentSubtitleTrackId ?? (tracks.first { !$0.isForced } ?? tracks.first)?.id,
                 steppers: steppers
             ) { [weak self] trackId in
                 guard let self else { return }
@@ -1209,11 +1230,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                     codec: "webvtt"
                 )
             }
-            let list = CardTrackListView(
-                header: "Subtitles",
+            let list = CardTrackListView.subtitleMenu(
                 tracks: tracks,
                 selectedTrackId: selectedIndex,
-                showsOffRow: true,
+                onTrackId: selectedIndex ?? tracks.first?.id,
                 steppers: self.subtitleAdjustmentSteppers()
             ) { [weak self] trackId in
                 self?.selectNativeLegible(trackId)
@@ -1223,19 +1243,27 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         }
     }
 
+    /// AVKit's hold on Subtitles: off if showing, else the first full track. Engine-demuxed channels only.
+    private func toggleSubtitles() {
+        guard let aether = aetherPlayer, !aether.subtitleTracks.isEmpty else { return }
+        if systemCaptionsOnMute.isActive { captionsOnMute.userPicked() }
+        if aether.currentSubtitleTrackId != nil {
+            aether.selectSubtitleTrack(id: nil)
+            railView.showNote("Subtitles off")
+        } else if let track = aether.subtitleTracks.first(where: { !$0.isForced }) ?? aether.subtitleTracks.first {
+            aether.selectSubtitleTrack(id: track.id)
+            railView.showNote("Subtitles on")
+        }
+    }
+
     private func presentAudioPanel() {
         guard let aether = aetherPlayer else { return }
 
         // Engine demux path: tracks come from the engine.
         if !aether.audioTracks.isEmpty {
-            let list = CardTrackListView(
-                header: "Audio",
+            let list = CardTrackListView.audioMenu(
                 tracks: aether.audioTracks,
-                selectedTrackId: aether.currentAudioTrackId,
-                showsOffRow: false,
-                audio: true,
-                choices: SystemAudioAdjustment.menuChoices,
-                toggles: SystemAudioAdjustment.menuToggles
+                selectedTrackId: aether.currentAudioTrackId
             ) { [weak self] trackId in
                 if let trackId { self?.aetherPlayer?.selectAudioTrack(id: trackId) }
                 self?.activePanel?.dismissPanel()
@@ -1262,14 +1290,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                     languageCode: option.locale?.identifier
                 )
             }
-            let list = CardTrackListView(
-                header: "Audio",
+            let list = CardTrackListView.audioMenu(
                 tracks: tracks,
-                selectedTrackId: selectedIndex,
-                showsOffRow: false,
-                audio: true,
-                choices: SystemAudioAdjustment.menuChoices,
-                toggles: SystemAudioAdjustment.menuToggles
+                selectedTrackId: selectedIndex
             ) { [weak self] trackId in
                 if let trackId, trackId < group.options.count {
                     item.select(group.options[trackId], in: group)
@@ -1684,7 +1707,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         guard newChannel.id != channel.id else { return }
         cancelRetune()
         retuneBudget = LiveRetuneBudget()
-        teardownPlaybackSession()
+        teardownPlaybackSession(keepingPlayer: true)
         channel = newChannel
         // Rail must not keep showing the old channel's programme while the
         // new one resolves.
@@ -1885,6 +1908,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     // MARK: - Remote handling
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if activePanel?.isPane == true { restartAutoHide() }
         for press in presses {
             switch press.type {
             case .menu:
@@ -2182,7 +2206,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     /// Plex answers a tune with no free tuner the same way as other tuner
     /// faults, so busy is the likely reason, not a certain one.
     private static func notice(forResolveError error: Error) -> String? {
-        error is PlexLiveTuneError ? "Couldn't tune this channel. All tuners may be busy." : nil
+        if error is PlexLiveTuneError { return "Couldn't tune this channel. All tuners may be busy." }
+        return (error as? TvheadendError)?.errorDescription
     }
 
     private static let tunersBusyNotice = "All tuners are busy. Stop another stream and try again."
@@ -2357,6 +2382,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         overlay.videoSize = aetherPlayer?.videoSize ?? .zero
         // Height is sticky per channel, like the delay stepper.
         overlay.heightUnits = subtitleHeightUnits
+        let pane = activePanel?.isPane == true
+        if overlay.paneOpen != pane {
+            overlay.paneOpen = pane
+            if animated { UIView.animate(withDuration: 0.25) { overlay.layoutIfNeeded() } }
+        }
         overlay.setControlsVisible(railVisible || timelineVisible, animated: animated)
     }
 

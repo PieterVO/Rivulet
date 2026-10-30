@@ -792,7 +792,8 @@ class PlexAuthManager: ObservableObject {
     }
 
     /// The profile in use was entered with a PIN, so the next launch starts locked.
-    var relocksOnLaunch: Bool { storedContent == .withheld }
+    /// Signed out of Plex is not a lock: `storedContent` reads `.withheld` with no account token.
+    var relocksOnLaunch: Bool { authToken != nil && storedContent == .withheld }
 
     /// The account token for account-level content (Watchlist, favourite channels),
     /// only while the account itself is the profile in use.

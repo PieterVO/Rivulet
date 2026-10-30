@@ -307,8 +307,7 @@ private nonisolated func jellyfinDate(_ string: String?) -> Date? {
 nonisolated extension JFLiveChannel {
     func unifiedChannel(sourceId: String, baseURL: URL) -> UnifiedChannel? {
         guard let id, let name else { return nil }
-        // OTA lineups number "5.1"; the guide sorts on the whole part.
-        let number = (channelNumber ?? self.number).flatMap { Int($0.split(separator: ".").first ?? "") }
+        let number = (channelNumber ?? self.number).flatMap(ChannelNumber.init)
         return UnifiedChannel(
             id: UnifiedChannel.makeId(sourceType: .jellyfin, sourceId: sourceId, channelId: id),
             sourceType: .jellyfin,
@@ -360,7 +359,8 @@ nonisolated extension JFLiveProgram {
             landscapeURL: jellyfinImageURL(baseURL, itemID: id, type: "Thumb", tag: imageTags?["Thumb"])
                 ?? jellyfinImageURL(baseURL, itemID: id, type: "Backdrop", tag: backdropImageTags?.first),
             episodeNumber: episode,
-            isNew: isPremiere ?? false,
+            // Jellyfin web's rule; Schedules Direct flags only season premieres.
+            isNew: isPremiere == true || (isSeries == true && isRepeat != true),
             year: isMovie == true ? productionYear : nil,
             contentRating: officialRating,
             isMovie: isMovie ?? false,
@@ -439,6 +439,7 @@ nonisolated struct JFLiveProgram: Decodable, Sendable {
     let isKids: Bool?
     let isLive: Bool?
     let isPremiere: Bool?
+    let isRepeat: Bool?
 }
 
 /// `LiveTv/Timers/Defaults`, posted back unchanged (but for the new-only

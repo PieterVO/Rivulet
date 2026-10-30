@@ -206,10 +206,13 @@ enum SettingsContent {
         case .liveTVFavorites: return liveTVFavorites
         case .addLiveTVSource:  return addLiveTVSource
         case .addXtream:        return addXtream
-        case .addOwnServer:     return addOwnServer
+        case .addDispatcharr:   return addDispatcharr
+        case .addTvheadend:     return addTvheadend
+        case .addThreadfin:     return addThreadfin
         case .addPlaylistURL:   return addPlaylistURL
         case .about:       return about
         case .appIconPicker:          return appIconPicker
+        case .homeHeroPicker:         return homeHeroPicker
         case .detailRatingPicker:     return detailRatingPicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
@@ -235,6 +238,32 @@ enum SettingsContent {
                 isSelected: { AppIcon.current == icon },
                 select: { icon.apply() }))
         }
+    }
+
+    private static let homeHeroOptions: [(id: String, title: String)] = [
+        ("off", "Off"), ("trending", "Trending"), ("continueWatching", "Continue Watching"),
+        ("recentlyAdded", "Recently Added"), ("watchlist", "Watchlist"),
+    ]
+
+    /// Off, or the hero on with what it shows: `showHomeHero` plus `homeHeroContent`.
+    private static var homeHeroPicker: [SettingsRowItem] {
+        homeHeroOptions.map { option in
+            SettingsRowItem(id: "hh_\(option.id)", title: option.title, kind: .option(
+                isSelected: { homeHeroChoice == option.id },
+                select: {
+                    SettingsStore.setBool("showHomeHero", option.id != "off")
+                    if option.id != "off" { SettingsStore.setString("homeHeroContent", option.id) }
+                }))
+        }
+    }
+
+    private static var homeHeroChoice: String {
+        guard SettingsStore.bool("showHomeHero", default: true) else { return "off" }
+        return PlexHomeViewController.heroContent.rawValue
+    }
+
+    private static var homeHeroTitle: String {
+        homeHeroOptions.first { $0.id == homeHeroChoice }?.title ?? "Trending"
     }
 
     private static var detailRatingPicker: [SettingsRowItem] {
@@ -293,29 +322,10 @@ enum SettingsContent {
         ["", "5.1.2", "5.1.4", "7.1.2", "7.1.4", "9.1.6"].map { layout in
             SettingsRowItem(id: "hs_\(layout.isEmpty ? "off" : layout)", title: layout.isEmpty ? "Off" : layout,
                             kind: .selectable(isSelected: { heightSpeakers == layout }, value: { nil }, handler: { vc in
-                let page = vc as? SettingsPageViewController
-                let firstHeights = heightSpeakers.isEmpty && !layout.isEmpty
                 SettingsStore.setString(AetherPlayer.heightSpeakersKey, layout)
-                guard firstHeights, dolbyVisionFEL,
-                      !SettingsStore.bool(heightsFELNoticeShownKey, default: false) else {
-                    page?.onPop?()
-                    return
-                }
-                SettingsStore.setBool(heightsFELNoticeShownKey, true)
-                vc.present(ConfirmationPopupViewController(
-                    title: "Height Speakers and FEL",
-                    message: "When a video has both Dolby Vision FEL and Atmos or DTS:X, Rivulet plays FEL, and the soundtrack plays without height channels. Turn off Dolby Vision FEL to keep heights instead.",
-                    confirmTitle: "Got It", cancelTitle: nil,
-                    onConfirm: { page?.onPop?() }, onCancel: { page?.onPop?() }), animated: true)
+                (vc as? SettingsPageViewController)?.onPop?()
             }))
         }
-    }
-
-    /// The one-time Height Speakers / FEL popup (#362).
-    private static let heightsFELNoticeShownKey = "heightsFELNoticeShown"
-
-    private static var dolbyVisionFEL: Bool {
-        SettingsStore.bool(AetherPlayer.dolbyVisionFELKey, default: true)
     }
 
     /// Read at play time by the player (`StreamingQuality.setting`).
@@ -434,13 +444,15 @@ enum SettingsContent {
             SettingsRowItem(id: "topShelfStyle", title: "Top Shelf",
                             kind: .cycle(value: { TopShelfCache.shared.fullScreen ? "Full Screen" : "Posters" },
                                          next: { TopShelfCache.shared.fullScreen.toggle() })),
+            toggle("skipPreview", "Skip Preview", key: "skipPreviewCarousel", default: false),
 
             // Titles drop whatever their caption already says ("Home Hero" under
             // HOME reads as "Home Home Hero"), the way Apple TV Settings puts a
             // bare "Siri" row under SIRI.
             .header("Home"),
             SettingsRowItem(id: "homeRows", title: "Rows", kind: .navigation(.homeRows)),
-            toggle("homeHero", "Hero", key: "showHomeHero", default: true),
+            SettingsRowItem(id: "homeHero", title: "Hero",
+                            kind: .navigationValue(.homeHeroPicker, value: { homeHeroTitle })),
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [
@@ -540,7 +552,7 @@ enum SettingsContent {
                             kind: .navigationValue(.autoplayLimitPicker, value: { AutoplayLimit.current.description })),
             toggle("showPostVideoUpNext", "Up Next Panel", key: "showPostVideoUpNext", default: true),
             .header("Home Theater"),
-            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: true),
+            toggle("dolbyVisionFEL", "Dolby Vision FEL", key: AetherPlayer.dolbyVisionFELKey, default: false),
             SettingsRowItem(id: "heightSpeakers", title: "Height Speakers",
                             kind: .navigationValue(.heightSpeakersPicker, value: { heightSpeakers.isEmpty ? "Off" : heightSpeakers })),
             .header("Filtering"),
@@ -567,7 +579,11 @@ enum SettingsContent {
             SettingsRowItem(id: "cf_master", title: "Content Filter", kind: .toggle(
                 get: { SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) },
                 set: { SettingsStore.setBool(ContentFilterManager.Keys.enabled, $0) },
-                didChange: { on, _ in if on { SpeechModelStore.shared.prepare() } }))
+                didChange: { on, _ in if on { SpeechModelStore.shared.prepare() } }),
+                isBusy: {
+                    guard case .downloading = SpeechModelStore.shared.state else { return false }
+                    return SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false)
+                })
         ]
 
         // Language categories (auto-detected from subtitles)

@@ -1098,7 +1098,7 @@ final class LiveMultiviewViewController: UIViewController {
                 let fa = store.isFavorite(a.channel)
                 let fb = store.isFavorite(b.channel)
                 if fa != fb { return fa }
-                return (a.channel.channelNumber ?? Int.max) < (b.channel.channelNumber ?? Int.max)
+                return (a.channel.channelNumber ?? .max) < (b.channel.channelNumber ?? .max)
             }
             .prefix(80)
             .map { LiveCardItem.channel($0.channel, program: store.getCurrentProgram(for: $0.channel), section: "add") }

@@ -3,8 +3,8 @@
 
 //
 //  Global audio and subtitle track memory (UserDefaults, last write wins, shared
-//  across profiles). Forced and regular subtitles are different intents, and the
-//  resolver never substitutes one for the other.
+//  across profiles). Forced and regular subtitles are different intents: a regular
+//  intent falls back to a forced track, a forced intent never takes a regular one.
 //
 
 import Foundation
@@ -55,16 +55,24 @@ extension SubtitleIntent {
 
     /// The intent a player pick leaves behind. Under Foreign Audio, a pick
     /// that fits the mode (a forced track, or subtitles over foreign audio)
-    /// keeps the mode and only updates the language.
+    /// keeps the mode and only updates the language, and Off covers the
+    /// current title only (#432). A forced pick means "on in this language",
+    /// never a switch to Forced Only (#425).
     static func afterPick(_ track: MediaTrack?, replacing current: SubtitleIntent,
                           audioLanguage: String?) -> SubtitleIntent {
-        guard let track else { return .off }
+        guard let track else {
+            if case .foreignAudio = current { return current }
+            return .off
+        }
         let language = track.languageCode ?? track.language ?? ""
         if case .foreignAudio = current, TrackLanguage.isKnown(language),
            track.isForced || TrackLanguage.isForeign(audioLanguage, to: language) {
             return .foreignAudio(language: language, hearingImpaired: track.isHearingImpaired)
         }
-        return SubtitleIntent(from: track)
+        var forced = false
+        if track.isForced, case .track(_, true, _, _) = current { forced = true }
+        return .track(language: language, forced: forced,
+                      hearingImpaired: track.isHearingImpaired, codec: track.codec)
     }
 
     /// The subtitle language this intent asks for, if any.
@@ -277,7 +285,9 @@ enum TrackIntentResolver {
     ///   1. language + forced + hearingImpaired + codec
     ///   2. language + forced + hearingImpaired
     ///   3. language + forced
-    ///   4. off
+    ///   4. regular intent only: a forced track in the language (#425, files that
+    ///      flag full subtitles forced). A forced intent never takes a full track.
+    ///   5. off
     ///
     /// `.foreignAudio` asks for full subtitles when `audioLanguage` is known
     /// and differs, falling back to forced; otherwise forced only.
@@ -302,7 +312,11 @@ enum TrackIntentResolver {
                 TrackLanguage.matches($0.languageCode ?? $0.language, language)
                     && $0.isForced == forced
             }
-            guard !base.isEmpty else { return nil }
+            guard !base.isEmpty else {
+                guard !forced else { return nil }
+                return resolveSubtitle(intent: .track(language: language, forced: true,
+                                                      hearingImpaired: hearingImpaired, codec: codec), in: tracks)
+            }
 
             // 1. + hearingImpaired + codec
             if let codec, !codec.isEmpty {

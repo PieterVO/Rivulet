@@ -58,17 +58,15 @@ final class DiscoverViewModel: ObservableObject {
         var hubs: [String: [MediaHub]] = [:]
         var errors: [String: String] = [:]
         var supported = Set<String>()
-        await withTaskGroup(of: (String, [MediaHub]?, String?).self) { group in
-            for provider in providers {
-                let providerID = provider.id
-                group.addTask {
-                    do { return (providerID, try await provider.discoveryHubs(), nil) }
-                    catch { return (providerID, nil, error.localizedDescription) }
+        // Keep native feed collection on the model's actor and authority generation.
+        for provider in providers {
+            do {
+                if let rows = try await provider.discoveryHubs() {
+                    hubs[provider.id] = rows
+                    supported.insert(provider.id)
                 }
-            }
-            for await (id, rows, error) in group {
-                if let rows { hubs[id] = rows; supported.insert(id) }
-                if let error { errors[id] = error }
+            } catch {
+                errors[provider.id] = error.localizedDescription
             }
         }
         guard expected == generation, !Task.isCancelled else { return }
@@ -130,7 +128,13 @@ final class DiscoverViewModel: ObservableObject {
     }
 
     func libraryMatch(for item: TMDBListItem) async -> PlexMetadata? {
-        guard let match = await libraryIndex.lookup(tmdbId: item.id, type: item.mediaType) else { return nil }
+        guard let plex = MediaProviderRegistry.shared.plexProvider,
+              LibrarySettingsManager.shared.areServerLibrariesVisible(plex.id),
+              let entry = await libraryIndex.lookup(tmdbId: item.id, type: item.mediaType),
+              let serverURL = PlexAuthManager.shared.selectedServerURL,
+              let token = PlexAuthManager.shared.selectedServerToken,
+              let match = await LibraryGUIDIndex.items(for: [entry], serverURL: serverURL, authToken: token)[entry.ratingKey]
+        else { return nil }
         let keys = PlexLibraryVisibilityFilter.normalizedKeySet(PlexDataStore.shared.visibleVideoLibraries.map(\.key))
         guard !keys.isEmpty, PlexLibraryVisibilityFilter.isVisible(match, in: keys) else { return nil }
         return match

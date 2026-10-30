@@ -15,7 +15,7 @@ final class SiloExtrasTests: XCTestCase {
            {"content_id":"extra-making-of","kind":"behind_the_scenes","title":"Making Of","duration_seconds":360,"file_id":82,"still_url":"/api/v2/images/extra-still"}
          ],
          "videos":[
-           {"kind":"trailer","site":"YouTube","site_key":"fixture0001","name":"Official Trailer","is_official":true},
+           {"kind":"trailer","site":"YouTube","site_key":"dQw4w9WgXcQ","name":"Official Trailer","is_official":true},
            {"kind":"teaser","site":"vimeo","site_key":"123456","name":"Teaser","is_official":false},
            {"kind":"clip","site":"youtube","site_key":"bbbbbbbbbbb","name":"A Clip","is_official":false}
          ]}
@@ -80,8 +80,8 @@ final class SiloExtrasTests: XCTestCase {
     func test_remoteWatchPagesNeverBecomeLocalPlaybackKeysOrArbitraryStreamURLs() throws {
         let dto = try SiloJSON.decoder().decode(SiloItem.self, from: Data("""
         {"content_id":"movie-a","title":"A Movie","videos":[
-          {"kind":"trailer","site":"youtube","site_key":"fixture0001"},
-          {"kind":"clip","site":"YouTube","site_key":"fixture0001"},
+          {"kind":"trailer","site":"youtube","site_key":"dQw4w9WgXcQ"},
+          {"kind":"clip","site":"YouTube","site_key":"dQw4w9WgXcQ"},
           {"kind":"featurette","site":"vimeo","site_key":"123456"},
           {"kind":"trailer","site":"unknown","site_key":"https://untrusted.invalid/video.mp4"}
         ]}

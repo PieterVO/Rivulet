@@ -19,7 +19,7 @@ final class SiloDetailMetadataTests: XCTestCase {
 
     func test_enabledSupplementalRTAudienceSurvivesSilosThreeRatingLimit() throws {
         let json = """
-        {"content_id":"movie:sample","type":"movie","title":"A Sample Film",
+        {"content_id":"movie:mary","type":"movie","title":"Mary",
          "rating_rt_critic":95,"rating_rt_audience":95,
          "rating_sources":[{"source":"mdblist","score":83},{"source":"rt_audience","score":95}],
          "ratings":[{"source":"imdb","name":"IMDb","score":82,"display":"8.2"},
@@ -44,7 +44,7 @@ final class SiloDetailMetadataTests: XCTestCase {
     func test_supplementalRTKeepsCanonicalPrecedenceAndValidatesSourceScores() throws {
         let enabled = [SiloRatingsCapability.Source(source: "rt_audience", name: "RT Audience")]
         let canonicalJSON = """
-        {"content_id":"movie:sample","type":"movie","title":"A Sample Film","rating_rt_audience":95,
+        {"content_id":"movie:mary","type":"movie","title":"Mary","rating_rt_audience":95,
          "ratings":[{"source":"rt_audience","name":"Audience","score":89,"display":"89%"}]}
         """
         let canonical = try SiloJSON.decoder().decode(SiloItem.self, from: Data(canonicalJSON.utf8))
@@ -53,7 +53,7 @@ final class SiloDetailMetadataTests: XCTestCase {
         XCTAssertEqual(detail.ratings.map(\.value), [8.9])
         for score in [-1, 0, 100, 101] {
             let json = """
-            {"content_id":"movie:sample","type":"movie","title":"A Sample Film","rating_rt_audience":\(score),"ratings":[]}
+            {"content_id":"movie:mary","type":"movie","title":"Mary","rating_rt_audience":\(score),"ratings":[]}
             """
             let dto = try SiloJSON.decoder().decode(SiloItem.self, from: Data(json.utf8))
             let detail = SiloMediaMapper.detail(dto, providerID: "silo:test", baseURL: baseURL, ratingSources: enabled)

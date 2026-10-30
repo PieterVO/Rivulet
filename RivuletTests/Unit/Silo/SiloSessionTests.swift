@@ -311,7 +311,7 @@ final class SiloServerNameTests: XCTestCase {
 
     private func seedSavedAccount() throws -> SiloSession.Account {
         let account = SiloSession.Account(
-            serverURL: base, serverID: "silo-auth-test", serverName: "192.0.2.23",
+            serverURL: base, serverID: "silo-auth-test", serverName: "192.168.1.23",
             userID: "account-a", userName: "alice", profileID: "profile-a",
             profileName: "Alice", credentialID: UUID()
         )

@@ -44,8 +44,6 @@ nonisolated struct SiloRecommendationRow: Decodable, Sendable {
     let type: String
     let title: String
     let items: [SiloItem]
-    let kind: String?
-    let key: String?
 }
 
 /// A route contains only API identity, never an expiring artwork or stream URL.
@@ -53,8 +51,6 @@ nonisolated struct SiloHubRoute: Codable, Sendable {
     let scope: String
     var sectionId: String? = nil
     var libraryId: String? = nil
-    var kind: String? = nil
-    var key: String? = nil
 
     func identifier(suffix: String = "") throws -> String {
         let encoder = JSONEncoder()

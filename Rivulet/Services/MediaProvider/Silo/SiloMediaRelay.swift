@@ -14,6 +14,7 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
         let id: UUID
         let originURL: URL
         let headers: [String: String]
+        let reportsSessionFaults: Bool
     }
     private nonisolated struct VariableContext: Sendable {
         static let empty = VariableContext(id: nil, values: [:], byteCount: 0)
@@ -48,6 +49,9 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
         var response: HTTPURLResponse?
         var playlist = false
         var playlistBody = Data()
+        var problemBody = Data()
+        var captureProblem = false
+        var receivedBodyBytes = false
         var refreshed = false
         var pendingSends = 0
         var finished = false
@@ -77,9 +81,11 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
     private var tasks: [Int: Transfer] = [:]
     private let delegate = SiloMediaRelayDelegate()
     private var session: URLSession!
+    var onSessionProblem: (@Sendable (SiloAPIError) -> Void)?
 
     private static let headerEnd = Data("\r\n\r\n".utf8)
     private static let maximumHeadBytes = 32_768
+    private static let maximumProblemBytes = 8_192
     private static let maximumPlaylistBytes = SiloHLSVariables.maximumPlaylistBytes
     private static let forwardedRequestHeaders: Set<String> = [
         "range", "if-range", "if-none-match", "if-modified-since", "accept", "user-agent"
@@ -146,9 +152,9 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
         session.invalidateAndCancel()
     }
 
-    func localURL(for url: URL, headers: [String: String] = [:]) throws -> URL {
+    func localURL(for url: URL, headers: [String: String] = [:], reportsSessionFaults: Bool = false) throws -> URL {
         let batch = RegistrationBatch(budget: allocationBudget)
-        let result = try register(url, scope: Scope(id: UUID(), originURL: url, headers: headers), batch: batch)
+        let result = try register(url, scope: Scope(id: UUID(), originURL: url, headers: headers, reportsSessionFaults: reportsSessionFaults), batch: batch)
         try commit(batch)
         return result
     }
@@ -295,7 +301,14 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
         guard SiloClient.origin(scope.originURL) == SiloClient.origin(url) else { return [:] }
         // A native plan's fixed headers may not escape its configured web root.
         if client.owns(scope.originURL), !client.owns(url) { return [:] }
-        return scope.headers.filter { !Self.reservedGrantHeaders.contains($0.key.lowercased()) }
+        return scope.headers.filter { key, _ in
+            let name = key.lowercased()
+            guard !Self.reservedGrantHeaders.contains(name) else { return false }
+            // Authorization in an explicitly registered foreign scope is its
+            // own stream grant. Only Silo profile/device credentials are barred.
+            return client.owns(url) || !(name == "x-profile-id" || name == "x-profile-token" ||
+                                          name.hasPrefix("x-silo-device-"))
+        }
     }
 
     fileprivate func receive(_ task: URLSessionDataTask, response: URLResponse,
@@ -323,6 +336,11 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
             reject(transfer.connection, id: transfer.id, status: 502)
             return
         }
+        transfer.captureProblem = transfer.method != "HEAD" && transfer.resource.scope.reportsSessionFaults
+            && client.owns(transfer.currentURL)
+            && [404, 409, 410].contains(http.statusCode)
+            && (contentType.contains("json") || contentType.contains("problem"))
+            && http.expectedContentLength <= Int64(Self.maximumProblemBytes)
         transfer.playlist = transfer.method != "HEAD" && http.statusCode == 200 && isPlaylist
         if transfer.playlist && http.expectedContentLength > Int64(Self.maximumPlaylistBytes) {
             completion(.cancel)
@@ -335,6 +353,11 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
 
     fileprivate func receive(_ task: URLSessionDataTask, data: Data) {
         guard let transfer = tasks[task.taskIdentifier] else { return }
+        if !data.isEmpty { transfer.receivedBodyBytes = true }
+        if transfer.captureProblem {
+            if transfer.problemBody.count + data.count <= Self.maximumProblemBytes { transfer.problemBody.append(data) }
+            else { transfer.captureProblem = false; transfer.problemBody.removeAll() }
+        }
         if transfer.playlist {
             guard transfer.playlistBody.count + data.count <= Self.maximumPlaylistBytes else {
                 reject(transfer.connection, id: transfer.id, status: 502); return
@@ -348,6 +371,19 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
 
     fileprivate func completed(_ task: URLSessionTask, error: Error?) {
         guard let transfer = tasks.removeValue(forKey: task.taskIdentifier) else { return }
+        if error == nil, transfer.resource.scope.reportsSessionFaults,
+           client.owns(transfer.currentURL), let response = transfer.response,
+           response.statusCode == 410, !transfer.receivedBodyBytes {
+            // The native stream deny marker is documented to return 410 with
+            // no bytes on some routes. Only a plan-owned media scope may use it.
+            onSessionProblem?(SiloAPIError(type: "https://siloserver.org/docs/api/v2/problems/playback_session_ended",
+                                           title: "Playback session ended", status: 410, detail: "", errors: nil))
+        }
+        if error == nil, transfer.captureProblem, let response = transfer.response,
+           let problem = Self.nativeProblem(from: transfer.problemBody, status: response.statusCode),
+           SiloPlaybackSessionFault.classifyMedia(problem) != nil {
+            onSessionProblem?(problem)
+        }
         if transfer.playlist {
             guard error == nil, let response = transfer.response,
                   let playlist = String(data: transfer.playlistBody, encoding: .utf8), playlist.hasPrefix("#EXTM3U") else {
@@ -449,6 +485,21 @@ nonisolated final class SiloMediaRelay: @unchecked Sendable {
         } else { target = URL(string: value, relativeTo: url)?.absoluteURL }
         guard let target else { throw SiloSignInError.invalidResponse }
         return try register(target, scope: scope, variables: variables, batch: batch)
+    }
+
+    private static func nativeProblem(from body: Data, status: Int) -> SiloAPIError? {
+        if let problem = try? SiloJSON.decoder().decode(SiloAPIError.self, from: body), problem.status == status {
+            return problem
+        }
+        // The native stream proxy also uses the documented {error,message}
+        // envelope. Accept only exact session codes, never the message text.
+        struct ProxyProblem: Decodable { let error: String; let message: String }
+        guard let proxy = try? JSONDecoder().decode(ProxyProblem.self, from: body),
+              (status == 404 && proxy.error == "playback_session_not_found") ||
+              (status == 409 && proxy.error == "installation_changed") ||
+              (status == 410 && proxy.error == "playback_session_ended") else { return nil }
+        return SiloAPIError(type: "https://siloserver.org/docs/api/v2/problems/\(proxy.error)",
+                            title: proxy.error, status: status, detail: proxy.message, errors: nil)
     }
 
     private static func responseHead(_ response: HTTPURLResponse, rewrittenLength: Int? = nil) -> Data {

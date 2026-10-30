@@ -59,15 +59,17 @@ final class SiloMediaRelayTests: XCTestCase {
         let suffix = UUID().uuidString.lowercased()
         let nativeHost = "silo-relay-\(suffix).invalid"
         let edgeHost = "silo-edge-\(suffix).invalid"
+        let otherHost = "silo-other-\(suffix).invalid"
         let base = URL(string: "https://\(nativeHost)/proxy/silo")!
         let master = base.appending(path: "api/v2/playback/transcode/session-a/master.m3u8")
         let foreignSegment = URL(string: "https://\(edgeHost)/segment.ts?st=a%2Bb")!
         let foreignKey = URL(string: "https://\(edgeHost)/key?st=key%2Bgrant")!
         let foreignSidecar = URL(string: "https://\(edgeHost)/sidecar.m3u8?st=side%2Bgrant")!
         let foreignSubtitle = URL(string: "https://\(edgeHost)/subtitle.vtt?st=sub%2Bgrant")!
+        let otherSubtitle = URL(string: "https://\(otherHost)/subtitle.vtt?st=other%2Bgrant")!
         let fixture = SiloMediaProtocolFixture()
-        for host in [nativeHost, edgeHost] { SiloMediaFixtureProtocol.install(fixture, host: host) }
-        defer { for host in [nativeHost, edgeHost] { SiloMediaFixtureProtocol.remove(host: host) } }
+        for host in [nativeHost, edgeHost, otherHost] { SiloMediaFixtureProtocol.install(fixture, host: host) }
+        defer { for host in [nativeHost, edgeHost, otherHost] { SiloMediaFixtureProtocol.remove(host: host) } }
         let masterBody = """
         #EXTM3U
         #EXT-X-KEY:METHOD=AES-128,URI="\(foreignKey.absoluteString)"
@@ -77,8 +79,9 @@ final class SiloMediaRelayTests: XCTestCase {
         fixture.respond("GET", master, [.init(headers: ["Content-Type": "application/vnd.apple.mpegurl"], body: Data(masterBody.utf8))])
         fixture.respond("GET", foreignSegment, [.init(body: Data("segment".utf8))])
         fixture.respond("GET", foreignKey, [.init(body: Data("key".utf8))])
-        fixture.respond("GET", foreignSidecar, [.init(headers: ["Content-Type": "application/vnd.apple.mpegurl"], body: Data("#EXTM3U\n\(foreignSubtitle.absoluteString)\n".utf8))])
+        fixture.respond("GET", foreignSidecar, [.init(headers: ["Content-Type": "application/vnd.apple.mpegurl"], body: Data("#EXTM3U\n\(foreignSubtitle.absoluteString)\n\(otherSubtitle.absoluteString)\n".utf8))])
         fixture.respond("GET", foreignSubtitle, [.init(headers: ["Content-Type": "text/vtt"], body: Data("WEBVTT\n\n".utf8))])
+        fixture.respond("GET", otherSubtitle, [.init(headers: ["Content-Type": "text/vtt"], body: Data("WEBVTT\n\n".utf8))])
         let credentials = SiloMediaCredentialFixture()
         let client = SiloClient(baseURL: base, profileID: "profile-a", profileToken: "proof-a",
                                 tokenSource: { await credentials.token(force: $0) })
@@ -86,9 +89,12 @@ final class SiloMediaRelayTests: XCTestCase {
         configuration.protocolClasses = [SiloMediaFixtureProtocol.self]
         let relay = try await SiloMediaRelay.start(client: client, configuration: configuration)
         defer { relay.stop() }
-        let localMaster = try relay.localURL(for: master, headers: ["X-Plan-Grant": "native-grant"])
+        let localMaster = try relay.localURL(for: master, headers: ["X-Plan-Grant": "native-grant", "X-Silo-Device-Id": "native-device"])
         XCTAssertEqual(localMaster.pathExtension, "m3u8")
-        let localSidecar = try relay.localURL(for: foreignSidecar, headers: ["Authorization": "Foreign sidecar grant"])
+        let localSidecar = try relay.localURL(for: foreignSidecar, headers: [
+            "Authorization": "Foreign sidecar grant", "X-Profile-Id": "must-not-leak",
+            "X-Silo-Device-Id": "must-not-leak", "X-Plan-Grant": "sidecar-grant"
+        ])
         let consumer = URLSession(configuration: .ephemeral)
         defer { consumer.invalidateAndCancel() }
         let (masterData, _) = try await consumer.data(from: localMaster)
@@ -108,17 +114,22 @@ final class SiloMediaRelayTests: XCTestCase {
         let subtitleURL = try XCTUnwrap(URL(string: subtitleLine))
         let (subtitle, _) = try await consumer.data(from: subtitleURL)
         XCTAssertEqual(subtitle, Data("WEBVTT\n\n".utf8))
+        let otherLine = try XCTUnwrap(sidecarText.components(separatedBy: "\n").filter { $0.hasPrefix("http://127.0.0.1:") }.last)
+        let otherURL = try XCTUnwrap(URL(string: otherLine))
+        _ = try await consumer.data(from: otherURL)
 
         let requests = fixture.requests()
         let native = try XCTUnwrap(requests.first { $0.url == master })
         XCTAssertEqual(native.value(forHTTPHeaderField: "Authorization"), "Bearer initial-access")
         XCTAssertEqual(native.value(forHTTPHeaderField: "X-Plan-Grant"), "native-grant")
+        XCTAssertEqual(native.value(forHTTPHeaderField: "X-Silo-Device-Id"), "native-device")
         for url in [foreignSegment, foreignKey] {
             let request = try XCTUnwrap(requests.first { $0.url == url })
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
             XCTAssertNil(request.value(forHTTPHeaderField: "X-Profile-Id"))
             XCTAssertNil(request.value(forHTTPHeaderField: "X-Profile-Token"))
             XCTAssertNil(request.value(forHTTPHeaderField: "X-Plan-Grant"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Silo-Device-Id"))
             XCTAssertEqual(request.url?.absoluteString, url.absoluteString, "signed query bytes must remain unchanged")
         }
         for url in [foreignSidecar, foreignSubtitle] {
@@ -126,8 +137,14 @@ final class SiloMediaRelayTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Foreign sidecar grant")
             XCTAssertNil(request.value(forHTTPHeaderField: "X-Profile-Id"))
             XCTAssertNil(request.value(forHTTPHeaderField: "X-Profile-Token"))
-            XCTAssertNil(request.value(forHTTPHeaderField: "X-Plan-Grant"))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Plan-Grant"), "sidecar-grant")
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Silo-Device-Id"))
         }
+        let other = try XCTUnwrap(requests.first { $0.url == otherSubtitle })
+        XCTAssertNil(other.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(other.value(forHTTPHeaderField: "X-Plan-Grant"))
+        XCTAssertNil(other.value(forHTTPHeaderField: "X-Profile-Id"))
+        XCTAssertNil(other.value(forHTTPHeaderField: "X-Silo-Device-Id"))
     }
 
     func test_stoppedRelayCannotRegisterNewCapabilities() async throws {
@@ -531,6 +548,32 @@ extension SiloMediaRelayTests {
         }
     }
 
+    func test_negotiatedProgressiveStatusKeepsOpaqueQualityAndRecipeTruth() throws {
+        let json = """
+        {"protocol_version":3,"plan_id":"plan-a","plan_attempt_key":"opaque-key","session_id":"session-a",
+         "delivery":"server_remux_progressive","effective_media_file_id":"file-a",
+         "stream":{"url":"/api/v2/stream/session-a","protocol":"http_progressive","headers":{},
+                   "header_refresh":"none","container":"mp4"},
+         "timeline":{"source_start_seconds":0,"stream_origin_seconds":0,"player_start_seconds":0,
+                     "timeline_offset_seconds":0,"can_seek_anywhere":true,"seek_restoration":"player_position"},
+         "source":{"media_file_id":"file-a","duration_seconds":7200},"selected_tracks":{},
+         "subtitle":{"mode":"off","inventory":[]},
+         "available_qualities":[{"label":"tier:opaque/2","display_name":"Adaptive","bitrate_kbps":4000,
+                                 "preserves_source":false}],
+         "active_quality":"tier:opaque/2",
+         "effective_recipe":{"video_codec":"h264","width":1280,"height":720,"bitrate_kbps":4000},
+         "decision_reason":"bandwidth_budget","degradation_warnings":[]}
+        """
+        let plan = try SiloJSON.decoder().decode(SiloPlaybackPlan.self, from: Data(json.utf8))
+        let status = plan.negotiatedStatus
+        XCTAssertEqual(status.delivery, .progressiveRemux)
+        XCTAssertEqual(status.availableQualities.map(\.id), ["tier:opaque/2"])
+        XCTAssertEqual(status.activeQualityID, "tier:opaque/2")
+        XCTAssertEqual(status.effectiveRecipe?.height, 720)
+        XCTAssertEqual(status.effectiveRecipe?.videoCodec, "h264")
+        XCTAssertEqual(status.decisionReason, "bandwidth_budget")
+    }
+
     private func subtitlePlan(mode: String, selected: Int? = 1, route: String? = nil,
                               delivery: String = "original_http") throws -> SiloPlaybackPlan {
         let identity = selected.map { #""subtitle":{"id":"file:file-a:subtitle:\#($0)","index":\#($0)}"# } ?? ""
@@ -720,5 +763,30 @@ extension SiloMediaRelayTests {
             "url":"/api/v2/stream/session-a/subtitles/4.vtt?file_id=file-a&downloaded_subtitle_id=\(otherPin)"}
          ]}}
         """
+    }
+}
+
+extension SiloMediaRelayTests {
+    func test_bufferingObservationRejectsUnmeasuredAndOutOfRangeEvidence() throws {
+        XCTAssertThrowsError(try SiloBufferingObservation(estimateKbps: 99, source: .probe))
+        XCTAssertThrowsError(try SiloBufferingObservation(estimateKbps: 1_000_001, source: .observedRebuffer))
+        XCTAssertThrowsError(try SiloBufferingObservation(estimateKbps: 4_000, source: .probe,
+                                                           observedThroughputKbps: 3_000))
+        let observed = try SiloBufferingObservation(estimateKbps: 4_000, source: .observedRebuffer,
+                                                     observedThroughputKbps: 3_000)
+        XCTAssertEqual(observed.source.rawValue, "observed_rebuffer")
+        XCTAssertEqual(observed.observedThroughputKbps, 3_000)
+    }
+
+    func test_renewalClassificationNeverResurrectsAdministratorEndedSession() throws {
+        func problem(_ status: Int, _ code: String) throws -> SiloAPIError {
+            try SiloJSON.decoder().decode(SiloAPIError.self, from: Data("""
+            {"type":"https://silo.invalid/problems/\(code)","title":"Synthetic","status":\(status),"detail":"Synthetic"}
+            """.utf8))
+        }
+        XCTAssertFalse(SiloPlaybackSessionRenewal.permitsFreshAttempt(after: try problem(410, "playback_session_ended")))
+        XCTAssertFalse(SiloPlaybackSessionRenewal.permitsFreshAttempt(after: try problem(409, "replan_in_progress")))
+        XCTAssertTrue(SiloPlaybackSessionRenewal.permitsFreshAttempt(after: try problem(404, "session_not_found")))
+        XCTAssertTrue(SiloPlaybackSessionRenewal.permitsFreshAttempt(after: try problem(409, "installation_changed")))
     }
 }

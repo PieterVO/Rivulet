@@ -70,7 +70,7 @@ final class SettingsLeftPanelView: UIView {
         addSubview(hintLabel)
 
         subtextLabel.font = .monospacedSystemFont(ofSize: 24, weight: .medium)
-        subtextLabel.textColor = UIColor.white.withAlphaComponent(0.35)
+        subtextLabel.textColor = SettingsPalette.dim
         subtextLabel.numberOfLines = 2
         subtextLabel.textAlignment = .center
         subtextLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -122,7 +122,7 @@ final class SettingsLeftPanelView: UIView {
 
     /// Reorder-style hint: an up/down glyph + text, dim like the description.
     private func hintAttributed(_ text: String) -> NSAttributedString {
-        let color = UIColor.white.withAlphaComponent(0.5)
+        let color = SettingsPalette.caption.resolvedColor(with: traitCollection)
         let result = NSMutableAttributedString()
         let cfg = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
         if let img = UIImage(systemName: "arrow.up.arrow.down", withConfiguration: cfg)?

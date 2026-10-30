@@ -260,7 +260,7 @@ nonisolated final class SiloProvider: MediaProvider, Sendable {
         // enabled source policy. If unavailable, keep the canonical ratings only.
         let ratingCapability: SiloRatingsCapability? = dto.hasSupplementalRTRatings
             ? try? await client.get("capabilities/ratings") : nil
-        return SiloMediaMapper.detail(dto, providerID: id, baseURL: client.baseURL, parentID: parentID,
+        return SiloMediaMapper.detail(dto, providerID: id, baseURL: client.baseURL, authorityRevision: authorityRevision, parentID: parentID,
                                      nextEpisode: next, ratingSources: ratingCapability?.sources ?? [])
     }
 

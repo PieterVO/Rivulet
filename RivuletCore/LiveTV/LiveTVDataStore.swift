@@ -161,12 +161,16 @@ class LiveTVDataStore: ObservableObject {
         /// a missing key leaves it nil, which is the previous all-channels
         /// behavior.
         var channelProfile: String?
-        /// Xtream Codes account name. Its password is in the Keychain (`apiTokenKey`).
+        /// Xtream Codes or Tvheadend account name. Its password is in the Keychain (`apiTokenKey`).
         var username: String?
+        /// Tvheadend: whether the login may record, nil when unknown.
+        var canRecord: Bool?
 
         init(id: String, type: String, name: String, baseURL: String?, m3uURL: String?,
-             epgURL: String?, apiToken: String?, channelProfile: String? = nil, username: String? = nil) {
+             epgURL: String?, apiToken: String?, channelProfile: String? = nil, username: String? = nil,
+             canRecord: Bool? = nil) {
             self.username = username
+            self.canRecord = canRecord
             self.id = id
             self.type = type
             self.name = name
@@ -369,6 +373,21 @@ class LiveTVDataStore: ObservableObject {
         await updateSourceInfo()
     }
 
+    /// Add a Tvheadend source. Re-adding the same login replaces it.
+    func addTvheadendSource(account: TvheadendAccount, name: String, canRecord: Bool? = nil) async {
+        let sourceId = Self.tvheadendSourceId(for: account)
+        providers[sourceId] = IPTVProvider(tvheadend: account, sourceId: sourceId, displayName: name, canRecord: canRecord)
+        saveSources()
+        await updateSourceInfo()
+    }
+
+    /// From a hash of the server and username, so neither ends up in channel ids.
+    /// Anonymous and signed-in sources on one server stay apart.
+    static func tvheadendSourceId(for account: TvheadendAccount) -> String {
+        let key = account.server.absoluteString.lowercased() + "\n" + (account.username ?? "")
+        return "tvheadend:" + SHA256.hash(data: Data(key.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// From a hash of the server and username, so neither ends up in channel ids.
     static func xtreamSourceId(for account: XtreamAccount) -> String {
         let key = account.server.absoluteString.lowercased() + "\n" + account.username
@@ -473,6 +492,16 @@ class LiveTVDataStore: ObservableObject {
                     providers[config.id] = IPTVProvider(
                         xtream: XtreamAccount(server: server, username: username, password: password),
                         sourceId: config.id, displayName: config.name)
+                }
+
+            case "tvheadend":
+                if let server = config.baseURL.flatMap(URL.init(string:)) {
+                    let password = config.username.flatMap { _ in
+                        KeychainHelper.get(Self.apiTokenKey(sourceId: config.id)) ?? config.apiToken
+                    }
+                    providers[config.id] = IPTVProvider(
+                        tvheadend: TvheadendAccount(server: server, username: config.username, password: password),
+                        sourceId: config.id, displayName: config.name, canRecord: config.canRecord)
                 }
 
             default:
@@ -658,6 +687,21 @@ class LiveTVDataStore: ObservableObject {
                         epgURL: nil,
                         apiToken: Self.storeAPIToken(account.password, sourceId: id),
                         username: account.username
+                    ))
+                }
+
+            case .tvheadend:
+                if let iptvProvider = provider as? IPTVProvider, let account = iptvProvider.tvheadendAccount {
+                    configs.append(SourceConfiguration(
+                        id: id,
+                        type: "tvheadend",
+                        name: provider.displayName,
+                        baseURL: account.server.absoluteString,
+                        m3uURL: nil,
+                        epgURL: nil,
+                        apiToken: Self.storeAPIToken(account.password, sourceId: id),
+                        username: account.username,
+                        canRecord: iptvProvider.tvheadendCanRecord
                     ))
                 }
 
@@ -1515,7 +1559,7 @@ class LiveTVDataStore: ObservableObject {
                           unfavorited: Set<String> = []) -> [UnifiedChannel] {
         let position = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         // Typed key: the inline tuple comparison times out Xcode 26.3's type checker.
-        let key = { (channel: UnifiedChannel) -> (Int, Int, Int) in
+        let key = { (channel: UnifiedChannel) -> (Int, Int, ChannelNumber) in
             (position[channel.id] ?? .max, channel.favouriteRank ?? .max, channel.channelNumber ?? .max)
         }
         return channels

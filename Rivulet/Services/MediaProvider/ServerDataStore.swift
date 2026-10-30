@@ -50,6 +50,9 @@ final class ServerDataStore: ObservableObject {
     var feedErrors: [String: String] {
         errors.merging(visibilityErrors) { feed, visibility in "\(feed)\n\(visibility)" }
     }
+    /// Each library's titles on TMDB's trending lists, in trending order, by
+    /// `settingsKey`. Home's hero reads them through `visibleTrending`.
+    @Published private(set) var trending: [String: [MediaItem]] = [:]
 
     /// Video, photo and music libraries.
     static let browsableKinds: Set<MediaLibrary.LibraryKind> = [.movies, .shows, .mixed, .photos, .music]
@@ -62,18 +65,26 @@ final class ServerDataStore: ObservableObject {
         let authorityRevision: UInt64
         var libraries: [MediaLibrary] = []
         var rows: CachedHomeRail = []
+        var trending: [String: [MediaItem]] = [:]
+        var trendingAt: Date?
 
-        init(_ provider: any MediaProvider, libraries: [MediaLibrary], rows: CachedHomeRail) {
+        init(_ provider: any MediaProvider, libraries: [MediaLibrary], rows: CachedHomeRail,
+             trending: [String: [MediaItem]] = [:], trendingAt: Date? = nil) {
             accountID = provider.accountID
             authorityRevision = provider.authorityRevision
             self.libraries = libraries
             self.rows = rows
+            self.trending = trending
+            self.trendingAt = trendingAt
         }
 
         func isOwned(by provider: any MediaProvider) -> Bool {
             accountID == provider.accountID && authorityRevision == provider.authorityRevision
         }
     }
+
+    /// TMDB's own list cache lifetime; each server's matches are refetched no sooner.
+    private static let trendingLifetime: TimeInterval = 3600
 
     private var slices: [String: Slice] = [:]
     private var loadTask: Task<Void, Never>?
@@ -274,6 +285,11 @@ final class ServerDataStore: ObservableObject {
         }
     }
 
+    /// `trending` for the sidebar's visible libraries, in sidebar order.
+    var visibleTrending: [[MediaItem]] {
+        visibleLibraries.compactMap { trending[$0.settingsKey] }
+    }
+
     /// Name sources only when libraries from multiple visible servers remain.
     var labelsServers: Bool {
         let plexID = MediaProviderRegistry.shared.plexProvider?.id
@@ -325,6 +341,8 @@ final class ServerDataStore: ObservableObject {
                     group.addTask { await self.load(from: provider, generation: loadGeneration) }
                 }
             }
+            // Shared store only: tests load providers without reaching TMDB.
+            if self === Self.shared { await self.loadTrending(from: providers, generation: loadGeneration) }
         }
     }
 
@@ -348,7 +366,7 @@ final class ServerDataStore: ObservableObject {
                 if loadsInFlight == 0 { update(\.isLoading, false) }
             }
         }
-        let previous = slices[provider.id]
+        let previous = slices[provider.id].flatMap { $0.isOwned(by: provider) ? $0 : nil }
         async let fetchedContinuing = provider.continueWatching(limit: 20)
         let fetched: [MediaLibrary]
         do {
@@ -425,7 +443,54 @@ final class ServerDataStore: ObservableObject {
         guard expected == generation, !Task.isCancelled else { return }
         errors.removeValue(forKey: provider.id)
         DiagLog.notice(.servers, "\(provider.kind) loaded: \(browsable.count) libraries, continue watching \(continuingRow.first?.items.count ?? 0), recent rows \(recent.count)")
-        slices[provider.id] = Slice(provider, libraries: browsable, rows: continuingRow + recent)
+        slices[provider.id] = Slice(provider, libraries: browsable, rows: continuingRow + recent,
+                                    trending: previous?.trending ?? [:], trendingAt: previous?.trendingAt)
+        publish()
+    }
+
+    /// Jellyfin's trending matches, at most once per `trendingLifetime`.
+    /// Native Silo feeds own their recommendations and never need TMDB here.
+    /// A failed library keeps its previous matches.
+    private func loadTrending(from providers: [any MediaProvider], generation expected: Int) async {
+        guard expected == generation, !Task.isCancelled else { return }
+        let due = providers.filter { provider in
+            guard provider.kind == .jellyfin,
+                  MediaProviderRegistry.shared.isCurrentAuthority(provider),
+                  let slice = slices[provider.id], slice.isOwned(by: provider),
+                  slice.libraries.contains(where: { Self.homeRowKinds.contains($0.kind) }) else { return false }
+            return slice.trendingAt.map { Date().timeIntervalSince($0) > Self.trendingLifetime } ?? true
+        }
+        guard !due.isEmpty else { return }
+        async let movies = TMDBDiscoverService.shared.fetchSection(.movieTrending)
+        async let shows = TMDBDiscoverService.shared.fetchSection(.tvTrending)
+        let titles = TrendingMatch.interleave(movies: await movies, shows: await shows)
+        guard expected == generation, !Task.isCancelled, !titles.isEmpty else { return }
+        for provider in due {
+            guard MediaProviderRegistry.shared.isCurrentAuthority(provider),
+                  var slice = slices[provider.id], slice.isOwned(by: provider) else { continue }
+            let libraries = slice.libraries.filter { Self.homeRowKinds.contains($0.kind) }
+            let keys = Set(libraries.map(\.settingsKey))
+            slice.trending = slice.trending.filter { keys.contains($0.key) }
+            for library in libraries {
+                do {
+                    let items = try await provider.trending(in: library, from: titles, limit: 10)
+                    guard expected == generation, !Task.isCancelled,
+                          MediaProviderRegistry.shared.isCurrentAuthority(provider),
+                          slices[provider.id]?.isOwned(by: provider) == true else { return }
+                    slice.trending[library.settingsKey] = items
+                } catch {
+                    guard expected == generation, !Task.isCancelled,
+                          MediaProviderRegistry.shared.isCurrentAuthority(provider),
+                          slices[provider.id]?.isOwned(by: provider) == true else { return }
+                    DiagLog.error(.servers, "\(provider.kind) trending failed: \(DiagLog.describe(error))")
+                }
+            }
+            guard expected == generation, !Task.isCancelled,
+                  MediaProviderRegistry.shared.isCurrentAuthority(provider),
+                  slices[provider.id]?.isOwned(by: provider) == true else { return }
+            slices[provider.id]?.trending = slice.trending
+            slices[provider.id]?.trendingAt = Date()
+        }
         publish()
     }
 
@@ -435,6 +500,7 @@ final class ServerDataStore: ObservableObject {
         let order = sources.map(\.providerID) + slices.keys.sorted().filter { id in !sources.contains { $0.providerID == id } }
         let ordered = order.compactMap { slices[$0] }
         update(\.libraries, ordered.flatMap(\.libraries))
+        update(\.trending, ordered.reduce(into: [:]) { $0.merge($1.trending) { a, _ in a } })
         let rows = ordered.flatMap(\.rows)
         guard !(rows.isEmpty && homeRows.isEmpty) else { return }
         homeRows = rows
