@@ -33,14 +33,16 @@ enum TopShelfFeed {
         let serverURL = auth.selectedServerURL
         let token = auth.selectedServerToken
         var plex: [TopShelfItem] = []
-        if let serverURL, let token {
+        // Top Shelf shows the rows Home shows: a row hidden in Settings > Home Rows stays off it.
+        let cwHub = PlexDataStore.shared.continueWatchingHub
+        if let serverURL, let token, !HomeRowSettings.isHidden(cwHub?.hubIdentifier) {
             // /hubs/continueWatching, as the in-app row uses. The global /hubs drops movies (#194).
-            plex = TopShelfMapper.items(from: PlexDataStore.shared.continueWatchingHub?.Metadata ?? [],
+            plex = TopShelfMapper.items(from: cwHub?.Metadata ?? [],
                                         serverURL: serverURL, token: token, limit: limit * 2)
         }
         let serverStore = ServerDataStore.shared
         let sources = serverStore.sources
-        let otherRows = serverStore.homeRows.filter(\.isContinueWatching).map(\.items)
+        let otherRows = serverStore.visibleHomeRows.filter(\.isContinueWatching).map(\.items)
         var others = otherRows.flatMap { TopShelfMapper.items(from: $0, limit: limit * 2) }
         // The same title on two servers is one card, as in Home's merged row.
         if !otherRows.isEmpty, let primaryID = MediaProviderRegistry.shared.plexProvider?.id {
@@ -80,11 +82,12 @@ enum TopShelfFeed {
             let store = PlexDataStore.shared
             let metadata = store.librariesPinnedToHome
                 .flatMap { store.libraryHubs[$0.key] ?? [] }
+                .filter { $0.promoted == true && !HomeRowSettings.isHidden($0.hubIdentifier) }
                 .filter { ($0.hubIdentifier ?? "").lowercased().contains("recentlyadded") }
                 .flatMap { $0.Metadata ?? [] }
             plex = TopShelfMapper.recentlyAddedItems(from: metadata, serverURL: serverURL, token: token, limit: limit * 2)
         }
-        let others = ServerDataStore.shared.homeRows
+        let others = ServerDataStore.shared.visibleHomeRows
             .filter { $0.id.hasSuffix(".recentlyAdded") }
             .flatMap { TopShelfMapper.items(from: $0.items.filter { !$0.userState.isPlayed }, limit: limit * 2) }
         return TopShelfMapper.merge(plex, others, limit: limit)

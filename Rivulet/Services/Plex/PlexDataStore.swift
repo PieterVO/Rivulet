@@ -284,7 +284,10 @@ class PlexDataStore: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: HomeRowSettings.changedNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.projectHomeItems() }
+            Task { @MainActor in
+                self?.projectHomeItems()
+                await TopShelfFeed.refresh()
+            }
         }
 
         // A pin change is also a data change: a new pin has nothing fetched.
