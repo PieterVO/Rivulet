@@ -1153,14 +1153,15 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
-        // A skip with the chrome up shows AVKit's glyph beside the time; with
-        // it hidden, UniversalPlayerView's centered indicator covers it.
+        // Every skip shows AVKit's glyph beside the time, on the full chrome or the bar alone.
         vm.$seekIndicator
             .compactMap { $0 }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak vm] indicator in
-                if vm?.showControls == true { self?.progressBar?.showSkipIndicator(indicator) }
-            }
+            .sink { [weak self] indicator in self?.progressBar?.showSkipIndicator(indicator) }
+            .store(in: &cancellables)
+        vm.$showsSkipBar
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
         // Caption inputs. The overlay measures against the picture, so a new
@@ -1347,9 +1348,9 @@ class PlayerContainerViewController: UIViewController {
         // Rail actions. (No play/pause control, no skip-back — the remote owns seeking.)
         rail.onSubtitles = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
-            let list = CardTrackListView(
-                    header: "Subtitles", tracks: vm.subtitleMenuTracks,
-                    selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+            let list = CardTrackListView.subtitleMenu(
+                    tracks: vm.subtitleMenuTracks,
+                    selectedTrackId: vm.currentSubtitleTrackId, onTrackId: vm.subtitleOnTrackId,
                     actions: vm.canSearchSubtitles ? [
                         CardActionConfig(title: "Search for Subtitles") { [weak self] row in
                             self?.searchSubtitles(from: row)
@@ -1921,8 +1922,10 @@ class PlayerContainerViewController: UIViewController {
         let ambient = vm.pausePresentation != .frame
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
         // The Up Next card sits over the video alone.
-        let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient && vm.postVideoState == .hidden
-        let railVisible = chromeVisible && !vm.isScrubbing
+        let chromeVisible = (vm.showControls || vm.isScrubbing || vm.showsSkipBar)
+            && !ambient && vm.postVideoState == .hidden
+        // A skip with the controls hidden shows the bar alone, as AVKit does.
+        let railVisible = chromeVisible && vm.showControls && !vm.isScrubbing
         if !chromeVisible { progressBar?.clearSkipIndicator() }
 
         // Every appearance of the rail starts on the scrubber; focus memory

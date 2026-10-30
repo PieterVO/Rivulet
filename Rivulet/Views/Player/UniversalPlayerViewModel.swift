@@ -171,6 +171,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Seek Indicator State
     /// Shows a brief indicator when user taps left/right to skip 10 seconds
     @Published var seekIndicator: SeekIndicator?
+    /// A skip with the controls hidden shows AVKit's bar alone, for as long as its skip glyph.
+    @Published private(set) var showsSkipBar = false
 
     // MARK: - Chapter Thumbnails
     private var chapterThumbnails: [Int: Data] = [:]  // index → image data
@@ -342,6 +344,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         return subtitleTracks + (offersGeneratedSubtitles ? [generated] : [])
     }
     var offersGeneratedSubtitles: Bool { aetherPlayer != nil }
+    /// What the menu's On turns on: the showing track, else the saved language's full track.
+    var subtitleOnTrackId: Int? {
+        if let currentSubtitleTrackId { return currentSubtitleTrackId }
+        let language = TrackIntentStore.effectiveSubtitleIntent.language ?? TrackLanguage.device
+        let full = SubtitleIntent.track(language: language, forced: false, hearingImpaired: false, codec: nil)
+        return TrackIntentResolver.resolveSubtitle(intent: full, in: subtitleTracks)?.id
+            ?? subtitleTracks.first { !$0.isForced }?.id
+            ?? subtitleMenuTracks.first?.id
+    }
     /// The generated row's second line: the model's download until it is on disk.
     static var generatedSubtitleStatus: String {
         switch SpeechModelStore.shared.state {
@@ -4089,17 +4100,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         replayWindow = nil
     }
 
-    /// Show seek indicator briefly (1.5 seconds)
+    /// Publishes the skip for the bar's glyph; with the controls hidden the bar shows alone (AVKit, 3.3s).
     private func showSeekIndicator(_ indicator: SeekIndicator) {
         seekIndicatorTimer?.invalidate()
-        withAnimation(.easeOut(duration: 0.15)) {
-            seekIndicator = indicator
-        }
-        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+        if !showControls { showsSkipBar = true }
+        seekIndicator = indicator
+        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 3.3, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                withAnimation(.easeOut(duration: 0.25)) {
-                    self?.seekIndicator = nil
-                }
+                self?.seekIndicator = nil
+                self?.showsSkipBar = false
             }
         }
     }

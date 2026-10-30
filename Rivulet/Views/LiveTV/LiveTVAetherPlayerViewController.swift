@@ -1191,11 +1191,11 @@ final class LiveTVAetherPlayerViewController: UIViewController {
             if aether.subtitleTracks.contains(where: { ($0.codec ?? "").lowercased().contains("teletext") }) {
                 steppers.append(teletextPageStepper())
             }
-            let list = CardTrackListView(
-                header: "Subtitles",
-                tracks: aether.subtitleTracks,
+            let tracks = aether.subtitleTracks
+            let list = CardTrackListView.subtitleMenu(
+                tracks: tracks,
                 selectedTrackId: aether.currentSubtitleTrackId,
-                showsOffRow: true,
+                onTrackId: aether.currentSubtitleTrackId ?? (tracks.first { !$0.isForced } ?? tracks.first)?.id,
                 steppers: steppers
             ) { [weak self] trackId in
                 guard let self else { return }
@@ -1227,11 +1227,10 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                     codec: "webvtt"
                 )
             }
-            let list = CardTrackListView(
-                header: "Subtitles",
+            let list = CardTrackListView.subtitleMenu(
                 tracks: tracks,
                 selectedTrackId: selectedIndex,
-                showsOffRow: true,
+                onTrackId: selectedIndex ?? tracks.first?.id,
                 steppers: self.subtitleAdjustmentSteppers()
             ) { [weak self] trackId in
                 self?.selectNativeLegible(trackId)

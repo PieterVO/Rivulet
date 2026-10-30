@@ -32,6 +32,11 @@ final class TransportControlButton: UIControl {
     private let backgroundEffectView: UIVisualEffectView
 
     var onPress: (() -> Void)?
+    /// While this button's menu is up AVKit greys it (100/255 over black, measured on device).
+    var showsMenu = false {
+        didSet { if !isFocused { backgroundEffectView.backgroundColor = restingColor } }
+    }
+    private var restingColor: UIColor { showsMenu ? UIColor(white: 1, alpha: 0.32) : .clear }
     /// Draws the glyph in this colour, focused or not, instead of white on
     /// glass / black on white (Live TV's Record while set to record).
     var glyphColor: UIColor? {
@@ -108,7 +113,7 @@ final class TransportControlButton: UIControl {
         let isFocused = context.nextFocusedView === self
         coordinator.addCoordinatedAnimations({
             self.transform = isFocused ? CGAffineTransform(scaleX: 1.12, y: 1.12) : .identity
-            self.backgroundEffectView.backgroundColor = isFocused ? .white : .clear
+            self.backgroundEffectView.backgroundColor = isFocused ? .white : self.restingColor
             self.iconView.tintColor = self.glyphColor ?? (isFocused ? .black : .white)
         }, completion: nil)
     }

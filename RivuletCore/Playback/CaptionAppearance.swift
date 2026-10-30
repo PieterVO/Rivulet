@@ -127,6 +127,23 @@ enum CaptionAppearance {
     /// marks it not editable, so an edited style is a profile of its own.
     static let systemDefaultProfileID = "MACaptionProfile-Default"
 
+    /// The system caption styles, in Settings order (built-ins first), as (id, display name).
+    static func styles() -> [(id: String, name: String)] {
+        let builtIns = ["Default", "LargeText", "Classic", "OutlineText"].map { "MACaptionProfile-\($0)" }
+        let ids = (MACaptionAppearanceCopyProfileIDs() as? [String]) ?? []
+        return ids.map { ($0, MACaptionAppearanceCopyProfileName($0 as CFString) as String) }
+            .sorted {
+                let a = builtIns.firstIndex(of: $0.0) ?? builtIns.count
+                let b = builtIns.firstIndex(of: $1.0) ?? builtIns.count
+                return a != b ? a < b : $0.1 < $1.1
+            }
+    }
+
+    static var activeStyleID: String {
+        get { MACaptionAppearanceCopyActiveProfileID() as String }
+        set { MACaptionAppearanceSetActiveProfileID(newValue as CFString) }
+    }
+
     /// Reads the current system caption style from MediaAccessibility.
     ///
     /// Uses the `.user` domain so that user-configured overrides take effect.

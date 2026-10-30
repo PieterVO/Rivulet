@@ -134,6 +134,8 @@ final class PlayerRailPanelView: UIView {
     @discardableResult
     static func present(content: UIView, width: CGFloat, in container: UIView, aboveRail rail: UIView, towards button: UIView) -> PlayerRailPanelView {
         let panel = PlayerRailPanelView(content: content)
+        panel.sourceButton = button as? TransportControlButton
+        panel.sourceButton?.showsMenu = true
         container.addSubview(panel)
         panel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -307,9 +309,13 @@ final class PlayerRailPanelView: UIView {
         layer.borderColor = UIColor.white.withAlphaComponent(0.3).cgColor
     }
 
+    /// The tool button this menu opened from, greyed while it is up (AVKit).
+    private weak var sourceButton: TransportControlButton?
+
     func dismissPanel() {
         guard !didDismiss else { return }
         didDismiss = true
+        sourceButton?.showsMenu = false
         isUserInteractionEnabled = false
         if isPane {
             let motion = Self.paneMotion()

@@ -67,6 +67,11 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
     /// Set: the adjustments lead under `header`, the tracks follow under this.
     private let trackHeader: String?
     private var stepperRows: [CardStepperRowView] = []
+    /// AVKit's Language submenu: the tracks, one level in from On and Off. Empty: tracks list in place.
+    private let languageRows: [Row]
+    private let languageValue: String?
+    private var showsLanguages = false
+    private weak var languageButton: CardTrackRowButton?
     /// Pin focus to the selected row only for the FIRST landing. After focus
     /// has entered the list once, `preferredFocusEnvironments` holds the row
     /// focus is on, so an edge press stops instead of bouncing to the selection.
@@ -87,14 +92,37 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
         rows.append(contentsOf: tracks.map { track in
             Row(
                 title: audio ? track.audioMenuTitle : track.name,
-                subtitle: audio ? track.audioMenuSubtitle
-                    : [track.language, track.codec?.uppercased()].compactMap { $0 }.joined(separator: " • "),
+                subtitle: audio ? track.audioMenuSubtitle : Self.subtitleLine(track),
                 trackId: track.id,
                 isSelected: track.id == selectedTrackId
             )
         })
         self.init(header: header, rows: rows, actions: actions, choices: choices, toggles: toggles,
                   steppers: steppers, trackHeader: trackHeader, onSelect: onSelect)
+    }
+
+    private static func subtitleLine(_ track: MediaTrack) -> String {
+        [track.language, track.codec?.uppercased()].compactMap { $0 }.joined(separator: " • ")
+    }
+
+    /// AVKit's subtitles menu: On and Off, then Language (the tracks) and Style one level in.
+    /// `onTrackId` is what On turns on; nil leaves only Off.
+    static func subtitleMenu(tracks: [MediaTrack], selectedTrackId: Int?, onTrackId: Int?,
+                             actions: [CardActionConfig] = [], steppers: [CardStepperConfig] = [],
+                             onSelect: @escaping (Int?) -> Void) -> CardTrackListView {
+        var rows = [Row(title: "Off", subtitle: nil, trackId: nil, isSelected: selectedTrackId == nil)]
+        var languageRows: [Row] = []
+        if let onTrackId {
+            rows.insert(Row(title: "On", subtitle: nil, trackId: onTrackId, isSelected: selectedTrackId != nil), at: 0)
+            languageRows = tracks.map {
+                Row(title: $0.name, subtitle: subtitleLine($0), trackId: $0.id, isSelected: $0.id == selectedTrackId)
+            }
+        }
+        let value = tracks.first { $0.id == (selectedTrackId ?? onTrackId) }?.name
+        return CardTrackListView(header: "Subtitles", rows: rows, actions: actions,
+                                 choices: [CardChoiceConfig.captionStyle()].compactMap { $0 },
+                                 steppers: steppers, languageRows: languageRows, languageValue: value,
+                                 onSelect: onSelect)
     }
 
     /// The audio menu in the TV app's order: Audio Adjustments, then Audio Track.
@@ -112,8 +140,11 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
     /// A plain list of choices: each row's `trackId` is what `onSelect` receives.
     init(header: String, rows: [Row], actions: [CardActionConfig] = [], choices: [CardChoiceConfig] = [],
          toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
-         trackHeader: String? = nil, onSelect: @escaping (Int?) -> Void) {
+         trackHeader: String? = nil, languageRows: [Row] = [], languageValue: String? = nil,
+         onSelect: @escaping (Int?) -> Void) {
         self.rows = rows
+        self.languageRows = languageRows
+        self.languageValue = languageValue
         self.trackHeader = trackHeader
         self.actions = actions
         self.choices = choices
@@ -195,7 +226,29 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
             buildSubmenu(choices[index])
             return
         }
+        if showsLanguages {
+            headerLabel.text = "Language"
+            for row in languageRows { addTrackButton(row) }
+            return
+        }
         headerLabel.text = header
+
+        // AVKit's subtitles menu: On, Off | Language, Style | actions | steppers.
+        if !languageRows.isEmpty {
+            buildTracks()
+            stack.addArrangedSubview(MenuSeparatorView())
+            let language = CardTrackRowButton(row: Row(title: "Language", subtitle: languageValue,
+                                                       trackId: nil, isSelected: false),
+                                              showsChevron: true)
+            language.onTap = { [weak self] in self?.showLanguages(true) }
+            stack.addArrangedSubview(language)
+            rowButtons.append(language)
+            languageButton = language
+            buildAdjustments(separated: false)
+            buildActions()
+            buildSteppers()
+            return
+        }
 
         // The TV app's audio menu: adjustments first, then the tracks under their own header.
         if let trackHeader {
@@ -206,9 +259,14 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
             return
         }
         buildTracks()
+        buildActions()
+        buildAdjustments()
+        buildSteppers()
+    }
 
-        // Actions (Search for Subtitles) get their own section; the handler
-        // decides what happens to the popup.
+    /// Actions (Search for Subtitles) get their own section; the handler
+    /// decides what happens to the popup.
+    private func buildActions() {
         if !actions.isEmpty, !rowButtons.isEmpty {
             stack.addArrangedSubview(MenuSeparatorView())
         }
@@ -221,12 +279,12 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
             stack.addArrangedSubview(button)
             rowButtons.append(button)
         }
+    }
 
-        buildAdjustments()
-
-        // Adjustment steppers (delay / height) sit in their own section below a
-        // separator. A press adjusts in place and leaves the popup up, so the
-        // user can watch the subtitles move as they step.
+    /// Adjustment steppers (delay / height) sit in their own section below a
+    /// separator. A press adjusts in place and leaves the popup up, so the
+    /// user can watch the subtitles move as they step.
+    private func buildSteppers() {
         if !steppers.isEmpty, !rowButtons.isEmpty {
             stack.addArrangedSubview(MenuSeparatorView())
         }
@@ -239,8 +297,8 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
 
     /// Choices (Enhance Dialogue levels) open their options in place, like AVKit's
     /// submenu; toggles flip in place and leave the popup up, in one section with them.
-    private func buildAdjustments() {
-        if !choices.isEmpty, !rowButtons.isEmpty {
+    private func buildAdjustments(separated: Bool = true) {
+        if separated, !choices.isEmpty, !rowButtons.isEmpty {
             stack.addArrangedSubview(MenuSeparatorView())
         }
         for (index, config) in choices.enumerated() {
@@ -272,15 +330,27 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
     }
 
     private func buildTracks() {
-        for row in rows {
-            let button = CardTrackRowButton(row: row)
-            button.onTap = { [weak self] in
-                self?.onSelect(row.trackId)
-            }
-            stack.addArrangedSubview(button)
-            rowButtons.append(button)
-            trackButtons.append(button)
+        for row in rows { addTrackButton(row) }
+    }
+
+    /// A row that hands its `trackId` to `onSelect`. On and Off are not the tracks
+    /// `checkTrack` and `updateTrack` address once the tracks sit in Language.
+    private func addTrackButton(_ row: Row) {
+        let button = CardTrackRowButton(row: row)
+        button.onTap = { [weak self] in
+            self?.onSelect(row.trackId)
         }
+        stack.addArrangedSubview(button)
+        rowButtons.append(button)
+        if languageRows.isEmpty || showsLanguages { trackButtons.append(button) }
+    }
+
+    private func showLanguages(_ show: Bool) {
+        showsLanguages = show
+        buildRows()
+        if !show { pendingFocus = languageButton }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
     }
 
     private func buildSubmenu(_ config: CardChoiceConfig) {
@@ -312,6 +382,10 @@ final class CardTrackListView: UIView, RailPanelMenuHandling {
     }
 
     func handleMenuPress() -> Bool {
+        if showsLanguages {
+            showLanguages(false)
+            return true
+        }
         guard openChoice != nil else { return false }
         showChoice(nil)
         return true
@@ -402,6 +476,19 @@ struct CardChoiceConfig {
     let options: [String]
     let selected: () -> Int
     let onSelect: (Int) -> Void
+}
+
+extension CardChoiceConfig {
+    /// AVKit's Style row: the system caption styles, applied system-wide as Settings does.
+    static func captionStyle() -> CardChoiceConfig? {
+        let styles = CaptionAppearance.styles()
+        guard styles.count > 1 else { return nil }
+        return CardChoiceConfig(
+            title: "Style",
+            options: styles.map(\.name),
+            selected: { styles.firstIndex { $0.id == CaptionAppearance.activeStyleID } ?? -1 },
+            onSelect: { CaptionAppearance.activeStyleID = styles[$0].id })
+    }
 }
 
 // MARK: - CardActionConfig
