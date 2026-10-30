@@ -53,7 +53,7 @@ enum TvheadendError: LocalizedError, Equatable {
 struct TvheadendChannel: Sendable, Equatable {
     let uuid: String
     let name: String
-    let number: Int?
+    let number: ChannelNumber?
     let iconURL: URL?
     let group: String?
 }
@@ -221,7 +221,7 @@ actor TvheadendService {
 
         return zip(entries, tagLists).compactMap { entry, channelTags in
             guard let uuid = string(entry["uuid"]), let name = string(entry["name"]) else { return nil }
-            let number = (entry["number"] as? NSNumber).flatMap { Int(exactly: $0.doubleValue) }.flatMap { $0 > 0 ? $0 : nil }
+            let number = (entry["number"] as? NSNumber).flatMap { ChannelNumber($0.stringValue) }.flatMap { $0.major > 0 ? $0 : nil }
             return TvheadendChannel(uuid: uuid, name: name, number: number,
                                     iconURL: icon(entry, server: server, signedIn: signedIn),
                                     group: tagNames.first { channelTags.contains($0.uuid) }?.name)

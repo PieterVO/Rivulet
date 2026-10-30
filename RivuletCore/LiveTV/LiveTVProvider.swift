@@ -47,6 +47,38 @@ enum LiveTVSourceType: String, Codable, CaseIterable, Sendable {
     }
 }
 
+// MARK: - Channel Number
+
+/// A channel number as the source writes it: "7", or an OTA sub-channel "10.1" (#430).
+nonisolated struct ChannelNumber: Hashable, Comparable, Sendable, LosslessStringConvertible,
+                                  ExpressibleByIntegerLiteral {
+    let major: Int
+    let minor: Int?
+
+    static let max = ChannelNumber(major: .max)
+
+    init(major: Int, minor: Int? = nil) {
+        self.major = major
+        self.minor = minor
+    }
+
+    init(integerLiteral value: Int) { self.init(major: value) }
+
+    /// "10", "10.1" or "10-1".
+    init?(_ text: String) {
+        let parts = text.trimmingCharacters(in: .whitespaces)
+            .split(maxSplits: 1, omittingEmptySubsequences: false) { $0 == "." || $0 == "-" }
+        guard let major = parts.first.flatMap({ Int($0) }) else { return nil }
+        self.init(major: major, minor: parts.count > 1 ? Int(parts[1]) : nil)
+    }
+
+    var description: String { minor.map { "\(major).\($0)" } ?? "\(major)" }
+
+    static func < (lhs: ChannelNumber, rhs: ChannelNumber) -> Bool {
+        (lhs.major, lhs.minor ?? -1) < (rhs.major, rhs.minor ?? -1)
+    }
+}
+
 // MARK: - Unified Channel
 
 /// A unified channel representation that works across all Live TV sources
@@ -54,7 +86,7 @@ nonisolated struct UnifiedChannel: Identifiable, Hashable, Sendable {
     let id: String
     let sourceType: LiveTVSourceType
     let sourceId: String
-    let channelNumber: Int?
+    let channelNumber: ChannelNumber?
     let name: String
     let callSign: String?
     let logoURL: URL?
@@ -80,7 +112,7 @@ nonisolated struct UnifiedChannel: Identifiable, Hashable, Sendable {
         id: String,
         sourceType: LiveTVSourceType,
         sourceId: String,
-        channelNumber: Int? = nil,
+        channelNumber: ChannelNumber? = nil,
         name: String,
         callSign: String? = nil,
         logoURL: URL? = nil,
@@ -239,6 +271,14 @@ nonisolated struct UnifiedProgram: Identifiable, Hashable, Sendable {
             .replacing(upcomingMarker, with: "", maxReplacements: 1)
         return stripped.isEmpty ? title : stripped
     }
+
+    /// The guide's second line: the episode title, else the episode number (#434).
+    var guideDetail: String? {
+        [subtitle, episodeNumber].lazy.compactMap { $0 }.first { !$0.isEmpty && $0 != title }
+    }
+
+    /// The guide's qualifier tag (#429).
+    var guideTag: String? { isLiveAiring ? "LIVE" : isNew ? "NEW" : nil }
 
     /// Check if this program is currently airing
     var isCurrentlyAiring: Bool {

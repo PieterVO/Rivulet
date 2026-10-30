@@ -74,7 +74,7 @@ final class JellyfinLiveTVTests: XCTestCase {
         XCTAssertEqual(result[0].logoURL?.absoluteString,
                        "http://jf.local:8096/Items/746bd1ff6d4432d20768254840f0acbc/Images/Primary?tag=c6273926e8951a56a888bfa92185676d")
         XCTAssertNil(result[0].streamURL, "resolved at play time")
-        XCTAssertEqual(result[1].channelNumber, 5, "an OTA sub-channel sorts on its whole number")
+        XCTAssertEqual(result[1].channelNumber?.description, "5.1", "an OTA sub-channel keeps its minor number")
         XCTAssertNil(result[1].logoURL)
         XCTAssertFalse(result[0].logoURL?.absoluteString.contains("tok") ?? true, "no token in image URLs")
     }
@@ -99,6 +99,7 @@ final class JellyfinLiveTVTests: XCTestCase {
         XCTAssertEqual(show.episodeNumber, "S1 E22")
         XCTAssertEqual(show.category, "Series, Bus./financial, News")
         XCTAssertTrue(show.isNew)
+        XCTAssertFalse(fox[0].isNew, "not a series and not a premiere")
         XCTAssertTrue(show.isLiveAiring, "the guide's Live: marker")
         XCTAssertNotNil(show.iconURL)
         XCTAssertEqual(fox[0].category, "News", "no genres falls back to the flag")

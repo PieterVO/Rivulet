@@ -38,9 +38,9 @@ nonisolated struct DispatcharrChannelIndex: Sendable {
     }
 
     /// The Dispatcharr channel behind a playlist entry.
-    func match(streamURL: URL?, number: Int?, name: String) -> DispatcharrChannelSummary? {
+    func match(streamURL: URL?, number: ChannelNumber?, name: String) -> DispatcharrChannelSummary? {
         if let uuid = Self.streamUUID(streamURL), let hit = byUUID[uuid] { return hit }
-        if let number, let hit = byNumber[Double(number)] { return hit }
+        if let number = number.flatMap({ Double($0.description) }), let hit = byNumber[number] { return hit }
         return byName[name.lowercased()]
     }
 
@@ -308,7 +308,7 @@ extension IPTVProvider: LiveTVRecordingProvider {
             return byStream.id
         }
         if let number = summary.channelNumber,
-           let byNumber = cachedChannels.first(where: { $0.channelNumber.map(Double.init) == number }) {
+           let byNumber = cachedChannels.first(where: { $0.channelNumber.flatMap { Double($0.description) } == number }) {
             return byNumber.id
         }
         let name = summary.name?.lowercased()

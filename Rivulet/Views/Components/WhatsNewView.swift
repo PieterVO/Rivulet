@@ -155,6 +155,9 @@ struct WhatsNewView: View {
             "Fixed thin, broken subtitle letters with the Uniform text edge style.",
             "Subtitles now match the size and position Apple's player uses.",
             "Live channels from Tvheadend, HDHomeRun and Plex tuners now start in a few seconds.",
+            "The Live TV guide now shows sub-channel numbers like 10.1.",
+            "The Live TV guide marks new episodes and live airings.",
+            "Jellyfin guide rows now show the episode title or number.",
         ]),
         ("1.1.1 (117)", [
             "The Home hero can show Trending, Continue Watching, Recently Added or Watchlist.",

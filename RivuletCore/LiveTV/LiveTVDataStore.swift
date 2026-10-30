@@ -1559,7 +1559,7 @@ class LiveTVDataStore: ObservableObject {
                           unfavorited: Set<String> = []) -> [UnifiedChannel] {
         let position = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         // Typed key: the inline tuple comparison times out Xcode 26.3's type checker.
-        let key = { (channel: UnifiedChannel) -> (Int, Int, Int) in
+        let key = { (channel: UnifiedChannel) -> (Int, Int, ChannelNumber) in
             (position[channel.id] ?? .max, channel.favouriteRank ?? .max, channel.channelNumber ?? .max)
         }
         return channels

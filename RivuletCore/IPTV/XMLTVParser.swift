@@ -263,7 +263,7 @@ private nonisolated final class XMLTVInternalParser: NSObject, XMLParserDelegate
                                             h: attributeDict["height"].flatMap { Int($0) }))
             }
 
-        case "new":
+        case "new", "premiere":
             currentIsNew = true
 
         case "episode-num":
