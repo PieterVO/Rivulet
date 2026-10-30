@@ -107,7 +107,7 @@ final class TransportControlButton: UIControl {
         super.didUpdateFocus(in: context, with: coordinator)
         let isFocused = context.nextFocusedView === self
         coordinator.addCoordinatedAnimations({
-            self.transform = isFocused ? CGAffineTransform(scaleX: 1.15, y: 1.15) : .identity
+            self.transform = isFocused ? CGAffineTransform(scaleX: 1.12, y: 1.12) : .identity
             self.backgroundEffectView.backgroundColor = isFocused ? .white : .clear
             self.iconView.tintColor = self.glyphColor ?? (isFocused ? .black : .white)
         }, completion: nil)

@@ -1246,14 +1246,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         // Engine demux path: tracks come from the engine.
         if !aether.audioTracks.isEmpty {
-            let list = CardTrackListView(
-                header: "Audio",
+            let list = CardTrackListView.audioMenu(
                 tracks: aether.audioTracks,
-                selectedTrackId: aether.currentAudioTrackId,
-                showsOffRow: false,
-                audio: true,
-                choices: SystemAudioAdjustment.menuChoices,
-                toggles: SystemAudioAdjustment.menuToggles
+                selectedTrackId: aether.currentAudioTrackId
             ) { [weak self] trackId in
                 if let trackId { self?.aetherPlayer?.selectAudioTrack(id: trackId) }
                 self?.activePanel?.dismissPanel()
@@ -1280,14 +1275,9 @@ final class LiveTVAetherPlayerViewController: UIViewController {
                     languageCode: option.locale?.identifier
                 )
             }
-            let list = CardTrackListView(
-                header: "Audio",
+            let list = CardTrackListView.audioMenu(
                 tracks: tracks,
-                selectedTrackId: selectedIndex,
-                showsOffRow: false,
-                audio: true,
-                choices: SystemAudioAdjustment.menuChoices,
-                toggles: SystemAudioAdjustment.menuToggles
+                selectedTrackId: selectedIndex
             ) { [weak self] trackId in
                 if let trackId, trackId < group.options.count {
                     item.select(group.options[trackId], in: group)

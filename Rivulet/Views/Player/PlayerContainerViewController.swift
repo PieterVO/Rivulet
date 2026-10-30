@@ -1391,11 +1391,8 @@ class PlayerContainerViewController: UIViewController {
         rail.onAudio = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
             self.presentRailPanel(
-                content: CardTrackListView(
-                    header: "Audio", tracks: vm.audioTracks,
-                    selectedTrackId: vm.currentAudioTrackId, showsOffRow: false, audio: true,
-                    choices: SystemAudioAdjustment.menuChoices,
-                    toggles: SystemAudioAdjustment.menuToggles,
+                content: CardTrackListView.audioMenu(
+                    tracks: vm.audioTracks, selectedTrackId: vm.currentAudioTrackId,
                     onSelect: { [weak vm, weak self] id in
                         if let id { vm?.selectAudioTrack(id: id) }
                         self?.activeRailPanel?.dismissPanel()
@@ -1818,10 +1815,18 @@ class PlayerContainerViewController: UIViewController {
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
     }
 
-    /// AVKit's title block: the show (or nothing) over the title. Runtime,
-    /// rating and audio live in the Info tab, as in AVKit.
+    /// The TV app's title block: an episode reads "S1, E1 • Pilot" over the show,
+    /// a movie its year over the title. Runtime, rating and audio live in the Info tab.
     private func applyRailMetadata(vm: UniversalPlayerViewModel) {
-        rail?.setTitle(vm.title, eyebrow: vm.subtitle)
+        let meta = vm.metadata
+        guard meta.type == "episode", let show = meta.grandparentTitle else {
+            rail?.setTitle(vm.title, eyebrow: vm.subtitle)
+            return
+        }
+        let number = [meta.parentIndex.map { "S\($0)" }, meta.index.map { "E\($0)" }]
+            .compactMap { $0 }.joined(separator: ", ")
+        let eyebrow = [number, meta.title ?? ""].filter { !$0.isEmpty }.joined(separator: " • ")
+        rail?.setTitle(show, eyebrow: eyebrow.isEmpty ? nil : eyebrow)
     }
 
     // MARK: - Post-video (Up Next)

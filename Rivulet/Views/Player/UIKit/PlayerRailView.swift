@@ -24,8 +24,10 @@ final class PlayerRailView: UIView {
         static let titleLeading: CGFloat = 84
         static let subtitleTop: CGFloat = 18
         static let titleTop: CGFloat = 62
-        static let toolTop: CGFloat = 56
-        static let toolDiameter: CGFloat = 70
+        // Tool row measured on device against the TV app and stock AVKit (tvOS 27):
+        // 66pt circles on a 90pt pitch, centred 833pt down. The 1080p sim draws 70.
+        static let toolTop: CGFloat = 60
+        static let toolDiameter: CGFloat = 66
         static let toolGap: CGFloat = 24
         static let pillsTop: CGFloat = 230
         static let pillGap: CGFloat = 24
