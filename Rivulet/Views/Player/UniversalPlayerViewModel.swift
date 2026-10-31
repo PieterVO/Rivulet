@@ -5331,6 +5331,12 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     @Published private(set) var canSearchSubtitles = false
     @Published private(set) var subtitleSearchWarning: String?
+    var siloSubtitleSearchLanguage: String {
+        get { selectedSiloSubtitleSearchLanguage ?? subtitleSearchLanguage }
+        set { selectedSiloSubtitleSearchLanguage = newValue }
+    }
+    private var selectedSiloSubtitleSearchLanguage: String?
+
     @Published private(set) var subtitleOperation: PlayerSubtitleOperation = .idle
     @Published private(set) var siloSubtitleJobs: [SiloSubtitleAIJob] = []
     @Published private(set) var siloSubtitleSyncStatus: SiloSubtitleSyncStatus?
@@ -5359,6 +5365,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     var subtitleSearchLanguageName: String {
         Locale.current.localizedString(forLanguageCode: subtitleSearchLanguage) ?? subtitleSearchLanguage
     }
+    var siloSubtitleSearchLanguageName: String {
+        Locale.current.localizedString(forLanguageCode: siloSubtitleSearchLanguage) ?? siloSubtitleSearchLanguage
+    }
+
 
     private var selectedSiloSubtitleTrack: SubtitleTrack? {
         guard isSiloPlayback, case .provider(let playback) = source, let id = currentSubtitleTrackId,
@@ -5439,7 +5449,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         if case .provider(let playback) = source, let provider = playback.provider as? SiloProvider {
             guard canSearchSubtitles else { throw MediaProviderError.backendSpecific(underlying: "Subtitle search is not enabled on Silo.") }
             let fileID = playback.stream.source.id
-            let response = try await provider.searchSubtitles(fileID: fileID, language: subtitleSearchLanguage)
+            let response = try await provider.searchSubtitles(fileID: fileID, language: siloSubtitleSearchLanguage)
             guard isCurrentSiloFile(fileID, generation: generation) else { throw CancellationError() }
             subtitleSearchWarning = response.warnings.isEmpty ? nil : "Some Silo subtitle providers could not return results."
             return response.results.map { .silo($0, fileID: fileID, providerID: provider.id) }

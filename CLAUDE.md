@@ -844,13 +844,14 @@ protocol v3, never compatibility endpoints or Plex Discover substitutions.
   Keep on-device generation distinct from Silo search, audio transcription,
   subtitle translation and jobs; nested menus return to their parent with Menu.
   Operation and sync outcomes wrap instead of truncating recovery instructions.
+  Silo subtitle search offers the full ISO language list regardless of existing
+  tracks; retain the selected language when repeating a search.
 - Playback preferences belong to the profile. Rivulet reads Silo's effective
   `playback.*` values — subtitle language, behavior and forced subtitles among
   them — and applies them by default; the Settings toggle opts out, and a local
-  pick overrides for this Apple TV only. Keep Silo's names in the rows ("Always
-  on", the contract's own `playback_subtitle_languages` tags), and show the
-  profile's resolved value on the Follow row so a preference set in Silo's own
-  app is visible here instead of silently ignored.
+  pick overrides for this Apple TV only. The language picker combines ISO codes
+  with server-provided tags, including regional variants, and shows the profile's
+  resolved value on the Follow row.
 - Subtitle sync uses the canonical inventory `sync_key`, never a display label,
   engine index or a reconstructed sidecar key. Probe native capability and
   permissions; only the selected syncable track is observed. Poll active jobs

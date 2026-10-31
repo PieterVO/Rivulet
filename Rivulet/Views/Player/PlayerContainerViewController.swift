@@ -1563,8 +1563,9 @@ class PlayerContainerViewController: UIViewController {
         guard let vm = viewModel, vm.isSiloPlayback else { return }
         var actions: [CardActionConfig] = []
         if vm.canSearchSubtitles {
-            actions.append(CardActionConfig(title: "Search Subtitles", subtitle: vm.subtitleSearchLanguageName) {
-                [weak self] row in self?.searchSubtitles(from: row)
+            actions.append(CardActionConfig(title: "Search Subtitles", subtitle: vm.siloSubtitleSearchLanguageName,
+                                            showsChevron: true) { [weak self] _ in
+                self?.presentSiloSubtitleSearch()
             })
         }
         if vm.siloSubtitleSyncStatus?.isAvailable == true {
@@ -1610,6 +1611,59 @@ class PlayerContainerViewController: UIViewController {
                 guard let self, let vm = self.viewModel else { return }
                 self.presentSubtitleMenu(vm)
             }, onSelect: { _ in })
+        presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+    }
+
+    private func presentSiloSubtitleSearch() {
+        guard let vm = viewModel, vm.isSiloPlayback else { return }
+        let actions = [
+            CardActionConfig(title: "Language", subtitle: vm.siloSubtitleSearchLanguageName,
+                             showsChevron: true) { [weak self] _ in
+                self?.presentSiloSubtitleSearchLanguages()
+            },
+            CardActionConfig(title: "Search Subtitles") { [weak self] row in
+                self?.searchSubtitles(from: row)
+            },
+        ]
+        let list = CardTrackListView(header: "Search Subtitles", rows: [], actions: actions,
+            onBack: { [weak self] in self?.presentSiloSubtitleMenu() }, onSelect: { _ in })
+        presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+    }
+
+    private func presentSiloSubtitleSearchLanguages() {
+        guard let vm = viewModel, vm.isSiloPlayback else { return }
+        let languages = SiloSubtitlePreferenceLabels.languageOptions(
+            additional: [], current: vm.siloSubtitleSearchLanguage)
+        let groups = Dictionary(grouping: languages) { code in
+            String(SiloSubtitlePreferenceLabels.languageName(code).prefix(1)).uppercased()
+        }
+        let letters = groups.keys.sorted()
+        let rows = letters.enumerated().map { index, letter in
+            CardTrackListView.Row(title: letter, trackId: index, isSelected: false)
+        }
+        let list = CardTrackListView(header: "Search Language", rows: rows,
+            onBack: { [weak self] in self?.presentSiloSubtitleSearch() },
+            onSelect: { [weak self] index in
+                guard let index, letters.indices.contains(index),
+                      let options = groups[letters[index]] else { return }
+                self?.presentSiloSubtitleSearchLanguageGroup(letters[index], languages: options)
+            })
+        presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+    }
+
+    private func presentSiloSubtitleSearchLanguageGroup(_ letter: String, languages: [String]) {
+        guard let vm = viewModel, vm.isSiloPlayback else { return }
+        let rows = languages.enumerated().map { index, code in
+            CardTrackListView.Row(title: SiloSubtitlePreferenceLabels.languageName(code),
+                                  trackId: index, isSelected: code == vm.siloSubtitleSearchLanguage)
+        }
+        let list = CardTrackListView(header: "Search Language · \(letter)", rows: rows,
+            onBack: { [weak self] in self?.presentSiloSubtitleSearchLanguages() },
+            onSelect: { [weak self, weak vm] index in
+                guard let index, languages.indices.contains(index), let vm else { return }
+                vm.siloSubtitleSearchLanguage = languages[index]
+                self?.presentSiloSubtitleSearch()
+            })
         presentRailPanel(content: list, width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
     }
 
@@ -1719,10 +1773,11 @@ class PlayerContainerViewController: UIViewController {
             self.subtitleSearchTask = nil
             if let row { row.setTitle(row.row.title) }
             guard let vm, let origin, self.activeRailPanel === origin else { return }
+            let languageName = vm.isSiloPlayback ? vm.siloSubtitleSearchLanguageName : vm.subtitleSearchLanguageName
             let found = results ?? []
             var rows = found.isEmpty
                 ? [CardTrackListView.Row(title: results == nil ? "Search Failed" : "No Subtitles Found",
-                    subtitle: failure ?? vm.subtitleSearchLanguageName, trackId: nil,
+                    subtitle: failure ?? languageName, trackId: nil,
                     isSelected: false, isEnabled: false, wrapsSubtitle: true)]
                 : found.enumerated().map { index, result in
                     CardTrackListView.Row(title: result.title, subtitle: result.detail,
@@ -1733,12 +1788,12 @@ class PlayerContainerViewController: UIViewController {
                     trackId: nil, isSelected: false, isEnabled: false, wrapsSubtitle: true), at: 0)
             }
             _ = self.presentRailPanel(
-                content: CardTrackListView(header: "Results · \(vm.subtitleSearchLanguageName)", rows: rows,
+                content: CardTrackListView(header: "Results · \(languageName)", rows: rows,
                     actions: [CardActionConfig(title: "Search Again") { [weak self] row in
                         self?.searchSubtitles(from: row)
                     }], onBack: { [weak self, weak vm] in
                         guard let self, let vm else { return }
-                        if vm.isSiloPlayback { self.presentSiloSubtitleMenu() }
+                        if vm.isSiloPlayback { self.presentSiloSubtitleSearch() }
                         else { self.presentSubtitleMenu(vm) }
                     }, onSelect: { [weak vm, weak self] index in
                         guard let index, let vm, found.indices.contains(index) else { return }

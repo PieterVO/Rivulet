@@ -15,6 +15,32 @@ nonisolated enum SiloSubtitlePreferenceLabels {
         return TrackLanguage.displayName(identifier)
     }
 
+    /// All ISO languages, augmented with server tags and the current choice.
+    /// Prefer the original server or override spelling when it aliases an ISO code.
+    static func languageOptions(additional: [String], current: String? = nil) -> [String] {
+        var seen = Set<String>()
+        var options: [(tag: String, name: String)] = []
+        for tag in [current].compactMap({ $0 }) + additional + Locale.isoLanguageCodes {
+            let value = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = languageKey(value)
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            options.append((value, languageName(value)))
+        }
+        return options.sorted {
+            let comparison = $0.name.localizedStandardCompare($1.name)
+            return comparison == .orderedSame ? $0.tag < $1.tag : comparison == .orderedAscending
+        }.map(\.tag)
+    }
+
+    static func languageKey(_ tag: String) -> String {
+        let parts = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "_", with: "-").lowercased().split(separator: "-")
+        guard let first = parts.first else { return "" }
+        let normalized = TrackLanguage.normalize(String(first))
+        let language = Locale.LanguageCode(normalized).identifier(.alpha2) ?? normalized
+        return ([language] + parts.dropFirst().map(String.init)).joined(separator: "-")
+    }
+
     /// The row's trailing value: the profile's language while inheriting.
     static func languageValue(override: SiloLocalPolicyValue<String>, resolved: String?) -> String {
         switch override {

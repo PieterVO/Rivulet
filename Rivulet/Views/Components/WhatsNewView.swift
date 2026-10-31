@@ -151,6 +151,7 @@ struct WhatsNewView: View {
     static let changelogs: [(version: String, features: [String])] = [
         ("1.1.1 (119)", [
             "Subtitle and audio language settings are now saved for each Plex profile.",
+            "Choose a subtitle search language even when the title has no matching subtitles yet.",
             "New season page lists the episodes beside the season poster.",
             "Hold Select on an episode on a show's page to open its menu.",
             "Menus and popups stay dark in Light mode.",

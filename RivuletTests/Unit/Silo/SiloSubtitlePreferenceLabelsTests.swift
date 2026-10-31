@@ -31,4 +31,35 @@ final class SiloSubtitlePreferenceLabelsTests: XCTestCase {
         XCTAssertNotEqual(SiloSubtitlePreferenceLabels.languageName("nl"), "nl")
         XCTAssertEqual(SiloSubtitlePreferenceLabels.languageName("qqq"), "qqq")
     }
+
+    func testLanguageOptionsIncludeISOAndPreserveServerVariantsAndOverride() {
+        let options = SiloSubtitlePreferenceLabels.languageOptions(
+            additional: ["eng", "pt-BR", "pt_PT", "PT-br", "x-custom"], current: "fre"
+        )
+        XCTAssertTrue(options.contains("sw"))
+        XCTAssertTrue(options.contains("eng"))
+        XCTAssertFalse(options.contains("en"))
+        XCTAssertTrue(options.contains("fre"))
+        XCTAssertFalse(options.contains("fr"))
+        XCTAssertTrue(options.contains("pt-BR"))
+        XCTAssertTrue(options.contains("pt_PT"))
+        XCTAssertFalse(options.contains("PT-br"))
+        XCTAssertTrue(options.contains("x-custom"))
+        XCTAssertEqual(Set(options.map(SiloSubtitlePreferenceLabels.languageKey)).count, options.count)
+        let names = options.map(SiloSubtitlePreferenceLabels.languageName)
+        for (left, right) in zip(names, names.dropFirst()) {
+            XCTAssertNotEqual(left.localizedStandardCompare(right), .orderedDescending)
+        }
+    }
+
+    func testLanguageOptionsDoNotDependOnServerOptions() {
+        let options = SiloSubtitlePreferenceLabels.languageOptions(additional: [])
+        XCTAssertTrue(options.contains("en"))
+        XCTAssertTrue(options.contains("sw"))
+        XCTAssertTrue(options.contains("zu"))
+        XCTAssertEqual(SiloSubtitlePreferenceLabels.languageKey("eng_US"),
+                       SiloSubtitlePreferenceLabels.languageKey("en-us"))
+        XCTAssertNotEqual(SiloSubtitlePreferenceLabels.languageKey("pt-BR"),
+                          SiloSubtitlePreferenceLabels.languageKey("pt-PT"))
+    }
 }

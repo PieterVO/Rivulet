@@ -141,8 +141,7 @@ enum SiloPlaybackSettingsContent {
         return row.value
     }
 
-    /// The picker pushed from the Silo page. Values are the contract's own
-    /// language tags when the server publishes them.
+    /// The picker includes ISO languages and any additional server tags.
     static var siloSubtitleLanguagePicker: [SettingsRowItem] {
         guard let provider = SiloSession.storedProvider(), let account = SiloSession.account,
               owner(provider, account) else { return [] }
@@ -171,22 +170,16 @@ enum SiloPlaybackSettingsContent {
         return nil
     }
 
-    /// The server's own tags, or Rivulet's codes when it publishes none, plus
-    /// an out-of-contract override so the current choice stays visible.
     private static var subtitleLanguageOptions: [String] {
-        let published = schema?.subtitleLanguages ?? []
-        var options = published.isEmpty ? TrackLanguage.choices : published
-        if let current = selectedSubtitleLanguage,
-           !options.contains(where: { sameLanguage($0, current) }) {
-            options.append(current)
-        }
-        return options
+        SiloSubtitlePreferenceLabels.languageOptions(
+            additional: schema?.subtitleLanguages ?? [], current: selectedSubtitleLanguage
+        )
     }
 
     private static func sameLanguage(_ lhs: String?, _ rhs: String?) -> Bool {
         guard let lhs, let rhs else { return false }
-        let left = TrackLanguage.normalize(lhs), right = TrackLanguage.normalize(rhs)
-        return !left.isEmpty && left == right
+        let left = SiloSubtitlePreferenceLabels.languageKey(lhs)
+        return !left.isEmpty && left == SiloSubtitlePreferenceLabels.languageKey(rhs)
     }
 
     private static func save(provider: SiloProvider, account: SiloSession.Account) {
